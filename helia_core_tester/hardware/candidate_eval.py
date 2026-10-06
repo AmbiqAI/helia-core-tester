@@ -1,17 +1,21 @@
 """Evaluate a kernel candidate on hardware: one command, one verdict.
 
 `candidate baseline` runs a clean ns-cmsis-nn tree N times with pinned
-options and keeps the bundles plus baseline.json in --out. `candidate
-eval` checks a candidate tree against that base commit, runs it once
-with the same options and the first baseline run's outputs as goldens,
-scores it against every baseline repeat and prints one JSON verdict.
+options and keeps, in --out, the bundles, baseline.json and a shallow
+copy of the base commit. `candidate eval` copies the candidate's
+Source/, Include/, cmake/ and nsx/ into a fresh checkout of that base,
+checks the copy, builds and runs the copy with the baseline's options
+and the first baseline run's outputs as goldens, scores it against
+every baseline repeat and prints one JSON verdict.
 
-Both shell out to `hardware run --json`, so the board session, build
-and bundle work exactly as for a human run. Hidden cases (bundle
-column `hidden`) count in the verdict, but their ids never print.
+The agent's own repo is only read as files: no git command runs in
+it, and later edits do not reach the build. Both commands shell out
+to `hardware run --json`; its stderr, which names every case, goes to
+--out/logs. Hidden cases (bundle column `hidden`) count in the verdict
+and in family totals, but their ids never print.
 
-Exit codes: 0 pass, 1 fail, 2 usage, 3 refused or rejected, 4 no_gain,
-5 error (build, board, transport).
+Exit codes: 0 pass, 1 fail, 2 usage, 3 refused, rejected or not
+comparable, 4 no_gain, 5 error (build, board, transport).
 """
 
 from __future__ import annotations
@@ -21,8 +25,9 @@ import json
 import shutil
 import subprocess
 import sys
+import traceback
 from collections import Counter
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -30,18 +35,21 @@ from typing import Any, Optional
 import typer
 
 from .boards import UnknownBoardError, repo_root, resolve_board
-from .candidate_check import CheckError, check_candidate
+from .candidate_check import CheckError, _git, candidate_app, check_candidate
+from .nsx_app import KERNEL_TREES
 from .pmu_explain import AGENT_PMU_SELECTION, explain_bundle
-from .score import DEFAULT_MIN_SCORE, EXITS, load_bundle, load_scoring, score_bundles
+from .score import DEFAULT_MIN_SCORE, EXIT_REFUSED, EXITS, load_bundle, load_scoring, score_bundles
 
 SCHEMA = "hct.candidate_eval"
 BASELINE_SCHEMA = "hct.candidate_baseline"
 SCHEMA_VERSION = 1
 BASELINE_FILE = "baseline.json"
-EXIT_REFUSED, EXIT_ERROR = 3, 5
-# hardware run exits 3 when it refuses.
+EXIT_ERROR = 5
+# Needs hardware run's refusal code.
 RUN_REFUSED = 3
 VERDICT_EXITS = {**EXITS, "rejected": EXIT_REFUSED, "refused": EXIT_REFUSED, "error": EXIT_ERROR}
+# The build copies these trees.
+SNAPSHOT_TREES = (*KERNEL_TREES, "nsx")
 
 
 @dataclass(frozen=True)
@@ -56,10 +64,16 @@ class RunSpec:
     dtypes: tuple[str, ...] = ()
     case_ids: tuple[str, ...] = ()
     hidden_set: Optional[Path] = None
-    pmu: tuple[str, ...] = field(default_factory=tuple)
+    pmu: tuple[str, ...] = ()
 
-    def selection(self) -> dict[str, Any]:
-        return {"ops": list(self.ops), "dtypes": list(self.dtypes), "case_ids": list(self.case_ids)}
+    def to_json(self) -> dict[str, Any]:
+        return {key: str(value) if isinstance(value, Path) else value for key, value in asdict(self).items()}
+
+    @classmethod
+    def from_json(cls, data: dict[str, Any], kernels: Path) -> "RunSpec":
+        hidden = data.get("hidden_set")
+        tuples = {key: tuple(data[key]) for key in ("ops", "dtypes", "case_ids", "pmu")}
+        return cls(**{**data, **tuples, "kernels": kernels, "hidden_set": Path(hidden) if hidden else None})
 
 
 def agent_pmu(board: str) -> tuple[str, ...]:
@@ -93,11 +107,14 @@ def run_args(
     return args
 
 
-def hardware_run(args: list[str]) -> tuple[int, Optional[dict]]:
-    """Run the CLI; stdout holds its JSON summary."""
-    proc = subprocess.run(
-        [sys.executable, "-m", "helia_core_tester", *args], cwd=repo_root(), stdout=subprocess.PIPE, text=True, check=False,
-    )
+def hardware_run(args: list[str], log: Path) -> tuple[int, Optional[dict]]:
+    """Run the CLI; stdout is JSON, stderr goes to log."""
+    log.parent.mkdir(parents=True, exist_ok=True)
+    with log.open("w", encoding="utf-8") as err:
+        proc = subprocess.run(
+            [sys.executable, "-m", "helia_core_tester", *args], cwd=repo_root(), stdout=subprocess.PIPE, stderr=err,
+            text=True, check=False,
+        )
     try:
         summary = json.loads(proc.stdout)
     except ValueError:
@@ -107,13 +124,6 @@ def hardware_run(args: list[str]) -> tuple[int, Optional[dict]]:
 
 def _stamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-
-
-def _head(tree: Path) -> str:
-    out = subprocess.run(["git", "-C", str(tree), "rev-parse", "HEAD"], capture_output=True, text=True, check=False)
-    if out.returncode != 0:
-        raise CheckError(f"{tree} is not a git checkout")
-    return out.stdout.strip()
 
 
 def _emit(verdict: dict) -> None:
@@ -128,15 +138,18 @@ def _emit(verdict: dict) -> None:
 def write_baseline(spec: RunSpec, out: Path, repeats: int, run=None) -> dict:
     """Run the clean tree `repeats` times; save bundles."""
     run = run or hardware_run
-    base = _head(spec.kernels)
+    base = _git(spec.kernels, "rev-parse", "HEAD").decode().strip()
     report = check_candidate(spec.kernels, base)
-    if report["files"]:
+    if report["files"] or not report["ok"]:
         raise CheckError("Baseline tree has changes; commit or stash them.")
+    # Trusted base objects for every eval.
+    _git(out, "init", "-q", "--bare", "kernels.git")
+    _git(out / "kernels.git", "fetch", "-q", "--depth", "1", f"file://{spec.kernels}", f"{base}:refs/heads/base")
     stamp, sessions = _stamp(), []
     for index in range(repeats):
         session = f"baseline-{stamp}-{index + 1}"
         # Repeats reuse the first build.
-        rc, summary = run(run_args(spec, session, skip_generate=index > 0, skip_flash=index > 0))
+        rc, summary = run(run_args(spec, session, skip_generate=index > 0, skip_flash=index > 0), out / "logs" / f"{session}.log")
         if summary is None:
             raise RuntimeError(f"Baseline run {session} exited {rc} without a bundle.")
         if summary["totals"]["failed"]:
@@ -145,9 +158,7 @@ def write_baseline(spec: RunSpec, out: Path, repeats: int, run=None) -> dict:
         sessions.append(session)
     meta = {
         "schema": BASELINE_SCHEMA, "schema_version": SCHEMA_VERSION, "created_at": _stamp(),
-        "board": spec.board, "base_commit": base, "base_tree": str(spec.kernels),
-        "placement": spec.placement, "inline_asm": spec.inline_asm, "pmu": list(spec.pmu), "selection": spec.selection(),
-        "hidden_set": str(spec.hidden_set) if spec.hidden_set else None, "sessions": sessions,
+        "base_commit": base, "run": spec.to_json(), "sessions": sessions,
     }
     (out / BASELINE_FILE).write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
     return meta
@@ -160,16 +171,25 @@ def read_baseline(path: Path) -> dict:
     return meta
 
 
-def spec_from(meta: dict, kernels: Path) -> RunSpec:
-    selection = meta["selection"]
-    return RunSpec(
-        board=meta["board"], kernels=kernels, placement=meta["placement"], inline_asm=meta["inline_asm"],
-        ops=tuple(selection["ops"]), dtypes=tuple(selection["dtypes"]), case_ids=tuple(selection["case_ids"]),
-        hidden_set=Path(meta["hidden_set"]) if meta.get("hidden_set") else None, pmu=tuple(meta["pmu"]),
-    )
-
-
 # --- eval ---------------------------------------------------------------------------
+
+
+def snapshot(candidate: Path, baseline: Path, base: str) -> Path:
+    """Base checkout with the candidate's trees copied in."""
+    snap = baseline / "snapshot"
+    shutil.rmtree(snap, ignore_errors=True)
+    _git(baseline, "clone", "-q", "--branch", "base", str(baseline / "kernels.git"), "snapshot")
+    if _git(snap, "rev-parse", "HEAD").decode().strip() != base:
+        raise CheckError("Baseline base copy does not match.")
+    for name in SNAPSHOT_TREES:
+        src, dst = candidate / name, snap / name
+        shutil.rmtree(dst, ignore_errors=True)
+        if src.is_symlink():
+            # The check flags symlinks.
+            dst.symlink_to(src.readlink())
+        elif src.is_dir():
+            shutil.copytree(src, dst, symlinks=True)
+    return snap
 
 
 def _hidden_ids(bundles: list) -> set[str]:
@@ -193,7 +213,7 @@ def _hints(bundle: Path, hidden: set[str]) -> list[dict]:
     """PMU diagnosis per public MAC case."""
     try:
         result = explain_bundle(bundle)
-    except (OSError, ValueError, KeyError):
+    except Exception:  # noqa: BLE001 -- hints are optional
         return []
     return [
         {"case_id": e.case_id, "pct_of_peak": e.pct_of_peak, "diagnosis": e.diagnosis, "hints": e.hints}
@@ -201,53 +221,59 @@ def _hints(bundle: Path, hidden: set[str]) -> list[dict]:
     ]
 
 
-def verdict_from(report: dict, hidden: set[str], meta: dict, candidate: Path) -> dict:
+def verdict_from(report: dict, hidden: set[str], candidate: Path) -> dict:
     """The agent-facing verdict; hidden ids redacted."""
-    public = [c for c in report["cases"] if c["case_id"] not in hidden and not c.get("hidden")]
-    secret = len(report["cases"]) - len(public)
+    public = [c for c in report["cases"] if c["case_id"] not in hidden]
     failures, hidden_kinds = [], Counter()
     for failure in report["failures"]:
         if failure.get("case_id") in hidden:
             hidden_kinds[failure["kind"]] += 1
         else:
             failures.append(failure)
+    verdict = report["verdict"]
+    # Lost cases mean the tests moved.
+    if failures and all(f["kind"] == "missing_case" for f in failures) and not hidden_kinds:
+        verdict = "refused"
     return {
-        "verdict": report["verdict"], "stage": "score", "score": report["score"], "board": report["board"],
-        "base_commit": meta["base_commit"], "candidate_session": report["candidate"][0], "baseline_sessions": report["baseline"],
+        "verdict": verdict, "stage": "score", "score": report["score"], "board": report["board"],
+        "candidate_session": report["candidate"][0], "baseline_sessions": report["baseline"],
         "families": report["families"], "failures": failures, "cases": [_case_view(c) for c in public],
-        "hidden": {"cases": secret, "failures": dict(hidden_kinds), "subscores": (report.get("subscores") or {}).get("hidden")}
-        if hidden else None,
+        # TODO(score-hidden): subscores land with score-hidden.
+        "hidden": {"cases": len(report["cases"]) - len(public), "failures": dict(hidden_kinds),
+                   "subscores": (report.get("subscores") or {}).get("hidden")} if hidden else None,
         "hints": _hints(candidate, hidden),
     }
 
 
-def evaluate(kernels: Path, baseline: Path, min_score: float, run=None) -> dict:
-    """Check, run, score: one verdict dict."""
+def evaluate(kernels: Path, baseline: Path, meta: dict, min_score: float, run=None) -> dict:
+    """Snapshot, check, run, score: one verdict dict."""
     run = run or hardware_run
-    meta = read_baseline(baseline)
-    head = {"schema": SCHEMA, "schema_version": SCHEMA_VERSION, "board": meta["board"], "base_commit": meta["base_commit"]}
+    head = {"schema": SCHEMA, "schema_version": SCHEMA_VERSION, "board": meta["run"]["board"], "base_commit": meta["base_commit"]}
+    session = f"eval-{_stamp()}"
     try:
-        check = check_candidate(kernels, meta["base_commit"])
-    except CheckError as exc:
+        snap = snapshot(kernels, baseline, meta["base_commit"])
+        check = check_candidate(snap, meta["base_commit"])
+    except (CheckError, OSError) as exc:
         return {**head, "verdict": "refused", "stage": "check", "reason": str(exc)}
     if not check["ok"]:
         return {**head, "verdict": "rejected", "stage": "check", "findings": check["findings"]}
-    spec = spec_from(meta, kernels.resolve())
-    bundles = [baseline / "bundles" / session for session in meta["sessions"]]
+    spec = RunSpec.from_json(meta["run"], snap)
+    bundles = [baseline / "bundles" / name for name in meta["sessions"]]
     # Baseline generated the cases; goldens check inputs.
-    rc, summary = run(run_args(spec, f"eval-{_stamp()}", golden_from=bundles[0], skip_generate=True))
+    rc, summary = run(run_args(spec, session, golden_from=bundles[0], skip_generate=True), baseline / "logs" / f"{session}.log")
     if summary is None:
         verdict = "refused" if rc == RUN_REFUSED else "error"
         return {**head, "verdict": verdict, "stage": "run", "reason": f"hardware run exited {rc}"}
     baselines, candidate = [load_bundle(path) for path in bundles], load_bundle(Path(summary["bundle"]))
-    scoring = load_scoring(meta["board"]) | {"min_score": min_score}
+    scoring = load_scoring(head["board"]) | {"min_score": min_score}
     report = _score(baselines, candidate, scoring, check)
-    return {**head, **verdict_from(report, _hidden_ids(baselines + [candidate]), meta, candidate.path)}
+    return {**head, **verdict_from(report, _hidden_ids(baselines + [candidate]), candidate.path)}
 
 
 # --- commands -----------------------------------------------------------------------
 
 
+@candidate_app.command("baseline")
 def baseline_command(
     kernels: Path = typer.Option(..., "--kernels", exists=True, file_okay=False, resolve_path=True, help="Clean ns-cmsis-nn checkout at the base."),
     board: str = typer.Option(..., "--board", help="Board id from assets/hardware_boards.yaml."),
@@ -277,11 +303,12 @@ def baseline_command(
         typer.echo(f"✗ {exc}", err=True)
         raise typer.Exit(EXIT_REFUSED)
     except RuntimeError as exc:
-        typer.echo(f"✗ {exc}", err=True)
+        typer.echo(f"✗ {exc} Logs: {out / 'logs'}", err=True)
         raise typer.Exit(EXIT_ERROR)
     typer.echo(json.dumps(meta, indent=2))
 
 
+@candidate_app.command("eval")
 def eval_command(
     kernels: Path = typer.Option(..., "--kernels", exists=True, file_okay=False, resolve_path=True, help="Candidate ns-cmsis-nn worktree."),
     baseline: Path = typer.Option(..., "--baseline", exists=True, file_okay=False, resolve_path=True, help="Dir from `candidate baseline`."),
@@ -290,12 +317,21 @@ def eval_command(
 ) -> None:
     """Check, run and score a candidate; print one JSON verdict.
 
-    Exit 0 pass, 1 fail, 2 usage, 3 refused or rejected, 4 no gain, 5 error.
+    Exit 0 pass, 1 fail, 2 usage, 3 refused, rejected or not comparable,
+    4 no gain, 5 error.
     """
     try:
         meta = read_baseline(baseline)
     except (OSError, ValueError) as exc:
         raise typer.BadParameter(str(exc), param_hint="--baseline") from exc
-    if board is not None and board != meta["board"]:
-        raise typer.BadParameter(f"baseline ran on {meta['board']}", param_hint="--board")
-    _emit(evaluate(kernels, baseline, min_score))
+    if board is not None and board != meta["run"]["board"]:
+        raise typer.BadParameter(f"baseline ran on {meta['run']['board']}", param_hint="--board")
+    try:
+        verdict = evaluate(kernels, baseline, meta, min_score)
+    except Exception as exc:  # noqa: BLE001 -- one verdict, always
+        log = baseline / "logs" / f"eval-error-{_stamp()}.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text(traceback.format_exc(), encoding="utf-8")
+        verdict = {"schema": SCHEMA, "schema_version": SCHEMA_VERSION, "verdict": "error", "stage": "eval",
+                   "reason": type(exc).__name__}
+    _emit(verdict)

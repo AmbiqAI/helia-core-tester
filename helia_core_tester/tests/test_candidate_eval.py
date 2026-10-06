@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -26,7 +27,7 @@ class FakeRun:
     def __init__(self, root: Path, base: dict | None = None, **cand) -> None:
         self.root, self.base, self.cand, self.calls = root, base or {}, cand, []
 
-    def __call__(self, args: list[str]):
+    def __call__(self, args: list[str], log: Path):
         self.calls.append(args)
         session = args[args.index("--session-id") + 1]
         options = self.cand if session.startswith("eval-") else self.base
@@ -41,10 +42,15 @@ def _baseline(tmp_path: Path, kernels: Path, repeats: int = 2, **base) -> tuple[
     return out, run
 
 
+def _eval(kernels: Path, out: Path, run) -> dict:
+    return candidate_eval.evaluate(kernels, out, candidate_eval.read_baseline(out), 0.005, run=run)
+
+
 def test_baseline_pins_options_and_reuses_build(tmp_path, kernels) -> None:
     out, run = _baseline(tmp_path, kernels, repeats=3)
     meta = candidate_eval.read_baseline(out)
     assert meta["base_commit"] == _git(kernels, "rev-parse", "HEAD").strip() and len(meta["sessions"]) == 3
+    assert candidate_eval.RunSpec.from_json(meta["run"], kernels).pmu == ("cpu:ARM_PMU_INST_RETIRED",)
     assert all((out / "bundles" / s / "case_summary.csv").is_file() for s in meta["sessions"])
     first, repeat = run.calls[0], run.calls[1]
     assert "--inline-asm" in first and "--placement" in first and "--skip-flash" not in first
@@ -57,46 +63,98 @@ def test_baseline_refuses_edited_tree(tmp_path, kernels) -> None:
         _baseline(tmp_path, kernels)
 
 
-def test_faster_candidate_passes(tmp_path, kernels) -> None:
+def test_faster_candidate_passes_from_a_snapshot(tmp_path, kernels) -> None:
     out, _ = _baseline(tmp_path, kernels)
     run = FakeRun(tmp_path / "reports", cycles={"conv_a": 800.0})
     (kernels / "Source/Conv/a.c").write_text("int a; /* faster */\n")
-    verdict = candidate_eval.evaluate(kernels, out, 0.005, run=run)
+    verdict = _eval(kernels, out, run)
     assert verdict["verdict"] == "pass" and verdict["hidden"] is None
     args = run.calls[0]
     assert args[args.index("--golden-from") + 1].endswith("-1") and "--skip-generate" in args and "--skip-flash" not in args
+    # The build reads the copy, not the agent's tree.
+    root = Path(args[args.index("--cmsis-nn-root") + 1])
+    assert root == out / "snapshot" and (root / "Source/Conv/a.c").read_text() == "int a; /* faster */\n"
     assert {c["case_id"] for c in verdict["cases"]} == set(sb.CASES)
 
 
-def test_out_of_bounds_edit_is_rejected_before_run(tmp_path, kernels) -> None:
+def test_candidate_git_config_never_runs(tmp_path, kernels) -> None:
     out, _ = _baseline(tmp_path, kernels)
-    (kernels / "nsx/CMakeLists.txt").write_text("target_compile_options(x -O0)\n")
+    marker = tmp_path / "pwned"
+    _git(kernels, "config", "core.fsmonitor", f"touch {marker}; false #")
+    _git(kernels, "config", "core.hooksPath", str(tmp_path))
+    assert _eval(kernels, out, FakeRun(tmp_path / "reports"))["verdict"] == "no_gain"
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize("edit", ["nsx", "symlink"])
+def test_out_of_bounds_edit_is_rejected_before_run(tmp_path, kernels, edit) -> None:
+    out, _ = _baseline(tmp_path, kernels)
+    if edit == "nsx":
+        (kernels / "nsx/CMakeLists.txt").write_text("target_compile_options(x -O0)\n")
+    else:
+        (kernels / "Source/Conv/b.c").symlink_to(tmp_path / "elsewhere.c")
     run = FakeRun(tmp_path / "reports")
-    verdict = candidate_eval.evaluate(kernels, out, 0.005, run=run)
+    verdict = _eval(kernels, out, run)
     assert verdict["verdict"] == "rejected" and verdict["stage"] == "check" and not run.calls
+
+
+def test_missing_base_copy_refuses(tmp_path, kernels) -> None:
+    out, _ = _baseline(tmp_path, kernels)
+    shutil.rmtree(out / "kernels.git")
+    verdict = _eval(kernels, out, FakeRun(tmp_path / "reports"))
+    assert verdict["verdict"] == "refused" and verdict["stage"] == "check"
 
 
 @pytest.mark.parametrize(("rc", "expected"), [(3, "refused"), (5, "error"), (1, "error")])
 def test_run_without_bundle_maps_exit(tmp_path, kernels, rc, expected) -> None:
     out, _ = _baseline(tmp_path, kernels)
-    verdict = candidate_eval.evaluate(kernels, out, 0.005, run=lambda args: (rc, None))
+    verdict = _eval(kernels, out, lambda args, log: (rc, None))
     assert verdict["verdict"] == expected and verdict["stage"] == "run"
+
+
+def test_lost_cases_refuse_not_fail(tmp_path, kernels) -> None:
+    out, _ = _baseline(tmp_path, kernels)
+    verdict = _eval(kernels, out, FakeRun(tmp_path / "reports", drop=("fc_a",)))
+    assert verdict["verdict"] == "refused" and {f["kind"] for f in verdict["failures"]} == {"missing_case"}
 
 
 def test_hidden_ids_never_print(tmp_path, kernels, monkeypatch) -> None:
     monkeypatch.setattr(sb, "FIELDS", sb.FIELDS + ["hidden"])
     out, _ = _baseline(tmp_path, kernels, rows={"dw_a": {"hidden": "true"}})
     run = FakeRun(tmp_path / "reports", rows={"dw_a": {"hidden": "true", "comparison_passed": "false"}})
-    verdict = candidate_eval.evaluate(kernels, out, 0.005, run=run)
+    verdict = _eval(kernels, out, run)
     assert verdict["verdict"] == "fail" and verdict["hidden"]["failures"] == {"comparison_failed": 1}
-    assert "dw_a" not in json.dumps(verdict)
+    assert verdict["hidden"]["cases"] == 1 and "dw_a" not in json.dumps(verdict)
+
+
+def _cli_eval(kernels: Path, out: Path, *extra: str):
+    result = runner.invoke(app, ["candidate", "eval", "--kernels", str(kernels), "--baseline", str(out), *extra])
+    return result, json.loads(result.stdout) if result.stdout.strip() else None
 
 
 def test_eval_cli_prints_one_json_and_exits(tmp_path, kernels, monkeypatch) -> None:
     out, _ = _baseline(tmp_path, kernels)
     monkeypatch.setattr(candidate_eval, "hardware_run", FakeRun(tmp_path / "reports"))
-    result = runner.invoke(app, ["candidate", "eval", "--kernels", str(kernels), "--baseline", str(out)])
-    verdict = json.loads(result.stdout)
+    result, verdict = _cli_eval(kernels, out)
     assert verdict["verdict"] == "no_gain" and result.exit_code == verdict["exit_code"] == 4
-    result = runner.invoke(app, ["candidate", "eval", "--kernels", str(kernels), "--baseline", str(out), "--board", "apollo3p_evb"])
+    (kernels / "nsx/CMakeLists.txt").write_text("y\n")
+    result, verdict = _cli_eval(kernels, out)
+    assert verdict["verdict"] == "rejected" and result.exit_code == 3
+    result, _ = _cli_eval(kernels, out, "--board", "apollo3p_evb")
+    assert result.exit_code == 2
+
+
+def test_eval_cli_crash_is_an_error_verdict(tmp_path, kernels, monkeypatch) -> None:
+    out, _ = _baseline(tmp_path, kernels)
+    monkeypatch.setattr(candidate_eval, "evaluate", lambda *a, **k: 1 / 0)
+    result, verdict = _cli_eval(kernels, out)
+    assert verdict["verdict"] == "error" and result.exit_code == 5
+    assert list((out / "logs").glob("eval-error-*.log"))
+
+
+def test_baseline_cli_refuses_used_out(tmp_path, kernels) -> None:
+    out = tmp_path / "used"
+    out.mkdir()
+    (out / "x").write_text("x")
+    result = runner.invoke(app, ["candidate", "baseline", "--kernels", str(kernels), "--board", "apollo510_evb", "--out", str(out)])
     assert result.exit_code == 2

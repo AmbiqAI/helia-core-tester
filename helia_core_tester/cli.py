@@ -23,7 +23,8 @@ from helia_core_tester.hardware.cli import boards as boards_command
 from helia_core_tester.hardware.cli import explain as explain_command
 from helia_core_tester.hardware.cli import hardware_app, probes_app
 from helia_core_tester.hardware.candidate_check import candidate_app
-from helia_core_tester.hardware.candidate_eval import baseline_command, eval_command
+# Registers candidate baseline and eval.
+import helia_core_tester.hardware.candidate_eval  # noqa: F401
 from helia_core_tester.hardware.score import score as score_command
 
 # Once, for every subcommand (including the hardware group's) for the lifetime of
@@ -40,8 +41,6 @@ app = typer.Typer(
 app.add_typer(hardware_app, name="hardware")
 app.add_typer(probes_app, name="probes")
 app.add_typer(candidate_app, name="candidate")
-candidate_app.command("baseline")(baseline_command)
-candidate_app.command("eval")(eval_command)
 app.command(name="boards")(boards_command)
 app.command(name="explain")(explain_command)
 app.command(name="score")(score_command)
