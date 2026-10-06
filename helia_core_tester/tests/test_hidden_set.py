@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import csv
 import json
-from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -36,16 +35,17 @@ def _hidden(root: Path, names=("h0123456789ab",), cpu: str = "cortex-m55") -> Pa
 
 
 def _fake_bridge(monkeypatch, *, hidden_skips: int = 0) -> list:
+    from helia_core_tester.hardware.case_bundle import CaseBundle
+
     calls = []
 
     def _build(project_root, *, tests_root=None, **kwargs):
-        calls.append(tests_root)
+        calls.append((tests_root, kwargs.get("fvp_gate")))
         name = "hidden" if tests_root else "public"
-        bundle = SimpleNamespace(case_id=name, manifest={"case_id": name})
+        bundle = CaseBundle(Path("."), Path("m.json"), {"case_id": name}, ())
         return [bundle], [(SimpleNamespace(name="x"), "why")] * (hidden_skips if tests_root else 0)
 
     monkeypatch.setattr("helia_core_tester.hardware.session_runner.build_generated_test_case_bundles", _build)
-    monkeypatch.setattr(hardware_pipeline, "replace", lambda b, **k: SimpleNamespace(**{**vars(b), **k}))
     return calls
 
 
@@ -58,8 +58,8 @@ def test_discover_reads_another_root(tmp_path: Path) -> None:
 def test_hidden_cases_join_and_are_marked(tmp_path: Path, monkeypatch) -> None:
     calls = _fake_bridge(monkeypatch)
     root = _hidden(tmp_path / "h")
-    bundles, _ = prepare_bundles(PROJECT_ROOT, BOARD, StreamOptions(hidden_set=root))
-    assert calls == [None, root]
+    bundles, _ = prepare_bundles(PROJECT_ROOT, BOARD, StreamOptions(hidden_set=root, fvp_gate="strict"))
+    assert calls == [(None, "strict"), (root, "off")]
     assert [(b.case_id, b.manifest.get("hidden")) for b in bundles] == [("public", None), ("hidden", True)]
 
 
@@ -87,7 +87,7 @@ def test_selection_records_commitment_only(tmp_path: Path) -> None:
 
 
 def test_case_summary_flags_hidden(tmp_path: Path) -> None:
-    from helia_core_tester.hardware.case_bundle import build_abs_s8_case_bundle, load_case_bundle
+    from helia_core_tester.hardware.case_bundle import build_abs_s8_case_bundle, hidden_bundle, load_case_bundle
     from helia_core_tester.hardware.fake_target import FakeTargetTransport
     from helia_core_tester.hardware.measurement import counter_passes_for_selection
     from helia_core_tester.hardware.result_bundle import write_result_bundle
@@ -98,7 +98,7 @@ def test_case_summary_flags_hidden(tmp_path: Path) -> None:
         return load_case_bundle(built.manifest_path)
 
     public, hidden = _load("abs_public"), _load("abs_hidden")
-    hidden = replace(hidden, manifest={**hidden.manifest, "hidden": True})
+    hidden = hidden_bundle(hidden)
     passes = counter_passes_for_selection({"cpu": "default"})
     result = HostSession(FakeTargetTransport(), counter_passes=passes).run_many([public, hidden])
     root = write_result_bundle(result, session_id="s", output_root=tmp_path, memory_report={}, kernel_catalog={})

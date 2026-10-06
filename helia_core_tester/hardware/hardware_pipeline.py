@@ -11,7 +11,7 @@ import contextlib
 import json
 import sys
 import time
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, List, Optional, Sequence, Union
 
@@ -313,15 +313,18 @@ def hidden_bundles(repo_root: Path, board: BoardSpec, options: "StreamOptions") 
     """Bridge the hidden set; mark each case."""
     from .session_runner import build_generated_test_case_bundles
 
+    from .case_bundle import hidden_bundle
+
     hidden_summary(options.hidden_set, board.cpu)
+    # No FVP report names hidden cases.
     bundles, skipped = build_generated_test_case_bundles(
-        repo_root, cpu=normalize_cpu(board.cpu), family=None, suite="int", fvp_gate=options.fvp_gate,
+        repo_root, cpu=normalize_cpu(board.cpu), family=None, suite="int", fvp_gate="off",
         board_id=board.id, tests_root=options.hidden_set,
     )
     # A partial set skews the score.
     if skipped or not bundles:
         raise HiddenSetError(f"{len(skipped)} hidden case(s) cannot run; {len(bundles)} can")
-    return [replace(bundle, manifest={**bundle.manifest, "hidden": True}) for bundle in bundles]
+    return [hidden_bundle(bundle) for bundle in bundles]
 
 
 @dataclass
@@ -636,8 +639,9 @@ def run_hardware_pipeline(
         )
         generate_s = time.monotonic() - generate_started
 
-    # Check goldens before touching the board.
-    prepared = prepare_bundles(repo_root, board, options) if options.golden_from is not None else None
+    # Check goldens and hidden cases before touching the board.
+    checked = options.golden_from is not None or options.hidden_set is not None
+    prepared = prepare_bundles(repo_root, board, options) if checked else None
     flash: Optional[FlashDecision] = None
     if skip_flash:
         echo("[hardware] --skip-flash set; reusing firmware already running on the board.")
