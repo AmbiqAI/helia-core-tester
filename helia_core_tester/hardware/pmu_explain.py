@@ -172,7 +172,7 @@ def _metrics(row: Mapping[str, Any], cycles: Optional[float], macs: Optional[flo
         "stall_backend": _ratio(counter("STALL_BACKEND"), cycles),
         "mve_stall_mem": _ratio(counter("MVE_STALL_RESOURCE_MEM"), cycles),
         "mve_stall_dep": _ratio(counter("MVE_STALL_DEPENDENCY"), cycles),
-        "pred_share": _ratio(counter("MVE_PRED"), mve_inst),
+        "pred_cycle_share": _ratio(counter("MVE_PRED"), cycles),
         "refill_kb": refills * _LINE_BYTES / 1024 if refills is not None else None,
         "prepare_share": _ratio(_number(row.get("prepare_cycles")), cycles),
     }
@@ -220,9 +220,9 @@ def _rule_underfilled(e: Explanation) -> Optional[Finding]:
     if ratio is None or ratio < UNDERFILLED:
         return None
     lanes = e.ceiling["lanes"]
-    pred = e.metrics["pred_share"] or 0
+    pred = e.metrics["pred_cycle_share"] or 0
     return Finding("underfilled_vectors", 1 - 1 / ratio,
-                   f"MVE MACs fill {1 / ratio:.0%} of {lanes} lanes, {pred:.0%} predicated",
+                   f"MVE MACs fill {1 / ratio:.0%} of {lanes} lanes, {pred:.0%} cycles predicated",
                    "Block channels so each MAC fills all lanes")
 
 

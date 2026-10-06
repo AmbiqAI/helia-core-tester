@@ -82,6 +82,19 @@ def test_underfilled_vectors():
     assert "underfilled_vectors" in _rules(_row(MVE_INT_MAC_RETIRED=2000, INST_RETIRED=5000, MVE_INST_RETIRED=4000))
 
 
+def test_predicated_share_counts_cycles():
+    result = explain_case(_row(MVE_INT_MAC_RETIRED=2000, MVE_PRED=1000), cpu=M55)
+    assert result.metrics["pred_cycle_share"] == pytest.approx(1000 / 4000)
+    finding = next(f for f in result.findings if f.rule == "underfilled_vectors")
+    assert "25% cycles predicated" in finding.diagnosis
+
+
+def test_depthwise_s16_widens_like_s8():
+    depthwise = load_ceilings()["cpus"][M55]["ops"]["depthwise"]
+    assert depthwise["s16"]["cycles_per_mac"] == depthwise["s8"]["cycles_per_mac"] == 0.5
+    assert depthwise["s16"]["lanes"] == depthwise["s8"]["lanes"] == 4
+
+
 def test_scalar_macs_beats_overhead():
     rules = _rules(_row(MVE_INT_MAC_RETIRED=100))
     assert "scalar_macs" in rules
