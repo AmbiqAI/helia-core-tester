@@ -1,8 +1,10 @@
-"""gcc -E scan of a candidate."""
+"""gcc -E and object scans of a candidate."""
 
 from __future__ import annotations
 
+import json
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -66,3 +68,53 @@ def test_missing_compiler_fails(kernels: Path, monkeypatch) -> None:
     monkeypatch.setattr(candidate_scan, "arm_tool", lambda name: "/nonexistent/gcc")
     found = candidate_scan.preprocess_findings(kernels, bytes(1024), rule_counts)
     assert [f["rule"] for f in found] == ["scan_error"]
+
+
+def _build(tmp_path: Path, source: str, define: str = "-DBOARD_X") -> Path:
+    """A build dir with one kernel object."""
+    build = tmp_path / "build"
+    src = build / "nsx_app/modules/nsx-cmsis-nn/Source/k.c"
+    src.parent.mkdir(parents=True)
+    src.write_text(source, encoding="utf-8")
+    gcc = arm_tool("arm-none-eabi-gcc")
+    subprocess.run([gcc, "-mcpu=cortex-m55", "-O2", "-c", str(src), "-o", str(build / "k.c.obj")], check=True)
+    include = f"-I{build}/nsx_app/modules/nsx-cmsis-nn/Include"
+    args = ["gcc", define, include, "-MD", "-MF", "k.d", "-o", "k.c.obj", "-c", str(src)]
+    entry = {"directory": str(build), "file": str(src), "output": "k.c.obj", "arguments": args}
+    (build / "compile_commands.json").write_text(json.dumps([entry]), encoding="utf-8")
+    return build
+
+
+def test_object_scan_flags_sections_and_scs(tmp_path: Path) -> None:
+    source = (
+        '__attribute__((section(".itcm_text"))) unsigned f(void)\n'
+        "{ return *(volatile unsigned *)(0x70000000u * 2u + 0x1000u); }\n"
+        '__attribute__((section(".data.fast"))) int g(int x) { return x + 1; }\n'
+        "volatile unsigned *const p = (volatile unsigned *)(0x70000000u * 2u + 0x3000u);\n"
+    )
+    findings, summary, flags = candidate_scan.object_findings(_build(tmp_path, source))
+    texts = {f["text"].split()[0] for f in findings if f["rule"] == "object_section"}
+    assert texts == {".itcm_text", ".data.fast"} and summary["objects"] == 1
+    assert len([f for f in findings if f["rule"] == "object_address"]) >= 2
+    assert flags == ("-DBOARD_X", "-IInclude")
+
+
+def test_object_scan_clean(tmp_path: Path) -> None:
+    source = "unsigned f(unsigned x) { return x > 0xE0000000u ? x : ~x; }\nconst int t[2] = {1, 2};\n"
+    findings, summary, _ = candidate_scan.object_findings(_build(tmp_path, source))
+    assert findings == [] and summary["objects"] == 1
+
+
+def test_object_scan_needs_objects(tmp_path: Path) -> None:
+    (tmp_path / "compile_commands.json").write_text("[]", encoding="utf-8")
+    findings, _, _ = candidate_scan.object_findings(tmp_path)
+    assert [f["rule"] for f in findings] == ["scan_error"]
+
+
+def test_build_macros_reach_gcc_e(kernels: Path, tmp_path: Path) -> None:
+    text = PASTE + '#ifdef BOARD_X\nCAT(_Pra, gma)("GCC optimize(\\"O3\\")")\n#endif\nint a;\n'
+    (kernels / "Source/Conv/a.c").write_text(text, encoding="utf-8")
+    assert _hits(kernels) == set()
+    report = check_candidate(kernels, _git(kernels, "rev-parse", "HEAD").strip(), build_dir=_build(tmp_path, "int k;\n"))
+    assert {(f["rule"], f["path"]) for f in report["findings"]} == {("pragma", "Source/Conv/a.c")}
+    assert report["objects"]["objects"] == 1

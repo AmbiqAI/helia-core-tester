@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import json
 import re
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional
@@ -37,7 +36,7 @@ from .firmware_build import (
     stage_kernels,
 )
 from .pathutil import display_path, write_text_lf
-from .toolchain import arm_tool
+from .toolchain import run_tool
 
 # Catalog kernels whose symbols are checked for retention in the linked server image.
 _SELECTED_ADAPTERS = (
@@ -165,7 +164,7 @@ def _retained_kernel_count(output: str) -> int:
 def _probe_binary(tool: str, args: Iterable[str], project_root: Optional[Path] = None) -> str:
     # `project_root` picks that checkout's downloaded toolchain (arm_tool), so a custom
     # checkout does not fall back to whatever binutils happen to be on PATH.
-    return subprocess.run([arm_tool(tool, project_root), *args], capture_output=True, text=True, check=True).stdout
+    return run_tool(tool, args, project_root)
 
 
 @dataclass(frozen=True)

@@ -30,7 +30,8 @@ Include/, nothing else. Rules, each a finding in the JSON report:
 Rules also run on text with adjacent string literals joined, per line
 and over all added lines of a file, as C joins them before asm sees them,
 and on text with `##` pastes joined. candidate_scan then reruns the
-rules on `gcc -E` output of base and candidate.
+rules on `gcc -E` output of base and candidate and, given a build
+dir, scans its kernel objects.
 
 Literal tensor shapes from descriptors are not grepped: too many false
 hits on common dims. Trees the build copies (Source, Include, cmake, nsx)
@@ -55,7 +56,7 @@ from typing import Iterator, Optional
 
 import typer
 
-from .candidate_scan import preprocess_findings
+from .candidate_scan import CONFIGS, object_findings, preprocess_findings
 from .nsx_app import KERNEL_TREES
 
 ALLOWED_DIRS = ("Source/", "Include/")
@@ -326,7 +327,7 @@ def hidden_entries(tree: Path) -> list[str]:
     return [entry[2:] for entry in out if entry[:1] == "S" or entry[:1].islower()]
 
 
-def check_candidate(tree: Path, base: str) -> dict:
+def check_candidate(tree: Path, base: str, *, build_dir: Optional[Path] = None) -> dict:
     """The JSON report for one candidate."""
     tree = tree.resolve()
     commit = _git(tree, "rev-parse", "--verify", f"{base}^{{commit}}").decode().strip()
@@ -368,10 +369,15 @@ def check_candidate(tree: Path, base: str) -> dict:
                          for rule in sorted(after) if after[rule] > before[rule] and rule not in hit_rules)
     findings += ({"rule": "hidden_index_entry", "path": path, "message": "skip-worktree or assume-unchanged set"}
                  for path in hidden_entries(tree))
+    objects, configs = None, CONFIGS
+    if build_dir is not None:
+        hits, objects, flags = object_findings(build_dir)
+        findings += hits
+        configs = {**CONFIGS, "build": flags} if flags else CONFIGS
     if any(path.startswith(ALLOWED_DIRS) for path in changes):
         tops = sorted({path.split("/", 1)[0] + "/" for path in base_blobs if path.startswith(ALLOWED_DIRS)})
         archive = _git(tree, "archive", commit, "--", *tops) if tops else _EMPTY_TAR
-        findings += preprocess_findings(tree, archive, partial(rule_counts, preprocessed=True))
+        findings += preprocess_findings(tree, archive, partial(rule_counts, preprocessed=True), configs)
     return {
         "schema": "hct.candidate_check",
         "schema_version": 1,
@@ -380,6 +386,8 @@ def check_candidate(tree: Path, base: str) -> dict:
         "base_commit": commit,
         "ok": not findings,
         "files": [{"path": path, "status": status} for path, status in sorted(changes.items())],
+        # Callers match kernels_hash to the tree.
+        "objects": objects,
         "findings": findings,
     }
 
@@ -391,10 +399,13 @@ candidate_app = typer.Typer(help="Check candidate kernel trees.", no_args_is_hel
 def check_command(
     tree: Path = typer.Argument(..., exists=True, file_okay=False, help="Candidate ns-cmsis-nn checkout."),
     base: str = typer.Option(..., "--base", help="Base commit SHA the candidate started from."),
+    build_dir: Optional[Path] = typer.Option(
+        None, "--build-dir", exists=True, file_okay=False, help="Build of this tree; scan its kernel objects.",
+    ),
 ) -> None:
     """Fail when the candidate diff leaves Source/Include."""
     try:
-        report = check_candidate(tree, base)
+        report = check_candidate(tree, base, build_dir=build_dir)
     except CheckError as exc:
         typer.echo(json.dumps({"ok": False, "error": str(exc)}))
         raise typer.Exit(2)

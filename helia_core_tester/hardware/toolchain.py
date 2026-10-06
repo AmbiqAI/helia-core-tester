@@ -16,7 +16,7 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional
 
 DOWNLOADS_DIR = "artifacts/downloads"
 
@@ -40,6 +40,11 @@ def arm_tool(name: str, repo_root: Optional[Path] = None) -> str:
     if candidate.is_file() and os.access(candidate, os.X_OK):
         return str(candidate)
     return shutil.which(name) or name
+
+
+def run_tool(tool: str, args: Iterable[str], repo_root: Optional[Path] = None) -> str:
+    """Stdout of an ARM binutil; raises on failure."""
+    return subprocess.run([arm_tool(tool, repo_root), *args], capture_output=True, text=True, check=True).stdout
 
 
 def add_toolchain_to_path(repo_root: Optional[Path] = None) -> bool:
