@@ -486,3 +486,19 @@ def test_hidden_sets_must_match(tmp_path, cases, commitment, reason):
 def test_kernel_commit_needs_clean_root(tmp_path, kernels, commit):
     build = {"options": {}, "modules": [{"name": "nsx-cmsis-nn", "commit": "a"}], "kernels": kernels}
     assert kernel_commit(load_bundle(_bundle(tmp_path, "a", build=build))) == commit
+
+
+def test_scoring_files_versioned():
+    scoring = load_scoring("apollo510_evb")
+    assert scoring["weights_version"] == 2 and scoring["mlperf_weight"] == 4.0
+
+
+@pytest.mark.parametrize("name", ["family_weights.yaml", "noise_floors.yaml"])
+def test_old_scoring_schema_refused(tmp_path, name):
+    from helia_core_tester.hardware.score import SCORING_DIR
+    for other in ("family_weights.yaml", "noise_floors.yaml"):
+        (tmp_path / other).write_text((SCORING_DIR / other).read_text())
+    path = tmp_path / name
+    path.write_text(path.read_text().replace("schema_version: 2", "schema_version: 1"))
+    with pytest.raises(ValueError, match="need schema_version 2"):
+        load_scoring("apollo510_evb", tmp_path)

@@ -4,7 +4,7 @@
 # identical firmware (adjacent nightlies, 2026-10), so one noisy
 # case in a full run does not fail the gate.
 schema: hct.scoring.noise_floors
-schema_version: 1
+schema_version: 2
 mad_k: 3.0
 default_floor_pct: 5.0
 # Family drift, nightlies: 0.05 % max.

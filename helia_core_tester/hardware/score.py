@@ -286,10 +286,21 @@ def _spread(rows: list[dict], key: str = "median_cycles", mad_key: str | None = 
     return MAD_SIGMA * max(repeat_mad, run_mad)
 
 
+# Version 2 added focus and gate keys.
+SCORING_SCHEMA = 2
+
+
+def _scoring_file(path: Path) -> dict:
+    """A scoring YAML at the current schema."""
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if data.get("schema_version") != SCORING_SCHEMA:
+        raise ValueError(f"{path}: need schema_version {SCORING_SCHEMA}, got {data.get('schema_version')}")
+    return data
+
+
 def load_scoring(board: str | None, directory: Path = SCORING_DIR) -> dict:
     """Weights, family rules and noise floor for `board`."""
-    weights = yaml.safe_load((directory / "family_weights.yaml").read_text(encoding="utf-8"))
-    floors = yaml.safe_load((directory / "noise_floors.yaml").read_text(encoding="utf-8"))
+    weights, floors = (_scoring_file(directory / name) for name in ("family_weights.yaml", "noise_floors.yaml"))
     weights_board = board if board in weights["boards"] else weights["fallback_board"]
     floor_row = floors["boards"].get(board) or {}
     return {
