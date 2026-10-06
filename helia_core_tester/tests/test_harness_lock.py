@@ -270,7 +270,6 @@ def test_git_tricks_cannot_hide_changes(kernels: Path) -> None:
     (kernels / "Tests/t.c").write_text("int t2;\n", encoding="utf-8")
     _git(kernels, "update-index", "--skip-worktree", "Tests/t.c")
     (kernels / "Source/Conv/a.c").write_text('#pragma GCC optimize("O3")\n', encoding="utf-8")
-    _git(kernels, "config", "diff.external", "true")
     (kernels / ".git/info/exclude").write_text("Source/Conv/hidden.c\n", encoding="utf-8")
     (kernels / "Source/Conv/hidden.c").write_text('__attribute__((section(".x"))) int h;\n', encoding="utf-8")
     report = check_candidate(kernels, _sha(kernels))
@@ -304,6 +303,25 @@ def test_token_inside_unchanged_attribute_fails(tmp_path: Path) -> None:
     text = '__attribute__((\n    noinline,\n    optimize("O3")))\nint a(void);\n'
     (root / "Source/Conv/a.c").write_text(text, encoding="utf-8")
     assert "attribute" in _rules(root)
+
+
+@pytest.mark.parametrize(("key", "value"), [
+    ("core.fsmonitor", "touch {pwned}; false #"),
+    ("filter.x.clean", "touch {pwned}; cat"),
+    ("core.worktree", "/"),
+    ("diff.external", "true"),
+    ("include.path", "{pwned}"),
+])
+def test_unsafe_git_config_refused(kernels: Path, tmp_path: Path, key: str, value: str) -> None:
+    from helia_core_tester.hardware.candidate_check import CheckError
+
+    pwned = tmp_path / "pwned"
+    (kernels / ".gitattributes").write_text("*.c filter=x\n", encoding="utf-8")
+    (kernels / "Source/Conv/a.c").write_text("int a2;\n", encoding="utf-8")
+    _git(kernels, "config", key, value.format(pwned=pwned))
+    with pytest.raises(CheckError, match=key):
+        check_candidate(kernels, _sha(kernels))
+    assert not pwned.exists()
 
 
 def test_hidden_index_entry_fails(kernels: Path) -> None:
