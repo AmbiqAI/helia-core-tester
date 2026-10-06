@@ -407,6 +407,25 @@ def check_hidden_paths(hidden_dir: Path, repo_root: Path, cpu: str, suite: str =
         real = Path(target).resolve()
         if not real.is_relative_to(root) or real.is_relative_to(repo):
             raise ValueError(f"{target} must stay under {root}")
+        _refuse_links(root, Path(target))
+
+
+def _refuse_links(root: Path, target: Path) -> None:
+    """Refuse any symlink from root through target."""
+    target = Path(os.path.abspath(target))
+    if not target.is_relative_to(root):
+        raise ValueError(f"{target} must stay under {root}")
+    path = root
+    for part in target.relative_to(root).parts:
+        path = path / part
+        if path.is_symlink():
+            raise ValueError(f"{path} is a symlink; hidden trees allow none")
+    if not target.is_dir():
+        return
+    for dirpath, dirnames, filenames in os.walk(target, followlinks=False):
+        for name in (*dirnames, *filenames):
+            if (Path(dirpath) / name).is_symlink():
+                raise ValueError(f"{Path(dirpath) / name} is a symlink; hidden trees allow none")
 
 
 def hidden_root(hidden_dir: Path, cpu: str) -> Path:

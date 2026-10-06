@@ -292,7 +292,7 @@ def _guard_options(**values):
     from types import SimpleNamespace
 
     options = SimpleNamespace(tbstyle="long", showlocals=True, fulltrace=True)
-    values = {"--cpu": "m55", "--suite": "int", **values}
+    values = {"--cpu": "m55", "--suite": "int", "--random-shapes": 2, **values}
     return SimpleNamespace(option=options, getoption=values.get)
 
 
@@ -323,3 +323,44 @@ def test_symlinked_hidden_dest_refused(tmp_path: Path, leaf: str) -> None:
         conftest._guard_hidden(_guard_options(**{"--hidden-dir": str(hidden)}))
     with pytest.raises(ConfigurationError, match="must stay under"):
         Config(project_root=Path.cwd(), random_shapes=2, hidden_dir=hidden)
+
+
+@pytest.mark.parametrize("count", [None, 0, -1])
+def test_direct_hidden_needs_a_count(tmp_path: Path, count) -> None:
+    from helia_core_tester.generation import conftest
+
+    with pytest.raises(pytest.UsageError, match="needs --random-shapes"):
+        conftest._guard_hidden(_guard_options(**{"--hidden-dir": str(tmp_path), "--random-shapes": count}))
+
+
+@pytest.mark.parametrize("kind", ["family", "file"])
+def test_symlink_inside_hidden_tree_refused(tmp_path: Path, kind: str) -> None:
+    from helia_core_tester.core.errors import ConfigurationError
+
+    hidden = tmp_path / "hidden"
+    family = hidden / "artifacts" / "generated_tests" / "int" / "cortex-m55" / "ConvolutionFunctions"
+    if kind == "family":
+        family.parent.mkdir(parents=True)
+        family.symlink_to(Path.cwd() / "assets", target_is_directory=True)
+    else:
+        family.mkdir(parents=True)
+        (family / "case.c").symlink_to(Path.cwd() / "README.md")
+    with pytest.raises(ConfigurationError, match="is a symlink"):
+        Config(project_root=Path.cwd(), random_shapes=2, hidden_dir=hidden)
+
+
+def test_pruning_never_follows_links(tmp_path: Path) -> None:
+    from helia_core_tester.generation.reuse import prune_unlisted_cases, reset_case_dir
+
+    outside = tmp_path / "outside"
+    (outside / "case").mkdir(parents=True)
+    tree = tmp_path / "tree"
+    (tree / "Fam").mkdir(parents=True)
+    (tree / "Linked").symlink_to(outside, target_is_directory=True)
+    (tree / "Fam" / "linked_case").symlink_to(outside / "case", target_is_directory=True)
+    assert prune_unlisted_cases(tree, set()) == 2
+    assert (outside / "case").is_dir() and not (tree / "Linked").is_symlink()
+    link = tmp_path / "link"
+    link.symlink_to(outside, target_is_directory=True)
+    reset_case_dir(link)
+    assert not link.is_symlink() and (outside / "case").is_dir()
