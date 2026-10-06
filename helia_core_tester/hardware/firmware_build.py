@@ -465,12 +465,12 @@ def built_kernels(board: BoardSpec, build_dir: Path, options: "AppOptions") -> P
         or built != _built_record(app_dir, options)
         or not nsx_cli.lock_is_current(app_dir, board.nsx_board)
     ):
-        raise nsx_cli.HardwareBuildError("Kernels changed since the build; rebuild first.")
+        raise nsx_cli.StaleBuildError("Kernels changed since the build; rebuild first.")
     module = kernel_dir(app_dir, options)
     if options.cmsis_nn_root is None:
         return module
     if not kernels_match(options.cmsis_nn_root, module):
-        raise nsx_cli.HardwareBuildError("Kernel checkout edited since the build; rebuild first.")
+        raise nsx_cli.StaleBuildError("Kernel checkout edited since the build; rebuild first.")
     return options.cmsis_nn_root
 
 

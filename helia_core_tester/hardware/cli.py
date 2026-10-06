@@ -15,10 +15,12 @@ rather than a hardware error. The commands are thin adapters: the behaviour
 lives in boards.py, probes.py, firmware_build.py, hardware_pipeline.py and
 run_summary.py.
 
-Failures inside the pipeline -- a cmake/J-Link subprocess exiting non-zero, a
-pylink error, a stalled transport -- print one line and exit 1; the traceback
-is shown with `--verbosity 1` or higher (also `$HELIA_CORE_TESTER_VERBOSITY`,
-the same knob the generate/build/run commands use).
+Exit codes, shared with `score`: 0 pass; 1 a case failed correctness; 2 bad
+flags; 3 refused before running (dirty tester, a --skip-flash or --golden-from
+mismatch); 5 error (cmake, J-Link, transport, probe). Failures print one line;
+the traceback is shown with `--verbosity 1` or higher (also
+`$HELIA_CORE_TESTER_VERBOSITY`, the same knob the generate/build/run commands
+use).
 """
 
 from __future__ import annotations
@@ -67,9 +69,13 @@ _ALLOW_UNVERIFIED_HELP = (
 )
 
 
-def _fail(message: str) -> None:
+# Match score's codes; 4 is no_gain there.
+EXIT_PASS, EXIT_FAIL, EXIT_USAGE, EXIT_REFUSED, EXIT_ERROR = 0, 1, 2, 3, 5
+
+
+def _fail(message: str, code: int = EXIT_USAGE) -> None:
     typer.echo(f"✗ {message}", err=True)
-    sys.exit(1)
+    sys.exit(code)
 
 
 def _verbosity(explicit: Optional[int]) -> int:
@@ -91,29 +97,36 @@ def _is_jlink_exception(exc: BaseException) -> bool:
 def _pipeline_errors(verbosity: int) -> Iterator[None]:
     """Turn the failures the hardware pipeline is known to raise into one-line errors.
 
+    RunRefused (a golden or case-selection misfit) exits EXIT_REFUSED.
     RuntimeError covers this package's own errors (probe resolution, J-Link library
     config, session/protocol failures); CalledProcessError is cmake or the J-Link
     flash target; pylink's JLinkException is the probe/RTT layer; TimeoutError and
-    FileNotFoundError are the transport write timeout and a missing ELF. Anything
-    else is a bug and keeps its traceback.
+    FileNotFoundError are the transport write timeout and a missing ELF. These
+    exit EXIT_ERROR. Anything else is a bug and keeps its traceback.
     """
+    from .nsx_cli import RunRefused
+
     try:
         yield
     except subprocess.CalledProcessError as exc:
         if verbosity >= 1:
             traceback.print_exc()
         command = " ".join(str(part) for part in exc.cmd) if isinstance(exc.cmd, (list, tuple)) else str(exc.cmd)
-        _fail(f"Command failed with exit status {exc.returncode}: {command}")
+        _fail(f"Command failed with exit status {exc.returncode}: {command}", EXIT_ERROR)
+    except RunRefused as exc:
+        if verbosity >= 1:
+            traceback.print_exc()
+        _fail(str(exc), EXIT_REFUSED)
     except (RuntimeError, TimeoutError, FileNotFoundError) as exc:
         if verbosity >= 1:
             traceback.print_exc()
-        _fail(str(exc))
+        _fail(str(exc), EXIT_ERROR)
     except Exception as exc:
         if not _is_jlink_exception(exc):
             raise
         if verbosity >= 1:
             traceback.print_exc()
-        _fail(f"J-Link error: {exc}")
+        _fail(f"J-Link error: {exc}", EXIT_ERROR)
 
 
 def _board(board_id: Optional[str]) -> BoardSpec:
@@ -128,7 +141,7 @@ def _serial(explicit: Optional[int]) -> int:
     try:
         return resolve_serial(explicit)
     except ProbeResolutionError as exc:
-        _fail(str(exc))
+        _fail(str(exc), EXIT_ERROR)
         raise AssertionError("unreachable")
 
 
@@ -173,7 +186,7 @@ def _check_tester_clean(allow: bool, echo) -> None:
     if tester_state(repo_root())["dirty"] is False:
         return
     if not allow:
-        _fail("Tester worktree is dirty; commit or pass --allow-dirty-tester.")
+        _fail("Tester worktree is dirty; commit or pass --allow-dirty-tester.", EXIT_REFUSED)
     echo("[hardware] WARNING: tester is dirty; bundle marks tester_dirty.")
 
 
@@ -191,7 +204,7 @@ def _app_options(build_dir: Path, cmsis_nn_ref, cmsis_nn_root, inline_asm, place
             placement=placement,
         )
     except AppRenderError as exc:
-        _fail(f"{exc}; pass --cmsis-nn-root or --cmsis-nn-ref.")
+        _fail(f"{exc}; pass --cmsis-nn-root or --cmsis-nn-ref.", EXIT_REFUSED)
     saved = saved_options(app_dir)
     # Compare values: templates embed paths.
     changes = options.changes_from(saved) if saved else []
@@ -212,18 +225,18 @@ def _built_options(build_dir: Path, cmsis_nn_ref, cmsis_nn_root, inline_asm, pla
     app_dir = nsx_app_dir(build_dir)
     saved = saved_options(app_dir)
     if saved is None:
-        _fail("--skip-flash needs a saved build; run hardware build.")
+        _fail("--skip-flash needs a saved build; run hardware build.", EXIT_REFUSED)
     try:
         wanted = resolve_options(
             app_dir, repo_root(), cmsis_nn_ref=cmsis_nn_ref, cmsis_nn_root=cmsis_nn_root, inline_asm=inline_asm,
             placement=placement, follow_pin=False,
         )
     except AppRenderError as exc:
-        _fail(f"{exc}; pass --skip-generate to stream only.")
+        _fail(f"{exc}; pass --skip-generate to stream only.", EXIT_REFUSED)
     # Generation must match the flashed firmware.
     changes = wanted.changes_from(saved)
     if changes:
-        _fail(f"--skip-flash keeps the built kernels: {'; '.join(changes)}")
+        _fail(f"--skip-flash keeps the built kernels: {'; '.join(changes)}", EXIT_REFUSED)
     typer.echo(f"[hardware] Kernels: {saved.summary()}", err=True)
     return saved
 
@@ -257,9 +270,12 @@ def explain(
         raise typer.BadParameter(f"No result bundle under {bundle}")
     results = [explain_bundle(path, tuple(case or ()), tuple(op or ()), all_cases) for path in dirs]
     if as_json:
-        for result in results:
-            result["cases"] = [explanation.to_dict() for explanation in result["cases"]]
-        typer.echo(json.dumps({"schema": SCHEMA, "schema_version": SCHEMA_VERSION, "bundles": results}, indent=2))
+        # One flat case list; each names its bundle.
+        cases = [
+            {"bundle": result["bundle"], **explanation.to_dict()} for result in results for explanation in result["cases"]
+        ]
+        bundles = [{key: value for key, value in result.items() if key != "cases"} for result in results]
+        typer.echo(json.dumps({"schema": SCHEMA, "schema_version": SCHEMA_VERSION, "bundles": bundles, "cases": cases}, indent=2))
         return
     for result in results:
         typer.echo(f"# {result['board']} ({result['cpu']}, {result['placement']}): {result['bundle']}")
@@ -293,7 +309,7 @@ def probes_list() -> None:
     try:
         probes = list_probes()
     except ProbeResolutionError as exc:
-        _fail(str(exc))
+        _fail(str(exc), EXIT_ERROR)
     if not probes:
         typer.echo("No connected J-Link probes detected.")
         return
@@ -306,7 +322,7 @@ def probes_match(
     board: Optional[str] = typer.Option(None, "--board", help=_BOARD_HELP),
 ) -> None:
     """Print the J-Link serial the hardware commands would use for --board
-    ($HPX_JLINK_SERIAL, else the single connected probe). Exits 1 on 0 or >1 candidates."""
+    ($HPX_JLINK_SERIAL, else the single connected probe). Exits 5 on 0 or >1 candidates."""
     spec = _board(board)
     serial = _serial(None)
     typer.echo(f"[probes] {spec.id} ({spec.jlink_device}) -> J-Link serial {serial}", err=True)
@@ -543,7 +559,7 @@ def _report(outcome, spec: BoardSpec, options, *, as_json: bool) -> None:
         ), indent=2))
     if failed:
         typer.echo(typer.style("✗ One or more generated-test cases failed correctness", fg=typer.colors.RED, bold=True), err=True)
-        sys.exit(1)
+        sys.exit(EXIT_FAIL)
     typer.echo(
         typer.style(f"✓ {len(outcome.result.cases)} generated test case(s) passed on {spec.id}", fg=typer.colors.GREEN, bold=True),
         err=as_json,

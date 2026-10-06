@@ -387,7 +387,7 @@ def test_run_flags_reach_the_pipeline(tmp_path: Path, monkeypatch) -> None:
     result = runner.invoke(app, [
         "hardware", "run", "--skip-generate", "--cmsis-nn-ref", "v1.0.0", "--build-dir", str(tmp_path),
     ])
-    assert result.exit_code == 1
+    assert result.exit_code == 5
     assert seen["app_options"] == AppOptions(cmsis_nn_ref="v1.0.0", cmsis_nn_ref_explicit=True)
     assert seen["update_dependencies"] is False
 
@@ -416,7 +416,7 @@ def test_default_kernels_follow_layout(tmp_path: Path, monkeypatch, nested: bool
 
 def test_kernel_ref_and_root_are_exclusive(tmp_path: Path) -> None:
     result = runner.invoke(app, ["hardware", "build", "--cmsis-nn-ref", "v1", "--cmsis-nn-root", str(tmp_path)])
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     assert "not both" in result.output
 
 
@@ -531,7 +531,7 @@ def test_missing_saved_root_fails_clearly(tmp_path: Path) -> None:
     app_dir.mkdir(parents=True)
     nsx_app.save_options(app_dir, AppOptions(cmsis_nn_root=tmp_path / "moved"))
     result = runner.invoke(app, ["hardware", "build", "--build-dir", str(tmp_path)])
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert "kernel root is gone" in result.output and "--cmsis-nn-root" in result.output
 
 

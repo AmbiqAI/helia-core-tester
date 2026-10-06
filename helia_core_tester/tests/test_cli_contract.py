@@ -103,7 +103,7 @@ def test_boards_lists_table() -> None:
 
 def test_unknown_board_lists_known_ids() -> None:
     result = runner.invoke(app, ["hardware", "build", "--board", "nope_evb"])
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     text = _result_text(result)
     assert "Unknown board 'nope_evb'" in text and "apollo510_evb" in text
 
@@ -122,17 +122,17 @@ def test_probes_match_fails_without_probes(monkeypatch) -> None:
     monkeypatch.setattr(hardware_cli, "resolve_serial", lambda explicit=None, **_: (_ for _ in ()).throw(
         hardware_cli.ProbeResolutionError("No connected J-Link probes detected.")))
     result = runner.invoke(app, ["probes", "match"])
-    assert result.exit_code == 1
+    assert result.exit_code == 5
     assert "No connected J-Link probes" in _result_text(result)
 
 
 def test_stream_precision_rules_are_enforced_before_hardware(monkeypatch) -> None:
     monkeypatch.setenv("HPX_JLINK_SERIAL", "1")
     result = runner.invoke(app, ["hardware", "stream", "--precision", "fp16", "--suite", "both"])
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     assert "--precision cannot be combined with --suite both" in _result_text(result)
     result = runner.invoke(app, ["hardware", "run", "--precision", "fp32", "--test-name", "x", "--skip-generate", "--skip-flash"])
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     assert "--precision and --test-name cannot be combined" in _result_text(result)
 
 
@@ -156,14 +156,14 @@ def test_option_validation_runs_before_probe_resolution(monkeypatch) -> None:
         (["hardware", "run", "--fvp-gate", "maybe"], "--fvp-gate must be one of"),
     ):
         result = runner.invoke(app, args)
-        assert result.exit_code == 1, args
+        assert result.exit_code == 2, args
         text = _result_text(result)
         assert expected in text and "No connected J-Link probes" not in text, (args, text)
     assert enumerated == []
 
     # Valid options: now the probe is resolved, and its error is what the user sees.
     result = runner.invoke(app, ["hardware", "stream", "--precision", "fp16"])
-    assert result.exit_code == 1 and "No connected J-Link probes" in _result_text(result)
+    assert result.exit_code == 5 and "No connected J-Link probes" in _result_text(result)
     assert enumerated == ["probe"]
 
 
@@ -193,7 +193,7 @@ def test_pipeline_failures_print_one_line_and_hide_the_traceback_unless_verbose(
     for args in (["hardware", "run", "--skip-generate"], ["hardware", "stream"]):
         result = runner.invoke(app, args)
         text = _result_text(result)
-        assert result.exit_code == 1, (args, text)
+        assert result.exit_code == 5, (args, text)
         assert expected_line in text and "Traceback" not in text, (args, text)
 
         verbose = _result_text(runner.invoke(app, args + ["-v", "1"]))
@@ -239,7 +239,7 @@ def test_run_rejects_skip_flash_with_force_flash(monkeypatch) -> None:
     monkeypatch.setattr(hardware_cli, "resolve_serial", lambda explicit=None, **_: (_ for _ in ()).throw(
         AssertionError("probes must not be resolved before option validation")))
     result = runner.invoke(app, ["hardware", "run", "--skip-flash", "--force-flash"])
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     assert "--skip-flash and --force-flash cannot be combined" in _result_text(result)
 
 
@@ -275,14 +275,14 @@ def test_precision_refuses_suite_both_in_any_spelling(monkeypatch) -> None:
     for spelling in ("BOTH", "Both", " both "):
         for command in (["hardware", "stream"], ["hardware", "run", "--skip-generate"]):
             result = runner.invoke(app, [*command, "--precision", "fp16", "--suite", spelling])
-            assert result.exit_code == 1, (command, spelling)
+            assert result.exit_code == 2, (command, spelling)
             assert "--precision cannot be combined with --suite both" in _result_text(result), (command, spelling)
 
 
 def test_memory_report_missing_elf_is_a_one_line_error(tmp_path) -> None:
     result = runner.invoke(app, ["hardware", "memory-report", "--build-dir", str(tmp_path / "never-built")])
     text = _result_text(result)
-    assert result.exit_code == 1 and isinstance(result.exception, SystemExit), text
+    assert result.exit_code == 5 and isinstance(result.exception, SystemExit), text
     assert "✗ Built firmware ELF not found" in text and "hardware build" in text and "Traceback" not in text
 
 
@@ -295,7 +295,7 @@ def test_stream_requires_the_build_id_stamp_unless_allowed(monkeypatch, tmp_path
     (unstamped / "hardware" / "hct_benchmark_server.elf").write_bytes(b"legacy")
     result = runner.invoke(app, ["hardware", "stream", "--build-dir", str(unstamped)])
     text = _result_text(result)
-    assert result.exit_code == 1 and "hct_build_id.txt not found" in text and "--allow-unverified-firmware" in text, text
+    assert result.exit_code == 3 and "hct_build_id.txt not found" in text and "--allow-unverified-firmware" in text, text
     assert "Traceback" not in text
 
     seen: dict = {}
@@ -421,6 +421,20 @@ def test_skip_flash_refusal_is_one_line(monkeypatch, tmp_path) -> None:
     app_dir.mkdir(parents=True)
     nsx_app.save_options(app_dir, nsx_app.AppOptions(cmsis_nn_ref="v9"))
     result = runner.invoke(app, ["hardware", "run", "--build-dir", str(tmp_path), "--skip-flash"])
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert "Kernels changed since the build; rebuild first." in _result_text(result)
     assert "Traceback" not in _result_text(result)
+
+
+def test_golden_refusal_exits_refused(monkeypatch) -> None:
+    """Refusals exit 3, not the correctness 1."""
+    from helia_core_tester.hardware import hardware_pipeline
+    from helia_core_tester.hardware.nsx_cli import RunRefused
+
+    def _refuse(*args, **kwargs):
+        raise RunRefused("Golden run failed these cases: c")
+
+    monkeypatch.setenv("HPX_JLINK_SERIAL", "1")
+    monkeypatch.setattr(hardware_pipeline, "run_hardware_pipeline", _refuse)
+    result = runner.invoke(app, ["hardware", "run", "--skip-generate"])
+    assert result.exit_code == 3 and "Golden run failed these cases" in _result_text(result)

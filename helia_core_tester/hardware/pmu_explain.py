@@ -20,7 +20,7 @@ import yaml
 from .boards import repo_root
 
 SCHEMA = "hct.pmu_explain"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # Counters the agent loop should request.
 AGENT_PMU_SELECTION: dict[str, list[str]] = {
