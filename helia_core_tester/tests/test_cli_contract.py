@@ -389,7 +389,9 @@ def test_skip_flash_generates_from_the_built_kernels(monkeypatch, tmp_path) -> N
     assert seen["app_options"] == built
 
 
-@pytest.mark.parametrize("flags", [["--cmsis-nn-ref", "v10"], ["--inline-asm"]])
+@pytest.mark.parametrize("flags", [
+    ["--cmsis-nn-ref", "v10"], ["--inline-asm"], ["--skip-generate", "--inline-asm"], ["--skip-generate", "--cmsis-nn-ref", "v10"],
+])
 def test_skip_flash_refuses_new_kernel_flags(monkeypatch, tmp_path, flags) -> None:
     """New flags would not reach the firmware."""
     from helia_core_tester.hardware import firmware_build, nsx_app

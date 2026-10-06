@@ -670,8 +670,8 @@ def run(
     # Neither builds nor generates: nothing to resolve.
     streams_only = skip_generate and skip_flash
     if streams_only:
-        # A passed placement must match the build.
-        if placement is not None:
+        # Passed build flags must match it.
+        if any(flag is not None for flag in (cmsis_nn_ref, cmsis_nn_root, inline_asm, placement)):
             _built_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement)
         app_options = None
     elif skip_flash:
