@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 from helia_core_tester.core.cpu_targets import normalize_cpu
-from helia_core_tester.core.discovery import find_generated_tests_dir
+from helia_core_tester.core.discovery import find_generated_tests_dir, find_repo_root
 from helia_core_tester.core.path_layout import generated_tests_dir
 
 
@@ -64,8 +64,25 @@ def _generated_override(config):
     return str(generated_tests_dir(Path(hidden), cpu, suite=config.getoption("--suite") or "int"))
 
 
+def _guard_hidden(config) -> None:
+    """Keep hidden output and secrets contained."""
+    hidden = config.getoption("--hidden-dir")
+    if not hidden:
+        return
+    # Verbose tracebacks print the seed.
+    config.option.tbstyle = "native"
+    config.option.showlocals = False
+    config.option.fulltrace = False
+    root = Path(hidden).resolve()
+    if root.is_relative_to(find_repo_root().resolve()):
+        raise pytest.UsageError(f"{root} must sit outside the tester tree")
+    if not Path(_generated_override(config)).resolve().is_relative_to(root):
+        raise pytest.UsageError("--generated-tests-dir must sit under --hidden-dir")
+
+
 def pytest_configure(config):
     """Configure pytest with custom options."""
+    _guard_hidden(config)
     generated_override = _generated_override(config)
     target_cpu = config.getoption("--cpu") or "cortex-m55"
     target_suite = config.getoption("--suite") or "int"

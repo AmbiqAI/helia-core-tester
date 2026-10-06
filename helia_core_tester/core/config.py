@@ -320,6 +320,7 @@ class Config:
         # Seed sits in hardware case ids.
         if not 0 <= self.shape_seed <= MAX_SHAPE_SEED:
             raise ConfigurationError(f"shape_seed must be in 0..{MAX_SHAPE_SEED}, got {self.shape_seed}")
+        self._validate_hidden()
         if self.random_shapes is None:
             if self.hidden_dir is not None:
                 raise ConfigurationError("hidden_dir needs random_shapes")
@@ -328,7 +329,6 @@ class Config:
             raise ConfigurationError(f"random_shapes must be >= 1, got {self.random_shapes}")
         if "int" not in self.suites:
             raise ConfigurationError("random_shapes needs the int suite")
-        self._validate_hidden()
 
     def _validate_hidden(self) -> None:
         if self.hidden_dir is None:
