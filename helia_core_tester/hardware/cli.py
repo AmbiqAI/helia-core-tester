@@ -24,6 +24,7 @@ the same knob the generate/build/run commands use).
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import json
 import os
 import subprocess
@@ -199,7 +200,7 @@ def _app_options(build_dir: Path, cmsis_nn_ref, cmsis_nn_root, inline_asm, place
     return options
 
 
-def _built_options(build_dir: Path, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement=None):
+def _built_options(build_dir: Path, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement=None, stream_only=False):
     """The flashed build's options, unchanged."""
     from .firmware_build import nsx_app_dir
     from .nsx_app import AppRenderError, resolve_options, saved_options
@@ -216,7 +217,11 @@ def _built_options(build_dir: Path, cmsis_nn_ref, cmsis_nn_root, inline_asm, pla
             placement=placement, follow_pin=False,
         )
     except AppRenderError as exc:
-        _fail(f"{exc}; pass --skip-generate to stream only.")
+        if not stream_only:
+            _fail(f"{exc}; pass --skip-generate to stream only.")
+        # Streaming never reads the checkout.
+        passed = {"requantize_inline_asm": inline_asm, "placement": placement}
+        wanted = dataclasses.replace(saved, **{k: v for k, v in passed.items() if v is not None})
     # Generation must match the flashed firmware.
     changes = wanted.changes_from(saved)
     if changes:
@@ -672,7 +677,7 @@ def run(
     if streams_only:
         # Passed build flags must match it.
         if any(flag is not None for flag in (cmsis_nn_ref, cmsis_nn_root, inline_asm, placement)):
-            _built_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement)
+            _built_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement, stream_only=True)
         app_options = None
     elif skip_flash:
         app_options = _built_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement)

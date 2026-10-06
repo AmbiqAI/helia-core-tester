@@ -359,6 +359,21 @@ def test_stream_only_run_skips_option_resolution(monkeypatch, tmp_path) -> None:
     assert seen["app_options"] is None and "inline asm off" in _result_text(result)
 
 
+@pytest.mark.parametrize(("flag", "refused"), [("--no-inline-asm", False), ("--inline-asm", True)])
+def test_stream_only_checks_flags_without_the_checkout(monkeypatch, tmp_path, flag, refused) -> None:
+    """A moved checkout cannot block streaming."""
+    from helia_core_tester.hardware import firmware_build, nsx_app
+
+    seen: dict = {}
+    _capture_run(monkeypatch, seen)
+    app_dir = firmware_build.nsx_app_dir(tmp_path)
+    app_dir.mkdir(parents=True)
+    nsx_app.save_options(app_dir, nsx_app.AppOptions(cmsis_nn_root=tmp_path / "moved", requantize_inline_asm=False))
+    args = ["hardware", "run", "--build-dir", str(tmp_path), "--skip-generate", "--skip-flash", flag]
+    text = _result_text(runner.invoke(app, args))
+    assert ("--skip-flash keeps the built kernels" in text) is refused and bool(seen) is not refused, text
+
+
 def _capture_run(monkeypatch, seen: dict) -> None:
     from helia_core_tester.hardware import hardware_pipeline
 
