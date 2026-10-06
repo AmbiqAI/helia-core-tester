@@ -52,7 +52,8 @@ def _bundle(root: Path, name: str, *, cycles: dict | None = None, rows: dict | N
 
 
 def _score(baselines: list[Path], candidates: list[Path], **settings) -> dict:
-    scoring = load_scoring("apollo510_evb")
+    """Score with the gain gate off."""
+    scoring = load_scoring("apollo510_evb") | {"min_score": -math.inf}
     scoring.update(settings)
     return score_bundles([load_bundle(p) for p in baselines], [load_bundle(p) for p in candidates], scoring)
 
@@ -61,9 +62,9 @@ def _kinds(report: dict) -> set[str]:
     return {failure["kind"] for failure in report["failures"]}
 
 
-def test_identical_bundles_pass(tmp_path):
-    report = _score([_bundle(tmp_path, "a")], [_bundle(tmp_path, "b")])
-    assert report["verdict"] == "pass" and report["score"] == 0.0
+def test_identical_bundles_no_gain(tmp_path):
+    report = _score([_bundle(tmp_path, "a")], [_bundle(tmp_path, "b")], min_score=0.0)
+    assert report["verdict"] == "no_gain" and report["score"] == 0.0 and not report["failures"]
     assert set(report["families"]) == {"conv", "depthwise", "fully_connected", "other"}
 
 
@@ -160,7 +161,8 @@ def test_retired_deltas_reported(tmp_path):
 
 
 @pytest.mark.parametrize(("change", "code", "verdict"), [
-    ({}, 0, "pass"),
+    ({"cycles": {"conv_a": 800.0}}, 0, "pass"),
+    ({}, 4, "no_gain"),
     ({"drop": ("conv_a",)}, 1, "fail"),
     ({"target": {"board": "apollo3p_evb"}}, 3, "not_comparable"),
 ])
@@ -185,3 +187,11 @@ def test_lost_timing_fails(tmp_path, status):
     cand = _bundle(tmp_path, "b", cycles={"conv_a": 9000.0}, rows={"conv_a": {"timing_status": status}})
     report = _score([_bundle(tmp_path, "a")], [cand])
     assert [(f["kind"], f["case_id"]) for f in report["failures"]] == [("timing_lost", "conv_a")]
+
+
+def test_min_score_sets_no_gain(tmp_path):
+    base, cand = _bundle(tmp_path, "a"), _bundle(tmp_path, "b", cycles={"conv_a": 990.0})
+    assert _score([base], [cand], min_score=0.0)["verdict"] == "pass"
+    assert _score([base], [cand], min_score=0.01)["verdict"] == "no_gain"
+    slower = _bundle(tmp_path, "c", cycles={"conv_a": 1020.0})
+    assert _score([base], [slower], min_score=0.0)["verdict"] == "no_gain"

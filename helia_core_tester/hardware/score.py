@@ -10,7 +10,8 @@ MAD and the spread of its repeat medians. A case timed valid in the
 baseline but not in the candidate fails. Only timing_status "valid" cases are timed.
 The score is sum(weight * ln(family geomean speedup)) with weights from
 assets/scoring/family_weights.yaml; with weights that sum to 1 it
-approximates ln(whole-model speedup). JSON schema: see `score_bundles`.
+approximates ln(whole-model speedup). A candidate with no failures
+but score <= min_score (default 0) gets verdict no_gain. JSON schema: see `score_bundles`.
 """
 
 from __future__ import annotations
@@ -35,7 +36,9 @@ SCHEMA = "hct.score"
 SCHEMA_VERSION = 1
 SCORING_DIR = repo_root() / "assets" / "scoring"
 MAD_SIGMA = 1.4826
-EXIT_PASS, EXIT_FAIL, EXIT_REFUSED = 0, 1, 3
+# Typer usage errors already exit 2.
+EXIT_PASS, EXIT_FAIL, EXIT_REFUSED, EXIT_NO_GAIN = 0, 1, 3, 4
+EXITS = {"pass": EXIT_PASS, "fail": EXIT_FAIL, "not_comparable": EXIT_REFUSED, "no_gain": EXIT_NO_GAIN}
 # INST_RETIRED plus every MVE retired counter.
 _RETIRED = re.compile(r"^ARM_PMU_(INST|MVE_\w+)_RETIRED$")
 
@@ -164,6 +167,7 @@ def load_scoring(board: str | None, directory: Path = SCORING_DIR) -> dict:
         "default_family": weights["default_family"],
         "floor_pct": float(floor_row.get("floor_pct", floors["default_floor_pct"])),
         "mad_k": float(floors["mad_k"]),
+        "min_score": 0.0,
     }
 
 
@@ -217,7 +221,7 @@ def _case(case_id: str, baselines: list[Bundle], candidates: list[Bundle], scori
 def score_bundles(baselines: list[Bundle], candidates: list[Bundle], scoring: dict) -> dict:
     """The score report; `schema_version` bumps on breaking change.
 
-    Keys: schema, schema_version, verdict (pass | fail | not_comparable),
+    Keys: schema, schema_version, verdict (pass | fail | not_comparable | no_gain),
     score (null unless comparable), board, placement, baseline and
     candidate session ids, settings, families {name: {weight, cases,
     geomean_speedup, contribution}}, cases (eligible and excluded rows),
@@ -235,7 +239,7 @@ def score_bundles(baselines: list[Bundle], candidates: list[Bundle], scoring: di
         "placement": identity["placement"],
         "baseline": [b.session_id for b in baselines],
         "candidate": [c.session_id for c in candidates],
-        "settings": {k: scoring[k] for k in ("weights_version", "weights_board", "weights", "floor_pct", "mad_k")},
+        "settings": {k: scoring[k] for k in ("weights_version", "weights_board", "weights", "floor_pct", "mad_k", "min_score")},
         "families": {},
         "cases": [],
         "failures": [],
@@ -286,6 +290,8 @@ def score_bundles(baselines: list[Bundle], candidates: list[Bundle], scoring: di
     report["score"] = total
     if failures:
         report["verdict"] = "fail"
+    elif total <= scoring["min_score"]:
+        report["verdict"] = "no_gain"
     return report
 
 
@@ -337,10 +343,11 @@ def score(
     as_json: bool = typer.Option(False, "--json", help="Print the JSON report."),
     floor_pct: Optional[float] = typer.Option(None, "--floor-pct", min=0.0, help="Noise floor in percent (default: per board)."),
     mad_k: Optional[float] = typer.Option(None, "--mad-k", min=0.0, help="MAD multiplier for the band."),
+    min_score: float = typer.Option(0.0, "--min-score", help="Score a passing candidate must beat."),
 ) -> None:
     """Score a kernel candidate against a baseline.
 
-    Exit 0 on pass, 1 on fail, 3 when the bundles cannot be compared.
+    Exit 0 pass, 1 fail, 3 not comparable, 4 no gain.
     """
     baselines = [load_bundle(path) for path in baseline]
     candidates = [load_bundle(path) for path in candidate]
@@ -349,6 +356,7 @@ def score(
         scoring["floor_pct"] = floor_pct
     if mad_k is not None:
         scoring["mad_k"] = mad_k
+    scoring["min_score"] = min_score
     report = score_bundles(baselines, candidates, scoring)
     typer.echo(json.dumps(report, indent=2) if as_json else format_report(report))
-    raise typer.Exit({"pass": EXIT_PASS, "fail": EXIT_FAIL}.get(report["verdict"], EXIT_REFUSED))
+    raise typer.Exit(EXITS[report["verdict"]])
