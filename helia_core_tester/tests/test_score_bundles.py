@@ -248,16 +248,25 @@ def test_cli_refuses_non_finite_settings(tmp_path, flag):
     assert result.exit_code == 2 and "must be finite" in result.output
 
 
-def test_digest_keeps_strict_compare_check(tmp_path):
-    def manifest_with(path, strict):
-        data = json.loads((path / "session_manifest.json").read_text())
-        data["harness_digest"] = "d" * 64
-        data["compare"] = {"strict": strict}
-        (path / "session_manifest.json").write_text(json.dumps(data))
-        return path
+def _with_compare(path, strict, golden=None):
+    data = json.loads((path / "session_manifest.json").read_text())
+    data["harness_digest"] = "d" * 64
+    data["compare"] = {"strict": strict, "golden_session_id": golden}
+    (path / "session_manifest.json").write_text(json.dumps(data))
+    return path
 
-    base = manifest_with(_bundle(tmp_path, "a"), False)
-    report = _score([base], [manifest_with(_bundle(tmp_path, "b"), True)])
-    assert report["verdict"] == "not_comparable"
-    assert "strict_compare" in report["failures"][0]["reason"]
+
+def test_candidate_may_be_stricter_never_looser(tmp_path):
+    loose_base = _with_compare(_bundle(tmp_path, "a"), False)
+    # The agent loop: --golden-from the baseline.
+    assert _score([loose_base], [_with_compare(_bundle(tmp_path, "b"), True, "a")])["verdict"] == "pass"
+    strict_base = _with_compare(_bundle(tmp_path, "c"), True)
+    report = _score([strict_base], [_with_compare(_bundle(tmp_path, "d"), False)])
+    assert report["verdict"] == "not_comparable" and "looser compare" in report["failures"][0]["reason"]
+
+
+def test_candidate_goldens_must_come_from_baseline(tmp_path):
+    base = _with_compare(_bundle(tmp_path, "a"), False)
+    report = _score([base], [_with_compare(_bundle(tmp_path, "b"), True, "elsewhere")])
+    assert report["verdict"] == "not_comparable" and "not a baseline" in report["failures"][0]["reason"]
 
