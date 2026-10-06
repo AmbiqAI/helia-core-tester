@@ -2,7 +2,7 @@
 # Score = sum over families of weight * ln(geomean speedup).
 # Bump `version` whenever a weight or rule changes.
 schema: hct.scoring.family_weights
-schema_version: 1
+schema_version: 2
 version: 1
 # First match on the timed symbol wins.
 families:
@@ -10,6 +10,8 @@ families:
   - {name: fully_connected, match: fully_connected}
   - {name: conv, match: convolve}
 default_family: other
+# Geomean weight of an MLPerf layer case.
+mlperf_case_weight: 4.0
 # Boards without a row use this one.
 fallback_board: apollo510_evb
 boards:
