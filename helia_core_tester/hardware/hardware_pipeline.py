@@ -554,9 +554,7 @@ def run_hardware_pipeline(
         from .nsx_app import resolve_options
 
         # Same resolution as the CLI.
-        app_options = resolve_options(
-            nsx_app_dir(resolved_build_dir), repo_root, follow_pin=not skip_flash, keep_switches=skip_flash,
-        )
+        app_options = resolve_options(nsx_app_dir(resolved_build_dir), repo_root, follow_pin=not skip_flash)
 
     generate_s = 0.0
     if skip_generate:

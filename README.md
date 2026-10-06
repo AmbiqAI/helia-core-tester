@@ -118,7 +118,7 @@ turns it back on); `--update-dependencies` re-resolves the NSX modules into
 `hardware build`, `flash` and `run` reuse the saved kernel source
 (`--cmsis-nn-root` or `--cmsis-nn-ref`) when you leave it out. Switches
 (`--inline-asm`, `--placement`) do not persist: an unpassed switch builds its
-default, so pass the same switches to `build` and `flash`. An option that
+default, so pass the same switches to `build`, `flash` and `run`. An option that
 differs from the saved build rebuilds and prints one line naming the change.
 `--skip-flash` keeps the flashed build's options and refuses a different flag. A
 saved ref you did not pass with `--cmsis-nn-ref` follows the pinned release, so

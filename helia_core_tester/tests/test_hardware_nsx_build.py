@@ -482,7 +482,7 @@ def test_flags_override_saved_options(tmp_path: Path) -> None:
     assert resolve() == AppOptions(cmsis_nn_root=kernels)
     assert resolve(cmsis_nn_ref="v2") == AppOptions(cmsis_nn_ref="v2", cmsis_nn_ref_explicit=True)
     assert resolve(inline_asm=False) == AppOptions(cmsis_nn_root=kernels, requantize_inline_asm=False)
-    assert resolve(keep_switches=True) == AppOptions(cmsis_nn_root=kernels, requantize_inline_asm=False)
+    assert resolve(follow_pin=False) == AppOptions(cmsis_nn_root=kernels, requantize_inline_asm=False)
 
 
 def test_defaulted_ref_follows_the_pin(tmp_path: Path, nsx: list[tuple]) -> None:

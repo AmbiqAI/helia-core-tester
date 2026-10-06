@@ -213,7 +213,7 @@ def _built_options(build_dir: Path, cmsis_nn_ref, cmsis_nn_root, inline_asm, pla
     try:
         wanted = resolve_options(
             app_dir, repo_root(), cmsis_nn_ref=cmsis_nn_ref, cmsis_nn_root=cmsis_nn_root, inline_asm=inline_asm,
-            placement=placement, follow_pin=False, keep_switches=True,
+            placement=placement, follow_pin=False,
         )
     except AppRenderError as exc:
         _fail(f"{exc}; pass --skip-generate to stream only.")
