@@ -21,6 +21,7 @@ from helia_core_tester.core.steps import BuildStep, CleanStep, GenerateStep, Run
 from helia_core_tester.reporting.coverage_merge import run_coverage_merge
 from helia_core_tester.hardware.cli import boards as boards_command
 from helia_core_tester.hardware.cli import hardware_app, probes_app
+from helia_core_tester.hardware.score import score as score_command
 
 # Once, for every subcommand (including the hardware group's) for the lifetime of
 # this process -- see ensure_arm_toolchain_on_path()'s own docstring for why this
@@ -36,6 +37,7 @@ app = typer.Typer(
 app.add_typer(hardware_app, name="hardware")
 app.add_typer(probes_app, name="probes")
 app.command(name="boards")(boards_command)
+app.command(name="score")(score_command)
 
 
 def _print_plan_item(plan_item) -> None:
