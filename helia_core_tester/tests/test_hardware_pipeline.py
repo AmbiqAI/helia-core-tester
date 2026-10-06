@@ -919,6 +919,9 @@ def test_golden_from_names_missing_cases(tmp_path: Path, monkeypatch) -> None:
     _write_golden(golden_dir, bundles[0])
     with pytest.raises(RuntimeError, match="Golden run is missing these cases: abs_gone$"):
         _stream_golden(tmp_path, monkeypatch, bundles, golden_dir)
+    # Disjoint selection: missing, not empty.
+    with pytest.raises(RuntimeError, match="Golden run is missing these cases: abs_gone$"):
+        _stream_golden(tmp_path, monkeypatch, bundles[1:], golden_dir)
 
 
 def test_input_digest_ignores_golden(tmp_path: Path) -> None:

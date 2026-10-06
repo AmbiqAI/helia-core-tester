@@ -399,9 +399,9 @@ def golden_bundles(bundles: list, golden_dir: Path, *, allow_failed: bool) -> li
     """Swap in past outputs; refuse misfits."""
     from .case_bundle import golden_bundle, golden_record, golden_usable, input_digest
 
-    records = {b.case_id: golden_record(b, golden_dir) for b in bundles}
-    if all(record is None for record in records.values()):
+    if not any((golden_dir / "correctness").glob("*.json")):
         raise RuntimeError(f"Golden bundle has no results: {golden_dir}")
+    records = {b.case_id: golden_record(b, golden_dir) for b in bundles}
     _refuse("Golden run is missing these cases", [i for i, r in records.items() if r is None])
     if not allow_failed:
         _refuse("Golden run failed these cases", [i for i, r in records.items() if r.get("passed") is not True])
