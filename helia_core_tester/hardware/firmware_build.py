@@ -393,19 +393,21 @@ def _built_record(app_dir: Path, options: "AppOptions") -> dict[str, str]:
     }
 
 
-def _checkout_state(root: Optional[Path]) -> dict[str, Any]:
-    """Kernel checkout HEAD and dirty flag."""
+def _checkout_state(root: Optional[Path], base_ref: Optional[str] = None) -> dict[str, Any]:
+    """Kernel checkout HEAD, dirty flag, base."""
     from ..generation.reuse import _git_output, _is_git_toplevel
     from .nsx_app import KERNEL_TREES
 
     if root is None or not _is_git_toplevel(root):
-        return {"root_head": None, "root_dirty": None}
+        return {"root_head": None, "root_dirty": None, "base_commit": None}
     head = _git_output(root, "rev-parse", "HEAD")
     # Only the copied trees matter.
     status = _git_output(root, "status", "--porcelain", "--", *KERNEL_TREES, "nsx")
+    base = _git_output(root, "rev-parse", "--verify", "-q", f"{base_ref}^{{commit}}") if base_ref else None
     return {
         "root_head": head.strip() if head else None,
         "root_dirty": None if status is None else bool(status.strip()),
+        "base_commit": base.strip() if base else None,
     }
 
 
@@ -419,14 +421,18 @@ def _replace_json(path: Path, data: dict[str, Any]) -> None:
 def _record_built(build_dir: Path, options: "AppOptions") -> None:
     """Record what the build used."""
     from . import nsx_cli
+    from .harness_lock import firmware_record
 
     app_dir = nsx_app_dir(build_dir)
     _replace_json(app_dir / BUILT_LOCK, _built_record(app_dir, options))
     version = gcc_version(_built_compiler(build_dir))
+    toolchain = {"name": GCC_NAME, "version": version} if version else None
     info = {
         "nsx_version": nsx_cli.nsx_version(),
-        "toolchain": {"name": GCC_NAME, "version": version} if version else None,
-        **_checkout_state(options.cmsis_nn_root),
+        "toolchain": toolchain,
+        **_checkout_state(options.cmsis_nn_root, options.cmsis_nn_ref),
+        # Measurement inputs, minus kernels.
+        "harness": firmware_record(tester_repo_root(), build_dir, options, toolchain, nsx_cli.nsx_version()),
     }
     _replace_json(app_dir / BUILT_INFO, info)
 

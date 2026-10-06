@@ -11,6 +11,7 @@ from typing import Any
 from xml.etree.ElementTree import Element, SubElement, ElementTree
 
 from .comparison import finite_or_none
+from .harness_lock import HARNESS_FIELD
 from .measurement import compute_counter_medians, counter_names_for_passes
 from .session import SessionResult
 from .wire import boot_record, placement_record
@@ -69,7 +70,9 @@ def build_provenance(build_dir: Path | None) -> tuple[dict, Path | None]:
     from .firmware_build import built_record, nsx_app_dir
     from .nsx_app import CMSIS_NN_MODULE, saved_options
 
-    kernels: dict[str, Any] = dict.fromkeys(("ref", "commit", "root", "root_head", "root_dirty", "tree_hash"))
+    kernels: dict[str, Any] = dict.fromkeys(
+        ("ref", "commit", "root", "root_head", "root_dirty", "tree_hash", "base_ref", "base_commit")
+    )
     provenance: dict[str, Any] = {
         "options": None, "kernels": kernels, "neuralspotx_version": None, "nsx_lock_sha256": None,
         "modules": None, "toolchain": None,
@@ -89,9 +92,11 @@ def build_provenance(build_dir: Path | None) -> tuple[dict, Path | None]:
     options = saved_options(app_dir)
     if options is not None:
         provenance["options"] = json.loads(options.to_json())
+        kernels["base_ref"] = options.cmsis_nn_ref
         if options.cmsis_nn_root is None:
             kernels["ref"] = options.cmsis_nn_ref
         else:
+            kernels["base_commit"] = _text(built.get("base_commit"))
             kernels["root"] = str(options.cmsis_nn_root)
             dirty = built.get("root_dirty")
             kernels["root_head"] = _text(built.get("root_head"))
@@ -103,7 +108,19 @@ def build_provenance(build_dir: Path | None) -> tuple[dict, Path | None]:
     modules = nsx_cli.locked_modules(app_dir)
     provenance["modules"] = modules
     kernels["commit"] = next((m["commit"] for m in modules or () if m["name"] == CMSIS_NN_MODULE), None)
+    if kernels["root"] is None:
+        kernels["base_commit"] = kernels["commit"]
     return provenance, app_dir / "nsx.lock"
+
+
+def harness_section(build_dir: Path | None) -> dict:
+    """Harness digest over the build's inputs."""
+    from .boards import repo_root
+    from .firmware_build import built_record, nsx_app_dir
+    from .harness_lock import harness_record
+
+    firmware = built_record(nsx_app_dir(build_dir)).get("harness") if build_dir is not None else None
+    return harness_record(firmware if isinstance(firmware, dict) else None, repo_root())
 
 
 def _rejection_record(case) -> dict | None:
@@ -195,6 +212,7 @@ def write_result_bundle(
         "compare": {"strict": False, "golden_from": None, **(compare or {})},
     }
     session_manifest["build"], lock_file = build_provenance(build_dir)
+    session_manifest[HARNESS_FIELD] = harness_section(build_dir)
     if lock_file is not None:
         shutil.copyfile(lock_file, bundle_root / "nsx.lock")
         session_manifest["artifacts"]["nsx_lock"] = "nsx.lock"

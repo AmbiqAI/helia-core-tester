@@ -132,6 +132,10 @@ def _serial(explicit: Optional[int]) -> int:
         raise AssertionError("unreachable")
 
 
+_DIRTY_TESTER_HELP = (
+    "Run a --cmsis-nn-root candidate from an uncommitted tester. "
+    "The bundle records harness.tester_dirty and a diff hash."
+)
 _CMSIS_NN_REF_HELP = "ns-cmsis-nn tag or commit to build (default: see --cmsis-nn-root)."
 _CMSIS_NN_ROOT_HELP = (
     "Local ns-cmsis-nn checkout to build. Default: the last build's checkout or "
@@ -159,6 +163,17 @@ def _check_placement(placement, spec: BoardSpec) -> None:
         _fail(f"--placement must be one of: {', '.join(PLACEMENTS)}.")
     if placement == "mram" and not spec.has_mram:
         _fail(f"{spec.id} has no cached MRAM; use tcm.")
+
+
+def _check_tester_clean(allow: bool, echo) -> None:
+    """Candidate runs need a committed tester."""
+    from .harness_lock import tester_state
+
+    if not tester_state(repo_root())["dirty"]:
+        return
+    if not allow:
+        _fail("Tester worktree is dirty; commit or pass --allow-dirty-tester.")
+    echo("[hardware] WARNING: tester is dirty; bundle marks tester_dirty.")
 
 
 def _app_options(build_dir: Path, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement=None):
@@ -589,6 +604,7 @@ def run(
     placement: Optional[str] = typer.Option(None, "--placement", help=_PLACEMENT_HELP),
     update_dependencies: bool = typer.Option(False, "--update-dependencies", help=_UPDATE_DEPS_HELP),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help=_VERBOSITY_HELP),
+    allow_dirty_tester: bool = typer.Option(False, "--allow-dirty-tester", help=_DIRTY_TESTER_HELP),
 ) -> None:
     """The whole hardware pipeline: generate tests for the board's CPU, build the
     firmware, flash it unless the board already runs this exact build, stream the
@@ -618,6 +634,8 @@ def run(
         app_options = _app_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement)
     serial = _serial(serial_no)
     echo = lambda msg: typer.echo(msg, err=as_json)  # noqa: E731
+    if cmsis_nn_root is not None:
+        _check_tester_clean(allow_dirty_tester, echo)
     if streams_only:
         _saved_kernels(build_dir, echo)
     with _pipeline_errors(_verbosity(verbosity)), _quiet_stdout(as_json):

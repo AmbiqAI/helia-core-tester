@@ -1,0 +1,228 @@
+"""Harness digest and candidate diff check."""
+
+from __future__ import annotations
+
+import json
+import subprocess
+from pathlib import Path
+
+import pytest
+from typer.testing import CliRunner
+
+from helia_core_tester.cli import app
+from helia_core_tester.hardware import boards, firmware_build, harness_lock
+from helia_core_tester.hardware.candidate_check import check_candidate
+from helia_core_tester.hardware.firmware_build import nsx_app_dir
+from helia_core_tester.hardware.nsx_app import AppOptions, kernel_dir, save_options
+from helia_core_tester.hardware.result_bundle import write_result_bundle
+from helia_core_tester.hardware.session import SessionResult
+
+runner = CliRunner()
+
+LOCK = """schema_version: 4
+targets:
+  apollo510_evb:
+    generated_at: '{stamp}'
+    nsx_tool:
+      version: 0.9.0
+    manifest:
+      path: nsx.yml
+      hash: sha256:{manifest}
+    target:
+      board: apollo510_evb
+    modules:
+      nsx-ambiqsuite:
+        project: nsx-ambiq-sdk
+        kind: git
+        resolved:
+          commit: a9f4ec25
+          content_hash: sha256:44
+          acquired_at: '{stamp}'
+      nsx-cmsis-nn:
+        project: nsx-cmsis-nn
+        kind: vendored
+        resolved:
+          content_hash: sha256:{kernel}
+          acquired_at: '{stamp}'
+"""
+CACHE = "CMAKE_C_FLAGS:STRING={flags}\nCMAKE_C_FLAGS-ADVANCED:INTERNAL=1\nNSX_JLINK_SERIAL:UNINITIALIZED=1\n"
+
+
+def _git(root: Path, *args: str) -> str:
+    return subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True, text=True).stdout
+
+
+def _repo(root: Path, files: dict[str, str]) -> Path:
+    """A committed git repo with files."""
+    for rel, text in files.items():
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(text, encoding="utf-8")
+    _git(root.parent, "init", "-q", str(root))
+    _git(root, "add", "-A")
+    _git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base")
+    return root
+
+
+@pytest.fixture
+def tester(tmp_path: Path, monkeypatch) -> Path:
+    """A fake tester checkout as repo root."""
+    root = _repo(tmp_path / "tester", {
+        "cmake/hardware/main.c": "int main;\n",
+        "assets/templates/hardware/nsx/CMakeLists.txt.j2": "x\n",
+        "scripts/patch_build_id.py": "pass\n",
+    })
+    monkeypatch.setattr(firmware_build, "tester_repo_root", lambda: root)
+    monkeypatch.setattr(boards, "repo_root", lambda: root)
+    return root
+
+
+def _build(build_dir: Path, kernel: str = "k", flags: str = "-O2", stamp: str = "t0", **opts) -> dict:
+    """Fake one build; return the manifest's harness."""
+    options = AppOptions(cmsis_nn_root=build_dir.parent / "kernels", **opts)
+    app_dir = nsx_app_dir(build_dir)
+    module = kernel_dir(app_dir, options)
+    (module / "Source").mkdir(parents=True, exist_ok=True)
+    (module / "Source" / "k.c").write_text(f"int {kernel};\n", encoding="utf-8")
+    memory = app_dir / "boards" / "b" / "memory.cmake"
+    if not memory.exists():
+        memory.parent.mkdir(parents=True)
+        memory.write_text("tcm\n", encoding="utf-8")
+    lock = LOCK.format(stamp=stamp, manifest=stamp, kernel=kernel)
+    (app_dir / "nsx.lock").write_text(lock, encoding="utf-8")
+    (build_dir / "CMakeCache.txt").write_text(CACHE.format(flags=flags), encoding="utf-8")
+    save_options(app_dir, options)
+    firmware_build._record_built(build_dir, options)
+    result = SessionResult(cases=(), protocol_trace=(), session_complete_cases=0, build_id="b")
+    root = write_result_bundle(
+        result, session_id="s", output_root=build_dir.parent, memory_report={}, kernel_catalog=[], build_dir=build_dir,
+    )
+    return json.loads((root / "session_manifest.json").read_text(encoding="utf-8"))
+
+
+def test_digest_is_stable_across_reruns(tester: Path, tmp_path: Path) -> None:
+    first = _build(tmp_path / "b", stamp="t0")
+    second = _build(tmp_path / "b", stamp="t1")
+    assert harness_lock.harness_digest(first) is not None
+    assert harness_lock.same_harness(first, second)
+    assert first["harness"]["tester_dirty"] is False
+
+
+def test_kernel_change_keeps_digest(tester: Path, tmp_path: Path) -> None:
+    base = _build(tmp_path / "b", kernel="a")
+    candidate = _build(tmp_path / "b", kernel="b")
+    assert harness_lock.same_harness(base, candidate)
+    assert harness_lock.kernel_digest(base) != harness_lock.kernel_digest(candidate)
+
+
+@pytest.mark.parametrize("change", ["source", "flags", "switch", "board"])
+def test_harness_change_moves_digest(tester: Path, tmp_path: Path, change: str) -> None:
+    base = _build(tmp_path / "b")
+    kwargs: dict = {}
+    if change == "source":
+        (tester / "cmake/hardware/main.c").write_text("int main2;\n", encoding="utf-8")
+        _git(tester, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", "edit")
+    elif change == "flags":
+        kwargs["flags"] = "-O3"
+    elif change == "switch":
+        kwargs["requantize_inline_asm"] = False
+    else:
+        memory = nsx_app_dir(tmp_path / "b") / "boards" / "b" / "memory.cmake"
+        memory.write_text("mram\n", encoding="utf-8")
+    assert not harness_lock.same_harness(base, _build(tmp_path / "b", **kwargs))
+
+
+def test_dirty_tester_marks_bundle(tester: Path, tmp_path: Path) -> None:
+    clean = _build(tmp_path / "b")
+    (tester / "cmake/hardware/main.c").write_text("int dirty;\n", encoding="utf-8")
+    dirty = _build(tmp_path / "b")
+    assert dirty["harness"]["tester_dirty"] is True
+    assert not harness_lock.same_harness(clean, dirty)
+
+
+def test_no_build_means_no_digest(tester: Path) -> None:
+    assert harness_lock.harness_record(None, tester)["digest"] is None
+    assert not harness_lock.same_harness({}, {})
+
+
+def test_run_refuses_dirty_tester(tmp_path: Path, monkeypatch) -> None:
+    from helia_core_tester.hardware import hardware_pipeline
+
+    def _pipeline(*args, **kwargs):
+        called.append(kwargs)
+        raise RuntimeError("stop here")
+
+    called: list = []
+    state = {"dirty": False}
+    monkeypatch.setattr(harness_lock, "tester_state", lambda root: state)
+    monkeypatch.setattr(hardware_pipeline, "run_hardware_pipeline", _pipeline)
+    monkeypatch.setenv("HPX_JLINK_SERIAL", "1160003180")
+    args = ["hardware", "run", "--skip-generate", "--build-dir", str(tmp_path / "b"), "--cmsis-nn-root", str(tmp_path)]
+    assert runner.invoke(app, args).exit_code == 1 and called, "clean tester runs"
+    called.clear()
+    state["dirty"] = True
+    result = runner.invoke(app, args)
+    assert result.exit_code == 1 and "dirty" in result.output and not called
+    result = runner.invoke(app, [*args, "--allow-dirty-tester"])
+    assert called and "tester is dirty" in result.output
+
+
+# --- candidate check ------------------------------------------------------------
+
+
+@pytest.fixture
+def kernels(tmp_path: Path) -> Path:
+    root = _repo(tmp_path / "nn", {
+        "Source/Conv/a.c": "int a;\n",
+        "Include/arm_nnsupportfunctions.h": "int s;\n",
+        "Include/arm_nnfunctions.h": "int f;\n",
+        "Tests/t.c": "int t;\n",
+        "nsx/CMakeLists.txt": "x\n",
+        ".gitignore": "*.o\n",
+    })
+    _git(root, "tag", "base")
+    return root
+
+
+def _rules(root: Path) -> set[str]:
+    return {finding["rule"] for finding in check_candidate(root, "base")["findings"]}
+
+
+def test_source_change_passes(kernels: Path) -> None:
+    (kernels / "Source/Conv/a.c").write_text("int a; /* faster */\n", encoding="utf-8")
+    (kernels / "Source/Conv/new.c").write_text("int b;\n", encoding="utf-8")
+    report = check_candidate(kernels, "base")
+    assert report["ok"], report
+    assert {f["path"] for f in report["files"]} == {"Source/Conv/a.c", "Source/Conv/new.c"}
+
+
+@pytest.mark.parametrize(("rel", "text", "rule"), [
+    ("Tests/t.c", "int t2;\n", "outside_allowlist"),
+    ("nsx/CMakeLists.txt", "y\n", "outside_allowlist"),
+    ("cmake/flags.cmake", "y\n", "outside_allowlist"),
+    ("CMakeLists.txt", "y\n", "outside_allowlist"),
+    ("Source/CMakeLists.txt", "y\n", "file_type"),
+    ("Source/Conv/a.o", "y\n", "file_type"),
+    ("Include/arm_nnfunctions.h", "int g;\n", "frozen_file"),
+    ("Source/Conv/a.c", '__attribute__((section(".itcm"))) int a;\n', "special_section"),
+    ("Source/Conv/a.c", "#pragma GCC optimize(\"O3\")\n", "build_flags"),
+    ("Source/Conv/a.c", "static const int golden[4];\n", "harness_reference"),
+    ("Source/Conv/a.c", '#include "../../Tests/t.c"\n', "include_escape"),
+])
+def test_forbidden_change_fails(kernels: Path, rel: str, text: str, rule: str) -> None:
+    (kernels / rel).parent.mkdir(parents=True, exist_ok=True)
+    (kernels / rel).write_text(text, encoding="utf-8")
+    assert rule in _rules(kernels)
+
+
+def test_symlink_fails(kernels: Path) -> None:
+    (kernels / "Source/Conv/link.c").symlink_to(kernels / "Tests/t.c")
+    assert "symlink" in _rules(kernels)
+
+
+def test_cli_prints_json(kernels: Path) -> None:
+    (kernels / "Tests/t.c").write_text("int t2;\n", encoding="utf-8")
+    result = runner.invoke(app, ["candidate", "check", "--base", "base", str(kernels)])
+    assert result.exit_code == 1
+    assert json.loads(result.output)["findings"][0]["rule"] == "outside_allowlist"
+    bad = runner.invoke(app, ["candidate", "check", "--base", "nope", str(kernels)])
+    assert bad.exit_code == 2 and json.loads(bad.output)["ok"] is False
