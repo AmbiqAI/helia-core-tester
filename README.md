@@ -363,6 +363,7 @@ The verdict (schema `hct.candidate_eval`) has these fields:
 | 3 | `refused` / `not_comparable` | Dirty tester, golden misfit, moved cases, other build |
 | 4 | `no_gain` | Correct but not faster |
 | 5 | `error` | Build, board, transport or tester error; see `<baseline>/logs/` |
+| 130 | | Interrupted (Ctrl-C); no verdict printed |
 
 ### `--skip-generate`
 
