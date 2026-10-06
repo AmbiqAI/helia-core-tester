@@ -306,6 +306,20 @@ def test_direct_pytest_hidden_guard(tmp_path: Path) -> None:
     with pytest.raises(pytest.UsageError, match="outside the tester tree"):
         conftest._guard_hidden(in_tree)
     escaped = _guard_options(**{"--hidden-dir": str(tmp_path), "--generated-tests-dir": str(Path.cwd() / "artifacts")})
-    with pytest.raises(pytest.UsageError, match="under --hidden-dir"):
+    with pytest.raises(pytest.UsageError, match="must stay under"):
         conftest._guard_hidden(escaped)
     conftest._guard_hidden(_guard_options())
+
+
+@pytest.mark.parametrize("leaf", ["random_shapes", "reports"])
+def test_symlinked_hidden_dest_refused(tmp_path: Path, leaf: str) -> None:
+    from helia_core_tester.core.errors import ConfigurationError
+    from helia_core_tester.generation import conftest
+
+    hidden = tmp_path / "hidden"
+    (hidden / "artifacts").mkdir(parents=True)
+    (hidden / "artifacts" / leaf).symlink_to(Path.cwd() / "artifacts", target_is_directory=True)
+    with pytest.raises(pytest.UsageError, match="must stay under"):
+        conftest._guard_hidden(_guard_options(**{"--hidden-dir": str(hidden)}))
+    with pytest.raises(ConfigurationError, match="must stay under"):
+        Config(project_root=Path.cwd(), random_shapes=2, hidden_dir=hidden)

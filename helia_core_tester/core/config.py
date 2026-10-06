@@ -338,9 +338,15 @@ class Config:
         if "shape_seed" in self._explicit_overrides:
             raise ConfigurationError("hidden_dir takes a secret, not shape_seed")
         # The agent may read the tree.
-        for path in (self.hidden_dir, self.hidden_seed_file):
-            if path is not None and path.is_relative_to(self.project_root):
-                raise ConfigurationError(f"{path} must sit outside the tester tree")
+        if self.hidden_seed_file is not None and self.hidden_seed_file.is_relative_to(self.project_root):
+            raise ConfigurationError(f"{self.hidden_seed_file} must sit outside the tester tree")
+        from helia_core_tester.generation.random_shapes import check_hidden_paths
+
+        try:
+            for cpu in self.cpus:
+                check_hidden_paths(self.hidden_dir, self.project_root, cpu)
+        except ValueError as exc:
+            raise ConfigurationError(str(exc)) from exc
 
     def _normalize_suite_mode(self, suite: str) -> str:
         normalized = str(suite).strip().lower()

@@ -73,11 +73,15 @@ def _guard_hidden(config) -> None:
     config.option.tbstyle = "native"
     config.option.showlocals = False
     config.option.fulltrace = False
-    root = Path(hidden).resolve()
-    if root.is_relative_to(find_repo_root().resolve()):
-        raise pytest.UsageError(f"{root} must sit outside the tester tree")
-    if not Path(_generated_override(config)).resolve().is_relative_to(root):
-        raise pytest.UsageError("--generated-tests-dir must sit under --hidden-dir")
+    from helia_core_tester.generation.random_shapes import check_hidden_paths
+
+    try:
+        check_hidden_paths(
+            Path(hidden), find_repo_root(), config.getoption("--cpu") or "cortex-m55",
+            config.getoption("--suite") or "int", Path(_generated_override(config)),
+        )
+    except ValueError as exc:
+        raise pytest.UsageError(str(exc)) from exc
 
 
 def pytest_configure(config):
