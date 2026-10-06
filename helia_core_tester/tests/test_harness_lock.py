@@ -310,17 +310,29 @@ def test_token_inside_unchanged_attribute_fails(tmp_path: Path) -> None:
     ("filter.x.clean", "touch {pwned}; cat"),
     ("core.worktree", "/"),
     ("diff.external", "true"),
-    ("include.path", "{pwned}"),
+    ("include.path", "{pwned}.cfg"),
 ])
 def test_unsafe_git_config_refused(kernels: Path, tmp_path: Path, key: str, value: str) -> None:
     from helia_core_tester.hardware.candidate_check import CheckError
 
     pwned = tmp_path / "pwned"
+    (tmp_path / "pwned.cfg").write_text(f'[filter "x"]\n\tclean = touch {pwned}; cat\n', encoding="utf-8")
     (kernels / ".gitattributes").write_text("*.c filter=x\n", encoding="utf-8")
     (kernels / "Source/Conv/a.c").write_text("int a2;\n", encoding="utf-8")
     _git(kernels, "config", key, value.format(pwned=pwned))
-    with pytest.raises(CheckError, match=key):
+    with pytest.raises(CheckError, match="filter.x.clean" if key == "include.path" else key):
         check_candidate(kernels, _sha(kernels))
+    assert not pwned.exists()
+
+
+def test_nested_repo_config_never_runs(kernels: Path, tmp_path: Path) -> None:
+    pwned = tmp_path / "pwned"
+    nested = _repo(kernels / "ext" / "n", {"x": "1\n", ".gitattributes": "x filter=ev\n"})
+    _git(nested, "config", "filter.ev.clean", f"touch {pwned}; cat")
+    (nested / "x").write_text("2\n", encoding="utf-8")
+    _git(kernels, "add", "ext/n")
+    rules = {(f["path"], f["rule"]) for f in check_candidate(kernels, _sha(kernels))["findings"]}
+    assert ("ext/n", "outside_allowlist") in rules
     assert not pwned.exists()
 
 

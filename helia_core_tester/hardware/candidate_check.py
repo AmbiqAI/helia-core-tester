@@ -37,9 +37,10 @@ a branch or tag lives in the candidate repo and can be moved.
 The candidate repo is untrusted. Repo config that can run commands
 or move the worktree (fsmonitor, hooks, filters, textconv, includes,
 core.worktree...) refuses the check, and git runs with fsmonitor and
-hooks off. Base objects come from the candidate's object store, which
-the candidate can forge: check a copy whose objects came from a
-trusted clone, as `candidate eval` does.
+hooks off; the outer diff skips nested repos' dirty state, so their
+config never runs. Base objects come from the candidate's object
+store, which the candidate can forge: check a copy whose objects came
+from a trusted clone.
 """
 
 from __future__ import annotations
@@ -105,11 +106,12 @@ _GIT_ENV = {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_NO
 
 # Never let repo config run code.
 _GIT_FLAGS = ("-c", "core.fsmonitor=false", "-c", f"core.hooksPath={os.devnull}")
+# A FIFO in config or tree blocks git.
+_GIT_TIMEOUT = 300
 # Config keys that run commands or redirect.
 _UNSAFE_CONFIG = re.compile(
-    r"^(?:core\.(?:fsmonitor|hookspath|sshcommand|gitproxy|askpass|pager|editor|worktree|alternaterefscommand)"
-    r"|filter\.|diff\.external|diff\..*\.(?:textconv|command)|merge\..*\.driver|includeif\.|include\."
-    r"|credential\.|gpg\.|uploadpack\.|uploadarchive\.|sequence\.editor)",
+    r"^(?:core\.(?:fsmonitor|sshcommand|gitproxy|askpass|pager|editor|worktree|alternaterefscommand)"
+    r"|filter\.|diff\.external|diff\..*\.(?:textconv|command)|merge\..*\.driver|uploadpack\.|sequence\.editor)",
 )
 
 
@@ -118,9 +120,13 @@ class CheckError(RuntimeError):
 
 
 def _git(tree: Path, *args: str) -> bytes:
-    done = subprocess.run(
-        ["git", *_GIT_FLAGS, "-C", str(tree), *args], capture_output=True, check=False, env={**os.environ, **_GIT_ENV},
-    )
+    try:
+        done = subprocess.run(
+            ["git", *_GIT_FLAGS, "-C", str(tree), *args], capture_output=True, check=False,
+            env={**os.environ, **_GIT_ENV}, timeout=_GIT_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise CheckError(f"git {args[0]} timed out") from exc
     if done.returncode != 0:
         raise CheckError(done.stderr.decode(errors="replace").strip() or f"git {args[0]} failed")
     return done.stdout
@@ -128,9 +134,9 @@ def _git(tree: Path, *args: str) -> bytes:
 
 def unsafe_config(tree: Path) -> list[str]:
     """Repo config keys that could run code."""
-    parts = _git(tree, "config", "--list", "--show-scope", "-z").decode(errors="replace").split("\0")
-    # Pairs: scope, then key and value.
-    keys = {entry.split("\n", 1)[0].lower() for scope, entry in zip(parts[::2], parts[1::2]) if scope != "command"}
+    parts = _git(tree, "config", "--list", "--show-scope", "--name-only", "-z").decode(errors="replace").split("\0")
+    # Pairs: scope, key. Our -c flags are "command".
+    keys = {key.lower() for scope, key in zip(parts[::2], parts[1::2]) if scope != "command"}
     return sorted(key for key in keys if _UNSAFE_CONFIG.match(key))
 
 
@@ -186,7 +192,9 @@ def changed_paths(tree: Path, commit: str) -> dict[str, str]:
         del changes[rel]
     # Elsewhere: hardened git diff.
     outside = [f":(exclude){top}" for top in WATCHED]
-    out = _split(_git(tree, "diff", "--name-status", "--no-renames", "--no-ext-diff", "-z", commit, "--", ".", *outside))
+    # Nested repos' dirty state would run their config.
+    diff = ("diff", "--name-status", "--no-renames", "--no-ext-diff", "--ignore-submodules=dirty", "-z")
+    out = _split(_git(tree, *diff, commit, "--", ".", *outside))
     changes.update(zip(out[1::2], out[0::2]))
     untracked = _split(_git(tree, "ls-files", "--others", "--exclude-standard", "-z", "--", ".", *outside))
     changes.update((rel, "A") for rel in untracked)
