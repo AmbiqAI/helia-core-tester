@@ -114,6 +114,10 @@ def _blob_id(path: Path, algo: str) -> str:
 def _disk_files(tree: Path, skip: set[str]) -> Iterator[str]:
     """Files and symlinks under watched trees."""
     for top in WATCHED:
+        # A symlinked root is a change.
+        if os.path.islink(tree / top):
+            yield top
+            continue
         for root, dirs, names in os.walk(tree / top):
             # Submodules (a nested tester) have their own check.
             dirs[:] = [name for name in dirs if Path(root, name).relative_to(tree).as_posix() not in skip]
@@ -159,15 +163,41 @@ def path_findings(path: str, status: str, tree: Path) -> Iterator[dict]:
         yield {"rule": "symlink", "path": path, "message": "symlinks are not allowed"}
 
 
+def _logical_lines(lines: list[str]) -> list[int]:
+    """Each line's spliced-line start index."""
+    starts, start = [], 0
+    for index, line in enumerate(lines):
+        starts.append(start)
+        if not line.endswith("\\"):
+            start = index + 1
+    return starts
+
+
 def added_lines(tree: Path, base: dict, path: str, status: str) -> Iterator[tuple[int, str]]:
-    """Added lines with new line numbers."""
+    """Spliced lines holding an added line.
+
+    C and assembly join backslash-newline before parsing, so rules see the
+    joined text; the number is the first added line in it.
+    """
     if status == "D":
         return
     new = (tree / path).read_text(encoding="utf-8", errors="replace").splitlines()
     old = _git(tree, "cat-file", "blob", base[path][1]).decode(errors="replace").splitlines() if path in base else []
-    for tag, _, _, start, end in difflib.SequenceMatcher(None, old, new, autojunk=False).get_opcodes():
-        if tag in ("replace", "insert"):
-            yield from ((index + 1, new[index]) for index in range(start, end))
+    starts = _logical_lines(new)
+    seen: set[int] = set()
+    for tag, _, _, first, last in difflib.SequenceMatcher(None, old, new, autojunk=False).get_opcodes():
+        if tag not in ("replace", "insert"):
+            continue
+        for index in range(first, last):
+            start = starts[index]
+            if start in seen:
+                continue
+            seen.add(start)
+            end = start
+            while end + 1 < len(new) and starts[end + 1] == start:
+                end += 1
+            text = "".join(line[:-1] if line.endswith("\\") else line for line in new[start:end + 1])
+            yield index + 1, text
 
 
 def _unsafe_attribute(text: str) -> bool:

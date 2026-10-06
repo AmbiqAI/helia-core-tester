@@ -34,6 +34,9 @@ FIRMWARE_INPUTS = (
 )
 # NSX-owned app trees: board, flags.
 APP_TREES = ("boards", "cmake/nsx")
+# Kernel module location: ref vs root.
+_KERNEL_MODULE_DIR = re.compile(r'(NSX_APP_MODULE_DIR_nsx_cmsis_nn\s+)"[^"]*"')
+_KERNEL_PROJECT_DIR = re.compile(r"(?m)^[ \t]*modules/nsx?-cmsis-nn[ \t]*\n")
 # Cache entries that set compile flags.
 _FLAG_CACHE = re.compile(
     r"^((?:CMAKE_(?:C|CXX|ASM)_FLAGS|CMAKE_EXE_LINKER_FLAGS)\w*|CMAKE_BUILD_TYPE|NSX_CMSIS_NN_\w+|ARM_NN_\w+)"
@@ -93,9 +96,18 @@ def path_hash(path: Path) -> Optional[str]:
     from neuralspotx.nsx_lock import hash_file, hash_tree
 
     if path.is_dir():
-        # Lists the kernel module dir name.
-        return hash_tree(path, exclude_names=frozenset({"modules.cmake"}))
+        digest = hashlib.sha256(hash_tree(path, exclude_names=frozenset({"modules.cmake"})).encode())
+        for modules in sorted(path.rglob("modules.cmake")):
+            digest.update(modules.relative_to(path).as_posix().encode() + b"\0")
+            digest.update(modules_print(modules.read_text(encoding="utf-8")).encode())
+        return "sha256:" + digest.hexdigest()
     return hash_file(path) if path.is_file() else None
+
+
+def modules_print(text: str) -> str:
+    """modules.cmake minus the kernel module location."""
+    text = _KERNEL_MODULE_DIR.sub(r'\1"<kernels>"', text)
+    return _KERNEL_PROJECT_DIR.sub("", text)
 
 
 def cache_flags(build_dir: Path) -> dict[str, str]:

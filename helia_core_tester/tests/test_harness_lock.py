@@ -250,6 +250,46 @@ def test_symlink_fails(kernels: Path) -> None:
     assert "symlink" in _rules(kernels)
 
 
+def test_symlinked_root_fails(kernels: Path, tmp_path: Path) -> None:
+    import shutil
+
+    shutil.copytree(kernels / "Source", tmp_path / "elsewhere")
+    shutil.rmtree(kernels / "Source")
+    (kernels / "Source").symlink_to(tmp_path / "elsewhere")
+    assert "symlink" in _rules(kernels)
+
+
+@pytest.mark.parametrize("text", [
+    "void g(void) { DW\\\nT->CTRL = 0; }\n",
+    "#prag\\\nma GCC optimize(\"O3\")\n",
+    "__attri\\\nbute__((target(\"arch=armv8.1-m.main\"))) int a;\n",
+])
+def test_spliced_lines_cannot_hide_tokens(kernels: Path, text: str) -> None:
+    (kernels / "Source/Conv/a.c").write_text(text, encoding="utf-8")
+    report = check_candidate(kernels, "base")
+    assert not report["ok"] and report["findings"][0]["line"] == 1
+
+
+def test_modules_cmake_hash_ignores_kernel_location(tmp_path: Path) -> None:
+    from helia_core_tester.hardware.harness_lock import path_hash
+
+    def tree(name: str, kernel_dir: str, project: str, extra: str = "") -> Path:
+        root = tmp_path / name
+        root.mkdir()
+        (root / "modules.cmake").write_text(
+            f'set(NSX_APP_MODULES\n    nsx-core\n    nsx-cmsis-nn\n{extra})\n'
+            f'set(NSX_APP_MODULE_DIR_nsx_cmsis_nn "{kernel_dir}")\n'
+            f"set(NSX_APP_PROJECT_DIRS\n{project}    modules/nsx-ambiq-sdk\n)\n",
+            encoding="utf-8",
+        )
+        return root
+
+    by_ref = tree("ref", "modules/ns-cmsis-nn/nsx", "    modules/ns-cmsis-nn\n")
+    by_root = tree("root", "modules/nsx-cmsis-nn", "")
+    assert path_hash(by_ref) == path_hash(by_root)
+    assert path_hash(tree("more", "modules/nsx-cmsis-nn", "", "    nsx-segger-rtt\n")) != path_hash(by_root)
+
+
 def test_cli_prints_json(kernels: Path) -> None:
     (kernels / "Tests/t.c").write_text("int t2;\n", encoding="utf-8")
     result = runner.invoke(app, ["candidate", "check", "--base", "base", str(kernels)])
