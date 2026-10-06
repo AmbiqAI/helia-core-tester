@@ -588,6 +588,23 @@ static arm_cmsis_nn_status run_convolve_once(hct_server_session_t *session)
     }
 }
 
+/* Out of line: timed code stays unchanged. */
+static __attribute__((noinline)) int32_t dw_entry_scratch(uint32_t kernel_id,
+                                                          const cmsis_nn_dims *input_dims,
+                                                          const cmsis_nn_dims *filter_dims)
+{
+    const int32_t opt = arm_depthwise_conv_s8_opt_get_buffer_size(input_dims, filter_dims);
+    int32_t dw3;
+    if (kernel_id != HCT_KERNEL_ID_DEPTHWISE_CONV_S8_OPT_3X3 &&
+        kernel_id != HCT_KERNEL_ID_DEPTHWISE_CONV_S8_OPT_3X3_C64_S1)
+    {
+        return opt;
+    }
+    /* The 3x3 entries take the larger size. */
+    dw3 = arm_depthwise_conv_s8_opt_3x3_get_buffer_size(input_dims);
+    return (opt < 0 || dw3 < 0) ? -1 : (dw3 > opt ? dw3 : opt);
+}
+
 static arm_cmsis_nn_status run_depthwise_conv_once(hct_server_session_t *session)
 {
     hct_server_blob_t *input = find_blob_by_role(session, HCT_BLOB_ROLE_INPUT_0);
@@ -822,7 +839,7 @@ static arm_cmsis_nn_status run_depthwise_conv_once(hct_server_session_t *session
         uint32_t operand_bytes_needed;
         const int32_t required_scratch = (kernel_id == HCT_KERNEL_ID_DEPTHWISE_CONV_S8)
             ? arm_depthwise_conv_wrapper_s8_get_buffer_size(&dw_conv_params, &input_dims, &filter_dims, &output_dims)
-            : arm_depthwise_conv_s8_opt_get_buffer_size(&input_dims, &filter_dims);
+            : dw_entry_scratch(kernel_id, &input_dims, &filter_dims);
         if (!hct_checked_dims_bytes(&input_dims, sizeof(int8_t), input->byte_length, &operand_bytes_needed) ||
             !hct_checked_dims_bytes(&filter_dims, sizeof(int8_t), weights->byte_length, &operand_bytes_needed) ||
             !hct_checked_count_bytes(bias_dims.c, sizeof(int32_t), bias->byte_length, &operand_bytes_needed) ||
