@@ -106,6 +106,36 @@ def test_step_passes_shape_flags(tmp_path: Path) -> None:
     assert cmd[cmd.index("--shape-seed") + 1] == "77"
 
 
+def test_explicit_zero_seed_beats_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    from helia_core_tester.cli import get_config
+
+    monkeypatch.setenv("HELIA_CORE_TESTER_SHAPE_SEED", "9")
+    assert get_config(project_root=Path.cwd(), random_shapes=2, shape_seed=0).shape_seed == 0
+    assert get_config(project_root=Path.cwd(), random_shapes=2).shape_seed == 9
+    monkeypatch.delenv("HELIA_CORE_TESTER_SHAPE_SEED")
+    assert get_config(project_root=Path.cwd(), random_shapes=2).shape_seed == 0
+
+
+@pytest.mark.parametrize(("settings", "message"), [
+    ({"random_shapes": 0}, "random_shapes must be >= 1"),
+    ({"random_shapes": -3}, "random_shapes must be >= 1"),
+    ({"random_shapes": 2, "shape_seed": -1}, "shape_seed must be >= 0"),
+    ({"random_shapes": 2, "suite": "float"}, "needs the int suite"),
+])
+def test_bad_random_settings_refused(settings: dict, message: str) -> None:
+    from helia_core_tester.core.errors import ConfigurationError
+
+    with pytest.raises(ConfigurationError, match=message):
+        Config(project_root=Path.cwd(), **settings)
+
+
+def test_dry_run_and_plan_skip_float_targets() -> None:
+    step = GenerateStep(Config(project_root=Path.cwd(), random_shapes=2, suite="both"))
+    previews = step.dry_run().details["commands"]
+    assert previews and all(cmd[cmd.index("--suite") + 1] == "int" for cmd in previews)
+    assert len(previews) == len(step._targets())
+
+
 def test_flat_random_draw_is_dropped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     generated = tmp_path / "artifacts" / "generated_tests" / "int" / "cortex-m55"
     fixed = generated / "ConvolutionFunctions" / "fixed_case"
