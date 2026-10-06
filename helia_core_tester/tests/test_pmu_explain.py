@@ -95,6 +95,13 @@ def test_instruction_overhead():
     assert _rules(_row(INST_RETIRED=8000, MVE_INST_RETIRED=6000))[0] == "instruction_overhead"
 
 
+def test_depthwise_has_own_target():
+    conv = explain_case(_row(), cpu=M55)
+    dw = explain_case(_row() | {"inner_symbol": "arm_depthwise_conv_s8_opt"}, cpu=M55)
+    assert conv.ceiling["target_inst_per_mac_instr"] == 2.6
+    assert dw.ceiling["target_inst_per_mac_instr"] == 5.9
+
+
 def test_underfilled_vectors():
     assert "underfilled_vectors" in _rules(_row(MVE_INT_MAC_RETIRED=2000, INST_RETIRED=5000, MVE_INST_RETIRED=4000))
 
