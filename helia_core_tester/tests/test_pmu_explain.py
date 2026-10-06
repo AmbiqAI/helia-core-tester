@@ -56,7 +56,7 @@ def test_healthy_row_has_no_bottleneck():
     result = explain_case(_row(), cpu=M55)
     assert [f.rule for f in result.findings] == ["no_bottleneck"]
     assert result.pct_of_peak == pytest.approx(0.125 / 0.25)
-    assert result.metrics["mac_instr_ratio"] == pytest.approx(1.0)
+    assert result.metrics["mve_mul_ratio"] == pytest.approx(1.0)
     assert result.missing_counters == []
     assert len(result.lines()) == 4
 
@@ -144,7 +144,7 @@ def test_findings_rank_by_impact():
 def test_float_uses_fp_mac_counter():
     row = _row(MVE_INT_MAC_RETIRED=0, MVE_FP_MAC_RETIRED=4000)
     row["inner_symbol"] = "arm_convolve_f32"
-    assert explain_case(row, cpu=M55).metrics["mac_instr_ratio"] == pytest.approx(1.0)
+    assert explain_case(row, cpu=M55).metrics["mve_mul_ratio"] == pytest.approx(1.0)
 
 
 def test_cycles_only_row_degrades():

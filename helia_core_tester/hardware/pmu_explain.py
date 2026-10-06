@@ -42,6 +42,7 @@ _LINE_BYTES = 32
 NEAR_PEAK = 0.6
 BACKEND_BOUND = 0.3
 LOW_IPC = 0.6
+# Above requantize multiplies: measured 1.00-1.11x.
 UNDERFILLED = 1.5
 SCALAR = 0.5
 LOW_MVE_SHARE = 0.3
@@ -145,7 +146,7 @@ class Explanation:
 
 
 _WHERE_FORMAT = (
-    ("ipc", "IPC {:.2f}"), ("mve_share", "MVE {:.0%} of inst"), ("mac_instr_ratio", "MVE MACs {:.2f}x ideal"),
+    ("ipc", "IPC {:.2f}"), ("mve_share", "MVE {:.0%} of inst"), ("mve_mul_ratio", "MVE mul {:.2f}x ideal MACs"),
     ("inst_per_mac_instr", "{:.1f} inst/MVE MAC"), ("stall_frontend", "FE stall {:.0%}"),
     ("stall_backend", "BE stall {:.0%}"), ("mve_stall_mem", "MVE mem stall {:.0%}"),
     ("mve_stall_dep", "MVE dep stall {:.0%}"), ("refill_kb", "L1D refill {:.1f} KB"),
@@ -167,7 +168,8 @@ def _metrics(row: Mapping[str, Any], cycles: Optional[float], macs: Optional[flo
     metrics = {
         "ipc": _ratio(inst, cycles),
         "mve_share": _ratio(mve_inst, inst) if lanes else None,
-        "mac_instr_ratio": _ratio(mve_mac, macs / lanes) if lanes and macs else None,
+        # Counts every MVE multiply, requantize too.
+        "mve_mul_ratio": _ratio(mve_mac, macs / lanes) if lanes and macs else None,
         "inst_per_mac_instr": _ratio(inst, mve_mac) if lanes else None,
         "stall_frontend": _ratio(counter("STALL_FRONTEND"), cycles),
         "stall_backend": _ratio(counter("STALL_BACKEND"), cycles),
@@ -210,7 +212,7 @@ def _rule_memory_bound(e: Explanation) -> Optional[Finding]:
 def _rule_overhead(e: Explanation) -> Optional[Finding]:
     ratio = e.metrics["inst_per_mac_instr"]
     target = e.ceiling.get("target_inst_per_mac_instr") if e.ceiling else None
-    fill = e.metrics["mac_instr_ratio"]
+    fill = e.metrics["mve_mul_ratio"]
     # Scalar MACs explain this better.
     if ratio is None or not target or ratio < target * OVERHEAD or (fill is not None and fill < SCALAR):
         return None
@@ -223,22 +225,23 @@ def _rule_overhead(e: Explanation) -> Optional[Finding]:
 
 
 def _rule_underfilled(e: Explanation) -> Optional[Finding]:
-    ratio = e.metrics["mac_instr_ratio"]
+    ratio = e.metrics["mve_mul_ratio"]
     if ratio is None or ratio < UNDERFILLED:
         return None
     lanes = e.ceiling["lanes"]
     pred = e.metrics["pred_cycle_share"]
     predicated = f", {pred:.0%} cycles predicated" if pred is not None else ""
     return Finding("underfilled_vectors", 1 - 1 / ratio,
-                   f"MVE MACs fill {1 / ratio:.0%} of {lanes} lanes{predicated}",
-                   "Block channels so each MAC fills all lanes")
+                   f"MVE multiplies {ratio:.1f}x ideal for {lanes} lanes{predicated}",
+                   "Fill all lanes per MAC; check requantize multiplies")
 
 
 def _rule_scalar_macs(e: Explanation) -> Optional[Finding]:
-    ratio = e.metrics["mac_instr_ratio"]
+    ratio = e.metrics["mve_mul_ratio"]
     if ratio is None or ratio >= SCALAR:
         return None
-    return Finding("scalar_macs", 1 - ratio, f"Only {ratio:.0%} of MACs use MVE MAC instructions",
+    # Extra multiplies only raise the ratio.
+    return Finding("scalar_macs", 1 - ratio, f"MVE multiplies cover {ratio:.0%} of ideal MACs",
                    "Vectorise the inner MAC loop or check route")
 
 
