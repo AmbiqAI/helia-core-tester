@@ -22,6 +22,8 @@ uv run helia_core_tester --help
 - `uv run helia_core_tester boards` / `probes list` / `probes match`
 - `uv run helia_core_tester hardware run|build|flash|stream|memory-report`
 - `uv run helia_core_tester explain <bundle> [--case ID] [--op OP] [--json]`
+- `uv run helia_core_tester score <baseline...> --candidate <bundle>` (used by `candidate eval`)
+- `uv run helia_core_tester candidate check|baseline|eval` (see [Agent loop](#agent-loop))
 
 Removed interfaces:
 - `gap-check` subcommand
@@ -257,6 +259,119 @@ only what the rules read (4 passes, `pmu_explain.AGENT_PMU_SELECTION`):
 --pmu-counters memory:ARM_PMU_L1D_CACHE_REFILL
 --pmu-counters mve:ARM_PMU_MVE_INST_RETIRED,ARM_PMU_MVE_INT_MAC_RETIRED,ARM_PMU_MVE_FP_MAC_RETIRED,ARM_PMU_MVE_PRED,ARM_PMU_MVE_STALL_RESOURCE_MEM,ARM_PMU_MVE_STALL_DEPENDENCY
 ```
+
+## Agent loop
+
+An optimization agent edits ns-cmsis-nn kernels. It submits each candidate
+with one command and gets one JSON verdict back. Everything trusted (this
+tester, the baseline bundles, hidden cases and their seed) stays outside
+the agent's view.
+
+### Trust boundary
+
+- The agent runs in a sandbox where only its own ns-cmsis-nn worktree is
+  writable. It cannot read this tester tree, the baseline dir, the hidden
+  set, its seed file, result bundles or logs.
+- The evaluator runs `candidate eval` as the human user, outside the
+  sandbox, and hands the agent only stdout and the exit code.
+  - On the bench host, wrap it in `bench-agent run`. The command runs in
+    `$HOME`, so use absolute paths:
+
+    ```bash
+    bench-agent run apollo510_evb --reason <sha> -- timeout 30m \
+      uv --directory /abs/helia-core-tester run helia_core_tester \
+      candidate eval --kernels /abs/agent-tree --baseline /abs/baseline
+    ```
+
+  - From elsewhere, use the `hct-run` client from nixos-config (its
+    `candidate eval` mode is a follow-up).
+- `candidate eval` reads the agent's tree as plain files and never runs git
+  in it. It copies `Source/`, `Include/`, `cmake/` and `nsx/` into a fresh
+  checkout of the base commit, then checks and builds that copy. Edits made
+  after the copy, and anything in the agent's `.git`, do not reach the
+  build. The copy walks by directory handle and never follows a symlink:
+  symlinks are copied as links, and the check rejects them. FIFOs, sockets
+  and devices are skipped.
+- `hardware run` stderr names every case, so it goes to
+  `<baseline>/logs/`, never to the agent.
+- Hidden case ids never print. Hidden cases still count in the verdict and
+  in the family totals.
+- The tester must be committed: a dirty tester is refused.
+- Run one eval at a time per baseline dir: each eval rebuilds
+  `<baseline>/snapshot`.
+
+### Flow
+
+1. Baseline, once per base commit, by the human. Use a clean checkout at
+   that commit:
+
+   ```bash
+   uv run helia_core_tester candidate baseline --kernels ~/ns-cmsis-nn \
+     --board apollo510_evb --out ~/hct-eval/dw-s8 --repeats 3 \
+     --op DepthwiseConv --dtype S8 [--hidden-set ~/hct-eval/hidden]
+   ```
+
+   - The first run generates, builds, flashes and streams. The other runs
+     stream the same build again, so the scorer gets a noise band.
+   - Every eval reuses the baseline's placement and inline asm (defaults
+     `tcm` and on), the agent PMU counters (see [PMU feedback](#pmu-feedback);
+     none on DWT boards) and `--fvp-gate off`.
+   - `--out` receives the bundles, `baseline.json` (base commit and run
+     options), `kernels.git` (the base commit, fetched from the clean tree)
+     and `logs/`.
+   - A hidden set comes from `generate --hidden-dir DIR --hidden-seed-file
+     F`. Keep DIR and F outside the sandbox.
+2. Candidate, as often as needed, one at a time. The agent edits `Source/` and `Include/`
+   in its worktree, and the evaluator runs:
+
+   ```bash
+   uv run helia_core_tester candidate eval --kernels <agent worktree> \
+     --baseline ~/hct-eval/dw-s8
+   ```
+
+   It does five things:
+   1. Snapshot the agent's trees.
+   2. Run `candidate check` against the base commit.
+   3. Run `hardware run` with the baseline's options, `--golden-from` its first
+      run (bit-exact) and `--skip-generate`.
+   4. Run `score` against every baseline repeat.
+   5. Print the verdict.
+
+   On apollo330mP, 50 DW s8 cases took about 1 minute per eval and the
+   two-repeat baseline about 2 minutes (measured).
+
+The verdict (schema `hct.candidate_eval`) has these fields:
+
+- `verdict`, `exit_code`, and `stage`: `check`, `run`, `objects` (once
+  `candidate check` scans built objects), `score`, or `eval` for an
+  unexpected error.
+- `findings`: the check's findings, on rejection.
+- `score`, `families` and `failures`.
+- `cases`: one entry per public case, with cycles, speedup, delta and noise
+  band.
+- `hints`: % of peak, a diagnosis and ranked hints for each public MAC case
+  (from `explain`).
+- `hidden`: null without hidden cases; otherwise case and failure counts,
+  plus the scorer's hidden `subscores` when it reports them.
+
+| Exit | Verdict | Meaning |
+|---|---|---|
+| 0 | `pass` | Correct, no regression, score above `--min-score` |
+| 1 | `fail` | Output mismatch, regression, lost timing or changed inputs |
+| 2 | | Bad flags or baseline dir |
+| 3 | `rejected` | The diff leaves `Source/`/`Include/` or uses a banned construct |
+| 3 | `refused` / `not_comparable` | Dirty tester, golden misfit, moved cases, other build |
+| 4 | `no_gain` | Correct but not faster |
+| 5 | `error` | Build, board, transport or tester error; see `<baseline>/logs/` |
+
+### `--skip-generate`
+
+- `candidate eval` always passes `--skip-generate`. The baseline generated
+  the cases into this tester's `artifacts/generated_tests`, and
+  `--golden-from` refuses any case whose inputs changed.
+- Do not regenerate between the baseline and its evals, for example with a
+  plain `hardware run` on the same tester. A baseline case that disappears
+  makes eval refuse (`missing_case`, exit 3); rerun `candidate baseline`.
 
 ## Suite-Based Runs
 
