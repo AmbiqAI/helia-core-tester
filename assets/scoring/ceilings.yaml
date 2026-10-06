@@ -1,7 +1,8 @@
 # Peak MAC rates: assumptions, not measurements.
 # Read by hardware/pmu_explain.py.
 # lanes: MACs per full MVE MAC instruction.
-# target_inst_per_mac_instr: best measured instruction mix.
+# target_inst_per_mac_instr: best measured instruction mix;
+# op_targets overrides it per op.
 schema: hct.scoring.ceilings
 schema_version: 1
 cpus:
@@ -10,6 +11,8 @@ cpus:
     # Measured s8 cyc/MAC: conv best 0.196.
     # DW opt median 3.5, MLPerf DW 2.9.
     target_inst_per_mac_instr: 2.6
+    # DW best: 5.92 inst/MAC instr.
+    op_targets: {depthwise: 5.9}
     ops:
       conv: &m55_mac
         s8: {cycles_per_mac: 0.125, lanes: 16, basis: "dual-beat MVE, 64 bits/cycle: VMLADAV.S8 16 MACs per 2 cycles"}
