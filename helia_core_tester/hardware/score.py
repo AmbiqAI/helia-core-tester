@@ -88,16 +88,18 @@ def load_bundle(path: Path) -> Bundle:
 
 def harness_print(manifest: dict) -> dict:
     """Everything in the build except kernels."""
+    # Run options stay beside the digest.
+    # Compare mode is checked in refusals.
+    runtime = {"core_clock_hz": (manifest.get("boot") or {}).get("core_clock_hz")}
     if manifest.get("harness_digest"):
-        return {"harness_digest": manifest["harness_digest"]}
+        return {"harness_digest": manifest["harness_digest"], **runtime}
     build = manifest.get("build") or {}
     return {
         "options": {k: v for k, v in (build.get("options") or {}).items() if not k.startswith("cmsis_nn_") and k != "placement"},
         "modules": [m for m in build.get("modules") or [] if m.get("name") != CMSIS_NN_MODULE],
         "neuralspotx_version": build.get("neuralspotx_version"),
         "toolchain": build.get("toolchain"),
-        "core_clock_hz": (manifest.get("boot") or {}).get("core_clock_hz"),
-        "strict_compare": (manifest.get("compare") or {}).get("strict"),
+        **runtime,
     }
 
 
@@ -122,12 +124,35 @@ def refusals(baselines: list[Bundle], candidates: list[Bundle]) -> list[str]:
         changed = sorted(k for k in first["harness"].keys() | other["harness"].keys() if first["harness"].get(k) != other["harness"].get(k))
         if changed:
             reasons.append(f"{bundle.session_id}: harness differs in {', '.join(changed)}")
+    reasons += _compare_refusals(baselines, candidates)
     for side, bundles in (("baseline", baselines), ("candidate", candidates)):
         kernels = [_kernel_id(b) for b in bundles]
         if len(bundles) > 1 and None in kernels:
             reasons.append(f"{side} repeats lack kernel identity")
         elif len(set(kernels)) > 1:
             reasons.append(f"{side} repeats built different kernels")
+    return reasons
+
+
+def _compare_refusals(baselines: list[Bundle], candidates: list[Bundle]) -> list[str]:
+    """Candidates judged no looser than baseline.
+
+    The kernel loop runs the baseline on default goldens and the candidate
+    with --golden-from that baseline (strict), so stricter is allowed.
+    """
+    compare = lambda b: b.manifest.get("compare") or {}  # noqa: E731
+    reasons = []
+    if len({bool(compare(b).get("strict")) for b in baselines}) > 1:
+        reasons.append("baseline repeats differ in compare mode")
+    strict_base = any(compare(b).get("strict") for b in baselines)
+    # Goldens must come from these baselines.
+    sources = {b.session_id for b in baselines} | {compare(b).get("golden_session_id") for b in baselines}
+    for c in candidates:
+        if strict_base and not compare(c).get("strict"):
+            reasons.append(f"{c.session_id}: looser compare than baseline")
+        source = compare(c).get("golden_session_id")
+        if source and source not in sources:
+            reasons.append(f"{c.session_id}: goldens from {source}, not a baseline")
     return reasons
 
 

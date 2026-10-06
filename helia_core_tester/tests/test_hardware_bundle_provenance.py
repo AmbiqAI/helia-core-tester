@@ -93,6 +93,7 @@ def test_pinned_ref_build_is_stamped(tmp_path: Path) -> None:
     tree = nsx_cli.tree_hash(kernel_dir(nsx_app_dir(build_dir), AppOptions()))
     assert build["kernels"] == {
         "ref": CMSIS_NN_REF, "commit": COMMIT, "root": None, "root_head": None, "root_dirty": None, "tree_hash": tree,
+        "base_ref": CMSIS_NN_REF, "base_commit": COMMIT,
     }
     assert build["options"]["requantize_inline_asm"] is False
     assert build["options"]["cmsis_nn_root"] is None
@@ -179,13 +180,14 @@ def test_missing_records_leave_nulls(tmp_path: Path, with_dir: bool) -> None:
     manifest = _manifest(bundle_root)
     assert manifest["build"] == {
         "options": None,
-        "kernels": dict.fromkeys(("ref", "commit", "root", "root_head", "root_dirty", "tree_hash")),
+        "kernels": dict.fromkeys(("ref", "commit", "root", "root_head", "root_dirty", "tree_hash", "base_ref", "base_commit")),
         "neuralspotx_version": None,
         "nsx_lock_sha256": None,
         "modules": None,
         "toolchain": None,
     }
     assert "nsx_lock" not in manifest["artifacts"]
+    assert manifest["harness_digest"] is None
     assert not (bundle_root / "nsx.lock").exists()
 
 
