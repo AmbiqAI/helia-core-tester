@@ -146,3 +146,17 @@ def test_result_bundle_writer_handles_empty_session(tmp_path: Path) -> None:
     assert case_summary_text.splitlines() == ["case_id,kernel_id,comparison_passed,mismatch_count,max_abs_diff,diff_count,sample_count,median_cycles,mad_cycles,p90_cycles,p99_cycles,fvp_status,timed_symbol,inner_symbol,inner_variant,macs,ops,cycles_per_mac,cycles_per_op,prepare_cycles,overflow_detected,valid_for_regression,timing_status"]
     assert raw_samples_text.splitlines() == ["case_id,sample_index,pass_name,iterations,cycles,cycles_per_invocation,counter_name,event_id,counter_value,overflow,supported"]
     assert (bundle_root / "junit.xml").exists()
+
+
+def test_status_only_case_records_no_output_digest(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from helia_core_tester.hardware import result_bundle
+
+    monkeypatch.setattr(result_bundle, "input_digest", lambda bundle: "in")
+    output = SimpleNamespace(sha256="placeholder")
+    status_only = SimpleNamespace(expected_status_code=-2, expected_output=output)
+    judged = SimpleNamespace(expected_status_code=None, expected_output=output)
+    assert result_bundle.case_digests(status_only) == {"input_digest": "in", "expected_output_sha256": None}
+    assert result_bundle.case_digests(judged)["expected_output_sha256"] == "placeholder"
+

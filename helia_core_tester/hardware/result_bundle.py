@@ -229,10 +229,7 @@ def write_result_bundle(
         # Planar or channelwise inside opt.
         variant = inner_variant(inner, case.case_bundle.manifest)
         rejection = _rejection_record(case)
-        digests = {
-            "input_digest": input_digest(case.case_bundle),
-            "expected_output_sha256": case.case_bundle.expected_output.sha256,
-        }
+        digests = case_digests(case.case_bundle)
         counter_medians = compute_counter_medians(case.normalized_samples)
         work_fields = _work_fields(case)
         for sample in case.samples:
@@ -397,3 +394,11 @@ def write_result_bundle(
     write_text_lf(bundle_root / "logs" / "host.log", host_log_text)
     write_text_lf(bundle_root / "logs" / "target.log", target_log_text)
     return bundle_root
+
+
+def case_digests(bundle) -> dict:
+    """Input and compared-output digests."""
+    # Status-only cases compare no output.
+    compared = None if bundle.expected_status_code is not None else bundle.expected_output.sha256
+    return {"input_digest": input_digest(bundle), "expected_output_sha256": compared}
+
