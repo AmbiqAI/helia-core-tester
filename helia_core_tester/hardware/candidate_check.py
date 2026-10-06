@@ -67,6 +67,7 @@ SAFE_ATTRIBUTES = frozenset((
 ))
 _ATTRIBUTE = re.compile(r"__attribute__\s*\(\((.*?)\)\)|\[\[(.*?)\]\]")
 _ADJACENT_LITERALS = re.compile(r'"\s*"')
+_ESCAPE = re.compile(r"\\([0-7]{1,3}|[xX][0-9a-fA-F]+)")
 _ATTRIBUTE_HINT = re.compile(r"__attribute|__declspec|\[\[")
 # "%:" is the "#" digraph.
 _PRAGMA = re.compile(r"(?:#|%:)\s*pragma|_Pragma|__pragma")
@@ -233,11 +234,23 @@ def line_rules(text: str) -> Iterator[str]:
     """Rule names one added line hits."""
     seen = set()
     # C joins adjacent string literals.
-    for variant in (text, _ADJACENT_LITERALS.sub("", text)):
+    for variant in (text, _literal_text(text)):
         for rule in _raw_rules(variant):
             if rule not in seen:
                 seen.add(rule)
                 yield rule
+
+
+def _literal_text(text: str) -> str:
+    """Text as the compiler sees literals."""
+    joined = _ADJACENT_LITERALS.sub("", _COMMENT.sub(" ", text))
+    return _ESCAPE.sub(_unescape, joined)
+
+
+def _unescape(match: re.Match) -> str:
+    code = match.group(1)
+    value = int(code[1:], 16) if code[0] in "xX" else int(code, 8)
+    return chr(value) if value < 0x110000 else match.group(0)
 
 
 def _raw_rules(text: str) -> Iterator[str]:
