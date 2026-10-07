@@ -83,6 +83,30 @@ def run_capped(cmd: list[str], cwd: Path, timeout: float, cap: int) -> Optional[
     return b"".join(chunks)
 
 
+def extract_tar(archive: bytes, dest: Path) -> None:
+    """Extract regular files and dirs only.
+
+    No extractall(filter=): Python 3.11.0-3.11.12 lack it.
+    """
+    root = dest.resolve()
+    with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
+        for member in tar.getmembers():
+            target = (root / member.name).resolve()
+            parts = Path(member.name).parts
+            if Path(member.name).is_absolute() or ".." in parts or not (member.isfile() or member.isdir()):
+                raise tarfile.TarError(f"unsafe tar member {member.name!r}")
+            if target != root and root not in target.parents:
+                raise tarfile.TarError(f"unsafe tar member {member.name!r}")
+            if member.isdir():
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            source = tar.extractfile(member)
+            if source is None:
+                raise tarfile.TarError(f"unreadable tar member {member.name!r}")
+            target.write_bytes(source.read())
+
+
 def _preprocess(gcc: str, root: Path, unit: str, flags: tuple[str, ...]) -> Optional[dict[str, str]]:
     """Kernel text of one unit, by origin."""
     out = run_capped([gcc, "-E", *flags, "-IInclude", unit], root, TIMEOUT_S, OUTPUT_CAP)
@@ -135,7 +159,7 @@ def preprocess_findings(
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(tmp)
         try:
-            tarfile.open(fileobj=io.BytesIO(archive)).extractall(base, filter="data")
+            extract_tar(archive, base)
             before, base_failed = _tree_counts(gcc, base, rule_counts, configs)
             after, failed = _tree_counts(gcc, tree, rule_counts, configs)
         except (OSError, tarfile.TarError) as exc:

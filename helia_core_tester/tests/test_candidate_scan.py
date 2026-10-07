@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import io
 import os
 import shutil
+import tarfile
 import time
 from pathlib import Path
 
@@ -101,3 +103,42 @@ def test_big_output_capped(tmp_path: Path) -> None:
 def test_small_output_kept(tmp_path: Path) -> None:
     gcc = _fake_gcc(tmp_path, "echo ok")
     assert candidate_scan.run_capped([gcc], tmp_path, 30.0, 1 << 16) == b"ok\n"
+
+
+def _tar(*members: tarfile.TarInfo) -> bytes:
+    out = io.BytesIO()
+    with tarfile.open(fileobj=out, mode="w") as tar:
+        for member in members:
+            tar.addfile(member, io.BytesIO(b"x" * member.size) if member.isfile() else None)
+    return out.getvalue()
+
+
+def _member(name: str, kind: bytes = tarfile.REGTYPE, link: str = "") -> tarfile.TarInfo:
+    member = tarfile.TarInfo(name)
+    member.type, member.linkname, member.size = kind, link, 1 if kind == tarfile.REGTYPE else 0
+    return member
+
+
+@pytest.mark.parametrize("member", [
+    _member("../evil.c"),
+    _member("/tmp/evil.c"),
+    _member("Source/link", tarfile.SYMTYPE, "/etc/passwd"),
+    _member("Source/hard", tarfile.LNKTYPE, "Source/a.c"),
+    _member("Source/dev", tarfile.CHRTYPE),
+])
+def test_unsafe_tar_rejected(tmp_path: Path, member: tarfile.TarInfo) -> None:
+    with pytest.raises(tarfile.TarError):
+        candidate_scan.extract_tar(_tar(_member("Source/a.c"), member), tmp_path / "out")
+    assert not (tmp_path / "evil.c").exists()
+
+
+def test_unsafe_tar_fails_closed(kernels: Path, monkeypatch) -> None:
+    # No gcc runs before the tar check.
+    monkeypatch.setattr(candidate_scan, "arm_tool", lambda name: "/nonexistent/gcc")
+    found = candidate_scan.preprocess_findings(kernels, _tar(_member("../evil.c")), rule_counts)
+    assert [f["rule"] for f in found] == ["scan_error"]
+
+
+def test_safe_tar_extracted(tmp_path: Path) -> None:
+    candidate_scan.extract_tar(_tar(_member("Source/Conv/a.c")), tmp_path)
+    assert (tmp_path / "Source/Conv/a.c").read_bytes() == b"x"
