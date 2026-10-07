@@ -527,7 +527,7 @@ def check_candidate(
                  for path in hidden_entries(tree))
     objects, configs = None, CONFIGS
     if build_dir is not None:
-        hits, objects, flags = object_findings(build_dir)
+        hits, objects, flags = object_findings(build_dir, scan_deadline)
         findings += hits
         module = nsx_app_dir(build_dir) / "modules" / CMSIS_NN_MODULE
         if not kernels_match(tree, module):

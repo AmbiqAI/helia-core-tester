@@ -25,6 +25,8 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import math
+import mmap
 import os
 import re
 import shlex
@@ -57,6 +59,9 @@ SCAN_MEMORY_BUDGET = 256 << 20
 # Whole-scan limits.
 SCAN_DEADLINE_S = 300.0
 MAX_UNITS = 2000
+# Object size caps, checked before reading.
+OBJECT_CAP = 16 << 20
+OBJECTS_TOTAL_CAP = 128 << 20
 # Abort-file poll interval.
 _POLL_S = 0.25
 _MARKER = re.compile(r'^#\s*\d+\s+"([^"]*)".*$', re.MULTILINE)
@@ -113,9 +118,12 @@ def run_capped(cmd: list[str], cwd: Path, timeout: float, cap: int, abort: str =
     return b"".join(chunks)
 
 
-def run_binutil(tool: str, args: list[str]) -> str:
+def run_binutil(tool: str, args: list[str], deadline: float = math.inf, abort: str = "") -> str:
     """Bounded binutil stdout; raises when capped."""
-    out = run_capped([arm_tool(tool), *args], Path.cwd(), TIMEOUT_S, OUTPUT_CAP)
+    timeout = min(TIMEOUT_S, deadline - time.monotonic())
+    if timeout <= 0:
+        raise ValueError(f"{tool}: scan deadline passed")
+    out = run_capped([arm_tool(tool), *args], Path.cwd(), timeout, OUTPUT_CAP, abort)
     if out is None:
         raise ValueError(f"{tool} failed or hit limits")
     return out.decode("utf-8", "replace")
@@ -299,6 +307,8 @@ _SECTION_OK = re.compile(
     r"|\.ARM\.(?:attributes|exidx|extab)|\.comment|\.note\.GNU-stack|\.group|\.(?:sym|str|shstr)tab|)$"
 )
 # Other names fail closed: no parser chasing.
+# Little-endian words 0xE0000000-0xE00FFFFF.
+_SCS_WORD = re.compile(rb"(?=[\x00-\xff]{2}[\x00-\x0f]\xe0)")
 _PLAIN_NAME = re.compile(r"[A-Za-z0-9._$]+")
 # ELF flag bits, as readelf letters.
 _FLAG_LETTERS = ((0x1, "W"), (0x2, "A"), (0x4, "X"), (0x10, "M"), (0x20, "S"), (0x40, "I"), (0x80, "L"),
@@ -359,13 +369,16 @@ def _preprocess_args(args: list[str], source: str) -> tuple[str, ...]:
     return tuple(kept)
 
 
-def elf_sections(obj: Path) -> list[tuple[str, int, str, bytes, int]]:
+def elf_sections(obj: Path) -> list[tuple[str, int, str, memoryview, int]]:
     """(name, type, flags, data, info) per section.
 
     Read from the ELF32 little-endian section table, not readelf text,
-    so no name spelling can hide a section.
+    so no name spelling can hide a section. The file is mapped, not
+    read: section data are views into it.
     """
-    raw = obj.read_bytes()
+    with open(obj, "rb") as handle:
+        # The map outlives the handle.
+        raw = memoryview(mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ))
     if raw[:4] != b"\x7fELF" or raw[4:6] != b"\x01\x01":
         raise ValueError(f"{obj.name}: not ELF32 little-endian")
     try:
@@ -379,22 +392,22 @@ def elf_sections(obj: Path) -> list[tuple[str, int, str, bytes, int]]:
         table = headers[names_index]
     except (struct.error, IndexError) as exc:
         raise ValueError(f"{obj.name}: bad section table: {exc}") from exc
-    strings = raw[table[4]:table[4] + table[5]]
+    strings = bytes(raw[table[4]:table[4] + table[5]])
     sections = []
     for name_at, kind, flags, _, offset, size, _, info, _, _ in headers:
         if name_at >= len(strings) or (kind != _NOBITS and offset + size > len(raw)):
             raise ValueError(f"{obj.name}: section out of bounds")
         name = strings[name_at:strings.index(b"\0", name_at)].decode(errors="replace")
-        data = raw[offset:offset + size] if kind != _NOBITS else b""
+        data = raw[offset:offset + size] if kind != _NOBITS else memoryview(b"")
         sections.append((name, kind, "".join(letter for bit, letter in _FLAG_LETTERS if flags & bit), data, info))
     return sections
 
 
-def _object_hits(source: str, obj: Path, defined: frozenset[str]) -> list[dict]:
+def _object_hits(source: str, obj: Path, defined: frozenset[str], limits: tuple[float, str]) -> list[dict]:
     """Section, SCS and reference hits."""
     hits, sections, names = [], {}, {}
     # Locals resolve only inside this object.
-    local = _defined_symbols([obj], local=True)
+    local = _defined_symbols([obj], local=True, limits=limits)
     table = elf_sections(obj)
     for index, (name, kind, flags, _, _) in enumerate(table):
         names[str(index)] = name
@@ -407,7 +420,7 @@ def _object_hits(source: str, obj: Path, defined: frozenset[str]) -> list[dict]:
 
     # Code outside .text, whatever its flags.
     homes = {}
-    for row in run_binutil("arm-none-eabi-readelf", ["-sW", str(obj)]).splitlines():
+    for row in run_binutil("arm-none-eabi-readelf", ["-sW", str(obj)], *limits).splitlines():
         match = _SYMBOL_ROW.match(row)
         if not match:
             continue
@@ -421,7 +434,7 @@ def _object_hits(source: str, obj: Path, defined: frozenset[str]) -> list[dict]:
     def hit(text: str) -> None:
         hits.append({"rule": "object_address", "path": source, "text": text[:200]})
 
-    for line in run_binutil("arm-none-eabi-objdump", ["-d", "--no-show-raw-insn", str(obj)]).splitlines():
+    for line in run_binutil("arm-none-eabi-objdump", ["-d", "--no-show-raw-insn", str(obj)], *limits).splitlines():
         if not _ADDRESS_INSN.search(line):
             continue
         for match in _IMMEDIATE.finditer(line):
@@ -432,14 +445,13 @@ def _object_hits(source: str, obj: Path, defined: frozenset[str]) -> list[dict]:
     contents = {index: table[index][3] for index in sections}
     for index, data in contents.items():
         # Any byte offset: loads may be unaligned.
-        words = (int.from_bytes(data[i:i + 4], "little") for i in range(len(data) - 3))
-        if "X" not in sections[index] and any(SCS_LOW <= word <= SCS_HIGH for word in words):
+        if "X" not in sections[index] and _SCS_WORD.search(data):
             hit(f"SCS address in {table[index][0]}")
     # readelf lists reloc sections in table order.
     targets = iter([info for _, kind, _, _, info in table if kind in (_REL, _RELA)])
     expected, seen_relocs = sum(kind in (_REL, _RELA) for _, kind, _, _, _ in table), 0
     target = None
-    for line in run_binutil("arm-none-eabi-readelf", ["-rW", str(obj)]).splitlines():
+    for line in run_binutil("arm-none-eabi-readelf", ["-rW", str(obj)], *limits).splitlines():
         if _RELOC_SECTION.match(line):
             seen_relocs += 1
             target = next(targets, None)
@@ -464,32 +476,61 @@ def _object_hits(source: str, obj: Path, defined: frozenset[str]) -> list[dict]:
     return hits
 
 
-def _defined_symbols(objects: list[Path], local: bool = False) -> frozenset[str]:
+def _defined_symbols(
+    objects: list[Path], local: bool = False, limits: tuple[float, str] = (math.inf, ""),
+) -> frozenset[str]:
     """Strong global (or local) definitions."""
-    out = run_binutil("arm-none-eabi-nm", ["--defined-only", *map(str, objects)])
+    out = run_binutil("arm-none-eabi-nm", ["--defined-only", *map(str, objects)], *limits)
     # Weak and common can lose to harness.
     kinds = "bdrt" if local else "BDRT"
     return frozenset(parts[2] for parts in map(str.split, out.splitlines()) if len(parts) == 3 and parts[1] in kinds)
 
 
-def object_findings(build_dir: Path) -> tuple[list[dict], dict, dict]:
+def _size_error(objects: list[tuple[str, Path]]) -> Optional[str]:
+    """Why the objects are too big."""
+    sizes = [(obj.stat().st_size, source) for source, obj in objects]
+    big = [source for size, source in sizes if size > OBJECT_CAP]
+    if big:
+        return f"object over {OBJECT_CAP >> 20} MiB: {big[0]}"
+    if sum(size for size, _ in sizes) > OBJECTS_TOTAL_CAP:
+        return f"objects over {OBJECTS_TOTAL_CAP >> 20} MiB in total"
+    return None
+
+
+def object_findings(build_dir: Path, deadline_s: float = SCAN_DEADLINE_S) -> tuple[list[dict], dict, dict]:
     """Object hits, a summary, per-unit -E flags."""
     from .firmware_build import built_record, nsx_app_dir
 
     summary = {"build_dir": str(build_dir), "count": 0,
                "kernels_hash": built_record(nsx_app_dir(build_dir)).get("kernels") or None}
-    try:
-        units = _kernel_units(build_dir)
-        missing = [source for source, obj, _ in units if not obj.is_file()]
-        if not units or missing:
-            message = f"kernel object missing: {missing[0]}" if missing else "no kernel objects found"
-            return [{"rule": "scan_error", "path": "", "message": message}], summary, {}
-        defined = _defined_symbols([obj for _, obj, _ in units])
-        with ThreadPoolExecutor(max_workers=scan_workers()) as pool:
-            found = pool.map(lambda unit: _object_hits(unit[0], unit[1], defined), units)
-            findings = [hit for hits in found for hit in hits]
-    except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as exc:
-        return [{"rule": "scan_error", "path": "", "message": f"object scan failed: {exc}"[:200]}], summary, {}
+
+    def error(message: str) -> tuple[list[dict], dict, dict]:
+        return [{"rule": "scan_error", "path": "", "message": message[:200]}], summary, {}
+
+    deadline = time.monotonic() + deadline_s
+    with tempfile.TemporaryDirectory() as tmp:
+        limits = (deadline, str(Path(tmp, "abort")))
+        pool = ThreadPoolExecutor(max_workers=scan_workers())
+        try:
+            units = _kernel_units(build_dir)
+            missing = [source for source, obj, _ in units if not obj.is_file()]
+            if not units or missing:
+                return error(f"kernel object missing: {missing[0]}" if missing else "no kernel objects found")
+            too_big = _size_error([(source, obj) for source, obj, _ in units])
+            if too_big:
+                return error(too_big)
+            defined = _defined_symbols([obj for _, obj, _ in units], limits=limits)
+            jobs = [pool.submit(_object_hits, source, obj, defined, limits) for source, obj, _ in units]
+            done, late = wait(jobs, timeout=max(0.0, deadline - time.monotonic()))
+            if late:
+                return error(f"object scan passed its {deadline_s:g} s deadline")
+            findings = [hit for job in jobs for hit in job.result()]
+        except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as exc:
+            return error(f"object scan failed: {exc}")
+        finally:
+            # Kill running binutils, drop queued jobs.
+            Path(limits[1]).touch()
+            pool.shutdown(wait=True, cancel_futures=True)
     summary["count"] = len(units)
     flags = {source: _preprocess_args(args, source) for source, _, args in units}
     # New units get the first unit's flags.

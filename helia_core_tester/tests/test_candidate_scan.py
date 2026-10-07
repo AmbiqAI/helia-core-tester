@@ -238,7 +238,7 @@ def test_per_unit_flags_reach_gcc_e(kernels: Path, tmp_path: Path, monkeypatch) 
     text = PASTE + '#ifdef BOARD_B\nCAT(_Pra, gma)("GCC optimize(\\"O3\\")")\n#endif\nint b;\n'
     (kernels / "Source/Conv/b.c").write_text(text, encoding="utf-8")
     flags = {"*": ("-DBOARD_X",), "Source/Conv/a.c": ("-DBOARD_X",), "Source/Conv/b.c": ("-DBOARD_B",)}
-    monkeypatch.setattr(candidate_check, "object_findings", lambda build: ([], {"count": 2}, flags))
+    monkeypatch.setattr(candidate_check, "object_findings", lambda build, deadline: ([], {"count": 2}, flags))
     report = check_candidate(kernels, _git(kernels, "rev-parse", "HEAD").strip(), build_dir=tmp_path)
     assert ("pragma", "Source/Conv/b.c") in {(f["rule"], f["path"]) for f in report["findings"]}
 
@@ -412,3 +412,31 @@ def test_jobs_in_flight_bounded(tmp_path: Path, monkeypatch) -> None:
     counts, failed = candidate_scan._tree_counts(gcc, _many_units(tmp_path, 12), rule_counts, {"c": ()},
                                                  time.monotonic() + 30, str(tmp_path / "abort"))
     assert counts == {} and not failed and peak[0] <= 2
+
+
+@needs_gcc
+@pytest.mark.parametrize(("cap", "total", "message"), [
+    (1024, 1 << 30, "object over 0 MiB: Source/k.c"),
+    (1 << 30, 1024, "objects over 0 MiB in total"),
+])
+def test_big_objects_refused(tmp_path: Path, monkeypatch, cap: int, total: int, message: str) -> None:
+    build = _build(tmp_path, "int k;\n")
+    (build / "k.c.obj").write_bytes(bytes(4096))
+    monkeypatch.setattr(candidate_scan, "OBJECT_CAP", cap)
+    monkeypatch.setattr(candidate_scan, "OBJECTS_TOTAL_CAP", total)
+    # Refused from stat alone: nothing read.
+    monkeypatch.setattr(candidate_scan, "elf_sections", lambda obj: pytest.fail("read the object"))
+    monkeypatch.setattr(candidate_scan, "run_binutil", lambda *args: pytest.fail("ran a binutil"))
+    findings, _, _ = candidate_scan.object_findings(build)
+    assert findings == [{"rule": "scan_error", "path": "", "message": message}]
+
+
+@needs_gcc
+def test_object_scan_deadline(tmp_path: Path, monkeypatch) -> None:
+    build = _build(tmp_path, "int k;\n")
+    slow = _fake_gcc(tmp_path, "sleep 30")
+    monkeypatch.setattr(candidate_scan, "arm_tool", lambda name: slow)
+    start = time.monotonic()
+    findings, _, _ = candidate_scan.object_findings(build, deadline_s=1.0)
+    assert time.monotonic() - start < 8
+    assert [f["rule"] for f in findings] == ["scan_error"]
