@@ -18,7 +18,10 @@ runner = CliRunner()
 
 @pytest.fixture
 def kernels(tmp_path: Path) -> Path:
-    return _repo(tmp_path / "nn", {"Source/Conv/a.c": "int a;\n", "Include/arm_nnfunctions.h": "int f;\n", "nsx/CMakeLists.txt": "x\n"})
+    return _repo(tmp_path / "nn", {
+        "Source/Conv/a.c": "int a;\n", "Include/arm_nnfunctions.h": "int f;\n", "nsx/CMakeLists.txt": "x\n",
+        "nsx/nsx-module.yaml": "name: nsx-cmsis-nn\n",
+    })
 
 
 class FakeRun:
@@ -31,7 +34,22 @@ class FakeRun:
         self.calls.append(args)
         session = args[args.index("--session-id") + 1]
         options = self.cand if session.startswith("eval-") else self.base
-        return 0, {"bundle": str(sb._bundle(self.root, session, **options)), "totals": {"failed": 0}}
+        path = sb._bundle(self.root, session, **options)
+        _built(path, Path(args[args.index("--cmsis-nn-root") + 1]), args)
+        return 0, {"bundle": str(path), "totals": {"failed": 0}}
+
+
+def _built(bundle: Path, root: Path, args: list[str]) -> None:
+    """Record provenance like a real run."""
+    manifest = json.loads((bundle / "session_manifest.json").read_text())
+    head = _git(root, "rev-parse", "HEAD").strip()
+    dirty = bool(_git(root, "status", "--porcelain").strip())
+    manifest["build"]["kernels"] = {
+        "root": str(root), "root_head": head, "root_dirty": dirty, "tree_hash": candidate_eval.snapshot_hash(root),
+    }
+    golden = Path(args[args.index("--golden-from") + 1]) if "--golden-from" in args else None
+    manifest["compare"] = {"strict": golden is not None, "golden_session_id": golden.name if golden else None}
+    (bundle / "session_manifest.json").write_text(json.dumps(manifest))
 
 
 def _baseline(tmp_path: Path, kernels: Path, repeats: int = 2, **base) -> tuple[Path, FakeRun]:
@@ -194,3 +212,23 @@ def test_eval_cli_interrupt_exits_130(tmp_path, kernels, monkeypatch) -> None:
     monkeypatch.setattr(candidate_eval, "evaluate", _stop)
     result, _ = _cli_eval(kernels, out)
     assert result.exit_code == 130
+
+
+class OtherBuild(FakeRun):
+    """Builds kernels other than the snapshot."""
+
+    def __call__(self, args: list[str], log: Path):
+        rc, summary = super().__call__(args, log)
+        manifest_path = Path(summary["bundle"]) / "session_manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["build"]["kernels"]["tree_hash"] = "other"
+        manifest_path.write_text(json.dumps(manifest))
+        return rc, summary
+
+
+def test_build_of_other_kernels_is_not_comparable(tmp_path, kernels) -> None:
+    """Score ties the bundle to the checked snapshot."""
+    out, _ = _baseline(tmp_path, kernels)
+    verdict = _eval(kernels, out, OtherBuild(tmp_path / "reports"))
+    assert verdict["verdict"] == "not_comparable"
+    assert any("tree hash" in f["reason"] for f in verdict["failures"])
