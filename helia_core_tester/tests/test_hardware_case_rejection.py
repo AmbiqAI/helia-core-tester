@@ -71,7 +71,7 @@ def test_rejected_case_fails_alone_and_the_session_continues(tmp_path: Path, sta
     ("status", "reason"),
     [
         (OUTPUT_CHANGED_STATUS, "timed output differs from first call"),
-        (OPERAND_CHANGED_STATUS, "timed run changed a read-only operand"),
+        (OPERAND_CHANGED_STATUS, "kernel changed a read-only operand"),
     ],
 )
 def test_integrity_failure_names_the_cause(tmp_path: Path, status: int, reason: str) -> None:

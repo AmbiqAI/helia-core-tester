@@ -79,6 +79,7 @@ def test_c_firmware_session_loop_executes_abs_correctness_flow(tmp_path: Path, p
     # Refusals end one case; the next runs.
     # 2 passes x 3 samples x 4 calls.
     assert "input_moves=24" in result.stdout
+    assert "misaligned=0" in result.stdout
     # Skipped timed calls fail the output check.
     for line in (
         "rejected correctness samples_dropped=0",

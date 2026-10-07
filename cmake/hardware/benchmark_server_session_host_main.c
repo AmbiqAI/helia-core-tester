@@ -109,6 +109,7 @@ extern uint32_t hct_host_skip_call;
 extern uint32_t hct_host_mutate_call;
 extern uint32_t hct_host_input_moves;
 extern const uint8_t *hct_host_last_input;
+extern uint32_t hct_host_misaligned;
 
 static hctp_status_t send_frame(hct_server_session_t *session, uint16_t message_type, const uint8_t *payload, size_t payload_length)
 {
@@ -117,7 +118,7 @@ static hctp_status_t send_frame(hct_server_session_t *session, uint16_t message_
 }
 
 /* CASE_META for one abs_s8 case. */
-static size_t encode_abs_meta(uint8_t *payload, const char *case_id, uint8_t mutable_data)
+static size_t encode_abs_meta(uint8_t *payload, const char *case_id, uint8_t mutable_data, uint32_t alignment)
 {
     size_t offset = 0u;
     write_text(payload, &offset, case_id);
@@ -142,7 +143,7 @@ static size_t encode_abs_meta(uint8_t *payload, const char *case_id, uint8_t mut
     write_u32(payload, &offset, 0u);
     write_u32(payload, &offset, 0u);
     write_u32(payload, &offset, (uint32_t)sizeof(kInput));
-    write_u32(payload, &offset, 1u);
+    write_u32(payload, &offset, alignment);
     write_u32(payload, &offset, hctp_crc32((const uint8_t *)kInput, sizeof(kInput)));
     write_u8(payload, &offset, mutable_data);
     write_u32(payload, &offset, 0u);
@@ -209,7 +210,7 @@ static int run_next_case(hct_server_session_t *session)
     size_t length = 0u;
     int status;
     if (drain_single_message(session, HCTP_MSG_REQUEST_CASE, payload, &length) != 0 || payload[0] != 1u) return 70;
-    if (send_frame(session, HCTP_MSG_CASE_META, payload, encode_abs_meta(payload, "abs_next_s8", 1u)) != HCTP_STATUS_OK) return 71;
+    if (send_frame(session, HCTP_MSG_CASE_META, payload, encode_abs_meta(payload, "abs_next_s8", 1u, 1u)) != HCTP_STATUS_OK) return 71;
     status = stream_input(session);
     if (status != 0) return status;
     if (send_frame(session, HCTP_MSG_RUN_CORRECTNESS, payload, 0u) != HCTP_STATUS_OK) return 72;
@@ -340,7 +341,7 @@ int main(void)
     if (hct_server_session_accept_frame(&session, inbound_frame, encode_frame(HCTP_MSG_SESSION_PLAN, session.session_id, next_host_sequence++, inbound_payload, offset, inbound_frame)) != HCTP_STATUS_OK) return 13;
     if (drain_single_message(&session, HCTP_MSG_REQUEST_CASE, outbound_payload, &outbound_length) != 0) return 14;
 
-    if (send_frame(&session, HCTP_MSG_CASE_META, inbound_payload, encode_abs_meta(inbound_payload, "abs_default_s8_stream_demo", 0u)) != HCTP_STATUS_OK) return 15;
+    if (send_frame(&session, HCTP_MSG_CASE_META, inbound_payload, encode_abs_meta(inbound_payload, "abs_default_s8_stream_demo", 0u, 64u)) != HCTP_STATUS_OK) return 15;
 
     /* Regression: a BLOB_CHUNK whose declared length is near UINT32_MAX must be refused
      * as truncated, never handed to memcpy (has_capacity() used to compute offset+needed,
@@ -419,6 +420,8 @@ int main(void)
     if (hct_server_session_accept_frame(&session, inbound_frame, encode_frame(HCTP_MSG_RUN_PERFORMANCE, session.session_id, next_host_sequence++, inbound_payload, 0u, inbound_frame)) != HCTP_STATUS_OK) return 28;
     /* Every timed call reads the other copy. */
     printf("input_moves=%u\n", (unsigned)hct_host_input_moves);
+    /* 64-byte input: twin keeps alignment. */
+    printf("misaligned=%u\n", (unsigned)hct_host_misaligned);
     {
         int sample_count = 0;
         int cpu_pass_samples = 0;

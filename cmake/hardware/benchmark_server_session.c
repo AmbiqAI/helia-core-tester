@@ -851,6 +851,8 @@ uint32_t hct_host_mutate_call;
 /* Host tests: calls with a new input address. */
 uint32_t hct_host_input_moves;
 const uint8_t *hct_host_last_input;
+/* Host tests: calls with a misaligned input. */
+uint32_t hct_host_misaligned;
 
 arm_cmsis_nn_status hct_run_kernel_once(hct_server_session_t *session)
 {
@@ -859,6 +861,7 @@ arm_cmsis_nn_status hct_run_kernel_once(hct_server_session_t *session)
     arm_cmsis_nn_status status;
     hct_host_input_moves += (hct_host_last_input != NULL && data != hct_host_last_input) ? 1u : 0u;
     hct_host_last_input = data;
+    hct_host_misaligned += (input != NULL && input->arena_offset % input->alignment != 0u) ? 1u : 0u;
     if (hct_host_fail_call != 0u && --hct_host_fail_call == 0u)
     {
         return ARM_CMSIS_NN_ARG_ERROR;
@@ -1455,7 +1458,7 @@ static bool is_input_role(uint8_t role)
     return role == HCT_BLOB_ROLE_INPUT_0 || role == HCT_BLOB_ROLE_INPUT_1 || role == HCT_BLOB_ROLE_INPUT_2;
 }
 
-/* Copy inputs; keep cache-line phase. */
+/* Copy inputs; keep phase and alignment. */
 static void place_input_twins(hct_server_session_t *session)
 {
     uint32_t cursor = session->workspace_used_bytes;
@@ -1463,11 +1466,12 @@ static void place_input_twins(hct_server_session_t *session)
     for (index = 0u; index < session->blob_count; ++index)
     {
         hct_server_blob_t *blob = &session->blobs[index];
-        const uint32_t phase = blob->arena_offset & (HCT_TWIN_PHASE_BYTES - 1u);
+        const uint32_t align = (blob->alignment > HCT_TWIN_PHASE_BYTES) ? blob->alignment : HCT_TWIN_PHASE_BYTES;
+        const uint32_t phase = blob->arena_offset & (align - 1u);
         uint32_t base;
         uint32_t end;
         if (!is_input_role(blob->role) || blob->mutable_data != 0u || blob->placed != NULL || blob->byte_length == 0u ||
-            !hct_checked_aligned_range(cursor, HCT_TWIN_PHASE_BYTES, phase + blob->byte_length, session->workspace_bytes,
+            !hct_checked_aligned_range(cursor, align, phase + blob->byte_length, session->workspace_bytes,
                                        &base, &end))
         {
             continue;

@@ -105,7 +105,7 @@ class CaseRejection:
         if self.kernel_status == OUTPUT_CHANGED_STATUS:
             return "timed output differs from first call"
         if self.kernel_status == OPERAND_CHANGED_STATUS:
-            return "timed run changed a read-only operand"
+            return "kernel changed a read-only operand"
         return f"kernel returned {self.kernel_status} in {self.stage} run"
 
 

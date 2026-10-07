@@ -36,7 +36,7 @@ extern "C" {
 #define HCT_SERVER_BLOB_CHUNK_BYTES 64u
 /* Timed output differs from first call. */
 #define HCT_STATUS_OUTPUT_CHANGED (-1000)
-/* Timed run changed a read-only operand. */
+/* Kernel changed a read-only operand. */
 #define HCT_STATUS_OPERAND_CHANGED (-1001)
 
 typedef enum
