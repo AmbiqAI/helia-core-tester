@@ -273,6 +273,8 @@ def test_server_sources_compile_out_of_this_checkout(tmp_path: Path) -> None:
     assert "patch_build_id.py" in text, "the post-link build-id stamp must survive"
     # MVE in the harness skews MVE counters.
     assert "-fno-tree-vectorize" in text
+    # Pinned kernel alignment: no layout drift.
+    assert "target_compile_options(nsx_cmsis_nn PRIVATE -falign-functions=64)" in text
     assert 'RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/hardware"' in text
     assert '"$<TARGET_FILE_DIR:hct_benchmark_server>/hct_benchmark_server.elf"' in text
 
@@ -363,5 +365,7 @@ def test_placement_is_a_saved_option(tmp_path: Path) -> None:
     app_dir = tmp_path / "app"
     app_dir.mkdir()
     nsx_app.save_options(app_dir, options)
-    assert nsx_app.resolve_options(app_dir, tmp_path).placement == "mram"
-    assert nsx_app.resolve_options(app_dir, tmp_path, placement="tcm").placement == "tcm"
+    # Only a passed placement or the flashed build.
+    assert nsx_app.resolve_options(app_dir, tmp_path).placement == "tcm"
+    assert nsx_app.resolve_options(app_dir, tmp_path, placement="mram").placement == "mram"
+    assert nsx_app.resolve_options(app_dir, tmp_path, follow_pin=False).placement == "mram"

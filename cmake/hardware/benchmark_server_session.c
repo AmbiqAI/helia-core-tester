@@ -634,6 +634,7 @@ static void reset_case_buffers(hct_server_session_t *session)
     session->output_stream_checksum = 0u;
     session->output_stream_active = 0u;
     session->mram_cursor = 0u;
+    session->checked_bytes = 0u;
     hct_window.cold_count = 0u;
     session->last_kernel_status = ARM_CMSIS_NN_SUCCESS;
     /* Zero every per-case scalar param field (stride_h..adj_y, contiguous in the struct --
@@ -841,12 +842,22 @@ arm_cmsis_nn_status hct_run_empty_once(hct_server_session_t *session)
  * reachable; the real firmware's dispatch is the generated hct_run_kernel_once(). */
 /* Host tests: Nth call fails; 0 disables. */
 uint32_t hct_host_fail_call;
+/* Host tests: Nth call on skips work. */
+uint32_t hct_host_skip_call;
 
 arm_cmsis_nn_status hct_run_kernel_once(hct_server_session_t *session)
 {
     if (hct_host_fail_call != 0u && --hct_host_fail_call == 0u)
     {
         return ARM_CMSIS_NN_ARG_ERROR;
+    }
+    if (hct_host_skip_call == 1u)
+    {
+        return ARM_CMSIS_NN_SUCCESS;
+    }
+    if (hct_host_skip_call != 0u)
+    {
+        --hct_host_skip_call;
     }
     switch (session->expected_kernel_id)
     {
@@ -1342,6 +1353,31 @@ static hctp_status_t handle_blob_chunk(hct_server_session_t *session, const uint
     return queue_case_ready(session);
 }
 
+static bool has_mutable_blob(const hct_server_session_t *session)
+{
+    uint32_t index;
+    for (index = 0u; index < session->blob_count; ++index)
+    {
+        if (session->blobs[index].mutable_data != 0u)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* FNV-1a over the output bytes. */
+static uint32_t output_digest(const uint8_t *data, uint32_t length)
+{
+    uint32_t hash = 2166136261u;
+    uint32_t index;
+    for (index = 0u; index < length; ++index)
+    {
+        hash = (hash ^ data[index]) * 16777619u;
+    }
+    return hash;
+}
+
 /* Correctness run; DWT skips kernel calls. */
 static arm_cmsis_nn_status run_counting_prepare(hct_server_session_t *session)
 {
@@ -1373,7 +1409,23 @@ static hctp_status_t handle_run_correctness(hct_server_session_t *session)
     {
         return HCTP_STATUS_INVALID_ARGUMENT;
     }
+    /* Stateful kernels may change outputs. */
+    session->checked_bytes = has_mutable_blob(session) ? 0u : session->output_length;
+    session->checked_digest = output_digest(hct_output_ptr(session), session->checked_bytes);
     return queue_correctness_output(session);
+}
+
+/* Varying bytes; skipped calls leave them. */
+static void poison_output(hct_server_session_t *session)
+{
+    static uint32_t state = 0x9E3779B9u;
+    uint8_t *output = hct_output_ptr(session);
+    uint32_t index;
+    for (index = 0u; index < session->checked_bytes; ++index)
+    {
+        state = state * 1664525u + 1013904223u;
+        output[index] = (uint8_t)(state >> 24);
+    }
 }
 
 /* Own function: stable window layout. */
@@ -1393,8 +1445,18 @@ __attribute__((noinline)) static bool time_one_sample(hct_server_session_t *sess
     iter = 0u;
     do
     {
-        arm_cmsis_nn_status status = hct_run_kernel_once(session);
+        arm_cmsis_nn_status status;
+        /* Counters pause between kernel calls. */
+        poison_output(session);
+        status = hct_run_kernel_once(session);
         session->last_kernel_status = status;
+        if (status == ARM_CMSIS_NN_SUCCESS &&
+            output_digest(hct_output_ptr(session), session->checked_bytes) != session->checked_digest)
+        {
+            /* Status enums may be one byte. */
+            session->last_kernel_status = HCT_STATUS_OUTPUT_CHANGED;
+            status = ARM_CMSIS_NN_FAILURE;
+        }
         if (kernel_status_is_fatal(session, status))
         {
             /* Next pass program parks the PMU. */

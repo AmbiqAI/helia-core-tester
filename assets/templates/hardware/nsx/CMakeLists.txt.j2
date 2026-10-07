@@ -30,6 +30,8 @@ nsx_bootstrap_app(
 )
 # Source switch changes commands; ninja recompiles.
 target_compile_definitions(nsx_cmsis_nn PRIVATE HCT_KERNEL_SOURCE="{{ kernel_id }}")
+# Pin kernel entry alignment.
+target_compile_options(nsx_cmsis_nn PRIVATE -falign-functions={{ kernel_align }})
 
 # Sources live in the rendering checkout.
 set(HCT_HARDWARE_DIR "{{ hardware_dir }}")

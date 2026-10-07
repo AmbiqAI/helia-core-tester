@@ -61,6 +61,9 @@ CHECKOUT_DIRS = ("Include", "Source")
 CHECKOUT_FILES = ("nsx/CMakeLists.txt", "nsx/nsx-module.yaml")
 KERNEL_SHIM = "# Shim: delegates to the native ns-cmsis-nn NSX build.\nadd_subdirectory(nsx)\n"
 
+# Kernel entry alignment; 64 is the max.
+KERNEL_ALIGN_BYTES = 64
+
 # tcm: all operands in DTCM. mram: weights, bias in MRAM.
 PLACEMENTS = ("tcm", "mram")
 
@@ -209,8 +212,16 @@ def resolve_options(
     placement: Optional[str] = None,
     follow_pin: bool = True,
 ) -> AppOptions:
-    """Given flags win, then saved, then defaults."""
+    """Flags win; kernel source then saved, switches then defaults.
+
+    follow_pin=False resolves the flashed build: saved ref and switches.
+    """
     saved = saved_options(app_dir)
+    if saved and follow_pin:
+        # Unpassed switches reset each build.
+        saved = AppOptions(**{
+            f.name: getattr(saved, f.name) for f in dataclasses.fields(saved) if f.name.startswith("cmsis_nn_")
+        })
     base = saved or AppOptions(cmsis_nn_root=nested_kernel_root(repo_root))
     if cmsis_nn_ref or cmsis_nn_root:
         base = dataclasses.replace(
@@ -401,6 +412,7 @@ def render_app(
         scripts_dir=repo_root / "scripts",
         kernel_dir=kernel_dir(app_dir, options).name,
         kernel_id=options.kernel_id(),
+        kernel_align=KERNEL_ALIGN_BYTES,
         image_dir="probe" if probe else IMAGE_SUBDIR,
         build_id_txt=BUILD_ID_TXT,
         link_pmu=PMU_MODULE in modules,

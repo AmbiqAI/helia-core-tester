@@ -88,6 +88,10 @@ def check_case_ids_unique(case_ids: Sequence[str]) -> None:
         raise ValueError(f"Duplicate case id(s) in one run: {duplicates}. Every case id must be unique.")
 
 
+# HCT_STATUS_OUTPUT_CHANGED in benchmark_server_session.h.
+OUTPUT_CHANGED_STATUS = -1000
+
+
 @dataclass(frozen=True)
 class CaseRejection:
     """The kernel refused the case on the target."""
@@ -97,6 +101,8 @@ class CaseRejection:
 
     @property
     def reason(self) -> str:
+        if self.kernel_status == OUTPUT_CHANGED_STATUS:
+            return "timed output differs from first call"
         return f"kernel returned {self.kernel_status} in {self.stage} run"
 
 
