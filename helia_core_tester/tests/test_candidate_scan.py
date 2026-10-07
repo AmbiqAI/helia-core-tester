@@ -134,6 +134,7 @@ def test_object_scan_flags_code_in_data(tmp_path: Path) -> None:
     assert {"code ramfn in .data", "branch to .data in .data"} <= texts
 
 
+@needs_gcc
 def test_object_scan_clean(tmp_path: Path) -> None:
     source = "unsigned f(unsigned x) { return x > 0xE0000000u ? x : ~x; }\nconst int t[2] = {1, 2};\n"
     findings, summary, _ = candidate_scan.object_findings(_build(tmp_path, source))
@@ -270,3 +271,13 @@ def test_unsafe_tar_fails_closed(kernels: Path, monkeypatch) -> None:
 def test_safe_tar_extracted(tmp_path: Path) -> None:
     candidate_scan.extract_tar(_tar(_member("Source/Conv/a.c")), tmp_path)
     assert (tmp_path / "Source/Conv/a.c").read_bytes() == b"x"
+
+
+def test_binutil_output_is_capped(tmp_path: Path, monkeypatch) -> None:
+    flood = tmp_path / "flood"
+    flood.write_text("#!/bin/sh\nexec yes x\n")
+    flood.chmod(0o755)
+    monkeypatch.setattr(candidate_scan, "arm_tool", lambda name: str(flood))
+    monkeypatch.setattr(candidate_scan, "OUTPUT_CAP", 1 << 16)
+    with pytest.raises(ValueError, match="hit limits"):
+        candidate_scan.run_binutil("arm-none-eabi-objdump", ["-s", "x.o"])

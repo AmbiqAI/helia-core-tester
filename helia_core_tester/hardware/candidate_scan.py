@@ -37,7 +37,7 @@ from itertools import repeat
 from pathlib import Path
 from typing import Callable, Optional
 
-from .toolchain import arm_tool, run_tool
+from .toolchain import arm_tool
 
 # Cores the boards use: MVE, DSP.
 _COMMON = ("-mthumb", "-mfloat-abi=hard", "-Ofast", "-ffast-math", "-DARM_NN_ENABLE_F32=1")
@@ -90,6 +90,14 @@ def run_capped(cmd: list[str], cwd: Path, timeout: float, cap: int) -> Optional[
             proc.wait()
         proc.stdout.close()
     return b"".join(chunks)
+
+
+def run_binutil(tool: str, args: list[str]) -> str:
+    """Bounded binutil stdout; raises when capped."""
+    out = run_capped([arm_tool(tool), *args], Path.cwd(), TIMEOUT_S, OUTPUT_CAP)
+    if out is None:
+        raise ValueError(f"{tool} failed or hit limits")
+    return out.decode("utf-8", "replace")
 
 
 def extract_tar(archive: bytes, dest: Path) -> None:
@@ -263,7 +271,7 @@ def _section_bytes(obj: Path, names: list[str]) -> dict[str, bytes]:
     found: dict[str, bytearray] = {}
     current = None
     args = [arg for name in names for arg in ("-j", name)]
-    for line in run_tool("arm-none-eabi-objdump", ["-s", *args, str(obj)]).splitlines():
+    for line in run_binutil("arm-none-eabi-objdump", ["-s", *args, str(obj)]).splitlines():
         header = _CONTENTS.match(line)
         if header:
             current = found.setdefault(header.group(1), bytearray())
@@ -279,7 +287,7 @@ def _object_hits(source: str, obj: Path, defined: frozenset[str]) -> list[dict]:
     hits, sections, names = [], {}, {}
     # Locals resolve only inside this object.
     local = _defined_symbols([obj], local=True)
-    for row in run_tool("arm-none-eabi-readelf", ["-SW", str(obj)]).splitlines():
+    for row in run_binutil("arm-none-eabi-readelf", ["-SW", str(obj)]).splitlines():
         match = _SECTION_ROW.match(row)
         if not match:
             continue
@@ -293,7 +301,7 @@ def _object_hits(source: str, obj: Path, defined: frozenset[str]) -> list[dict]:
 
     # Code outside .text, whatever its flags.
     homes = {}
-    for row in run_tool("arm-none-eabi-readelf", ["-sW", str(obj)]).splitlines():
+    for row in run_binutil("arm-none-eabi-readelf", ["-sW", str(obj)]).splitlines():
         match = _SYMBOL_ROW.match(row)
         if not match:
             continue
@@ -307,7 +315,7 @@ def _object_hits(source: str, obj: Path, defined: frozenset[str]) -> list[dict]:
     def hit(text: str) -> None:
         hits.append({"rule": "object_address", "path": source, "text": text[:200]})
 
-    for line in run_tool("arm-none-eabi-objdump", ["-d", "--no-show-raw-insn", str(obj)]).splitlines():
+    for line in run_binutil("arm-none-eabi-objdump", ["-d", "--no-show-raw-insn", str(obj)]).splitlines():
         if not _ADDRESS_INSN.search(line):
             continue
         for match in _IMMEDIATE.finditer(line):
@@ -322,7 +330,7 @@ def _object_hits(source: str, obj: Path, defined: frozenset[str]) -> list[dict]:
         if "X" not in sections[name] and any(SCS_LOW <= word <= SCS_HIGH for word in words):
             hit(f"SCS address in {name}")
     section = None
-    for line in run_tool("arm-none-eabi-readelf", ["-rW", str(obj)]).splitlines():
+    for line in run_binutil("arm-none-eabi-readelf", ["-rW", str(obj)]).splitlines():
         header = _RELOC_SECTION.match(line)
         if header:
             section = header.group(1)
@@ -346,7 +354,7 @@ def _object_hits(source: str, obj: Path, defined: frozenset[str]) -> list[dict]:
 
 def _defined_symbols(objects: list[Path], local: bool = False) -> frozenset[str]:
     """Strong global (or local) definitions."""
-    out = run_tool("arm-none-eabi-nm", ["--defined-only", *map(str, objects)])
+    out = run_binutil("arm-none-eabi-nm", ["--defined-only", *map(str, objects)])
     # Weak and common can lose to harness.
     kinds = "bdrt" if local else "BDRT"
     return frozenset(parts[2] for parts in map(str.split, out.splitlines()) if len(parts) == 3 and parts[1] in kinds)
