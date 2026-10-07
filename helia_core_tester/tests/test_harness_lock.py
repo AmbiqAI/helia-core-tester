@@ -328,8 +328,28 @@ def test_unsafe_git_config_refused(kernels: Path, tmp_path: Path, key: str, valu
     assert not pwned.exists()
 
 
+@pytest.mark.parametrize("key", ["filter..clean", "diff..textconv", "merge..driver", "FILTER.X.Smudge", "diff.A.b.command"])
+def test_unsafe_key_any_subsection(key: str) -> None:
+    from helia_core_tester.hardware.candidate_check import _UNSAFE_CONFIG, _key_parts
+
+    assert _key_parts(key) in _UNSAFE_CONFIG
+
+
+def test_empty_driver_name_refused(kernels: Path, tmp_path: Path) -> None:
+    from helia_core_tester.hardware.candidate_check import CheckError
+
+    pwned = tmp_path / "pwned"
+    (kernels / ".git/config").open("a", encoding="utf-8").write(f'[filter ""]\n\tclean = touch {pwned}; cat\n')
+    (kernels / ".gitattributes").write_text("*.c filter=\n", encoding="utf-8")
+    with pytest.raises(CheckError, match=r"filter\.\.clean"):
+        check_candidate(kernels, _sha(kernels))
+    assert not pwned.exists()
+
+
 def test_safe_config_keys_pass(kernels: Path) -> None:
-    for key, value in (("core.fsmonitorHookVersion", "2"), ("filter.lfs.required", "true"), ("diff.x.binary", "true")):
+    safe = (("core.fsmonitorHookVersion", "2"), ("filter.lfs.required", "true"), ("diff.x.binary", "true"),
+            ("core.hooksPath", "hooks"))
+    for key, value in safe:
         _git(kernels, "config", key, value)
     assert check_candidate(kernels, _sha(kernels))["ok"]
 

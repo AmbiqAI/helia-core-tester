@@ -35,10 +35,12 @@ paths come from a hardened `git diff`. Pass --base as a full commit SHA:
 a branch or tag lives in the candidate repo and can be moved.
 
 The candidate repo is untrusted. Repo config that can run commands
-or move the worktree (fsmonitor, hooks, filters, textconv, includes,
-core.worktree...) refuses the check, and git runs with fsmonitor and
-hooks off; the outer diff skips nested repos' dirty state, so their
-config never runs. Base objects come from the candidate's object
+or move the worktree (core.fsmonitor, filter drivers, textconv, diff
+and merge drivers, core.worktree...) refuses the check. Keys pulled in
+through include.path or includeIf count the same; the include keys
+themselves are allowed. core.hooksPath is allowed: git always runs
+with fsmonitor off and hooks pointed at /dev/null. The outer diff
+skips nested repos' dirty state, so their config never runs. Base objects come from the candidate's object
 store, which the candidate can forge: check a copy whose objects came
 from a trusted clone.
 """
@@ -112,12 +114,15 @@ _GIT_FLAGS = ("-c", "core.fsmonitor=false", "-c", f"core.hooksPath={os.devnull}"
 # A FIFO in config or tree blocks git.
 _GIT_TIMEOUT = 300
 # Config keys that run commands or redirect.
-_UNSAFE_CONFIG = re.compile(
-    r"core\.(?:fsmonitor|sshcommand|gitproxy|askpass|pager|editor|worktree|alternaterefscommand)"
-    r"|filter\..+\.(?:clean|smudge|process)|diff\.external|diff\..+\.(?:textconv|command)|merge\..+\.driver"
-    r"|uploadpack\.packobjectshook|sequence\.editor",
-    re.IGNORECASE,
-)
+# (section, name); any subsection, even empty.
+_UNSAFE_CONFIG = frozenset((
+    *(("core", name) for name in (
+        "fsmonitor", "sshcommand", "gitproxy", "askpass", "pager", "editor", "worktree", "alternaterefscommand",
+    )),
+    ("filter", "clean"), ("filter", "smudge"), ("filter", "process"),
+    ("diff", "external"), ("diff", "textconv"), ("diff", "command"), ("merge", "driver"),
+    ("uploadpack", "packobjectshook"), ("sequence", "editor"),
+))
 
 
 class CheckError(RuntimeError):
@@ -141,8 +146,14 @@ def unsafe_config(tree: Path) -> list[str]:
     """Repo config keys that could run code."""
     parts = _git(tree, "config", "--list", "--show-scope", "--name-only", "-z").decode(errors="replace").split("\0")
     # Pairs: scope, key. Our -c flags are "command".
-    keys = {key.lower() for scope, key in zip(parts[::2], parts[1::2]) if scope != "command"}
-    return sorted(key for key in keys if _UNSAFE_CONFIG.fullmatch(key))
+    keys = {key for scope, key in zip(parts[::2], parts[1::2]) if scope != "command"}
+    return sorted(key for key in keys if _key_parts(key) in _UNSAFE_CONFIG)
+
+
+def _key_parts(key: str) -> tuple[str, str]:
+    """(section, name), lowercased; subsection dropped."""
+    section, _, rest = key.partition(".")
+    return section.lower(), rest.rpartition(".")[2].lower()
 
 
 def _split(out: bytes) -> list[str]:
