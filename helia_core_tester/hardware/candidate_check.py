@@ -20,9 +20,12 @@ Include/, nothing else. Rules, each a finding in the JSON report:
   .incbin and .include in assembly.
 - build_probe: #line, line markers, __has_include and macros the
   build flags set (__OPTIMIZE__, __FAST_MATH__), which can hide code
-  from the gcc -E scan. Also an added #if/#elif that calls a macro or
-  pastes, and an added #define that calls or pastes when any #if in
-  Source/ or Include/ reaches it: these can build a probe.
+  from the gcc -E scan. Since the scan configs and the real build can
+  disagree on which branches are live, also: an added #if/#elif that
+  calls a macro or pastes; an added or removed #define/#undef of a name
+  any conditional in Source/ or Include/ reaches, through macro bodies,
+  whatever its body (include guards excepted); and an added line that
+  uses a macro whose body (transitively) pastes.
 - hidden_index_entry: any path flagged skip-worktree or
   assume-unchanged, which git diff and status would skip.
 - guard_change: an added or removed #if/#ifdef/#else/#define/#undef
@@ -105,7 +108,11 @@ _LEX = re.compile(
 )
 _GUARD = re.compile(r"^\s*(?:#|%:)\s*(?:if|ifdef|ifndef|elif|elifdef|elifndef|else|endif|define|undef)\b")
 _CONDITION = re.compile(r"^\s*(?:#|%:)\s*(?:if|elif)\b(.*)", re.DOTALL)
-_DEFINE = re.compile(r"^\s*(?:#|%:)\s*define\s+([A-Za-z_]\w*)(.*)", re.DOTALL)
+_NAME_TEST = re.compile(r"^\s*(?:#|%:)\s*(?:el)?ifn?def\s+([A-Za-z_]\w*)")
+_DEFINE = re.compile(r"^\s*(?:#|%:)\s*define\s+([A-Za-z_]\w*)(\([^)]*\))?(.*)", re.DOTALL)
+_IFNDEF = re.compile(r"^\s*(?:#|%:)\s*ifndef\s+([A-Za-z_]\w*)\s*$")
+_DEFINE_UNDEF = re.compile(r"^\s*(?:#|%:)\s*(?:define|undef)\s+([A-Za-z_]\w*)")
+_PASTES = re.compile(r"##|%:%:")
 _IDENT = re.compile(r"[A-Za-z_]\w*")
 # Pastes, or calls besides defined/__has_*.
 _MACRO_CALL = re.compile(r"##|%:%:|\b(?!defined\b|__has_\w+\b)[A-Za-z_]\w*\s*\(")
@@ -377,44 +384,91 @@ def rule_counts(source: str) -> Counter:
     return counts
 
 
-def _tree_macros(tree: Path) -> set[str]:
-    """Names any #if reaches via defines."""
-    used: set[str] = set()
+def _closure(seed: set[str], edges: dict[str, set[str]]) -> set[str]:
+    """Names reachable from seed."""
+    found, todo = set(seed), list(seed)
+    while todo:
+        for name in edges.get(todo.pop(), ()):
+            if name not in found:
+                found.add(name)
+                todo.append(name)
+    return found
+
+
+def _tree_macros(tree: Path) -> tuple[set[str], set[str]]:
+    """Names conditionals reach; pasting macros."""
+    tested: set[str] = set()
     bodies: dict[str, set[str]] = {}
+    users: dict[str, set[str]] = {}
+    pasting: set[str] = set()
     for top in ALLOWED_DIRS:
         for path in sorted((tree / top).rglob("*")):
             if path.is_symlink() or not path.is_file() or not path.name.endswith(ALLOWED_SUFFIXES):
                 continue
             for code in normalize(path.read_text(encoding="utf-8", errors="replace"))[0]:
                 if match := _CONDITION.match(code):
-                    used |= set(_IDENT.findall(match.group(1)))
+                    tested |= set(_IDENT.findall(match.group(1)))
+                elif match := _NAME_TEST.match(code):
+                    tested.add(match.group(1))
                 elif match := _DEFINE.match(code):
-                    bodies.setdefault(match.group(1), set()).update(_IDENT.findall(match.group(2)))
-    # Names reached through macro bodies.
-    todo = list(used)
-    while todo:
-        for name in bodies.get(todo.pop(), ()):
-            if name not in used:
-                used.add(name)
-                todo.append(name)
-    return used
+                    name, body = match.group(1), match.group(3)
+                    bodies.setdefault(name, set()).update(_IDENT.findall(body))
+                    for ref in _IDENT.findall(body):
+                        users.setdefault(ref, set()).add(name)
+                    if _PASTES.search(body):
+                        pasting.add(name)
+    # Users of pasting macros paste too.
+    return _closure(tested, bodies), _closure(pasting, users)
 
 
-def probe_findings(tree: Path, added: dict[str, list[tuple[int, str]]]) -> Iterator[dict]:
-    """Conditionals built from macro calls.
+def _guard_name(lines: list[str]) -> Optional[str]:
+    """The file's include guard, if any."""
+    code = [line for line in lines if line.strip()]
+    if len(code) < 2 or not (match := _IFNDEF.match(code[0])):
+        return None
+    define = _DEFINE.match(code[1])
+    if define and define.group(1) == match.group(1) and not define.group(2) and not define.group(3).strip():
+        return match.group(1)
+    return None
 
-    gcc -E drops code under a false #if, so a probe the scan cannot
-    see (a pasted __has_include) can hide a pragma.
+
+def removed_lines(tree: Path, base: dict, path: str, status: str) -> list[tuple[int, str]]:
+    """Base logical lines the candidate dropped."""
+    if path not in base:
+        return []
+    old_source = _git(tree, "cat-file", "blob", base[path][1]).decode(errors="replace")
+    old, owner = normalize(old_source)
+    new = [] if status == "D" else normalize((tree / path).read_text(encoding="utf-8", errors="replace"))[0]
+    first = {logical: index for index, logical in reversed(list(enumerate(owner)))}
+    return [(first[logical] + 1, old[logical]) for logical in _changed(old, new, removed=True)]
+
+
+def probe_findings(tree: Path, added: dict[str, list[tuple[int, str]]],
+                   removed: dict[str, list[tuple[int, str]]]) -> Iterator[dict]:
+    """Edits that can flip a build-only branch.
+
+    gcc -E drops code under a false #if, and the scan configs need not
+    match the real build, so code behind a probe stays unseen.
     """
-    used: Optional[set[str]] = None
-    for path, lines in sorted(added.items()):
-        for line_no, code in lines:
+    if not any(added.values()) and not any(removed.values()):
+        return
+    reached, pasting = _tree_macros(tree)
+    for path in sorted(added.keys() | removed.keys()):
+        guard = None
+        if (tree / path).is_file():
+            guard = _guard_name(normalize((tree / path).read_text(encoding="utf-8", errors="replace"))[0])
+        for line_no, code in added.get(path, []):
+            define = _DEFINE.match(code)
             if (match := _CONDITION.match(code)) and _MACRO_CALL.search(match.group(1)):
                 yield {"rule": "build_probe", "path": path, "line": line_no, "text": "macro call in #if"}
-            elif (match := _DEFINE.match(code)) and _MACRO_CALL.search(match.group(2)):
-                used = _tree_macros(tree) if used is None else used
-                if match.group(1) in used:
-                    yield {"rule": "build_probe", "path": path, "line": line_no, "text": "#if reaches computed macro"}
+            elif (match := _DEFINE_UNDEF.match(code)) and match.group(1) in reached and match.group(1) != guard:
+                yield {"rule": "build_probe", "path": path, "line": line_no, "text": f"conditional reaches {match.group(1)}"}
+            elif (names := set(_IDENT.findall(code)) & pasting - {define.group(1) if define else ""}):
+                yield {"rule": "build_probe", "path": path, "line": line_no, "text": f"uses pasting macro {min(names)}"}
+        for line_no, code in removed.get(path, []):
+            if (match := _DEFINE_UNDEF.match(code)) and match.group(1) in reached:
+                yield {"rule": "build_probe", "path": path, "line": line_no,
+                       "text": f"removed {match.group(1)}, base line {line_no}"}
 
 
 def hidden_entries(tree: Path) -> list[str]:
@@ -434,12 +488,14 @@ def check_candidate(tree: Path, base: str, *, build_dir: Optional[Path] = None) 
     base_blobs = base_files(tree, commit)
     findings: list[dict] = []
     added_by_path: dict[str, list[tuple[int, str]]] = {}
+    removed_by_path: dict[str, list[tuple[int, str]]] = {}
     for path, status in sorted(changes.items()):
         hits = list(path_findings(path, status, tree))
         findings += hits
         if hits:
             continue
         added = added_by_path[path] = list(added_lines(tree, base_blobs, path, status))
+        removed_by_path[path] = removed_lines(tree, base_blobs, path, status)
         hit_rules: set[str] = set()
         for line_no, text in added:
             for rule in line_rules(text):
@@ -464,7 +520,7 @@ def check_candidate(tree: Path, base: str, *, build_dir: Optional[Path] = None) 
             before, after = rule_counts(old), rule_counts((tree / path).read_text(encoding="utf-8", errors="replace"))
             findings += ({"rule": rule, "path": path, "line": added[0][0], "text": "more matches in whole file"}
                          for rule in sorted(after) if after[rule] > before[rule] and rule not in hit_rules)
-    findings += probe_findings(tree, added_by_path)
+    findings += probe_findings(tree, added_by_path, removed_by_path)
     findings += ({"rule": "hidden_index_entry", "path": path, "message": "skip-worktree or assume-unchanged set"}
                  for path in hidden_entries(tree))
     objects, configs = None, CONFIGS

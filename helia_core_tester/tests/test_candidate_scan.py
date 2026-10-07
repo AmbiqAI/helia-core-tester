@@ -21,6 +21,7 @@ from helia_core_tester.hardware.toolchain import arm_tool
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
 needs_gcc = pytest.mark.skipif(shutil.which(arm_tool("arm-none-eabi-gcc")) is None, reason="needs arm-none-eabi-gcc")
 PASTE = "#define CAT(a, b) a##b\n"
+CMSIS_NN_ROOT = os.environ.get("CMSIS_NN_ROOT", "")
 
 
 @pytest.fixture
@@ -166,10 +167,34 @@ def test_build_macros_reach_gcc_e(kernels: Path, tmp_path: Path, monkeypatch) ->
     monkeypatch.setattr(candidate_check, "kernels_match", lambda tree, module: True)
     text = PASTE + '#ifdef BOARD_X\nCAT(_Pra, gma)("GCC optimize(\\"O3\\")")\n#endif\nint a;\n'
     (kernels / "Source/Conv/a.c").write_text(text, encoding="utf-8")
-    assert _hits(kernels) == set()
+    # Source rules see only the paste.
+    assert _hits(kernels) == {("build_probe", "Source/Conv/a.c")}
     report = check_candidate(kernels, _git(kernels, "rev-parse", "HEAD").strip(), build_dir=_build(tmp_path, "int k;\n"))
-    assert {(f["rule"], f["path"]) for f in report["findings"]} == {("pragma", "Source/Conv/a.c")}
+    found = {(f["rule"], f["path"]) for f in report["findings"]}
+    assert found == {("pragma", "Source/Conv/a.c"), ("build_probe", "Source/Conv/a.c")}
     assert report["objects"]["count"] == 1
+
+
+@needs_gcc
+def test_board_header_probe_found(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(candidate_check, "kernels_match", lambda tree, module: True)
+    header = PASTE + '#define B CAT(__has_, include)("board.h")\n#define A 1\n'
+    root = _repo(tmp_path / "nn", {"Include/p.h": header,
+                                   "Source/Conv/p.c": '#include "p.h"\n#if A\nint p;\n#endif\n'})
+    (root / "Include/p.h").write_text(header.replace("A 1", "A B"), encoding="utf-8")
+    (root / "Source/Conv/p.c").write_text(
+        '#include "p.h"\n#if A\nCAT(_Pra, gma)("GCC optimize(\\"O3\\")")\n#endif\n', encoding="utf-8")
+    build = _build(tmp_path, "int k;\n")
+    # Only the real build sees board.h.
+    (build / "bsp").mkdir()
+    (build / "bsp/board.h").write_text("", encoding="utf-8")
+    entries = json.loads((build / "compile_commands.json").read_text(encoding="utf-8"))
+    entries[0]["arguments"].insert(1, f"-I{build}/bsp")
+    (build / "compile_commands.json").write_text(json.dumps(entries), encoding="utf-8")
+    sha = _git(root, "rev-parse", "HEAD").strip()
+    assert ("pragma", "Source/Conv/p.c") not in _hits(root)
+    found = {(f["rule"], f["path"]) for f in check_candidate(root, sha, build_dir=build)["findings"]}
+    assert {("pragma", "Source/Conv/p.c"), ("build_probe", "Include/p.h")} <= found
 
 
 @needs_gcc
@@ -281,3 +306,15 @@ def test_binutil_output_is_capped(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(candidate_scan, "OUTPUT_CAP", 1 << 16)
     with pytest.raises(ValueError, match="hit limits"):
         candidate_scan.run_binutil("arm-none-eabi-objdump", ["-s", "x.o"])
+
+
+@needs_gcc
+@pytest.mark.skipif(not Path(CMSIS_NN_ROOT, ".git").exists(), reason="needs CMSIS_NN_ROOT checkout")
+def test_real_tree_clean(tmp_path: Path) -> None:
+    root = tmp_path / "nn"
+    subprocess.run(["git", "clone", "-q", CMSIS_NN_ROOT, str(root)], check=True)
+    # A comment-only edit runs every scan.
+    unit = root / "Source/ActivationFunctions/arm_relu_q7.c"
+    unit.write_text(unit.read_text(encoding="utf-8") + "/* note */\n", encoding="utf-8")
+    report = check_candidate(root, _git(root, "rev-parse", "HEAD").strip())
+    assert report["ok"], report["findings"][:5]
