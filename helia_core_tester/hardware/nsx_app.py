@@ -11,6 +11,7 @@ out of its own wheel on every lock and sync, so the app never ships them.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import hashlib
 import json
@@ -18,7 +19,7 @@ import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 import jinja2
 import yaml
@@ -316,31 +317,123 @@ def _write_if_changed(path: Path, text: str) -> None:
 
 def _check_no_overlap(root: Path, module_dir: Path) -> None:
     """Refuse copies that would delete sources."""
-    # rmtree of the module must not reach root.
-    src, dst = root.resolve(), module_dir.resolve()
+    # Lexical and resolved, both directions.
+    sources = {Path(os.path.abspath(root)), root.resolve()}
+    targets = {Path(os.path.abspath(module_dir)), module_dir.resolve(), module_dir.parent.resolve() / module_dir.name}
     copied = (*KERNEL_TREES, "nsx")
-    inside_tree = any(is_relative_to(dst, src / name) for name in copied)
-    if dst == src or is_relative_to(src, dst) or inside_tree:
-        raise AppRenderError(f"Kernel root overlaps the app: {root}")
+    for src in sources:
+        for dst in targets:
+            inside_tree = any(is_relative_to(dst, src / name) for name in copied)
+            if dst == src or is_relative_to(src, dst) or inside_tree:
+                raise AppRenderError(f"Kernel root overlaps the app: {root}")
+
+
+def _remove(path: Path) -> None:
+    """Delete a path; never follow links."""
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    elif os.path.lexists(path):
+        path.unlink()
+
+
+class SwapError(AppRenderError):
+    """A swap failed and left the old module aside."""
+
+
+def _swap_in(fresh: Path, module_dir: Path) -> None:
+    """Replace module_dir with fresh in one step."""
+    old = None
+    # Move links and dirs aside; never follow.
+    if os.path.lexists(module_dir):
+        old = fresh.with_name(fresh.name + ".old")
+        os.rename(module_dir, old)
+    try:
+        os.replace(fresh, module_dir)
+    except BaseException as exc:
+        if old is not None:
+            try:
+                os.rename(old, module_dir)
+            except OSError:
+                error = SwapError(f"Old module left at {old}; {module_dir} taken by another writer")
+                error.stranded = old
+                raise error from exc
+        raise
+    if old is not None:
+        _remove(old)
+
+
+@contextlib.contextmanager
+def _module_lock(module_dir: Path) -> Iterator[None]:
+    """Serialize writers of one module dir."""
+    try:
+        import fcntl
+    except ImportError:  # pragma: no cover - no flock on Windows
+        yield
+        return
+    lock = module_dir.with_name(module_dir.name + ".lock")
+    fd = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
 
 
 def write_kernels(root: Path, module_dir: Path) -> None:
-    """Vendor a local checkout, as hpx does."""
+    """Vendor a local checkout, as hpx does.
+
+    Under a per-module lock, builds a fresh sibling dir, then swaps it in.
+    """
     missing = _checkout_missing(root)
     if missing:
         raise AppRenderError(f"Not an ns-cmsis-nn checkout: {root} lacks {missing[0]}")
     _check_no_overlap(root, module_dir)
-    (module_dir / "nsx").mkdir(parents=True, exist_ok=True)
-    # Native manifest at the module root.
-    shutil.copy2(root / "nsx" / "nsx-module.yaml", module_dir / "nsx-module.yaml")
-    shutil.copy2(root / "nsx" / "CMakeLists.txt", module_dir / "nsx" / "CMakeLists.txt")
-    # A fresh mtime would rerun CMake.
-    _write_if_changed(module_dir / "CMakeLists.txt", KERNEL_SHIM)
-    # copytree keeps mtimes: ninja skips unchanged.
-    for name in KERNEL_TREES:
-        shutil.rmtree(module_dir / name, ignore_errors=True)
-        if (root / name).is_dir():
-            shutil.copytree(root / name, module_dir / name)
+    module_dir.parent.mkdir(parents=True, exist_ok=True)
+    with _module_lock(module_dir):
+        _check_no_overlap(root, module_dir)
+        _vendor(root, module_dir)
+
+
+def _vendor(root: Path, module_dir: Path) -> None:
+    """Build fresh, then swap in."""
+    import tempfile
+
+    fresh = Path(tempfile.mkdtemp(prefix=f".{module_dir.name}.", dir=module_dir.parent))
+    try:
+        (fresh / "nsx").mkdir()
+        # Native manifest at the module root.
+        shutil.copy2(root / "nsx" / "nsx-module.yaml", fresh / "nsx-module.yaml")
+        shutil.copy2(root / "nsx" / "CMakeLists.txt", fresh / "nsx" / "CMakeLists.txt")
+        # Keep the shim's mtime: CMake reruns otherwise.
+        shim = module_dir / "CMakeLists.txt"
+        if not module_dir.is_symlink() and shim.is_file() and not shim.is_symlink() and shim.read_text(
+            encoding="utf-8", errors="replace",
+        ) == KERNEL_SHIM:
+            shutil.copy2(shim, fresh / "CMakeLists.txt")
+        else:
+            (fresh / "CMakeLists.txt").write_text(KERNEL_SHIM, encoding="utf-8")
+        # copytree keeps mtimes: ninja skips unchanged.
+        for name in KERNEL_TREES:
+            if (root / name).is_dir():
+                shutil.copytree(root / name, fresh / name)
+        _swap_in(fresh, module_dir)
+    except BaseException:
+        _remove(fresh)
+        raise
+
+
+def checkout_hash(root: Path) -> Optional[str]:
+    """Tree hash a vendored build records."""
+    import tempfile
+
+    from .nsx_cli import tree_hash
+
+    if _checkout_missing(root):
+        return None
+    with tempfile.TemporaryDirectory() as tmp:
+        module = Path(tmp) / CMSIS_NN_MODULE
+        write_kernels(root, module)
+        return tree_hash(module)
 
 
 def kernels_match(root: Path, module_dir: Path) -> bool:

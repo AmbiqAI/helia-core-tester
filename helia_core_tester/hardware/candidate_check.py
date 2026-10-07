@@ -5,8 +5,11 @@ Include/, nothing else. Rules, each a finding in the JSON report:
 
 - outside_allowlist: any path outside Source/ or Include/ (Tests/,
   cmake/, nsx/, CMakeLists, scripts, build files).
-- frozen_file: public API headers the adapters compile against, and
-  arm_nntables.c, which the s16 golden generator reads.
+- frozen_file: public API headers the adapters compile against, every
+  kernel header they include (the union of the base and candidate
+  closures), and arm_nntables.c, which the s16 golden generator reads.
+- header_shadow: a new file under Include/ outside Include/Internal/,
+  which -I Include would find before a system header.
 - file_type: Source/Include files that are not .c/.h/.s/.S.
 - symlink: a symlink in the candidate change set.
 - attribute: added attributes beyond a safe list (inline, unused,
@@ -49,16 +52,15 @@ from typing import Iterator, Optional
 
 import typer
 
-from .nsx_app import KERNEL_TREES
+from .harness_lock import HARNESS_HEADERS, header_closure
+from .nsx_app import KERNEL_TREES, checkout_hash
+from .pathutil import is_relative_to
 
 ALLOWED_DIRS = ("Source/", "Include/")
 ALLOWED_SUFFIXES = (".c", ".h", ".s", ".S")
 # Adapters and goldens read these.
 FROZEN_FILES = (
-    "Include/arm_nnfunctions.h",
-    "Include/arm_nnfunctions_flt.h",
-    "Include/arm_nn_types.h",
-    "Include/arm_nn_types_flt.h",
+    *HARNESS_HEADERS,
     "Source/NNSupportFunctions/arm_nntables.c",
 )
 # Trees the build or generation reads.
@@ -168,12 +170,37 @@ def changed_paths(tree: Path, commit: str) -> dict[str, str]:
     return changes
 
 
-def path_findings(path: str, status: str, tree: Path) -> Iterator[dict]:
+def frozen_files(tree: Path, base: dict[str, tuple[str, str]]) -> frozenset[str]:
+    """Files the harness reads, base or candidate."""
+
+    def read(rel: str) -> Optional[str]:
+        if rel not in base or base[rel][0] not in ("100644", "100755"):
+            return None
+        return _git(tree, "cat-file", "blob", base[rel][1]).decode(errors="replace")
+
+    def read_disk(rel: str) -> Optional[str]:
+        path = tree / rel
+        # Stay in the tree; never follow links.
+        try:
+            if path.resolve() != path or not is_relative_to(path, tree) or not path.is_file():
+                return None
+        # Link loops: path_findings reports symlink.
+        except (RuntimeError, OSError):
+            return None
+        return path.read_text(encoding="utf-8", errors="replace")
+
+    # A new header can shadow a base one.
+    return frozenset((*FROZEN_FILES, *header_closure(read), *header_closure(read_disk)))
+
+
+def path_findings(path: str, status: str, tree: Path, frozen: frozenset[str]) -> Iterator[dict]:
     """Rule hits from the path alone."""
     if not path.startswith(ALLOWED_DIRS):
         yield {"rule": "outside_allowlist", "path": path, "message": "only Source/ and Include/ may change"}
-    elif path in FROZEN_FILES:
+    elif path in frozen:
         yield {"rule": "frozen_file", "path": path, "message": "harness reads this file"}
+    elif status == "A" and path.startswith("Include/") and not path.startswith("Include/Internal/"):
+        yield {"rule": "header_shadow", "path": path, "message": "new headers go under Include/Internal/"}
     elif not path.endswith(ALLOWED_SUFFIXES):
         yield {"rule": "file_type", "path": path, "message": "only .c .h .s .S files"}
     if status != "D" and (tree / path).is_symlink():
@@ -315,9 +342,10 @@ def check_candidate(tree: Path, base: str) -> dict:
         raise CheckError(f"--base must be a full commit SHA, got {base!r}")
     changes = changed_paths(tree, commit)
     base_blobs = base_files(tree, commit)
+    frozen = frozen_files(tree, base_blobs)
     findings: list[dict] = []
     for path, status in sorted(changes.items()):
-        hits = list(path_findings(path, status, tree))
+        hits = list(path_findings(path, status, tree, frozen))
         findings += hits
         if hits:
             continue
@@ -350,10 +378,12 @@ def check_candidate(tree: Path, base: str) -> dict:
                  for path in hidden_entries(tree))
     return {
         "schema": "hct.candidate_check",
-        "schema_version": 1,
+        "schema_version": 2,
         "tree": str(tree),
         "base": base,
         "base_commit": commit,
+        # Equals build.kernels.tree_hash; null on failure.
+        "tree_hash": None if findings else checkout_hash(tree),
         "ok": not findings,
         "files": [{"path": path, "status": status} for path, status in sorted(changes.items())],
         "findings": findings,
