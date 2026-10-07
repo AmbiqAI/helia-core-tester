@@ -298,6 +298,37 @@ def test_macro_probe_fails(kernels: Path, text: str) -> None:
     assert "build_probe" in _rules(kernels)
 
 
+def test_probe_after_comment_fails(kernels: Path) -> None:
+    text = ('#define CAT(a,b) a##b\n/* note\n */ #if CAT(__has_, include)("missing.h")\n'
+            'CAT(_Pra,gma)("GCC optimize(\\"O3\\")")\n#endif\n')
+    (kernels / "Source/Conv/a.c").write_text(text, encoding="utf-8")
+    assert "build_probe" in _rules(kernels)
+
+
+def test_spliced_comment_hides_directive(kernels: Path) -> None:
+    # gcc splices first: the pragma is comment.
+    (kernels / "Source/Conv/a.c").write_text('// note \\\n#pragma GCC optimize("O3")\nint a;\n', encoding="utf-8")
+    assert check_candidate(kernels, _sha(kernels))["ok"]
+
+
+def test_comment_start_in_literal(kernels: Path) -> None:
+    text = 'static const char s[] = "/*";\n_Pragma("GCC optimize(\\"O3\\")")\n// */\n'
+    (kernels / "Source/Conv/a.c").write_text(text, encoding="utf-8")
+    assert "pragma" in _rules(kernels)
+
+
+def test_finding_lines_match_file(kernels: Path) -> None:
+    text = 'int a;\n/* x\n y */\n#pragma GCC optimize("O3")\n#define D \\\n  _Pragma("x")\n'
+    (kernels / "Source/Conv/a.c").write_text(text, encoding="utf-8")
+    report = check_candidate(kernels, _sha(kernels))
+    assert {f["line"] for f in report["findings"] if f["rule"] == "pragma"} == {4, 5}
+
+
+def test_trigraph_fails(kernels: Path) -> None:
+    (kernels / "Source/Conv/a.c").write_text('??=pragma GCC optimize("O3")\n', encoding="utf-8")
+    assert "build_probe" in _rules(kernels)
+
+
 def test_plain_conditional_passes(kernels: Path) -> None:
     text = "#define N 4\n#if defined(ARM_MATH_MVEI) && N > 2 && __has_builtin(__builtin_expect)\nint z;\n#endif\n"
     (kernels / "Source/Conv/a.c").write_text(text, encoding="utf-8")

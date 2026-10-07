@@ -29,6 +29,11 @@ Include/, nothing else. Rules, each a finding in the JSON report:
   in a file that already holds a forbidden construct, which it could
   enable.
 
+Every rule reads one normalized view of a file, as translation
+phases 1-3 make it: line splices joined, then each comment turned into
+one space (keeping its newlines), string and char literals respected.
+Line numbers in findings stay those of the original file.
+
 Rules also run on text with adjacent string literals joined, per line
 and over all added lines of a file, as C joins them before asm sees them,
 and on text with `##` (or `%:%:`) pastes joined. candidate_scan then reruns the
@@ -51,7 +56,6 @@ import os
 import re
 import subprocess
 from collections import Counter
-from functools import partial
 from pathlib import Path
 from typing import Iterator, Optional
 
@@ -86,7 +90,17 @@ _ATTRIBUTE_HINT = re.compile(r"__attribute|__declspec|\[\[")
 _PRAGMA = re.compile(r"(?:#|%:)\s*pragma|_Pragma|__pragma")
 # Checked per occurrence; _Pragma is never safe.
 _SAFE_PRAGMA = re.compile(r"(?:#|%:)\s*pragma\s+(?:once|GCC\s+unroll\s+\d+|GCC\s+diagnostic\b)")
-_COMMENT = re.compile(r"/\*.*?\*/|//[^\n]*", re.DOTALL)
+_NEWLINE = re.compile(r"\r\n|\r|\n")
+# gcc also splices after trailing blanks.
+_SPLICE = re.compile(r"\\[ \t\f\v]*$")
+# Code runs, literals, comments: phase 3.
+_LEX = re.compile(
+    r"(?P<code>(?:[^\W\d]\w*|\.?\d(?:[eEpP][+-]|'\w|[\w.])*|[^\"'/\w]|/(?![*/]))+)"
+    r"|(?P<literal>\"(?:\\[^\n]|[^\"\\\n])*\"?|'(?:\\[^\n]|[^'\\\n])*'?)"
+    r"|(?P<block>/\*.*?(?:\*/|\Z))"
+    r"|(?P<line>//[^\n]*)",
+    re.DOTALL,
+)
 _GUARD = re.compile(r"^\s*(?:#|%:)\s*(?:if|ifdef|ifndef|elif|elifdef|elifndef|else|endif|define|undef)\b")
 _CONDITION = re.compile(r"^\s*(?:#|%:)\s*(?:if|elif)\b(.*)", re.DOTALL)
 _DEFINE = re.compile(r"^\s*(?:#|%:)\s*define\s+([A-Za-z_]\w*)(.*)", re.DOTALL)
@@ -112,7 +126,7 @@ LINE_RULES = (
     )),
     ("include_escape", re.compile(r'(?:#|%:)\s*include\s*(?:["<](?:/|[^">]*\.\.)|[^"<\s])|\.(?:incbin|include)\b')),
     ("build_probe", re.compile(
-        r"(?:^|\n)\s*(?:#|%:)\s*(?:line\b|\d)|__has_include|__OPTIMIZE(?:_SIZE)?__|__FAST_MATH__|__NO_INLINE__",
+        r"(?:^|\n)\s*(?:#|%:)\s*(?:line\b|\d)|\?\?[=/'()!<>-]|__has_include|__OPTIMIZE(?:_SIZE)?__|__FAST_MATH__|__NO_INLINE__",
     )),
 )
 # An empty tar: 1024 zero bytes.
@@ -205,53 +219,77 @@ def path_findings(path: str, status: str, tree: Path) -> Iterator[dict]:
         yield {"rule": "symlink", "path": path, "message": "symlinks are not allowed"}
 
 
-def _logical_lines(lines: list[str]) -> list[int]:
-    """Each line's spliced-line start index."""
-    starts, start = [], 0
-    for index, line in enumerate(lines):
-        starts.append(start)
-        if not line.endswith("\\"):
-            start = index + 1
-    return starts
+def _physical(source: str) -> list[str]:
+    """Lines as gcc splits them."""
+    return _NEWLINE.split(source)
+
+
+def _blank(match: re.Match) -> str:
+    if match.lastgroup == "block":
+        return "\n" * match.group().count("\n") + " "
+    return " " if match.lastgroup == "line" else match.group()
+
+
+def normalize(source: str) -> tuple[list[str], list[int]]:
+    """Logical lines after phases 1-3.
+
+    Also each physical line's logical index.
+    """
+    logical: list[str] = []
+    owner: list[int] = []
+    parts: list[str] = []
+    for line in _physical(source):
+        owner.append(len(logical))
+        spliced = _SPLICE.sub("", line)
+        parts.append(spliced)
+        if spliced == line:
+            logical.append("".join(parts))
+            parts = []
+    if parts:
+        logical.append("".join(parts))
+    return _LEX.sub(_blank, "\n".join(logical)).split("\n"), owner
+
+
+def _sources(tree: Path, base: dict, path: str) -> tuple[str, str]:
+    """Base and candidate text of a path."""
+    new = (tree / path).read_text(encoding="utf-8", errors="replace")
+    old = _git(tree, "cat-file", "blob", base[path][1]).decode(errors="replace") if path in base else ""
+    return old, new
+
+
+def _changed(old: list[str], new: list[str], removed: bool = False) -> Iterator[int]:
+    """Indexes of added (or removed) lines."""
+    kinds = ("replace", "delete") if removed else ("replace", "insert")
+    for tag, old_first, old_last, first, last in difflib.SequenceMatcher(None, old, new, autojunk=False).get_opcodes():
+        if tag in kinds:
+            yield from range(old_first, old_last) if removed else range(first, last)
 
 
 def added_lines(tree: Path, base: dict, path: str, status: str) -> Iterator[tuple[int, str]]:
-    """Spliced lines holding an added line.
+    """Normalized logical lines that changed.
 
-    C and assembly join backslash-newline before parsing, so rules see the
-    joined text; the number is the first added line in it.
+    The number is the first added physical line in it, else its first.
     """
     if status == "D":
         return
-    new = (tree / path).read_text(encoding="utf-8", errors="replace").splitlines()
-    old = _git(tree, "cat-file", "blob", base[path][1]).decode(errors="replace").splitlines() if path in base else []
-    starts = _logical_lines(new)
-    seen: set[int] = set()
-    for tag, _, _, first, last in difflib.SequenceMatcher(None, old, new, autojunk=False).get_opcodes():
-        if tag not in ("replace", "insert"):
-            continue
-        for index in range(first, last):
-            start = starts[index]
-            if start in seen:
-                continue
-            seen.add(start)
-            end = start
-            while end + 1 < len(new) and starts[end + 1] == start:
-                end += 1
-            text = "".join(line[:-1] if line.endswith("\\") else line for line in new[start:end + 1])
-            yield index + 1, text
+    old_source, new_source = _sources(tree, base, path)
+    new, owner = normalize(new_source)
+    old = normalize(old_source)[0] if old_source else []
+    numbers: dict[int, int] = {}
+    for index in _changed(_physical(old_source) if old_source else [], _physical(new_source)):
+        numbers.setdefault(owner[index], index)
+    for index, logical in enumerate(owner):
+        numbers.setdefault(logical, index)
+    for logical in _changed(old, new):
+        yield numbers[logical] + 1, new[logical]
 
 
 def _removed_guard(tree: Path, base: dict, path: str, status: str) -> bool:
     """A deleted line was a guard."""
     if status == "D" or path not in base:
         return False
-    new = (tree / path).read_text(encoding="utf-8", errors="replace").splitlines()
-    old = _git(tree, "cat-file", "blob", base[path][1]).decode(errors="replace").splitlines()
-    for tag, first, last, _, _ in difflib.SequenceMatcher(None, old, new, autojunk=False).get_opcodes():
-        if tag in ("replace", "delete") and any(_GUARD.match(line) for line in old[first:last]):
-            return True
-    return False
+    old, new = (normalize(text)[0] for text in _sources(tree, base, path))
+    return any(_GUARD.match(old[index]) for index in _changed(old, new, removed=True))
 
 
 def _unsafe_attribute(text: str) -> bool:
@@ -280,10 +318,9 @@ def line_rules(text: str) -> Iterator[str]:
                 yield rule
 
 
-def _literal_text(text: str, comments: bool = True) -> str:
+def _literal_text(text: str) -> str:
     """Text as the compiler sees literals."""
-    joined = _ADJACENT_LITERALS.sub("", _COMMENT.sub(" ", text) if comments else text)
-    return _ESCAPE.sub(_unescape, joined)
+    return _ESCAPE.sub(_unescape, _ADJACENT_LITERALS.sub("", text))
 
 
 def _unescape(match: re.Match) -> str:
@@ -308,8 +345,7 @@ def _scs_count(text: str) -> int:
 def _raw_rules(text: str) -> Iterator[str]:
     if _unsafe_attribute(text):
         yield "attribute"
-    code = _COMMENT.sub(" ", text)
-    if any(not _SAFE_PRAGMA.match(code, hit.start()) for hit in _PRAGMA.finditer(code)):
+    if any(not _SAFE_PRAGMA.match(text, hit.start()) for hit in _PRAGMA.finditer(text)):
         yield "pragma"
     if _scs_count(text):
         yield "measurement_access"
@@ -318,28 +354,19 @@ def _raw_rules(text: str) -> Iterator[str]:
 
 def _grandfathered(tree: Path, path: str) -> bool:
     """File already holds a rule hit."""
-    lines = (tree / path).read_text(encoding="utf-8", errors="replace").splitlines()
-    starts = _logical_lines(lines)
-    joined: dict[int, str] = {}
-    for index, line in enumerate(lines):
-        joined[starts[index]] = joined.get(starts[index], "") + (line[:-1] if line.endswith("\\") else line)
-    return any(next(line_rules(text), None) for text in joined.values())
+    lines = normalize((tree / path).read_text(encoding="utf-8", errors="replace"))[0]
+    return any(next(line_rules(text), None) for text in lines)
 
 
-def rule_counts(source: str, preprocessed: bool = False) -> Counter:
-    """Rule matches over a whole file.
-
-    Preprocessed text has no comments: a "//" literal stays.
-    """
-    lines = source.splitlines()
-    text = _literal_text("\n".join(line[:-1] if line.endswith("\\") else line for line in lines), not preprocessed)
+def rule_counts(source: str) -> Counter:
+    """Rule matches over a whole file."""
+    text = _literal_text("\n".join(normalize(source)[0]))
     counts: Counter = Counter()
     found = _ATTRIBUTE.findall(text)
     # Unparsed attribute spellings count as unsafe.
     counts["attribute"] = sum(_unsafe_attribute("".join(groups).join(("__attribute__((", "))"))) for groups in found)
     counts["attribute"] += max(0, len(_ATTRIBUTE_HINT.findall(text)) - len(found))
-    code = text if preprocessed else _COMMENT.sub(" ", text)
-    counts["pragma"] = sum(not _SAFE_PRAGMA.match(code, hit.start()) for hit in _PRAGMA.finditer(code))
+    counts["pragma"] = sum(not _SAFE_PRAGMA.match(text, hit.start()) for hit in _PRAGMA.finditer(text))
     for rule, pattern in LINE_RULES:
         counts[rule] += len(pattern.findall(text))
     counts["measurement_access"] += _scs_count(text)
@@ -354,13 +381,7 @@ def _tree_macros(tree: Path) -> set[str]:
         for path in sorted((tree / top).rglob("*")):
             if path.is_symlink() or not path.is_file() or not path.name.endswith(ALLOWED_SUFFIXES):
                 continue
-            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-            starts = _logical_lines(lines)
-            joined: dict[int, str] = {}
-            for index, line in enumerate(lines):
-                joined[starts[index]] = joined.get(starts[index], "") + (line[:-1] if line.endswith("\\") else line)
-            for text in joined.values():
-                code = _COMMENT.sub(" ", text)
+            for code in normalize(path.read_text(encoding="utf-8", errors="replace"))[0]:
                 if match := _CONDITION.match(code):
                     used |= set(_IDENT.findall(match.group(1)))
                 elif match := _DEFINE.match(code):
@@ -383,8 +404,7 @@ def probe_findings(tree: Path, added: dict[str, list[tuple[int, str]]]) -> Itera
     """
     used: Optional[set[str]] = None
     for path, lines in sorted(added.items()):
-        for line_no, text in lines:
-            code = _COMMENT.sub(" ", text)
+        for line_no, code in lines:
             if (match := _CONDITION.match(code)) and _MACRO_CALL.search(match.group(1)):
                 yield {"rule": "build_probe", "path": path, "line": line_no, "text": "macro call in #if"}
             elif (match := _DEFINE.match(code)) and _MACRO_CALL.search(match.group(2)):
@@ -446,7 +466,7 @@ def check_candidate(tree: Path, base: str) -> dict:
     if any(path.startswith(ALLOWED_DIRS) for path in changes):
         tops = sorted({path.split("/", 1)[0] + "/" for path in base_blobs if path.startswith(ALLOWED_DIRS)})
         archive = _git(tree, "archive", commit, "--", *tops) if tops else _EMPTY_TAR
-        findings += preprocess_findings(tree, archive, partial(rule_counts, preprocessed=True))
+        findings += preprocess_findings(tree, archive, rule_counts)
     return {
         "schema": "hct.candidate_check",
         "schema_version": 1,
