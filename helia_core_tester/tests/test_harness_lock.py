@@ -432,6 +432,8 @@ def test_source_change_passes(kernels: Path) -> None:
     ("Source/Conv/a.c", "#pragma once\n_Pragma(\"GCC unroll 4\")\n", "pragma"),
     ("Source/Conv/a.c", '__asm__(".push"\n        "section .itcm");\n', "special_section"),
     ("Source/Conv/k.s", '.incbin "/etc/x"\n', "include_escape"),
+    ("Source/Conv/k.S", ".data\nramfn:\n  bx lr\n", "special_section"),
+    ("Source/Conv/a.c", '__asm__(".bss\\n");\n', "special_section"),
     ("Source/Conv/a.c", "static const int golden[4];\n", "harness_reference"),
     ("Source/Conv/a.c", '#include "../../Tests/t.c"\n', "include_escape"),
 ])

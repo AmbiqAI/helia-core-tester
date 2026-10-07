@@ -43,7 +43,8 @@ Line numbers in findings stay those of the original file.
 Rules also run on text with adjacent string literals joined, per line
 and over all added lines of a file, as C joins them before asm sees them,
 and on text with `##` (or `%:%:`) pastes joined. candidate_scan then reruns the
-rules on `gcc -E` output of base and candidate.
+rules on `gcc -E` output of base and candidate and, given a build
+dir, scans its kernel objects.
 
 Literal tensor shapes from descriptors are not grepped: too many false
 hits on common dims. Trees the build copies (Source, Include, cmake, nsx)
@@ -79,9 +80,10 @@ from typing import Iterator, Optional
 import typer
 
 from .c_lex import NEWLINE, SPLICE, strip_comments
-from .candidate_scan import CONFIGS, SCAN_DEADLINE_S, preprocess_findings
+from .candidate_scan import CONFIGS, SCAN_DEADLINE_S, object_findings, preprocess_findings
+from .firmware_build import nsx_app_dir
 from .harness_lock import HARNESS_HEADERS, header_closure
-from .nsx_app import KERNEL_TREES, checkout_hash
+from .nsx_app import CMSIS_NN_MODULE, KERNEL_TREES, checkout_hash, kernels_match
 from .pathutil import is_relative_to
 
 ALLOWED_DIRS = ("Source/", "Include/")
@@ -123,7 +125,9 @@ _INTEGER = re.compile(r"(?<![\w.'])(0[xX][0-9a-fA-F']+|0[bB][01']+|\d[\d']*)[uUl
 SCS_RANGE = range(0xE0000000, 0xE0100000)
 LINE_RULES = (
     ("special_section", re.compile(
-        r"\.(?:push)?section\b|\b_*section_*\s*\(|\b(?:ITCM|DTCM|__RAMFUNC|RAMFUNC|AM_SHARED_RW|NS_PUT_IN_TCM)\b",
+        r"\.(?:push)?section\b|\b_*section_*\s*\(|\b(?:ITCM|DTCM|__RAMFUNC|RAMFUNC|AM_SHARED_RW|NS_PUT_IN_TCM)\b"
+        # Assembly .data/.bss switch sections.
+        r"|(?<![\w\])\]])\.(?:data|bss)\b(?!\s*=)",
     )),
     ("measurement_access", re.compile(
         r"\b(?:DWT|CoreDebug|DCB|SysTick|ITM|TPI|NVIC|SCB|PMU|MEMSYSCTL|CYCCNT)\b|\bARM_PMU_|\bam_hal_"
@@ -552,7 +556,9 @@ def hidden_entries(tree: Path) -> list[str]:
     return [entry[2:] for entry in out if entry[:1] == "S" or entry[:1].islower()]
 
 
-def check_candidate(tree: Path, base: str, scan_deadline: float = SCAN_DEADLINE_S) -> dict:
+def check_candidate(
+    tree: Path, base: str, *, build_dir: Optional[Path] = None, scan_deadline: float = SCAN_DEADLINE_S,
+) -> dict:
     """The JSON report for one candidate."""
     tree = tree.resolve()
     unsafe = unsafe_config(tree)
@@ -602,10 +608,18 @@ def check_candidate(tree: Path, base: str, scan_deadline: float = SCAN_DEADLINE_
     findings += probe_findings(tree, added_by_path, removed_by_path)
     findings += ({"rule": "hidden_index_entry", "path": path, "message": "skip-worktree or assume-unchanged set"}
                  for path in hidden_entries(tree))
+    objects, configs = None, CONFIGS
+    if build_dir is not None:
+        hits, objects, flags = object_findings(build_dir, scan_deadline)
+        findings += hits
+        module = nsx_app_dir(build_dir) / "modules" / CMSIS_NN_MODULE
+        if not kernels_match(tree, module):
+            findings.append({"rule": "scan_error", "path": "", "message": "build dir holds other kernels"})
+        configs = {**CONFIGS, "build": flags} if flags else CONFIGS
     if any(path.startswith(ALLOWED_DIRS) for path in changes):
         tops = sorted({path.split("/", 1)[0] + "/" for path in base_blobs if path.startswith(ALLOWED_DIRS)})
         archive = _git(tree, "archive", commit, "--", *tops) if tops else _EMPTY_TAR
-        findings += preprocess_findings(tree, archive, rule_counts, CONFIGS, scan_deadline)
+        findings += preprocess_findings(tree, archive, rule_counts, configs, scan_deadline)
     return {
         "schema": "hct.candidate_check",
         "schema_version": 2,
@@ -616,6 +630,7 @@ def check_candidate(tree: Path, base: str, scan_deadline: float = SCAN_DEADLINE_
         "tree_hash": None if findings else checkout_hash(tree),
         "ok": not findings,
         "files": [{"path": path, "status": status} for path, status in sorted(changes.items())],
+        "objects": objects,
         "findings": findings,
     }
 
@@ -627,11 +642,14 @@ candidate_app = typer.Typer(help="Check candidate kernel trees.", no_args_is_hel
 def check_command(
     tree: Path = typer.Argument(..., exists=True, file_okay=False, help="Candidate ns-cmsis-nn checkout."),
     base: str = typer.Option(..., "--base", help="Base commit SHA the candidate started from."),
+    build_dir: Optional[Path] = typer.Option(
+        None, "--build-dir", exists=True, file_okay=False, help="Build of this tree; scan its kernel objects.",
+    ),
     scan_deadline: float = typer.Option(SCAN_DEADLINE_S, "--scan-deadline", help="Seconds the gcc -E scan may take."),
 ) -> None:
     """Fail when the candidate diff leaves Source/Include."""
     try:
-        report = check_candidate(tree, base, scan_deadline)
+        report = check_candidate(tree, base, build_dir=build_dir, scan_deadline=scan_deadline)
     except CheckError as exc:
         typer.echo(json.dumps({"ok": False, "error": str(exc)}))
         raise typer.Exit(2)

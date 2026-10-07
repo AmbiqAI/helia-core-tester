@@ -21,7 +21,6 @@ interrupted (no verdict).
 
 from __future__ import annotations
 
-import inspect
 import json
 import math
 import os
@@ -331,9 +330,6 @@ def object_check(snap: Path, base: str, board: str) -> Optional[dict]:
     """Recheck with the built objects."""
     from .firmware_build import resolve_build_dir
 
-    # TODO(object-scan): always run once merged.
-    if "build_dir" not in inspect.signature(check_candidate).parameters:
-        return None
     build_dir = resolve_build_dir(repo_root(), resolve_board(board), None)
     report = check_candidate(snap, base, build_dir=build_dir)
     if (report.get("objects") or {}).get("kernels_hash") != report.get("tree_hash"):

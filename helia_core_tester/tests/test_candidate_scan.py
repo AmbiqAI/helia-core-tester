@@ -1,8 +1,9 @@
-"""gcc -E scan of a candidate."""
+"""gcc -E and object scans of a candidate."""
 
 from __future__ import annotations
 
 import io
+import json
 import os
 import shutil
 import subprocess
@@ -16,7 +17,7 @@ from pathlib import Path
 import pytest
 from test_harness_lock import _git, _repo
 
-from helia_core_tester.hardware import candidate_scan
+from helia_core_tester.hardware import candidate_check, candidate_scan
 from helia_core_tester.hardware.candidate_check import check_candidate, rule_counts
 from helia_core_tester.hardware.toolchain import arm_tool
 
@@ -78,6 +79,174 @@ def test_missing_compiler_fails(kernels: Path, monkeypatch) -> None:
     monkeypatch.setattr(candidate_scan, "arm_tool", lambda name: "/nonexistent/gcc")
     found = candidate_scan.preprocess_findings(kernels, bytes(1024), rule_counts)
     assert [f["rule"] for f in found] == ["scan_error"]
+
+
+def _build(tmp_path: Path, source: str, define: str = "-DBOARD_X", name: str = "k.c") -> Path:
+    """A build dir with one kernel object."""
+    build = tmp_path / "build"
+    src = build / "nsx_app/modules/nsx-cmsis-nn/Source" / name
+    src.parent.mkdir(parents=True)
+    src.write_text(source, encoding="utf-8")
+    gcc = arm_tool("arm-none-eabi-gcc")
+    subprocess.run([gcc, "-mcpu=cortex-m55", "-O2", "-c", str(src), "-o", str(build / "k.c.obj")], check=True)
+    include = f"-I{build}/nsx_app/modules/nsx-cmsis-nn/Include"
+    args = ["gcc", define, include, "-MD", "-MF", "k.d", "-o", "k.c.obj", "-c", str(src)]
+    entry = {"directory": str(build), "file": str(src), "output": "k.c.obj", "arguments": args}
+    (build / "compile_commands.json").write_text(json.dumps([entry]), encoding="utf-8")
+    return build
+
+
+@needs_gcc
+def test_object_scan_flags_sections_and_scs(tmp_path: Path) -> None:
+    source = (
+        '__attribute__((section(".itcm_text"))) unsigned f(void)\n'
+        "{ return *(volatile unsigned *)(0x70000000u * 2u + 0x1000u); }\n"
+        '__attribute__((section(".data.fast"))) int g(int x) { return x + 1; }\n'
+        "volatile unsigned *const p = (volatile unsigned *)(0x70000000u * 2u + 0x3000u);\n"
+    )
+    findings, summary, flags = candidate_scan.object_findings(_build(tmp_path, source))
+    texts = {f["text"].split()[0] for f in findings if f["rule"] == "object_section"}
+    assert texts == {".itcm_text", ".data.fast", "code"} and summary["count"] == 1
+    assert len([f for f in findings if f["rule"] == "object_address"]) >= 2
+    assert flags["*"] == flags["Source/k.c"] == ("-DBOARD_X", "-IInclude")
+
+
+RAM_ROUTINE = """.syntax unified
+.thumb
+.data
+.global ramfn
+.type ramfn, %function
+.thumb_func
+ramfn:
+  bx lr
+lab:
+  bx lr
+.text
+.global caller
+.type caller, %function
+.thumb_func
+caller:
+  bl lab
+  b ramfn
+"""
+
+
+@needs_gcc
+def test_object_scan_flags_code_in_data(tmp_path: Path) -> None:
+    findings, _, _ = candidate_scan.object_findings(_build(tmp_path, RAM_ROUTINE, name="k.S"))
+    texts = {f["text"] for f in findings if f["rule"] == "object_section"}
+    assert {"code ramfn in .data", "branch to .data in .data"} <= texts
+
+
+@needs_gcc
+@pytest.mark.parametrize("name", ["data hidden", "data\\thidden"])
+def test_odd_section_name_flagged(tmp_path: Path, name: str) -> None:
+    source = f'.section ".{name}","aw"\n.word 0xE0001004\n'
+    findings, _, _ = candidate_scan.object_findings(_build(tmp_path, source, name="k.S"))
+    rules = {f["rule"] for f in findings}
+    assert any(f["rule"] == "object_section" and "hidden" in f["text"] for f in findings)
+    assert "object_address" in rules
+
+
+def test_bad_elf_fails(tmp_path: Path) -> None:
+    obj = tmp_path / "k.o"
+    obj.write_bytes(b"\x7fELF\x01\x01" + bytes(10))
+    with pytest.raises(ValueError):
+        candidate_scan.elf_sections(obj)
+
+
+@needs_gcc
+def test_object_scan_clean(tmp_path: Path) -> None:
+    source = "unsigned f(unsigned x) { return x > 0xE0000000u ? x : ~x; }\nconst int t[2] = {1, 2};\n"
+    findings, summary, _ = candidate_scan.object_findings(_build(tmp_path, source))
+    assert findings == [] and summary["count"] == 1
+
+
+@needs_gcc
+@pytest.mark.parametrize("source", [
+    # Unaligned bytes: e0 10 e0 00.
+    "const unsigned short h[3] = {0, 0xE010, 0xE000};\n",
+    "extern char __Vectors[];\nchar *const v = __Vectors + 0xDFBFE010u;\n",
+    "extern int harness_var;\nint *const w = &harness_var;\n",
+    # Weak loses to a harness definition.
+    "__attribute__((weak)) int harness_w;\nint *const w = &harness_w;\n",
+])
+def test_object_scan_hidden_addresses(tmp_path: Path, source: str) -> None:
+    findings, _, _ = candidate_scan.object_findings(_build(tmp_path, source))
+    assert [f["rule"] for f in findings] and {f["rule"] for f in findings} == {"object_address"}
+
+
+def test_object_scan_needs_objects(tmp_path: Path) -> None:
+    (tmp_path / "compile_commands.json").write_text("[]", encoding="utf-8")
+    findings, _, _ = candidate_scan.object_findings(tmp_path)
+    assert [f["rule"] for f in findings] == ["scan_error"]
+
+
+@needs_gcc
+def test_build_macros_reach_gcc_e(kernels: Path, tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(candidate_check, "kernels_match", lambda tree, module: True)
+    text = PASTE + '#ifdef BOARD_X\nCAT(_Pra, gma)("GCC optimize(\\"O3\\")")\n#endif\nint a;\n'
+    (kernels / "Source/Conv/a.c").write_text(text, encoding="utf-8")
+    # Source rules see only the paste.
+    assert _hits(kernels) == {("build_probe", "Source/Conv/a.c")}
+    report = check_candidate(kernels, _git(kernels, "rev-parse", "HEAD").strip(), build_dir=_build(tmp_path, "int k;\n"))
+    found = {(f["rule"], f["path"]) for f in report["findings"]}
+    assert found == {("pragma", "Source/Conv/a.c"), ("build_probe", "Source/Conv/a.c")}
+    assert report["objects"]["count"] == 1
+
+
+@needs_gcc
+def test_board_header_probe_found(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(candidate_check, "kernels_match", lambda tree, module: True)
+    header = PASTE + '#define B CAT(__has_, include)("board.h")\n#define A 1\n'
+    root = _repo(tmp_path / "nn", {"Include/p.h": header,
+                                   "Source/Conv/p.c": '#include "p.h"\n#if A\nint p;\n#endif\n'})
+    (root / "Include/p.h").write_text(header.replace("A 1", "A B"), encoding="utf-8")
+    (root / "Source/Conv/p.c").write_text(
+        '#include "p.h"\n#if A\nCAT(_Pra, gma)("GCC optimize(\\"O3\\")")\n#endif\n', encoding="utf-8")
+    build = _build(tmp_path, "int k;\n")
+    # Only the real build sees board.h.
+    (build / "bsp").mkdir()
+    (build / "bsp/board.h").write_text("", encoding="utf-8")
+    entries = json.loads((build / "compile_commands.json").read_text(encoding="utf-8"))
+    entries[0]["arguments"].insert(1, f"-I{build}/bsp")
+    (build / "compile_commands.json").write_text(json.dumps(entries), encoding="utf-8")
+    sha = _git(root, "rev-parse", "HEAD").strip()
+    assert ("pragma", "Source/Conv/p.c") not in _hits(root)
+    found = {(f["rule"], f["path"]) for f in check_candidate(root, sha, build_dir=build)["findings"]}
+    assert {("pragma", "Source/Conv/p.c"), ("build_probe", "Include/p.h")} <= found
+
+
+@needs_gcc
+def test_local_name_hides_no_global(tmp_path: Path) -> None:
+    build = _build(tmp_path, "static int x;\nint *const p = &x;\n")
+    other = build / "nsx_app/modules/nsx-cmsis-nn/Source/o.c"
+    other.write_text("extern int x;\nint *const q = &x;\n", encoding="utf-8")
+    gcc = arm_tool("arm-none-eabi-gcc")
+    subprocess.run([gcc, "-mcpu=cortex-m55", "-O2", "-c", str(other), "-o", str(build / "o.c.obj")], check=True)
+    entries = json.loads((build / "compile_commands.json").read_text(encoding="utf-8"))
+    entries.append({**entries[0], "file": str(other), "output": "o.c.obj", "arguments": ["gcc", "-c", str(other)]})
+    (build / "compile_commands.json").write_text(json.dumps(entries), encoding="utf-8")
+    findings, _, flags = candidate_scan.object_findings(build)
+    assert {f["path"] for f in findings} == {"Source/o.c"}
+    assert flags["Source/o.c"] == () and flags["Source/k.c"][0] == "-DBOARD_X"
+
+
+@needs_gcc
+def test_per_unit_flags_reach_gcc_e(kernels: Path, tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(candidate_check, "kernels_match", lambda tree, module: True)
+    text = PASTE + '#ifdef BOARD_B\nCAT(_Pra, gma)("GCC optimize(\\"O3\\")")\n#endif\nint b;\n'
+    (kernels / "Source/Conv/b.c").write_text(text, encoding="utf-8")
+    flags = {"*": ("-DBOARD_X",), "Source/Conv/a.c": ("-DBOARD_X",), "Source/Conv/b.c": ("-DBOARD_B",)}
+    monkeypatch.setattr(candidate_check, "object_findings", lambda build, deadline: ([], {"count": 2}, flags))
+    report = check_candidate(kernels, _git(kernels, "rev-parse", "HEAD").strip(), build_dir=tmp_path)
+    assert ("pragma", "Source/Conv/b.c") in {(f["rule"], f["path"]) for f in report["findings"]}
+
+
+@needs_gcc
+def test_stale_build_fails(kernels: Path, tmp_path: Path) -> None:
+    report = check_candidate(kernels, _git(kernels, "rev-parse", "HEAD").strip(), build_dir=_build(tmp_path, "int k;\n"))
+    assert {f.get("message") for f in report["findings"]} == {"build dir holds other kernels"}
 
 
 def _fake_gcc(tmp_path: Path, body: str) -> str:
@@ -149,6 +318,16 @@ def test_safe_tar_extracted(tmp_path: Path) -> None:
     assert (tmp_path / "Source/Conv/a.c").read_bytes() == b"x"
 
 
+def test_binutil_output_is_capped(tmp_path: Path, monkeypatch) -> None:
+    flood = tmp_path / "flood"
+    flood.write_text("#!/bin/sh\nexec yes x\n")
+    flood.chmod(0o755)
+    monkeypatch.setattr(candidate_scan, "arm_tool", lambda name: str(flood))
+    monkeypatch.setattr(candidate_scan, "OUTPUT_CAP", 1 << 16)
+    with pytest.raises(ValueError, match="hit limits"):
+        candidate_scan.run_binutil("arm-none-eabi-objdump", ["-s", "x.o"])
+
+
 @needs_gcc
 @pytest.mark.skipif(not CMSIS_NN_ROOT or not Path(CMSIS_NN_ROOT, ".git").exists(), reason="needs CMSIS_NN_ROOT")
 def test_real_tree_clean(tmp_path: Path) -> None:
@@ -159,6 +338,14 @@ def test_real_tree_clean(tmp_path: Path) -> None:
     unit.write_text(unit.read_text(encoding="utf-8") + "/* note */\n", encoding="utf-8")
     report = check_candidate(root, _git(root, "rev-parse", "HEAD").strip())
     assert report["ok"], report["findings"][:5]
+
+
+@pytest.mark.parametrize(("cpus", "cap", "want"), [(64, 64 << 20, 4), (2, 64 << 20, 2), (None, 64 << 20, 1),
+                                                   (64, 1 << 30, 1)])
+def test_workers_fit_budget(monkeypatch, cpus, cap: int, want: int) -> None:
+    monkeypatch.setattr(candidate_scan.os, "cpu_count", lambda: cpus)
+    monkeypatch.setattr(candidate_scan, "OUTPUT_CAP", cap)
+    assert candidate_scan.scan_workers() == want
 
 
 def _many_units(tmp_path: Path, count: int) -> Path:
@@ -225,3 +412,31 @@ def test_jobs_in_flight_bounded(tmp_path: Path, monkeypatch) -> None:
     counts, failed = candidate_scan._tree_counts(gcc, _many_units(tmp_path, 12), rule_counts, {"c": ()},
                                                  time.monotonic() + 30, str(tmp_path / "abort"))
     assert counts == {} and not failed and peak[0] <= 2
+
+
+@needs_gcc
+@pytest.mark.parametrize(("cap", "total", "message"), [
+    (1024, 1 << 30, "object over 0 MiB: Source/k.c"),
+    (1 << 30, 1024, "objects over 0 MiB in total"),
+])
+def test_big_objects_refused(tmp_path: Path, monkeypatch, cap: int, total: int, message: str) -> None:
+    build = _build(tmp_path, "int k;\n")
+    (build / "k.c.obj").write_bytes(bytes(4096))
+    monkeypatch.setattr(candidate_scan, "OBJECT_CAP", cap)
+    monkeypatch.setattr(candidate_scan, "OBJECTS_TOTAL_CAP", total)
+    # Refused from stat alone: nothing read.
+    monkeypatch.setattr(candidate_scan, "elf_sections", lambda obj: pytest.fail("read the object"))
+    monkeypatch.setattr(candidate_scan, "run_binutil", lambda *args: pytest.fail("ran a binutil"))
+    findings, _, _ = candidate_scan.object_findings(build)
+    assert findings == [{"rule": "scan_error", "path": "", "message": message}]
+
+
+@needs_gcc
+def test_object_scan_deadline(tmp_path: Path, monkeypatch) -> None:
+    build = _build(tmp_path, "int k;\n")
+    slow = _fake_gcc(tmp_path, "sleep 30")
+    monkeypatch.setattr(candidate_scan, "arm_tool", lambda name: slow)
+    start = time.monotonic()
+    findings, _, _ = candidate_scan.object_findings(build, deadline_s=1.0)
+    assert time.monotonic() - start < 8
+    assert [f["rule"] for f in findings] == ["scan_error"]

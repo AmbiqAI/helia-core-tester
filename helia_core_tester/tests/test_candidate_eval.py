@@ -22,6 +22,8 @@ REAL_TESTER_DIRTY = candidate_eval.tester_dirty
 def clean_tester(monkeypatch) -> None:
     """CLI tests assume a committed tester."""
     monkeypatch.setattr(candidate_eval, "tester_dirty", lambda: False)
+    # Fake runs build no objects.
+    monkeypatch.setattr(candidate_eval, "object_check", lambda *args: None)
 
 
 @pytest.fixture
