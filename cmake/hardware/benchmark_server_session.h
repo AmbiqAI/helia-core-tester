@@ -33,7 +33,8 @@ extern "C" {
 #define HCT_SERVER_WORKSPACE_BYTES 114688u
 #endif
 #define HCT_SERVER_MAX_OUTBOX_BYTES 32768u
-#define HCT_SERVER_BLOB_CHUNK_BYTES 64u
+/* One BLOB_CHUNK frame fits the RTT down ring. */
+#define HCT_SERVER_BLOB_CHUNK_BYTES 448u
 /* Timed output differs from first call. */
 #define HCT_STATUS_OUTPUT_CHANGED (-1000)
 /* Kernel changed a read-only operand. */

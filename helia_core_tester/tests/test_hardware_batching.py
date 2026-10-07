@@ -23,7 +23,7 @@ from typing import Any
 
 import pytest
 
-from helia_core_tester.hardware import measurement, session, session_runner
+from helia_core_tester.hardware import measurement, nsx_app, session, session_runner
 from helia_core_tester.hardware.boards import resolve_board
 from helia_core_tester.hardware.case_bundle import (
     EMPTY_CALL_KERNEL_ID, FLOOR_CASE_ID, build_abs_s8_case_bundle, load_case_bundle,
@@ -96,6 +96,15 @@ def test_host_constants_match_the_firmware_header() -> None:
     # The fake target advertises the same limits by default.
     info = FakeTargetTransport()
     assert (info._max_cases_per_session, info._max_passes) == (measurement.MAX_CASES_PER_PLAN, measurement.MAX_PASSES_PER_PLAN)
+
+
+def test_blob_chunk_fits_down_ring() -> None:
+    # The ring keeps one slot free.
+    header = (PROJECT_ROOT / "cmake" / "hardware" / "benchmark_server_session.h").read_text()
+    chunk = int(re.search(r"#define HCT_SERVER_BLOB_CHUNK_BYTES (\d+)u", header).group(1))
+    frame = HEADER_SIZE + 8 + chunk  # u32 blob_id, u32 offset, data
+    assert frame <= nsx_app.RTT_BUFFER_SIZE_DOWN - 1
+    assert frame <= int(re.search(r"#define HCT_SERVER_RX_BUFFER_BYTES (\d+)u", header).group(1))
 
 
 def test_run_case_bundles_refuses_more_passes_than_the_firmware_runs_before_opening_the_probe(tmp_path: Path, monkeypatch) -> None:
