@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import os
 import shutil
+import subprocess
 import tarfile
 import time
 from pathlib import Path
@@ -19,6 +20,7 @@ from helia_core_tester.hardware.toolchain import arm_tool
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
 needs_gcc = pytest.mark.skipif(shutil.which(arm_tool("arm-none-eabi-gcc")) is None, reason="needs arm-none-eabi-gcc")
 PASTE = "#define CAT(a, b) a##b\n"
+CMSIS_NN_ROOT = os.environ.get("CMSIS_NN_ROOT", "")
 
 
 @pytest.fixture
@@ -142,3 +144,15 @@ def test_unsafe_tar_fails_closed(kernels: Path, monkeypatch) -> None:
 def test_safe_tar_extracted(tmp_path: Path) -> None:
     candidate_scan.extract_tar(_tar(_member("Source/Conv/a.c")), tmp_path)
     assert (tmp_path / "Source/Conv/a.c").read_bytes() == b"x"
+
+
+@needs_gcc
+@pytest.mark.skipif(not Path(CMSIS_NN_ROOT, ".git").exists(), reason="needs CMSIS_NN_ROOT checkout")
+def test_real_tree_clean(tmp_path: Path) -> None:
+    root = tmp_path / "nn"
+    subprocess.run(["git", "clone", "-q", CMSIS_NN_ROOT, str(root)], check=True)
+    # A comment-only edit runs every scan.
+    unit = root / "Source/ActivationFunctions/arm_relu_q7.c"
+    unit.write_text(unit.read_text(encoding="utf-8") + "/* note */\n", encoding="utf-8")
+    report = check_candidate(root, _git(root, "rev-parse", "HEAD").strip())
+    assert report["ok"], report["findings"][:5]

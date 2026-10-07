@@ -329,8 +329,40 @@ def test_trigraph_fails(kernels: Path) -> None:
     assert "build_probe" in _rules(kernels)
 
 
+PROBE_BASE = {
+    "Include/p.h": '#define CAT(a, b) a##b\n#define B CAT(__has_, include)("board.h")\n#define A 1\n',
+    "Source/Conv/p.c": '#include "p.h"\n#if A\nint p;\n#endif\nint q(int x) { return x; }\n',
+}
+
+
+@pytest.mark.parametrize(("rel", "text", "want"), [
+    # Base probe routed into a base #if.
+    ("Include/p.h", PROBE_BASE["Include/p.h"].replace("A 1", "A B"), "conditional reaches A"),
+    ("Source/Conv/p.c", PROBE_BASE["Source/Conv/p.c"].replace(
+        "int p;", 'CAT(_Pra,gma)("GCC optimize(\\"O3\\")")'), "uses pasting macro CAT"),
+    ("Include/p.h", PROBE_BASE["Include/p.h"].replace("#define A 1\n", ""), "removed A, base line 3"),
+    ("Include/p.h", PROBE_BASE["Include/p.h"] + "#undef A\n", "conditional reaches A"),
+])
+def test_conditional_macro_edit_fails(tmp_path: Path, rel: str, text: str, want: str) -> None:
+    root = _repo(tmp_path / "nn", PROBE_BASE)
+    (root / rel).write_text(text, encoding="utf-8")
+    texts = {f.get("text") for f in check_candidate(root, _git(root, "rev-parse", "HEAD").strip())["findings"]
+             if f["rule"] == "build_probe"}
+    assert want in texts
+
+
+def test_clean_edit_near_probe_passes(tmp_path: Path) -> None:
+    root = _repo(tmp_path / "nn", PROBE_BASE)
+    (root / "Source/Conv/p.c").write_text(
+        PROBE_BASE["Source/Conv/p.c"].replace("return x;", "return x + 1;"), encoding="utf-8")
+    (root / "Include/new.h").write_text("#ifndef NEW_H\n#define NEW_H\n#define TWICE(x) ((x) * 2)\n#endif\n",
+                                        encoding="utf-8")
+    report = check_candidate(root, _git(root, "rev-parse", "HEAD").strip())
+    assert report["ok"], report["findings"]
+
+
 def test_plain_conditional_passes(kernels: Path) -> None:
-    text = "#define N 4\n#if defined(ARM_MATH_MVEI) && N > 2 && __has_builtin(__builtin_expect)\nint z;\n#endif\n"
+    text = "#if defined(ARM_MATH_MVEI) && __has_builtin(__builtin_expect)\nint z;\n#endif\n"
     (kernels / "Source/Conv/a.c").write_text(text, encoding="utf-8")
     assert check_candidate(kernels, _sha(kernels))["ok"]
 
