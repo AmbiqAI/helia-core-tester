@@ -416,6 +416,22 @@ def test_prepare_growth_fails(tmp_path, cand, fails):
     assert (("prepare_regression", "conv_a") in _pairs(report)) == fails
 
 
+@pytest.mark.parametrize(("cycles", "prepare", "cause"), [
+    (2000.0, 1600, None),  # layout growth, timed unchanged
+    (1960.0, 1600, None),  # gain inside the board floor
+    (500.0, 1300, None),  # big gain, small growth
+    (1400.0, 1600, "pays_for_gain"),  # work moved to prepare
+    (2000.0, 2100, "blowup"),
+])
+def test_prepare_growth_must_explain_gain(tmp_path, cycles, prepare, cause):
+    base = _bundle(tmp_path, "a", rows={"dw_a": {"prepare_cycles": 1000}})
+    cand = _bundle(tmp_path, "b", cycles={"dw_a": cycles}, rows={"dw_a": {"prepare_cycles": prepare}})
+    report = _score([base], [cand])
+    case = next(c for c in report["cases"] if c["case_id"] == "dw_a")
+    assert case["prepare"]["cause"] == cause
+    assert (("prepare_regression", "dw_a") in _pairs(report)) == bool(cause)
+
+
 def test_case_reports_peak_and_dtype(tmp_path):
     target = {"board": "apollo510_evb", "cpu": "cortex-m55", "placement": {"name": "tcm"}}
     report = _score([_bundle(tmp_path, "a", target=target)], [_bundle(tmp_path, "b", target=target)])
@@ -496,12 +512,13 @@ def test_scoring_files_versioned():
 
 @pytest.mark.parametrize("name", ["family_weights.yaml", "noise_floors.yaml"])
 def test_old_scoring_schema_refused(tmp_path, name):
-    from helia_core_tester.hardware.score import SCORING_DIR
+    from helia_core_tester.hardware.score import SCORING_DIR, SCORING_SCHEMAS
     for other in ("family_weights.yaml", "noise_floors.yaml"):
         (tmp_path / other).write_text((SCORING_DIR / other).read_text())
     path = tmp_path / name
-    path.write_text(path.read_text().replace("schema_version: 2", "schema_version: 1"))
-    with pytest.raises(ValueError, match="need schema_version 2"):
+    want = SCORING_SCHEMAS[name]
+    path.write_text(path.read_text().replace(f"schema_version: {want}", f"schema_version: {want - 1}"))
+    with pytest.raises(ValueError, match=f"need schema_version {want}"):
         load_scoring("apollo510_evb", tmp_path)
 
 

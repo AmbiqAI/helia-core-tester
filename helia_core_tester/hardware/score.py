@@ -10,10 +10,14 @@ MAD and the spread of its repeat medians. A case timed valid in the
 baseline but not in the candidate fails. Only timing_status "valid" cases are timed.
 With repeat baselines the floor is the small session floor instead of
 the board floor. Each family also fails when its geomean is slower than
-max(family floor, median case band / sqrt(cases)), and each case when
-its prepare_cycles grow past max(prepare floor %, k * repeat spread)
-of prepare and prepare_timed_pct of its timed cycles. MLPerf layer cases weigh mlperf_case_weight
-in geomeans. The score is sum(weight * ln(family geomean speedup)) with
+max(family floor, median case band / sqrt(cases)). Prepare cycles move
+with code layout, so a case fails on them only when they go missing or
+grow past their band (max(prepare floor %, k * repeat spread) of
+prepare, prepare_timed_pct of timed) and also either pass
+prepare_max_ratio times the baseline or could pay for a timed gain:
+the case got faster than max(board floor, k * timed spread) and
+prepare grew past prepare_share_pct of the cycles saved. MLPerf layer
+cases weigh mlperf_case_weight in geomeans. The score is sum(weight * ln(family geomean speedup)) with
 weights from assets/scoring/family_weights.yaml; with weights that sum
 to 1 it approximates ln(whole-model speedup). --focus limits the score
 (not the gates) to some routes or dtypes, weights renormalized. A
@@ -58,7 +62,7 @@ DEFAULT_MIN_SCORE = 0.005
 EXITS = {"pass": EXIT_PASS, "fail": EXIT_FAIL, "not_comparable": EXIT_REFUSED, "no_gain": EXIT_NO_GAIN}
 SETTINGS = (
     "weights_version", "weights_board", "weights", "floor_pct", "family_floor_pct", "session_floor_pct",
-    "prepare_floor_pct", "prepare_timed_pct", "mad_k", "mlperf_weight", "min_score",
+    "prepare_floor_pct", "prepare_timed_pct", "prepare_share_pct", "prepare_max_ratio", "mad_k", "mlperf_weight", "min_score",
 )
 # INST_RETIRED plus every MVE retired counter.
 _RETIRED = re.compile(r"^ARM_PMU_(INST|MVE_\w+)_RETIRED$")
@@ -286,15 +290,16 @@ def _spread(rows: list[dict], key: str = "median_cycles", mad_key: str | None = 
     return MAD_SIGMA * max(repeat_mad, run_mad)
 
 
-# Version 2 added focus and gate keys.
-SCORING_SCHEMA = 2
+# v2 focus and gates; floors v3 prepare intent.
+SCORING_SCHEMAS = {"family_weights.yaml": 2, "noise_floors.yaml": 3}
 
 
 def _scoring_file(path: Path) -> dict:
     """A scoring YAML at the current schema."""
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    if data.get("schema_version") != SCORING_SCHEMA:
-        raise ValueError(f"{path}: need schema_version {SCORING_SCHEMA}, got {data.get('schema_version')}")
+    want = SCORING_SCHEMAS[path.name]
+    if data.get("schema_version") != want:
+        raise ValueError(f"{path}: need schema_version {want}, got {data.get('schema_version')}")
     return data
 
 
@@ -314,6 +319,8 @@ def load_scoring(board: str | None, directory: Path = SCORING_DIR) -> dict:
         "session_floor_pct": float(floors["session_floor_pct"]),
         "prepare_floor_pct": float(floors["prepare_floor_pct"]),
         "prepare_timed_pct": float(floors["prepare_timed_pct"]),
+        "prepare_share_pct": float(floors["prepare_share_pct"]),
+        "prepare_max_ratio": float(floors["prepare_max_ratio"]),
         "mad_k": float(floors["mad_k"]),
         "mlperf_weight": float(weights["mlperf_case_weight"]),
         "min_score": DEFAULT_MIN_SCORE,
@@ -341,15 +348,33 @@ def _peak_pct(cpu: str | None, route: str, cycles_per_mac: float | None) -> floa
     return entry["cycles_per_mac"] / cycles_per_mac * 100.0 if entry and cycles_per_mac else None
 
 
-def _prepare(base: list[dict], cand: list[dict], timed: float | None, scoring: dict) -> dict | None:
+def _prepare_cause(a: float, b: float | None, allowed: float, saved: float, scoring: dict) -> str | None:
+    """Why prepare growth fails, or None."""
+    if b is None:
+        return "missing"
+    growth = b - a
+    if growth <= allowed:
+        return None
+    if b > a * scoring["prepare_max_ratio"]:
+        return "blowup"
+    # Growth that could buy the gain.
+    return "pays_for_gain" if saved > 0 and growth > saved * scoring["prepare_share_pct"] / 100.0 else None
+
+
+def _prepare(base: list[dict], cand: list[dict], timed: tuple[float | None, float | None], scoring: dict) -> dict | None:
     """Prepare cycles; None when the baseline lacks them."""
     a = _pool(base, "prepare_cycles")
     if a is None:
         return None
     b = _pool(cand, "prepare_cycles")
     band = max(scoring["prepare_floor_pct"], scoring["mad_k"] * _spread(base, "prepare_cycles", None) / a * 100.0) if a else 0.0
-    allowed = max(a * band / 100.0, (timed or 0.0) * scoring["prepare_timed_pct"] / 100.0)
-    return {"baseline": a, "candidate": b, "band_pct": band, "regression": b is None or b - a > allowed}
+    before, after = timed
+    allowed = max(a * band / 100.0, (before or 0.0) * scoring["prepare_timed_pct"] / 100.0)
+    # Gains inside cross-build noise don't count.
+    noise = max(scoring["floor_pct"], scoring["mad_k"] * _spread(base) / before * 100.0) if before else 0.0
+    saved = before - after if before and after and before - after > before * noise / 100.0 else 0.0
+    cause = _prepare_cause(a, b, allowed, saved, scoring)
+    return {"baseline": a, "candidate": b, "band_pct": band, "cause": cause, "regression": cause is not None}
 
 
 def family_of(symbol: str, scoring: dict) -> str:
@@ -403,7 +428,7 @@ def _case(case_id: str, baselines: list[Bundle], candidates: list[Bundle], scori
         "cycles_per_mac_candidate": cpm_b,
         "pct_of_peak_baseline": _peak_pct(cpu, base_route, cpm_a),
         "pct_of_peak_candidate": _peak_pct(cpu, inner or symbol, cpm_b),
-        "prepare": _prepare(base, cand, a, scoring),
+        "prepare": _prepare(base, cand, (a, b), scoring),
         "retired": _retired(base, cand),
     }
     case["in_focus"] = in_focus(base_route, symbol, case["dtype"], focus)
@@ -539,7 +564,7 @@ def score_bundles(
     for case in cases:
         prepare = case["prepare"]
         if prepare and prepare["regression"] and case["excluded_by"] != "comparison_failed":
-            reason = f"prepare cycles {prepare['baseline']:.0f} -> {_cell(prepare['candidate'], '.0f')}"
+            reason = f"prepare cycles {prepare['baseline']:.0f} -> {_cell(prepare['candidate'], '.0f')}, {prepare['cause']}"
             failures.append({"kind": "prepare_regression", "case_id": case["case_id"], "reason": reason})
     focused = [case for case in eligible if case["in_focus"]]
     if not focused:
