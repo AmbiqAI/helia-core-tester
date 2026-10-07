@@ -73,6 +73,7 @@ OPTIONS_FILE = ".hct-options.json"
 
 # Holds one flush burst; rarely blocks.
 RTT_BUFFER_SIZE_UP = 8192
+# Holds one BLOB_CHUNK frame.
 RTT_BUFFER_SIZE_DOWN = 512
 
 _SERVER_SOURCES = (
