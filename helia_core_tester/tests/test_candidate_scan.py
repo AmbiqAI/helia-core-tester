@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -14,10 +16,8 @@ from helia_core_tester.hardware import candidate_check, candidate_scan
 from helia_core_tester.hardware.candidate_check import check_candidate, rule_counts
 from helia_core_tester.hardware.toolchain import arm_tool
 
-pytestmark = [
-    pytest.mark.skipif(shutil.which("git") is None, reason="needs git"),
-    pytest.mark.skipif(shutil.which(arm_tool("arm-none-eabi-gcc")) is None, reason="needs arm-none-eabi-gcc"),
-]
+pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
+needs_gcc = pytest.mark.skipif(shutil.which(arm_tool("arm-none-eabi-gcc")) is None, reason="needs arm-none-eabi-gcc")
 PASTE = "#define CAT(a, b) a##b\n"
 
 
@@ -42,11 +42,13 @@ def _hits(root: Path) -> set[tuple[str, str]]:
     PASTE + 'int a;\n#ifdef __OPTIMIZE__\nCAT(__attri, bute)( (section(".s")) ) int z;\n#endif\n',
     PASTE + 'static const char s[] = "//";\nCAT(_Pra, gma)("GCC optimize(\\"O3\\")")\n',
 ])
+@needs_gcc
 def test_nested_paste_found(kernels: Path, text: str) -> None:
     (kernels / "Source/Conv/a.c").write_text(text, encoding="utf-8")
     assert {rule for rule, path in _hits(kernels) if path == "Source/Conv/a.c"} & {"pragma", "attribute"}
 
 
+@needs_gcc
 def test_header_macro_reaches_unit(kernels: Path) -> None:
     # The unit itself is unchanged.
     text = PASTE + '#define KATTR CAT(__attri, bute__)((optimize("O3")))\n'
@@ -54,11 +56,13 @@ def test_header_macro_reaches_unit(kernels: Path) -> None:
     assert ("attribute", "Source/Conv/a.c") in _hits(kernels)
 
 
+@needs_gcc
 def test_old_header_hits_pass(kernels: Path) -> None:
     (kernels / "Source/Conv/new.c").write_text('#include "arm_nn_types.h"\nint n;\n', encoding="utf-8")
     assert _hits(kernels) == set()
 
 
+@needs_gcc
 def test_failed_unit_fails(kernels: Path) -> None:
     (kernels / "Source/Conv/a.c").write_text("#error no\n", encoding="utf-8")
     assert ("scan_error", "Source/Conv/a.c") in _hits(kernels)
@@ -85,6 +89,7 @@ def _build(tmp_path: Path, source: str, define: str = "-DBOARD_X") -> Path:
     return build
 
 
+@needs_gcc
 def test_object_scan_flags_sections_and_scs(tmp_path: Path) -> None:
     source = (
         '__attribute__((section(".itcm_text"))) unsigned f(void)\n'
@@ -99,12 +104,14 @@ def test_object_scan_flags_sections_and_scs(tmp_path: Path) -> None:
     assert flags["*"] == flags["Source/k.c"] == ("-DBOARD_X", "-IInclude")
 
 
+@needs_gcc
 def test_object_scan_clean(tmp_path: Path) -> None:
     source = "unsigned f(unsigned x) { return x > 0xE0000000u ? x : ~x; }\nconst int t[2] = {1, 2};\n"
     findings, summary, _ = candidate_scan.object_findings(_build(tmp_path, source))
     assert findings == [] and summary["count"] == 1
 
 
+@needs_gcc
 @pytest.mark.parametrize("source", [
     # Unaligned bytes: e0 10 e0 00.
     "const unsigned short h[3] = {0, 0xE010, 0xE000};\n",
@@ -124,6 +131,7 @@ def test_object_scan_needs_objects(tmp_path: Path) -> None:
     assert [f["rule"] for f in findings] == ["scan_error"]
 
 
+@needs_gcc
 def test_build_macros_reach_gcc_e(kernels: Path, tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(candidate_check, "kernels_match", lambda tree, module: True)
     text = PASTE + '#ifdef BOARD_X\nCAT(_Pra, gma)("GCC optimize(\\"O3\\")")\n#endif\nint a;\n'
@@ -134,6 +142,7 @@ def test_build_macros_reach_gcc_e(kernels: Path, tmp_path: Path, monkeypatch) ->
     assert report["objects"]["count"] == 1
 
 
+@needs_gcc
 def test_local_name_hides_no_global(tmp_path: Path) -> None:
     build = _build(tmp_path, "static int x;\nint *const p = &x;\n")
     other = build / "nsx_app/modules/nsx-cmsis-nn/Source/o.c"
@@ -148,6 +157,7 @@ def test_local_name_hides_no_global(tmp_path: Path) -> None:
     assert flags["Source/o.c"] == () and flags["Source/k.c"][0] == "-DBOARD_X"
 
 
+@needs_gcc
 def test_per_unit_flags_reach_gcc_e(kernels: Path, tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(candidate_check, "kernels_match", lambda tree, module: True)
     text = PASTE + '#ifdef BOARD_B\nCAT(_Pra, gma)("GCC optimize(\\"O3\\")")\n#endif\nint b;\n'
@@ -158,6 +168,37 @@ def test_per_unit_flags_reach_gcc_e(kernels: Path, tmp_path: Path, monkeypatch) 
     assert ("pragma", "Source/Conv/b.c") in {(f["rule"], f["path"]) for f in report["findings"]}
 
 
+@needs_gcc
 def test_stale_build_fails(kernels: Path, tmp_path: Path) -> None:
     report = check_candidate(kernels, _git(kernels, "rev-parse", "HEAD").strip(), build_dir=_build(tmp_path, "int k;\n"))
     assert {f.get("message") for f in report["findings"]} == {"build dir holds other kernels"}
+
+
+def _fake_gcc(tmp_path: Path, body: str) -> str:
+    script = tmp_path / "gcc"
+    script.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
+    script.chmod(0o755)
+    return str(script)
+
+
+def test_slow_gcc_killed(tmp_path: Path) -> None:
+    pid_file = tmp_path / "pid"
+    gcc = _fake_gcc(tmp_path, f"sleep 60 &\necho $! > {pid_file}\nwait")
+    start = time.monotonic()
+    assert candidate_scan.run_capped([gcc], tmp_path, 1.0, 1 << 20) is None
+    assert time.monotonic() - start < 10
+    # The grandchild dies with the group.
+    pid = int(pid_file.read_text())
+    time.sleep(0.2)
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
+
+
+def test_big_output_capped(tmp_path: Path) -> None:
+    gcc = _fake_gcc(tmp_path, "yes")
+    assert candidate_scan.run_capped([gcc], tmp_path, 30.0, 1 << 16) is None
+
+
+def test_small_output_kept(tmp_path: Path) -> None:
+    gcc = _fake_gcc(tmp_path, "echo ok")
+    assert candidate_scan.run_capped([gcc], tmp_path, 30.0, 1 << 16) == b"ok\n"
