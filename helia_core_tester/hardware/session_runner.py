@@ -22,6 +22,7 @@ from .case_bundle import (
     build_floor_bundle, load_case_bundle,
 )
 from .case_validity import apply_floor
+from .errors import RunRefused
 from .firmware_build import elf_path
 from .generated_test_bridge import (
     CaseSelection,
@@ -461,7 +462,7 @@ def no_bridgeable_cases_error(
     family: str | None,
     name_filter: str | None,
     suite: str,
-) -> RuntimeError:
+) -> RunRefused:
     """The error to raise when discovery bridged nothing, leading with the reasons
     cases were rejected (an all-FVP-gate rejection in particular is fixed by refreshing
     or bypassing the gate, not by regenerating)."""
@@ -471,7 +472,7 @@ def no_bridgeable_cases_error(
         f"name_filter={name_filter!r} suite={suite!r} (skipped {len(skipped)})"
     )
     if not skipped:
-        return RuntimeError(f"{base}; run `helia_core_tester generate` first.")
+        return RunRefused(f"{base}; run `helia_core_tester generate` first.")
     fvp_skips = [(t, r) for t, r in skipped if "FVP" in r or "artifact" in r]
     adapter_gaps = sum(r.startswith(NO_ADAPTER) for _, r in skipped)
     detail = "\n".join(f"  - {t.name}: {r}" for t, r in skipped[:5])
@@ -496,4 +497,4 @@ def no_bridgeable_cases_error(
                 "report. Investigate before overriding; --fvp-gate off will run them anyway and "
                 "record fvp_status=failed in case_summary.csv."
             )
-    return RuntimeError(f"{base}:\n{detail}{hint}")
+    return RunRefused(f"{base}:\n{detail}{hint}")

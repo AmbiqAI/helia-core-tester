@@ -315,6 +315,9 @@ class Config:
         self.reports_root.mkdir(parents=True, exist_ok=True)
 
     def _validate_random_shapes(self) -> None:
+        # Any seed would be silently ignored.
+        if self.hidden_dir is not None and self.shape_seed is not None:
+            raise ConfigurationError("hidden_dir takes a secret, not shape_seed")
         if self.shape_seed is None:
             self.shape_seed = 0
         # Seed sits in hardware case ids.
@@ -335,8 +338,6 @@ class Config:
             if self.hidden_seed_file is not None:
                 raise ConfigurationError("hidden_seed_file needs hidden_dir")
             return
-        if "shape_seed" in self._explicit_overrides:
-            raise ConfigurationError("hidden_dir takes a secret, not shape_seed")
         # Hidden outputs all derive from DIR.
         moved = [
             name for name, default in (

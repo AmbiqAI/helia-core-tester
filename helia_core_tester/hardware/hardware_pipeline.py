@@ -27,6 +27,7 @@ from .firmware_build import (
     resolve_build_dir,
     stage_kernels,
 )
+from .errors import RunRefused
 from .measurement import (
     TooManyPassesError,
     UnsupportedCounterError,
@@ -433,9 +434,9 @@ def prepare_bundles(
         names = [b.case_id.removesuffix(HW_CASE_SUFFIX) for b in bundles] + [t.name for t, _ in skipped]
         missing = select.unmatched_ids(names)
         if missing:
-            raise RuntimeError(f"No case matches these ids: {', '.join(missing)}")
+            raise RunRefused(f"No case matches these ids: {', '.join(missing)}")
     if not bundles and not skipped and select != CaseSelection():
-        raise RuntimeError("No generated case matches --op/--dtype/--case-id.")
+        raise RunRefused("No generated case matches --op/--dtype/--case-id.")
     if not bundles:
         raise no_bridgeable_cases_error(
             skipped, cpu=board.cpu, family=options.family, name_filter=options.test_name, suite=options.suite,
@@ -454,7 +455,7 @@ def golden_bundles(bundles: list, golden_dir: Path, *, allow_failed: bool) -> li
     from .case_bundle import golden_bundle, golden_record, golden_usable, input_digest
 
     if not any((golden_dir / "correctness").glob("*.json")):
-        raise RuntimeError(f"Golden bundle has no results: {golden_dir}")
+        raise RunRefused(f"Golden bundle has no results: {golden_dir}")
     records = {b.case_id: golden_record(b, golden_dir) for b in bundles}
     _refuse("Golden run is missing these cases", [i for i, r in records.items() if r is None])
     if not allow_failed:
@@ -470,7 +471,7 @@ def golden_bundles(bundles: list, golden_dir: Path, *, allow_failed: bool) -> li
 
 def _refuse(reason: str, case_ids: list[str]) -> None:
     if case_ids:
-        raise RuntimeError(f"{reason}: {', '.join(case_ids)}")
+        raise RunRefused(f"{reason}: {', '.join(case_ids)}")
 
 
 def stream_generated_tests(
@@ -504,7 +505,7 @@ def stream_generated_tests(
             "against this build dir."
         )
         if not allow_unverified_firmware:
-            raise RuntimeError(
+            raise RunRefused(
                 f"{stamp_missing} Rebuild with `hardware build --board {board.id}` (which stamps it), "
                 "or pass --allow-unverified-firmware to stream to legacy firmware unchecked."
             )
@@ -619,9 +620,7 @@ def run_hardware_pipeline(
         # Generate against the firmware's kernels.
         if skip_flash:
             if update_dependencies:
-                from .nsx_cli import HardwareBuildError
-
-                raise HardwareBuildError("--skip-flash cannot update dependencies.")
+                raise RunRefused("--skip-flash cannot update dependencies.")
             # Board keeps the built image.
             kernel_root = built_kernels(board, resolved_build_dir, app_options)
         else:

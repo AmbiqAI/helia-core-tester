@@ -407,7 +407,7 @@ def check_hidden_paths(hidden_dir: Path, repo_root: Path, cpu: str, suite: str =
 
 
 def _refuse_links(root: Path, target: Path) -> None:
-    """Refuse any symlink from root through target."""
+    """Refuse any link from root through target."""
     path = root
     for part in target.relative_to(root).parts:
         path = path / part
@@ -417,8 +417,12 @@ def _refuse_links(root: Path, target: Path) -> None:
         return
     for dirpath, dirnames, filenames in os.walk(target, followlinks=False):
         for name in (*dirnames, *filenames):
-            if (Path(dirpath) / name).is_symlink():
-                raise ValueError(f"{Path(dirpath) / name} is a symlink; hidden trees allow none")
+            entry = Path(dirpath) / name
+            if entry.is_symlink():
+                raise ValueError(f"{entry} is a symlink; hidden trees allow none")
+            # In-place writes would reach the other name.
+            if entry.is_file() and entry.lstat().st_nlink > 1:
+                raise ValueError(f"{entry} is hard-linked; hidden trees allow none")
 
 
 def hidden_root(hidden_dir: Path, cpu: str) -> Path:

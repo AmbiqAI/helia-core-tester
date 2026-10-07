@@ -41,7 +41,7 @@ def pytest_addoption(parser):
                     help="Keep cases outside the filter instead of pruning")
     parser.addoption("--random-shapes", action="store", type=int, default=None,
                     help="Draw N random shapes per op instead")
-    parser.addoption("--shape-seed", action="store", type=int, default=0,
+    parser.addoption("--shape-seed", action="store", type=int, default=None,
                     help="Seed for --random-shapes")
     parser.addoption("--hidden-dir", action="store", default=None,
                     help="Write secret-seeded shapes here instead")
@@ -78,6 +78,8 @@ def _guard_hidden(config) -> None:
     # Else public cases replace the draw.
     if (config.getoption("--random-shapes") or 0) < 1:
         raise pytest.UsageError("--hidden-dir needs --random-shapes N >= 1")
+    if config.getoption("--shape-seed") is not None:
+        raise pytest.UsageError("--hidden-dir takes a secret, not --shape-seed")
 
     # Hidden outputs all derive from DIR.
     if config.getoption("--generated-tests-dir"):
