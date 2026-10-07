@@ -54,6 +54,7 @@ import typer
 
 from .harness_lock import HARNESS_HEADERS, header_closure
 from .nsx_app import KERNEL_TREES, checkout_hash
+from .pathutil import is_relative_to
 
 ALLOWED_DIRS = ("Source/", "Include/")
 ALLOWED_SUFFIXES = (".c", ".h", ".s", ".S")
@@ -182,7 +183,7 @@ def frozen_files(tree: Path, base: dict[str, tuple[str, str]]) -> frozenset[str]
     def read_disk(rel: str) -> Optional[str]:
         path = tree / rel
         # Stay in the tree; never follow links.
-        if path.resolve() != path or not path.is_relative_to(tree) or not path.is_file():
+        if path.resolve() != path or not is_relative_to(path, tree) or not path.is_file():
             return None
         return path.read_text(encoding="utf-8", errors="replace")
 
