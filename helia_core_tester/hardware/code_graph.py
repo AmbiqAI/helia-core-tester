@@ -19,6 +19,10 @@ but `routes`, the other cases' inner symbols: the wrapper's own code,
 transposes and nested wrappers count, sibling kernels do not. A case
 whose symbol neither build defines counts as touched. Digests include
 section alignment, so a header cannot realign an untouched kernel.
+
+A name defined in several units (weak, COMDAT) folds every copy with
+its unit and binding, so the linker's pick cannot change unseen: any
+change to any copy, or a weak/strong swap, touches the name.
 """
 
 from __future__ import annotations
@@ -31,7 +35,7 @@ from typing import Iterable, Optional
 from .candidate_scan import _NOBITS, _PROGBITS, _REL, _RELA, _kernel_units, elf_sections
 
 SCHEMA = "hct.code_graph"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 _SYMTAB = 2
 _LOCAL = 0
 # Symbol types that name a node.
@@ -52,17 +56,19 @@ def _symbols(table: list, strings: bytes) -> list[tuple[str, int, int, int]]:
     return out
 
 
-def _node_names(unit: str, table: list, symbols: list) -> dict[int, str]:
-    """Section index to node name."""
+def _node_names(unit: str, table: list, symbols: list) -> tuple[dict[int, str], dict[int, int]]:
+    """Section index to node name and binding."""
     names: dict[int, str] = {}
+    binds: dict[int, int] = {}
     # Globals name a node before locals.
     for name, bind, kind, shndx in sorted(symbols, key=lambda s: s[1] == _LOCAL):
         if kind in _NAMED and 0 < shndx < _SHN_LORESERVE and shndx not in names:
             names[shndx] = name if bind != _LOCAL else f"{unit}:{name}"
+            binds[shndx] = bind
     for index, (section, kind, flags, _, _) in enumerate(table):
         if "A" in flags and kind in (_PROGBITS, _NOBITS) and index not in names:
             names[index] = f"{unit}:{section}"
-    return names
+    return names, binds
 
 
 def _alignments(obj: Path) -> list[int]:
@@ -88,7 +94,7 @@ def object_nodes(unit: str, obj: Path) -> dict[str, dict]:
     table = elf_sections(obj)
     strtab = next((bytes(data) for name, kind, _, data, _ in table if name == ".strtab"), b"")
     symbols = _symbols(table, strtab)
-    names = _node_names(unit, table, symbols)
+    names, binds = _node_names(unit, table, symbols)
     aligns = _alignments(obj)
 
     def target(index: int) -> str:
@@ -111,7 +117,7 @@ def object_nodes(unit: str, obj: Path) -> dict[str, dict]:
     for index, name in names.items():
         _, kind, flags, data, _ = table[index]
         # Alignment moves code too.
-        digest = hashlib.sha256(f"{kind}:{flags}:{aligns[index]}:{len(data)}:".encode())
+        digest = hashlib.sha256(f"{kind}:{flags}:{aligns[index]}:{len(data)}:{binds.get(index, _LOCAL)}:".encode())
         if kind == _PROGBITS:
             digest.update(data)
         refs = set()
@@ -130,13 +136,22 @@ def object_nodes(unit: str, obj: Path) -> dict[str, dict]:
 
 def code_graph(build_dir: Path) -> dict:
     """Digests and references of every kernel node."""
-    nodes: dict[str, dict] = {}
+    copies: dict[str, list[tuple[str, dict]]] = {}
     units = _kernel_units(build_dir)
     if not units:
         raise ValueError("no kernel objects found")
     for unit, obj, _ in sorted(units):
         for name, node in object_nodes(unit, obj).items():
-            _fold(nodes, name, node)
+            copies.setdefault(name, []).append((unit, node))
+    nodes: dict[str, dict] = {}
+    for name, defs in copies.items():
+        if len(defs) == 1:
+            nodes[name] = defs[0][1]
+            continue
+        # Bind each copy to its unit.
+        joined = "|".join(f"{unit}={node['digest']}" for unit, node in sorted(defs, key=lambda d: d[0]))
+        nodes[name] = {"digest": hashlib.sha256(joined.encode()).hexdigest(),
+                       "refs": sorted({ref for _, node in defs for ref in node["refs"]})}
     return {"schema": SCHEMA, "schema_version": SCHEMA_VERSION, "nodes": nodes}
 
 

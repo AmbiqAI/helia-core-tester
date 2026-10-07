@@ -25,22 +25,27 @@ NEIGHBOUR
 DECL
 __attribute__((noinline)) static int inner(int x) { return helper(x) + table[x & 3]; }
 int kernel(int x) { return inner(x) BODY; }
-int other(int x) { return x - 7; }
+OTHER
 """
-CALLER = "int kernel(int);\nint caller(int x) { return kernel(x) + 1; }\n"
+OTHER = "int other(int x) { return x - 7; }\n"
+WEAK_OTHER = "__attribute__((weak)) " + OTHER
+CALLER = "int kernel(int);\nint caller(int x) { return kernel(x) + 1; }\nEXTRA"
 NEIGHBOUR = """
 const char *words[] = {"alpha", "beta", "gamma"};
 int neighbour(int x) { int s = 0; for (int i = 0; i < x; i++) s += words[i % 3][0] * i; return s; }
 """
 
 
-def _build(root: Path, *, body: str = "", k: int = 3, last: int = 4, neighbour: str = "", decl: str = "") -> Path:
+def _build(
+    root: Path, *, body: str = "", k: int = 3, last: int = 4, neighbour: str = "", decl: str = "", other: str = OTHER, extra: str = "",
+) -> Path:
     """Compile a fake kernel tree; return its build dir."""
     module = root / "modules" / CMSIS_NN_MODULE
     (module / "Source").mkdir(parents=True)
     (module / "Include").mkdir()
     (module / "Include/k.h").write_text(f"#define HELPER_K {k}\n#define TABLE_LAST {last}\n" + HEADER)
-    sources = {"Source/k.c": KERNEL.replace("NEIGHBOUR", neighbour).replace("DECL", decl).replace("BODY", body), "Source/c.c": CALLER}
+    kernel = KERNEL.replace("NEIGHBOUR", neighbour).replace("DECL", decl).replace("BODY", body).replace("OTHER", other)
+    sources = {"Source/k.c": kernel, "Source/c.c": CALLER.replace("EXTRA", extra)}
     entries = []
     for rel, text in sources.items():
         (module / rel).write_text(text)
@@ -53,8 +58,8 @@ def _build(root: Path, *, body: str = "", k: int = 3, last: int = 4, neighbour: 
     return root
 
 
-def _graphs(tmp_path: Path, **edit) -> tuple[dict, dict]:
-    return code_graph(_build(tmp_path / "a"))["nodes"], code_graph(_build(tmp_path / "b", **edit))["nodes"]
+def _graphs(tmp_path: Path, base: dict | None = None, **edit) -> tuple[dict, dict]:
+    return code_graph(_build(tmp_path / "a", **(base or {})))["nodes"], code_graph(_build(tmp_path / "b", **edit))["nodes"]
 
 
 def _touched(base: dict, cand: dict, root: str) -> bool:
@@ -131,3 +136,14 @@ def test_wrapper_helpers_count_sibling_kernels_do_not() -> None:
     base = graph("t", "s")
     for cand, touched in ((graph("t2", "s"), True), (graph("t", "s2"), False)):
         assert is_touched("wrap", "kern", base, cand, changed_nodes(base, cand), routes) is touched
+
+
+def test_weak_strong_swap_touches_name(tmp_path) -> None:
+    # Same bytes; the linker's pick moves.
+    base, cand = _graphs(tmp_path, base={"extra": WEAK_OTHER}, other=WEAK_OTHER, extra=OTHER)
+    assert "other" in changed_nodes(base, cand)
+
+
+def test_duplicate_copy_edit_touches_name(tmp_path) -> None:
+    base, cand = _graphs(tmp_path, base={"extra": WEAK_OTHER}, extra=WEAK_OTHER.replace("7", "8"))
+    assert "other" in changed_nodes(base, cand) and _touched(base, cand, "other")

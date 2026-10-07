@@ -9,7 +9,7 @@ import pytest
 from typer.testing import CliRunner
 
 from helia_core_tester.cli import app
-from helia_core_tester.hardware import candidate_eval
+from helia_core_tester.hardware import candidate_eval, code_graph
 from helia_core_tester.hardware.candidate_check import CheckError
 from helia_core_tester.tests import test_score_bundles as sb
 from helia_core_tester.tests.test_harness_lock import _git, _repo
@@ -457,7 +457,7 @@ CONV4 = {f"conv_{i}": ("arm_convolve_wrapper_s8", 1000.0) for i in "abcd"}
 def _graph(digest: str) -> dict:
     nodes = {"arm_convolve_wrapper_s8": {"digest": digest, "refs": ["arm_nn_mat_mult_s8"]},
              "arm_nn_mat_mult_s8": {"digest": "m", "refs": []}}
-    return {"schema": "hct.code_graph", "schema_version": 1, "nodes": nodes}
+    return {"schema": code_graph.SCHEMA, "schema_version": code_graph.SCHEMA_VERSION, "nodes": nodes}
 
 
 @pytest.mark.parametrize("base_graph, cand_graph, verdict, scope, reason", [
