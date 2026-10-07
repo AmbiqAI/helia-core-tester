@@ -23,7 +23,7 @@ from helia_core_tester.hardware.fake_target import FakeTargetTransport
 from helia_core_tester.hardware.hctp import MessageType
 from helia_core_tester.hardware.measurement import CounterPass, counter_passes_for_selection
 from helia_core_tester.hardware.pmu_catalog import CounterDescriptor
-from helia_core_tester.hardware.session import OUTPUT_CHANGED_STATUS, HostSession
+from helia_core_tester.hardware.session import OPERAND_CHANGED_STATUS, OUTPUT_CHANGED_STATUS, HostSession
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PASSES = counter_passes_for_selection({"cpu": "default"})
@@ -67,13 +67,20 @@ def test_rejected_case_fails_alone_and_the_session_continues(tmp_path: Path, sta
         assert first_case.count("RX:SAMPLE_RESULT") > 0
 
 
-def test_changed_timed_output_names_the_cause(tmp_path: Path) -> None:
-    transport = FakeTargetTransport(rejections={"abs_a": ("performance", OUTPUT_CHANGED_STATUS)})
+@pytest.mark.parametrize(
+    ("status", "reason"),
+    [
+        (OUTPUT_CHANGED_STATUS, "timed output differs from first call"),
+        (OPERAND_CHANGED_STATUS, "kernel changed a read-only operand"),
+    ],
+)
+def test_integrity_failure_names_the_cause(tmp_path: Path, status: int, reason: str) -> None:
+    transport = FakeTargetTransport(rejections={"abs_a": ("performance", status)})
 
     rejected = HostSession(transport, counter_passes=PASSES).run_many(_bundles(tmp_path)).cases[0]
 
     assert rejected.rejection is not None and rejected.comparison.passed is False
-    assert rejected.rejection.reason == "timed output differs from first call"
+    assert rejected.rejection.reason == reason
 
 
 def test_runner_writes_the_bundle_with_the_rejected_case(tmp_path: Path, monkeypatch) -> None:
