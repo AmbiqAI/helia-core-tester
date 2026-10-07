@@ -20,7 +20,7 @@ import yaml
 from .boards import repo_root
 
 SCHEMA = "hct.pmu_explain"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # Counters the agent loop should request.
 AGENT_PMU_SELECTION: dict[str, list[str]] = {
@@ -39,7 +39,8 @@ _DTYPE_RE = re.compile(r"_(s4|s8|s16|f16|f32)(?=_|$)")
 # Cortex-M55 L1D line size.
 _LINE_BYTES = 32
 
-NEAR_PEAK = 0.6
+# Percent of peak.
+NEAR_PEAK = 60.0
 BACKEND_BOUND = 0.3
 LOW_IPC = 0.6
 # Above requantize multiplies: measured 1.00-1.11x.
@@ -128,7 +129,7 @@ class Explanation:
         head = f"{self.case_id}: {self.op or '?'} {self.dtype or '?'} via {self.route or '?'}"
         if self.pct_of_peak is not None:
             head += (f", {self.cycles_per_mac:.3f} cyc/MAC vs {self.ceiling['cycles_per_mac']}"
-                     f" = {self.pct_of_peak:.0%} of peak")
+                     f" = {self.pct_of_peak:.0f}% of peak")
         elif self.cycles is not None:
             head += f", {self.cycles:.0f} cycles"
         if self.timing_status not in (None, "valid"):
@@ -189,7 +190,7 @@ def _rule_near_peak(e: Explanation) -> Optional[Finding]:
     pct = e.pct_of_peak
     if pct is None or pct < NEAR_PEAK:
         return None
-    return Finding("near_peak", pct, f"Near ceiling at {pct:.0%} of peak",
+    return Finding("near_peak", pct / 100, f"Near ceiling at {pct:.0f}% of peak",
                    "Only fewer MACs or fused work helps now")
 
 
@@ -302,7 +303,7 @@ def explain_case(
     result = Explanation(
         case_id=str(row.get("case_id")), cpu=cpu, placement=placement, op=op, dtype=dtype, route=route,
         timing_status=row.get("timing_status"), cycles=cycles, macs=macs, cycles_per_mac=cpm, ceiling=ceiling,
-        pct_of_peak=_ratio(ceiling["cycles_per_mac"], cpm) if ceiling and cpm else None,
+        pct_of_peak=100 * ceiling["cycles_per_mac"] / cpm if ceiling and cpm else None,
         metrics=metrics, missing_counters=missing,
     )
     if result.timing_status not in (None, "valid"):

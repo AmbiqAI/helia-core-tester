@@ -55,7 +55,8 @@ def test_classify_route(symbol, expected):
 def test_healthy_row_has_no_bottleneck():
     result = explain_case(_row(), cpu=M55)
     assert [f.rule for f in result.findings] == ["no_bottleneck"]
-    assert result.pct_of_peak == pytest.approx(0.125 / 0.25)
+    assert result.pct_of_peak == pytest.approx(50.0)
+    assert "= 50% of peak" in result.lines()[0]
     assert result.metrics["mve_mul_ratio"] == pytest.approx(1.0)
     assert result.missing_counters == []
     assert len(result.lines()) == 4
@@ -64,7 +65,11 @@ def test_healthy_row_has_no_bottleneck():
 def test_near_peak():
     row = _row()
     row["median_cycles"] = 2500
-    assert _rules(row)[0] == "near_peak"
+    result = explain_case(row, cpu=M55)
+    assert result.findings[0].rule == "near_peak"
+    assert result.pct_of_peak == pytest.approx(80.0)
+    assert result.findings[0].impact == pytest.approx(0.8)
+    assert "80% of peak" in result.findings[0].diagnosis
 
 
 def test_memory_bound_tcm_and_mram():
@@ -159,7 +164,7 @@ def test_cycles_only_row_degrades():
            "median_cycles": "48000", "macs": "16000", "prepare_cycles": "", "ARM_PMU_CPU_CYCLES": "48000"}
     result = explain_case(row, cpu="cortex-m4")
     assert [f.rule for f in result.findings] == ["no_counters"]
-    assert result.pct_of_peak == pytest.approx(0.25)
+    assert result.pct_of_peak == pytest.approx(25.0)
     assert "ARM_PMU_INST_RETIRED" in result.missing_counters
     json.dumps(result.to_dict())
 
