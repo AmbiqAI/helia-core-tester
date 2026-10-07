@@ -27,6 +27,7 @@ import re
 import shlex
 import selectors
 import signal
+import struct
 import subprocess
 import tarfile
 import tempfile
@@ -213,12 +214,15 @@ _SECTION_OK = re.compile(
     r"^(?:\.rela?(?=\.))?(?:(?:\.text|\.rodata|\.data|\.bss|\.debug_\w+)(?:\..*)?"
     r"|\.ARM\.(?:attributes|exidx|extab)|\.comment|\.note\.GNU-stack|\.group|\.(?:sym|str|shstr)tab|)$"
 )
-_SECTION_ROW = re.compile(r"^\s*\[\s*(\d+)\]\s+(\S*)\s+([A-Z][A-Z0-9_]*)\s+[0-9a-f]{8}\s+\S+\s+\S+\s+\S+\s+([A-Z]*)")
+# Other names fail closed: no parser chasing.
+_PLAIN_NAME = re.compile(r"[A-Za-z0-9._$]+")
+# ELF flag bits, as readelf letters.
+_FLAG_LETTERS = ((0x1, "W"), (0x2, "A"), (0x4, "X"), (0x10, "M"), (0x20, "S"), (0x40, "I"), (0x80, "L"),
+                 (0x200, "G"), (0x400, "T"))
+_PROGBITS, _NOBITS, _RELA, _REL = 1, 8, 4, 9
 _ADDRESS_INSN = re.compile(r"\t(?:mov|movw|movt|ldr)\S*\t|\t\.word\t")
 _IMMEDIATE = re.compile(r"#(-?(?:0x[0-9a-fA-F]+|\d+))|\.word\t(0x[0-9a-fA-F]+)")
-_CONTENTS = re.compile(r"^Contents of section (\S+):")
-_DUMP_ROW = re.compile(r"^ [0-9a-f]+ ((?:[0-9a-f]{2,8} ){1,4})")
-_RELOC_SECTION = re.compile(r"^Relocation section '\.rela?(\S+)'")
+_RELOC_SECTION = re.compile(r"^Relocation section '.*' at offset")
 _SYMBOL_ROW = re.compile(r"^\s*\d+:\s+[0-9a-f]+\s+\d+\s+(\w+)\s+\w+\s+\w+\s+(\d+)\s+(\S+)")
 # Mapping symbols mark code: $t, $a.
 _CODE_SYMBOL = re.compile(r"^\$[ta](?:\.|$)")
@@ -271,22 +275,35 @@ def _preprocess_args(args: list[str], source: str) -> tuple[str, ...]:
     return tuple(kept)
 
 
-def _section_bytes(obj: Path, names: list[str]) -> dict[str, bytes]:
-    """Contents of the named sections."""
-    if not names:
-        return {}
-    found: dict[str, bytearray] = {}
-    current = None
-    args = [arg for name in names for arg in ("-j", name)]
-    for line in run_binutil("arm-none-eabi-objdump", ["-s", *args, str(obj)]).splitlines():
-        header = _CONTENTS.match(line)
-        if header:
-            current = found.setdefault(header.group(1), bytearray())
-            continue
-        row = _DUMP_ROW.match(line)
-        if row and current is not None:
-            current += bytes.fromhex("".join(row.group(1).split()))
-    return {name: bytes(data) for name, data in found.items()}
+def elf_sections(obj: Path) -> list[tuple[str, int, str, bytes, int]]:
+    """(name, type, flags, data, info) per section.
+
+    Read from the ELF32 little-endian section table, not readelf text,
+    so no name spelling can hide a section.
+    """
+    raw = obj.read_bytes()
+    if raw[:4] != b"\x7fELF" or raw[4:6] != b"\x01\x01":
+        raise ValueError(f"{obj.name}: not ELF32 little-endian")
+    try:
+        shoff, = struct.unpack_from("<I", raw, 0x20)
+        entsize, count, names_index = struct.unpack_from("<HHH", raw, 0x2E)
+        headers = [struct.unpack_from("<10I", raw, shoff + i * entsize) for i in range(count or 1)]
+        # Extended numbering keeps counts in section 0.
+        count = count or headers[0][5]
+        headers = [struct.unpack_from("<10I", raw, shoff + i * entsize) for i in range(count)]
+        names_index = headers[0][6] if names_index == 0xFFFF else names_index
+        table = headers[names_index]
+    except (struct.error, IndexError) as exc:
+        raise ValueError(f"{obj.name}: bad section table: {exc}") from exc
+    strings = raw[table[4]:table[4] + table[5]]
+    sections = []
+    for name_at, kind, flags, _, offset, size, _, info, _, _ in headers:
+        if name_at >= len(strings) or (kind != _NOBITS and offset + size > len(raw)):
+            raise ValueError(f"{obj.name}: section out of bounds")
+        name = strings[name_at:strings.index(b"\0", name_at)].decode(errors="replace")
+        data = raw[offset:offset + size] if kind != _NOBITS else b""
+        sections.append((name, kind, "".join(letter for bit, letter in _FLAG_LETTERS if flags & bit), data, info))
+    return sections
 
 
 def _object_hits(source: str, obj: Path, defined: frozenset[str]) -> list[dict]:
@@ -294,17 +311,15 @@ def _object_hits(source: str, obj: Path, defined: frozenset[str]) -> list[dict]:
     hits, sections, names = [], {}, {}
     # Locals resolve only inside this object.
     local = _defined_symbols([obj], local=True)
-    for row in run_binutil("arm-none-eabi-readelf", ["-SW", str(obj)]).splitlines():
-        match = _SECTION_ROW.match(row)
-        if not match:
-            continue
-        index, name, kind, flags = match.groups()
-        names[index] = name
+    table = elf_sections(obj)
+    for index, (name, kind, flags, _, _) in enumerate(table):
+        names[str(index)] = name
         # Code may live in .text only.
-        if not _SECTION_OK.match(name) or ("X" in flags and not name.startswith(".text")):
-            hits.append({"rule": "object_section", "path": source, "text": f"{name} {flags}"})
-        if kind == "PROGBITS" and "A" in flags:
-            sections[name] = flags
+        odd = index and not _PLAIN_NAME.fullmatch(name)
+        if odd or not _SECTION_OK.match(name) or ("X" in flags and not name.startswith(".text")):
+            hits.append({"rule": "object_section", "path": source, "text": f"{repr(name) if odd else name} {flags}"[:200]})
+        if kind == _PROGBITS and "A" in flags:
+            sections[index] = flags
 
     # Code outside .text, whatever its flags.
     homes = {}
@@ -330,25 +345,29 @@ def _object_hits(source: str, obj: Path, defined: frozenset[str]) -> list[dict]:
             # movt loads the top half.
             if SCS_LOW <= value <= SCS_HIGH or ("\tmovt" in line and SCS_LOW >> 16 <= value <= SCS_HIGH >> 16):
                 hit(line.strip())
-    contents = _section_bytes(obj, list(sections))
-    for name, data in contents.items():
+    contents = {index: table[index][3] for index in sections}
+    for index, data in contents.items():
         # Any byte offset: loads may be unaligned.
         words = (int.from_bytes(data[i:i + 4], "little") for i in range(len(data) - 3))
-        if "X" not in sections[name] and any(SCS_LOW <= word <= SCS_HIGH for word in words):
-            hit(f"SCS address in {name}")
-    section = None
+        if "X" not in sections[index] and any(SCS_LOW <= word <= SCS_HIGH for word in words):
+            hit(f"SCS address in {table[index][0]}")
+    # readelf lists reloc sections in table order.
+    targets = iter([info for _, kind, _, _, info in table if kind in (_REL, _RELA)])
+    expected, seen_relocs = sum(kind in (_REL, _RELA) for _, kind, _, _, _ in table), 0
+    target = None
     for line in run_binutil("arm-none-eabi-readelf", ["-rW", str(obj)]).splitlines():
-        header = _RELOC_SECTION.match(line)
-        if header:
-            section = header.group(1)
+        if _RELOC_SECTION.match(line):
+            seen_relocs += 1
+            target = next(targets, None)
             continue
         row = _RELOC_ROW.match(line)
-        if not row or section not in contents:
+        if not row or target not in contents:
             continue
+        section = table[target][0]
         offset, kind, symbol = int(row.group(1), 16), row.group(2), row.group(3)
         # Symbol plus addend can reach any address.
         if kind == "R_ARM_ABS32":
-            addend = int.from_bytes(contents[section][offset:offset + 4], "little", signed=True)
+            addend = int.from_bytes(contents[target][offset:offset + 4], "little", signed=True)
             if not 0 <= addend < _ADDEND_MAX:
                 hit(f"{symbol}{addend:+#x} in {section}")
         home = homes.get(symbol, "")
@@ -356,6 +375,8 @@ def _object_hits(source: str, obj: Path, defined: frozenset[str]) -> list[dict]:
             hits.append({"rule": "object_section", "path": source, "text": f"branch to {symbol} in {home}"})
         if kind not in _CALLS and not symbol.startswith(".") and symbol not in defined | local:
             hit(f"{kind} to {symbol} in {section}")
+    if seen_relocs != expected:
+        raise ValueError(f"{obj.name}: read {seen_relocs} of {expected} reloc sections")
     return hits
 
 

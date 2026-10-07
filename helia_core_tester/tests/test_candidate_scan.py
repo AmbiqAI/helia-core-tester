@@ -136,6 +136,23 @@ def test_object_scan_flags_code_in_data(tmp_path: Path) -> None:
 
 
 @needs_gcc
+@pytest.mark.parametrize("name", ["data hidden", "data\\thidden"])
+def test_odd_section_name_flagged(tmp_path: Path, name: str) -> None:
+    source = f'.section ".{name}","aw"\n.word 0xE0001004\n'
+    findings, _, _ = candidate_scan.object_findings(_build(tmp_path, source, name="k.S"))
+    rules = {f["rule"] for f in findings}
+    assert any(f["rule"] == "object_section" and "hidden" in f["text"] for f in findings)
+    assert "object_address" in rules
+
+
+def test_bad_elf_fails(tmp_path: Path) -> None:
+    obj = tmp_path / "k.o"
+    obj.write_bytes(b"\x7fELF\x01\x01" + bytes(10))
+    with pytest.raises(ValueError):
+        candidate_scan.elf_sections(obj)
+
+
+@needs_gcc
 def test_object_scan_clean(tmp_path: Path) -> None:
     source = "unsigned f(unsigned x) { return x > 0xE0000000u ? x : ~x; }\nconst int t[2] = {1, 2};\n"
     findings, summary, _ = candidate_scan.object_findings(_build(tmp_path, source))
