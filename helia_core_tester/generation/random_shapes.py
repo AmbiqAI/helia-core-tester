@@ -390,31 +390,24 @@ def hidden_cases(n: int, secret: bytes, cpu: str) -> list[dict[str, Any]]:
     return cases
 
 
-def check_hidden_paths(hidden_dir: Path, repo_root: Path, cpu: str, suite: str = "int", generated: Path | None = None) -> None:
-    """Refuse hidden writes that escape DIR."""
+def check_hidden_paths(hidden_dir: Path, repo_root: Path, cpu: str, suite: str = "int") -> None:
+    """Refuse hidden writes that could touch the checkout."""
     from helia_core_tester.core.path_layout import generated_tests_dir, generation_report_dir
 
     root, repo = Path(hidden_dir).resolve(), Path(repo_root).resolve()
-    if root.is_relative_to(repo):
-        raise ValueError(f"{root} must sit outside the tester tree")
-    targets = (
-        generated or generated_tests_dir(root, normalize_cpu(cpu), suite=suite),
+    # Deleting either would reach the other.
+    if root.is_relative_to(repo) or repo.is_relative_to(root):
+        raise ValueError(f"{root} must neither hold nor sit inside the checkout")
+    for target in (
+        generated_tests_dir(root, normalize_cpu(cpu), suite=suite),
         hidden_root(root, cpu),
         generation_report_dir(root, normalize_cpu(cpu), suite=suite),
-    )
-    # Resolve symlinks before checking containment.
-    for target in targets:
-        real = Path(target).resolve()
-        if not real.is_relative_to(root) or real.is_relative_to(repo):
-            raise ValueError(f"{target} must stay under {root}")
-        _refuse_links(root, Path(target))
+    ):
+        _refuse_links(root, target)
 
 
 def _refuse_links(root: Path, target: Path) -> None:
     """Refuse any symlink from root through target."""
-    target = Path(os.path.abspath(target))
-    if not target.is_relative_to(root):
-        raise ValueError(f"{target} must stay under {root}")
     path = root
     for part in target.relative_to(root).parts:
         path = path / part

@@ -123,7 +123,11 @@ def test_explicit_zero_seed_beats_env(monkeypatch: pytest.MonkeyPatch) -> None:
     ({"random_shapes": 2, "shape_seed": 2**32}, "shape_seed must be in"),
     ({"random_shapes": 2, "suite": "float"}, "needs the int suite"),
     ({"hidden_dir": "/tmp/hidden"}, "needs random_shapes"),
-    ({"random_shapes": 2, "hidden_dir": "artifacts/hidden"}, "outside the tester tree"),
+    ({"random_shapes": 2, "hidden_dir": "artifacts/hidden"}, "neither hold nor sit inside"),
+    ({"random_shapes": 2, "hidden_dir": ".."}, "neither hold nor sit inside"),
+    ({"random_shapes": 2, "hidden_dir": "/tmp/h", "hidden_seed_file": "/tmp/h/artifacts/seed.txt"}, "and hidden_dir"),
+    ({"random_shapes": 2, "hidden_dir": "/tmp/h", "generated_tests_root": "/tmp/g"}, "no generated_tests_root"),
+    ({"random_shapes": 2, "hidden_dir": "/tmp/h", "reports_root": "/tmp/r"}, "no reports_root"),
     ({"random_shapes": 2, "hidden_dir": "/tmp/h", "hidden_seed_file": "seed.txt"}, "outside the tester tree"),
     ({"random_shapes": 2, "hidden_seed_file": "/tmp/seed"}, "needs hidden_dir"),
     ({"hidden_seed_file": "/tmp/seed"}, "needs hidden_dir"),
@@ -233,7 +237,7 @@ def test_step_passes_hidden_flags(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     step = GenerateStep(config)
     cmd = step._build_cmd("cortex-m55", "int")
     assert "--shape-seed" not in cmd and cmd[cmd.index("--hidden-dir") + 1] == str(tmp_path / "h")
-    assert cmd[cmd.index("--generated-tests-dir") + 1] == str(tmp_path / "h/artifacts/generated_tests/int/cortex-m55")
+    assert "--generated-tests-dir" not in cmd
     assert step.validate()
     seed_file.write_text(SECRET + "\n")
     assert step.validate() is None
@@ -303,10 +307,12 @@ def test_direct_pytest_hidden_guard(tmp_path: Path) -> None:
     conftest._guard_hidden(config)
     assert (config.option.tbstyle, config.option.showlocals, config.option.fulltrace) == ("native", False, False)
     in_tree = _guard_options(**{"--hidden-dir": str(Path.cwd() / "artifacts" / "h")})
-    with pytest.raises(pytest.UsageError, match="outside the tester tree"):
+    with pytest.raises(pytest.UsageError, match="neither hold nor sit inside"):
         conftest._guard_hidden(in_tree)
-    escaped = _guard_options(**{"--hidden-dir": str(tmp_path), "--generated-tests-dir": str(Path.cwd() / "artifacts")})
-    with pytest.raises(pytest.UsageError, match="must stay under"):
+    with pytest.raises(pytest.UsageError, match="neither hold nor sit inside"):
+        conftest._guard_hidden(_guard_options(**{"--hidden-dir": str(Path.cwd().parent)}))
+    escaped = _guard_options(**{"--hidden-dir": str(tmp_path), "--generated-tests-dir": str(tmp_path)})
+    with pytest.raises(pytest.UsageError, match="takes no --generated-tests-dir"):
         conftest._guard_hidden(escaped)
     conftest._guard_hidden(_guard_options())
 
@@ -319,9 +325,9 @@ def test_symlinked_hidden_dest_refused(tmp_path: Path, leaf: str) -> None:
     hidden = tmp_path / "hidden"
     (hidden / "artifacts").mkdir(parents=True)
     (hidden / "artifacts" / leaf).symlink_to(Path.cwd() / "artifacts", target_is_directory=True)
-    with pytest.raises(pytest.UsageError, match="must stay under"):
+    with pytest.raises(pytest.UsageError, match="is a symlink"):
         conftest._guard_hidden(_guard_options(**{"--hidden-dir": str(hidden)}))
-    with pytest.raises(ConfigurationError, match="must stay under"):
+    with pytest.raises(ConfigurationError, match="is a symlink"):
         Config(project_root=Path.cwd(), random_shapes=2, hidden_dir=hidden)
 
 
@@ -364,3 +370,23 @@ def test_pruning_never_follows_links(tmp_path: Path) -> None:
     link.symlink_to(outside, target_is_directory=True)
     reset_case_dir(link)
     assert not link.is_symlink() and (outside / "case").is_dir()
+
+
+def test_hidden_outputs_report_hidden_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import subprocess
+
+    import helia_core_tester.core.steps.generate as generate_module
+
+    monkeypatch.setenv(rs.SECRET_ENV, SECRET)
+    step = GenerateStep(Config(project_root=Path.cwd(), random_shapes=2, hidden_dir=tmp_path / "h"))
+    expected = str(tmp_path / "h" / "artifacts" / "generated_tests")
+    assert step.dry_run().outputs["generated_tests_root"] == expected
+    assert step._plan_details().outputs["generated_tests_root"] == expected
+    monkeypatch.setattr(generate_module, "run_command", lambda *a, **k: None)
+    assert step._do_execute().outputs["generated_tests_root"] == expected
+
+    def _fail(*_args, **_kwargs):
+        raise subprocess.CalledProcessError(1, "pytest")
+
+    monkeypatch.setattr(generate_module, "run_command", _fail)
+    assert step._do_execute().outputs["generated_tests_root"] == expected

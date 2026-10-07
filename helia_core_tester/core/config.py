@@ -337,9 +337,19 @@ class Config:
             return
         if "shape_seed" in self._explicit_overrides:
             raise ConfigurationError("hidden_dir takes a secret, not shape_seed")
-        # The agent may read the tree.
-        if self.hidden_seed_file is not None and self.hidden_seed_file.is_relative_to(self.project_root):
-            raise ConfigurationError(f"{self.hidden_seed_file} must sit outside the tester tree")
+        # Hidden outputs all derive from DIR.
+        moved = [
+            name for name, default in (
+                ("generated_tests_root", generated_tests_root(self.project_root)),
+                ("reports_root", reports_root(self.project_root)),
+            ) if getattr(self, name) != default
+        ]
+        if moved:
+            raise ConfigurationError(f"hidden_dir takes no {', '.join(moved)} override")
+        # The agent may read the tree; generation wipes DIR.
+        seed = self.hidden_seed_file
+        if seed is not None and (seed.is_relative_to(self.project_root) or seed.is_relative_to(self.hidden_dir)):
+            raise ConfigurationError(f"{seed} must sit outside the tester tree and hidden_dir")
         from helia_core_tester.generation.random_shapes import check_hidden_paths
 
         try:
