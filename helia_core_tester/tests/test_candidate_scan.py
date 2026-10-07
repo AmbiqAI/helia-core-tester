@@ -7,7 +7,10 @@ import os
 import shutil
 import subprocess
 import tarfile
+import threading
 import time
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -190,3 +193,35 @@ def test_first_failure_stops_scan(kernels: Path) -> None:
         (kernels / f"Source/Conv/bad{index}.c").write_text("#error no\n", encoding="utf-8")
     found = candidate_scan.preprocess_findings(kernels, bytes(1024), rule_counts)
     assert len(found) == 1 and found[0]["rule"] == "scan_error"
+
+
+def test_worker_returns_counts(tmp_path: Path, monkeypatch) -> None:
+    # 4 MiB of kernel text, one hit.
+    gcc = _fake_gcc(tmp_path, 'echo \'# 1 "Source/u.c"\'; echo "_Pragma(1)"; head -c 4194304 /dev/zero | tr "\\0" x; echo')
+    found = candidate_scan._unit_counts(gcc, tmp_path, "Source/u.c", (), time.monotonic() + 30, "", rule_counts)
+    assert set(found) == {"Source/u.c"}
+    assert isinstance(found["Source/u.c"], Counter) and found["Source/u.c"]["pragma"] == 1
+
+
+def test_jobs_in_flight_bounded(tmp_path: Path, monkeypatch) -> None:
+    peak, live, lock = [0], [0], threading.Lock()
+
+    class Pool(ThreadPoolExecutor):
+        def submit(self, fn, *args):
+            def run():
+                try:
+                    return fn(*args)
+                finally:
+                    with lock:
+                        live[0] -= 1
+            with lock:
+                live[0] += 1
+                peak[0] = max(peak[0], live[0])
+            return super().submit(run)
+
+    monkeypatch.setattr(candidate_scan, "ProcessPoolExecutor", Pool)
+    monkeypatch.setattr(candidate_scan, "scan_workers", lambda: 2)
+    gcc = _fake_gcc(tmp_path, "sleep 0.05")
+    counts, failed = candidate_scan._tree_counts(gcc, _many_units(tmp_path, 12), rule_counts, {"c": ()},
+                                                 time.monotonic() + 30, str(tmp_path / "abort"))
+    assert counts == {} and not failed and peak[0] <= 2

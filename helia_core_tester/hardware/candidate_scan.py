@@ -15,6 +15,7 @@ runs are killed and one scan_error names the cause.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import os
 import re
@@ -25,7 +26,8 @@ import tarfile
 import tempfile
 import time
 from collections import Counter
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
+from itertools import islice
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -146,39 +148,76 @@ def _preprocess(
     return {origin: "".join(chunks) for origin, chunks in by_file.items()}
 
 
+def scan_workers() -> int:
+    """Pool size, and jobs in flight."""
+    return max(1, os.cpu_count() or 1)
+
+
+# Worker-side counts, keyed by text digest.
+_MEMO: dict[bytes, Counter] = {}
+
+
+def _unit_counts(
+    gcc: str, root: Path, unit: str, flags: tuple[str, ...], deadline: float, abort: str,
+    rule_counts: Callable[[str], Counter],
+) -> Optional[dict[str, Counter]]:
+    """Rule counts of one unit, by origin.
+
+    Runs in the worker, so only counts reach the parent.
+    """
+    by_file = _preprocess(gcc, root, unit, flags, deadline, abort)
+    if by_file is None:
+        return None
+    counts = {}
+    for origin, text in by_file.items():
+        # Headers repeat across units.
+        key = hashlib.blake2b(text.encode(errors="replace"), digest_size=16).digest()
+        if key not in _MEMO:
+            _MEMO[key] = rule_counts(text)
+        counts[origin] = _MEMO[key]
+    return counts
+
+
 def _tree_counts(
     gcc: str, root: Path, rule_counts: Callable[[str], Counter], configs: dict, deadline: float, abort: str,
     fatal: Callable[[str], bool] = lambda key: False,
 ) -> tuple[dict, set[str]]:
     """Max rule counts per origin, plus failed units.
 
-    Raises TimeoutError past the deadline, ScanStopped on a fatal
-    failure; either way after killing every outstanding run.
+    At most scan_workers() jobs are in flight. Raises TimeoutError past
+    the deadline, ScanStopped on a fatal failure; either way after
+    killing every outstanding run.
     """
     counts: dict[tuple[str, str], Counter] = {}
-    memo: dict[str, Counter] = {}
     failed: set[str] = set()
+    jobs = iter([(config, unit) for config in configs for unit in _units(root)])
+    window = scan_workers()
+    pending: dict[Future, tuple[str, str]] = {}
     # Parsing gcc -E output is CPU bound.
-    pool = ProcessPoolExecutor()
+    pool = ProcessPoolExecutor(max_workers=window)
     try:
-        futures = {pool.submit(_preprocess, gcc, root, unit, configs[config], deadline, abort): (config, unit)
-                   for config in configs for unit in _units(root)}
-        for future in as_completed(futures, timeout=max(0.0, deadline - time.monotonic())):
-            config, unit = futures[future]
-            by_file = future.result()
-            if by_file is None:
-                if time.monotonic() >= deadline:
-                    raise TimeoutError
-                failed.add(f"{config}:{unit}")
-                if fatal(f"{config}:{unit}"):
-                    raise ScanStopped(unit, f"gcc -E failed for {config}:{unit}")
-                continue
-            for origin, text in by_file.items():
-                # Headers repeat across units.
-                if text not in memo:
-                    memo[text] = rule_counts(text)
-                key = (config, origin)
-                counts[key] = counts.get(key, Counter()) | memo[text]
+        while True:
+            for config, unit in islice(jobs, window - len(pending)):
+                job = pool.submit(_unit_counts, gcc, root, unit, configs[config], deadline, abort, rule_counts)
+                pending[job] = (config, unit)
+            if not pending:
+                break
+            done, _ = wait(pending, timeout=max(0.0, deadline - time.monotonic()), return_when=FIRST_COMPLETED)
+            if not done:
+                raise TimeoutError
+            for future in done:
+                config, unit = pending.pop(future)
+                found = future.result()
+                if found is None:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError
+                    failed.add(f"{config}:{unit}")
+                    if fatal(f"{config}:{unit}"):
+                        raise ScanStopped(unit, f"gcc -E failed for {config}:{unit}")
+                    continue
+                for origin, found_counts in found.items():
+                    key = (config, origin)
+                    counts[key] = counts.get(key, Counter()) | found_counts
     except BaseException:
         # Running workers poll this file.
         Path(abort).touch()
