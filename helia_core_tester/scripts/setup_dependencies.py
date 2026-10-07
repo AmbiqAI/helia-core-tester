@@ -18,8 +18,10 @@ Usage:
 
 import argparse
 import hashlib
+import os
 import platform
 import shutil
+import ssl
 import subprocess
 import sys
 import tarfile
@@ -27,6 +29,8 @@ import tempfile
 import urllib.request
 from pathlib import Path
 from typing import Optional
+
+import certifi
 
 from helia_core_tester.core.discovery import find_repo_root
 
@@ -74,6 +78,16 @@ def get_os() -> str:
 
 
 
+def tls_context() -> ssl.SSLContext:
+    """Return a verifying TLS context for downloads."""
+    ctx = ssl.create_default_context()
+    if os.environ.get("SSL_CERT_FILE") or os.environ.get("SSL_CERT_DIR"):
+        return ctx
+    # uv's CPython on NixOS lacks CAs.
+    ctx.load_verify_locations(cafile=certifi.where())
+    return ctx
+
+
 def download_file(url: str, dest_path: Path, description: str, expected_sha256: str) -> None:
     """Download a file from URL to destination path, verifying its SHA-256 digest.
 
@@ -88,7 +102,7 @@ def download_file(url: str, dest_path: Path, description: str, expected_sha256: 
 
     hasher = hashlib.sha256()
     try:
-        with urllib.request.urlopen(url) as response:
+        with urllib.request.urlopen(url, context=tls_context()) as response:
             with open(dest_path, 'wb') as f:
                 while True:
                     chunk = response.read(1024 * 1024)
