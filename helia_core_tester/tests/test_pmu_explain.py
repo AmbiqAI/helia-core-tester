@@ -95,6 +95,13 @@ def test_instruction_overhead():
     assert _rules(_row(INST_RETIRED=8000, MVE_INST_RETIRED=6000))[0] == "instruction_overhead"
 
 
+def test_depthwise_has_own_target():
+    conv = explain_case(_row(), cpu=M55)
+    dw = explain_case(_row() | {"inner_symbol": "arm_depthwise_conv_s8_opt"}, cpu=M55)
+    assert conv.ceiling["target_inst_per_mac_instr"] == 2.6
+    assert dw.ceiling["target_inst_per_mac_instr"] == 5.9
+
+
 def test_underfilled_vectors():
     assert "underfilled_vectors" in _rules(_row(MVE_INT_MAC_RETIRED=2000, INST_RETIRED=5000, MVE_INST_RETIRED=4000))
 
@@ -201,7 +208,8 @@ def test_explain_cli_json(tmp_path):
     assert result.exit_code == 0, result.output
     data = json.loads(result.output)
     assert data["schema_version"] == SCHEMA_VERSION
-    assert [case["case_id"] for case in data["bundles"][0]["cases"]] == ["c"]
+    assert [case["case_id"] for case in data["cases"]] == ["c"]
+    assert data["cases"][0]["bundle"] == str(bundle) and "cases" not in data["bundles"][0]
     result = CliRunner().invoke(app, ["explain", str(tmp_path), "--op", "softmax", "--all"])
     assert result.exit_code == 0 and "softmax" in result.output
     result = CliRunner().invoke(app, ["explain", str(tmp_path), "--op", "depthwise"])

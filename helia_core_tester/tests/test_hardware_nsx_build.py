@@ -387,7 +387,7 @@ def test_run_flags_reach_the_pipeline(tmp_path: Path, monkeypatch) -> None:
     result = runner.invoke(app, [
         "hardware", "run", "--skip-generate", "--cmsis-nn-ref", "v1.0.0", "--build-dir", str(tmp_path),
     ])
-    assert result.exit_code == 1
+    assert result.exit_code == 5
     assert seen["app_options"] == AppOptions(cmsis_nn_ref="v1.0.0", cmsis_nn_ref_explicit=True)
     assert seen["update_dependencies"] is False
 
@@ -416,7 +416,7 @@ def test_default_kernels_follow_layout(tmp_path: Path, monkeypatch, nested: bool
 
 def test_kernel_ref_and_root_are_exclusive(tmp_path: Path) -> None:
     result = runner.invoke(app, ["hardware", "build", "--cmsis-nn-ref", "v1", "--cmsis-nn-root", str(tmp_path)])
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     assert "not both" in result.output
 
 
@@ -450,22 +450,23 @@ def bench(tmp_path: Path, nsx: list[tuple], monkeypatch) -> dict:
     return board
 
 
-def test_bare_flash_flashes_what_was_built(tmp_path: Path, nsx: list[tuple], bench: dict) -> None:
+def test_flash_flashes_what_was_built(tmp_path: Path, nsx: list[tuple], bench: dict) -> None:
     build_dir = tmp_path / "build"
     _cli(build_dir, "build", "--no-inline-asm")
     built = firmware_build.read_build_id(build_dir)
 
     nsx.clear()
-    out = _cli(build_dir, "flash")
+    out = _cli(build_dir, "flash", "--no-inline-asm")
     assert "inline asm off" in out and "Options changed" not in out
     assert "Firmware flashed successfully" in out and bench["id"] == built
     # No relock, resync or reconfigure.
     assert _steps(nsx) == ["render", "build"] and nsx[0][1].requantize_inline_asm is False
 
-    out = _cli(build_dir, "flash")
+    out = _cli(build_dir, "flash", "--no-inline-asm")
     assert f"board confirmed build id {built}" in out and "already up to date" in out
 
-    out = _cli(build_dir, "flash", "--inline-asm")
+    # Unpassed switches reset to defaults.
+    out = _cli(build_dir, "flash")
     assert "Options changed, rebuilding: requantize inline asm off -> on" in out
     assert "Firmware flashed successfully" in out and bench["id"] != built
     assert nsx_app.saved_options(firmware_build.nsx_app_dir(build_dir)).requantize_inline_asm is True
@@ -477,11 +478,11 @@ def test_flags_override_saved_options(tmp_path: Path) -> None:
     app_dir.mkdir(parents=True)
     nsx_app.save_options(app_dir, AppOptions(cmsis_nn_root=kernels, requantize_inline_asm=False))
     resolve = lambda **flags: nsx_app.resolve_options(app_dir, tmp_path, **flags)  # noqa: E731
-    assert resolve() == AppOptions(cmsis_nn_root=kernels, requantize_inline_asm=False)
-    assert resolve(cmsis_nn_ref="v2") == AppOptions(
-        cmsis_nn_ref="v2", cmsis_nn_ref_explicit=True, requantize_inline_asm=False,
-    )
-    assert resolve(inline_asm=True) == AppOptions(cmsis_nn_root=kernels)
+    # Kernel source stays; switches reset.
+    assert resolve() == AppOptions(cmsis_nn_root=kernels)
+    assert resolve(cmsis_nn_ref="v2") == AppOptions(cmsis_nn_ref="v2", cmsis_nn_ref_explicit=True)
+    assert resolve(inline_asm=False) == AppOptions(cmsis_nn_root=kernels, requantize_inline_asm=False)
+    assert resolve(follow_pin=False) == AppOptions(cmsis_nn_root=kernels, requantize_inline_asm=False)
 
 
 def test_defaulted_ref_follows_the_pin(tmp_path: Path, nsx: list[tuple]) -> None:
@@ -531,7 +532,7 @@ def test_missing_saved_root_fails_clearly(tmp_path: Path) -> None:
     app_dir.mkdir(parents=True)
     nsx_app.save_options(app_dir, AppOptions(cmsis_nn_root=tmp_path / "moved"))
     result = runner.invoke(app, ["hardware", "build", "--build-dir", str(tmp_path)])
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert "kernel root is gone" in result.output and "--cmsis-nn-root" in result.output
 
 
