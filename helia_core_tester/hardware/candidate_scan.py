@@ -8,7 +8,9 @@ core in CONFIGS. Lines are credited to the kernel file they came from
 (system headers drop out), and a rule whose count grows in a file is
 a finding. Counts per file: swapping one existing hit for another
 stays unseen. Each gcc -E run has a time and output cap; a unit
-that hits either is a scan_error.
+that hits either is a scan_error. The whole scan has a deadline and a
+unit limit: past either, or at the first new failure, outstanding
+runs are killed and one scan_error names the cause.
 
 With a build dir, `gcc -E` also runs with that build's own compile
 args (board and SoC macros, include paths), and each kernel object
@@ -33,8 +35,7 @@ import tarfile
 import tempfile
 import time
 from collections import Counter
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
-from itertools import repeat
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -51,6 +52,11 @@ TIMEOUT_S = 30.0
 OUTPUT_CAP = 64 << 20
 # Output all workers may buffer.
 SCAN_MEMORY_BUDGET = 256 << 20
+# Whole-scan limits.
+SCAN_DEADLINE_S = 300.0
+MAX_UNITS = 2000
+# Abort-file poll interval.
+_POLL_S = 0.25
 _MARKER = re.compile(r'^#\s*\d+\s+"([^"]*)".*$', re.MULTILINE)
 
 
@@ -58,8 +64,16 @@ def _units(root: Path) -> list[str]:
     return sorted(p.relative_to(root).as_posix() for ext in ("*.c", "*.S") for p in (root / "Source").rglob(ext))
 
 
-def run_capped(cmd: list[str], cwd: Path, timeout: float, cap: int) -> Optional[bytes]:
-    """Stdout, or None on failure or cap."""
+class ScanStopped(Exception):
+    """The scan hit a limit or failed."""
+
+    def __init__(self, path: str, message: str) -> None:
+        super().__init__(message)
+        self.finding = {"rule": "scan_error", "path": path, "message": message}
+
+
+def run_capped(cmd: list[str], cwd: Path, timeout: float, cap: int, abort: str = "") -> Optional[bytes]:
+    """Stdout, or None on failure, cap or abort file."""
     proc = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                             stderr=subprocess.DEVNULL, start_new_session=True)
     deadline = time.monotonic() + timeout
@@ -70,8 +84,10 @@ def run_capped(cmd: list[str], cwd: Path, timeout: float, cap: int) -> Optional[
             selector.register(proc.stdout, selectors.EVENT_READ)
             while True:
                 left = deadline - time.monotonic()
-                if left <= 0 or not selector.select(left):
+                if left <= 0 or (abort and os.path.exists(abort)):
                     return None
+                if not selector.select(min(left, _POLL_S)):
+                    continue
                 chunk = os.read(proc.stdout.fileno(), 1 << 16)
                 if not chunk:
                     break
@@ -132,9 +148,14 @@ def scan_workers() -> int:
     return max(1, min(os.cpu_count() or 1, SCAN_MEMORY_BUDGET // OUTPUT_CAP))
 
 
-def _preprocess(gcc: str, root: Path, unit: str, flags: tuple[str, ...]) -> Optional[dict[str, str]]:
+def _preprocess(
+    gcc: str, root: Path, unit: str, flags: tuple[str, ...], deadline: float, abort: str,
+) -> Optional[dict[str, str]]:
     """Kernel text of one unit, by origin."""
-    out = run_capped([gcc, "-E", *flags, "-IInclude", unit], root, TIMEOUT_S, OUTPUT_CAP)
+    timeout = min(TIMEOUT_S, deadline - time.monotonic())
+    if timeout <= 0:
+        return None
+    out = run_capped([gcc, "-E", *flags, "-IInclude", unit], root, timeout, OUTPUT_CAP, abort)
     if out is None:
         return None
     stdout = out.decode(errors="replace")
@@ -154,20 +175,34 @@ def _unit_flags(config: tuple | dict, unit: str) -> tuple[str, ...]:
     return config.get(unit, config["*"]) if isinstance(config, dict) else config
 
 
-def _tree_counts(gcc: str, root: Path, rule_counts: Callable[[str], Counter], configs: dict) -> tuple[dict, set[str]]:
-    """Max rule counts per origin, plus failed units."""
+def _tree_counts(
+    gcc: str, root: Path, rule_counts: Callable[[str], Counter], configs: dict, deadline: float, abort: str,
+    fatal: Callable[[str], bool] = lambda key: False,
+) -> tuple[dict, set[str]]:
+    """Max rule counts per origin, plus failed units.
+
+    Raises TimeoutError past the deadline, ScanStopped on a fatal
+    failure; either way after killing every outstanding run.
+    """
     counts: dict[tuple[str, str], Counter] = {}
     memo: dict[str, Counter] = {}
     failed: set[str] = set()
-    jobs = [(config, unit) for config in configs for unit in _units(root)]
     # Parsing gcc -E output is CPU bound.
-    with ProcessPoolExecutor(max_workers=scan_workers()) as pool:
+    pool = ProcessPoolExecutor(max_workers=scan_workers())
+    try:
+        jobs = [(config, unit) for config in configs for unit in _units(root)]
         # A dict config holds per-unit flags.
-        flags = [_unit_flags(configs[config], unit) for config, unit in jobs]
-        results = pool.map(_preprocess, repeat(gcc), repeat(root), [unit for _, unit in jobs], flags, chunksize=8)
-        for (config, unit), by_file in zip(jobs, results):
+        futures = {pool.submit(_preprocess, gcc, root, unit, _unit_flags(configs[config], unit), deadline, abort):
+                   (config, unit) for config, unit in jobs}
+        for future in as_completed(futures, timeout=max(0.0, deadline - time.monotonic())):
+            config, unit = futures[future]
+            by_file = future.result()
             if by_file is None:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError
                 failed.add(f"{config}:{unit}")
+                if fatal(f"{config}:{unit}"):
+                    raise ScanStopped(unit, f"gcc -E failed for {config}:{unit}")
                 continue
             for origin, text in by_file.items():
                 # Headers repeat across units.
@@ -175,30 +210,46 @@ def _tree_counts(gcc: str, root: Path, rule_counts: Callable[[str], Counter], co
                     memo[text] = rule_counts(text)
                 key = (config, origin)
                 counts[key] = counts.get(key, Counter()) | memo[text]
+    except BaseException:
+        # Running workers poll this file.
+        Path(abort).touch()
+        raise
+    finally:
+        pool.shutdown(wait=True, cancel_futures=True)
     return counts, failed
 
 
 def preprocess_findings(
     tree: Path, archive: bytes, rule_counts: Callable[[str], Counter], configs: dict = CONFIGS,
+    deadline_s: float = SCAN_DEADLINE_S,
 ) -> list[dict]:
     """Rules that grow after gcc -E.
 
     archive: base Include/ and Source/ as a tar.
     """
+    units = len(_units(tree))
+    if units > MAX_UNITS:
+        return [{"rule": "scan_error", "path": "", "message": f"too many units: {units} > {MAX_UNITS}"}]
     gcc = arm_tool("arm-none-eabi-gcc")
+    deadline = time.monotonic() + deadline_s
     with tempfile.TemporaryDirectory() as tmp:
-        base = Path(tmp)
+        base, abort = Path(tmp, "base"), str(Path(tmp, "abort"))
         try:
+            base.mkdir()
             extract_tar(archive, base)
-            before, base_failed = _tree_counts(gcc, base, rule_counts, configs)
-            after, failed = _tree_counts(gcc, tree, rule_counts, configs)
+            before, base_failed = _tree_counts(gcc, base, rule_counts, configs, deadline, abort)
+            # A unit the base built must build.
+            after, _ = _tree_counts(gcc, tree, rule_counts, configs, deadline, abort,
+                                         lambda key: key not in base_failed or key.startswith("build:"))
+        except TimeoutError:
+            return [{"rule": "scan_error", "path": "", "message": f"scan passed its {deadline_s:g} s deadline"}]
+        except ScanStopped as stop:
+            return [stop.finding]
         except (OSError, tarfile.TarError) as exc:
             return [{"rule": "scan_error", "path": "", "message": f"preprocess failed: {exc}"[:200]}]
-    findings = [{"rule": "scan_error", "path": unit.split(":", 1)[1], "message": f"gcc -E failed for {unit}"}
-                for unit in sorted(failed - base_failed | {u for u in failed if u.startswith("build:")})]
     # A config that never runs scans nothing.
-    findings += [{"rule": "scan_error", "path": "", "message": f"gcc -E failed for all of {config}"}
-                 for config in configs if _units(tree) and not any(key[0] == config for key in after)]
+    findings = [{"rule": "scan_error", "path": "", "message": f"gcc -E failed for all of {config}"}
+                for config in configs if _units(tree) and not any(key[0] == config for key in after)]
     seen: set[tuple[str, str]] = set()
     for (config, origin), found in sorted(after.items()):
         old = before.get((config, origin), Counter())

@@ -326,7 +326,7 @@ def test_binutil_output_is_capped(tmp_path: Path, monkeypatch) -> None:
 
 
 @needs_gcc
-@pytest.mark.skipif(not Path(CMSIS_NN_ROOT, ".git").exists(), reason="needs CMSIS_NN_ROOT checkout")
+@pytest.mark.skipif(not CMSIS_NN_ROOT or not Path(CMSIS_NN_ROOT, ".git").exists(), reason="needs CMSIS_NN_ROOT")
 def test_real_tree_clean(tmp_path: Path) -> None:
     root = tmp_path / "nn"
     subprocess.run(["git", "clone", "-q", CMSIS_NN_ROOT, str(root)], check=True)
@@ -343,3 +343,37 @@ def test_workers_fit_budget(monkeypatch, cpus, cap: int, want: int) -> None:
     monkeypatch.setattr(candidate_scan.os, "cpu_count", lambda: cpus)
     monkeypatch.setattr(candidate_scan, "OUTPUT_CAP", cap)
     assert candidate_scan.scan_workers() == want
+
+
+def _many_units(tmp_path: Path, count: int) -> Path:
+    root = tmp_path / "many"
+    for index in range(count):
+        (root / "Source" / f"u{index}.c").parent.mkdir(parents=True, exist_ok=True)
+        (root / "Source" / f"u{index}.c").write_text("int u;\n", encoding="utf-8")
+    return root
+
+
+def test_scan_deadline_stops_all(tmp_path: Path, monkeypatch) -> None:
+    gcc = _fake_gcc(tmp_path, "sleep 30")
+    monkeypatch.setattr(candidate_scan, "arm_tool", lambda name: gcc)
+    start = time.monotonic()
+    found = candidate_scan.preprocess_findings(_many_units(tmp_path, 40), bytes(1024), rule_counts, deadline_s=1.0)
+    assert time.monotonic() - start < 8
+    assert found == [{"rule": "scan_error", "path": "", "message": "scan passed its 1 s deadline"}]
+
+
+def test_too_many_units_refused(tmp_path: Path, monkeypatch) -> None:
+    ran = tmp_path / "ran"
+    gcc = _fake_gcc(tmp_path, f"touch {ran}")
+    monkeypatch.setattr(candidate_scan, "arm_tool", lambda name: gcc)
+    monkeypatch.setattr(candidate_scan, "MAX_UNITS", 2)
+    found = candidate_scan.preprocess_findings(_many_units(tmp_path, 3), bytes(1024), rule_counts)
+    assert [f["message"] for f in found] == ["too many units: 3 > 2"] and not ran.exists()
+
+
+@needs_gcc
+def test_first_failure_stops_scan(kernels: Path) -> None:
+    for index in range(20):
+        (kernels / f"Source/Conv/bad{index}.c").write_text("#error no\n", encoding="utf-8")
+    found = candidate_scan.preprocess_findings(kernels, bytes(1024), rule_counts)
+    assert len(found) == 1 and found[0]["rule"] == "scan_error"

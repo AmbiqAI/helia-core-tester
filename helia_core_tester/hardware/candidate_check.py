@@ -65,7 +65,7 @@ from typing import Iterator, Optional
 
 import typer
 
-from .candidate_scan import CONFIGS, object_findings, preprocess_findings
+from .candidate_scan import CONFIGS, SCAN_DEADLINE_S, object_findings, preprocess_findings
 from .firmware_build import nsx_app_dir
 from .nsx_app import CMSIS_NN_MODULE, KERNEL_TREES, kernels_match
 
@@ -477,7 +477,9 @@ def hidden_entries(tree: Path) -> list[str]:
     return [entry[2:] for entry in out if entry[:1] == "S" or entry[:1].islower()]
 
 
-def check_candidate(tree: Path, base: str, *, build_dir: Optional[Path] = None) -> dict:
+def check_candidate(
+    tree: Path, base: str, *, build_dir: Optional[Path] = None, scan_deadline: float = SCAN_DEADLINE_S,
+) -> dict:
     """The JSON report for one candidate."""
     tree = tree.resolve()
     commit = _git(tree, "rev-parse", "--verify", f"{base}^{{commit}}").decode().strip()
@@ -534,7 +536,7 @@ def check_candidate(tree: Path, base: str, *, build_dir: Optional[Path] = None) 
     if any(path.startswith(ALLOWED_DIRS) for path in changes):
         tops = sorted({path.split("/", 1)[0] + "/" for path in base_blobs if path.startswith(ALLOWED_DIRS)})
         archive = _git(tree, "archive", commit, "--", *tops) if tops else _EMPTY_TAR
-        findings += preprocess_findings(tree, archive, rule_counts, configs)
+        findings += preprocess_findings(tree, archive, rule_counts, configs, scan_deadline)
     return {
         "schema": "hct.candidate_check",
         "schema_version": 1,
@@ -558,10 +560,11 @@ def check_command(
     build_dir: Optional[Path] = typer.Option(
         None, "--build-dir", exists=True, file_okay=False, help="Build of this tree; scan its kernel objects.",
     ),
+    scan_deadline: float = typer.Option(SCAN_DEADLINE_S, "--scan-deadline", help="Seconds the gcc -E scan may take."),
 ) -> None:
     """Fail when the candidate diff leaves Source/Include."""
     try:
-        report = check_candidate(tree, base, build_dir=build_dir)
+        report = check_candidate(tree, base, build_dir=build_dir, scan_deadline=scan_deadline)
     except CheckError as exc:
         typer.echo(json.dumps({"ok": False, "error": str(exc)}))
         raise typer.Exit(2)
