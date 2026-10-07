@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import re
 
-_NEWLINE = re.compile(r"\r\n|\r|\n")
-_SPLICE = re.compile(r"\\[ \t\f\v]*$")
+NEWLINE = re.compile(r"\r\n|\r|\n")
+SPLICE = re.compile(r"\\[ \t\f\v]*$")
 # Header names, code, literals, comments.
 _LEX = re.compile(
     r"(?P<header>(?:#|%:)[ \t\v\f]*include[ \t\v\f]*<[^>\n]*>)"
@@ -32,8 +32,8 @@ def _blank(match: re.Match) -> str:
 def strip_comments(source: str) -> str:
     """Source with lines spliced, comments blanked."""
     logical, parts = [], []
-    for line in _NEWLINE.split(source):
-        spliced = _SPLICE.sub("", line)
+    for line in NEWLINE.split(source):
+        spliced = SPLICE.sub("", line)
         parts.append(spliced)
         if spliced == line:
             logical.append("".join(parts))

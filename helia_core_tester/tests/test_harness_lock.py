@@ -22,6 +22,12 @@ from helia_core_tester.hardware.session import SessionResult
 runner = CliRunner()
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
 
+
+@pytest.fixture(autouse=True)
+def _line_rules_only(monkeypatch) -> None:
+    """test_candidate_scan covers gcc -E."""
+    monkeypatch.setattr(candidate_check, "preprocess_findings", lambda *args: [])
+
 LOCK = """schema_version: 4
 targets:
   apollo510_evb:
@@ -401,6 +407,18 @@ def test_source_change_passes(kernels: Path) -> None:
     ("Source/Conv/a.c", "#pragma GCC optimize(\"O3\")\n", "pragma"),
     ("Source/Conv/a.c", '_Pragma("GCC optimize(\\"O3\\")")\n', "pragma"),
     ("Source/Conv/a.c", "void g(void) { DWT->CYCCNT = 0; }\n", "measurement_access"),
+    ("Source/Conv/a.c", "volatile int *c = (volatile int *)0xE0001004UL;\n", "measurement_access"),
+    ("Source/Conv/a.c", "volatile int *c = (volatile int *)3758100484u;\n", "measurement_access"),
+    ("Source/Conv/a.c", '#define P _Pra##gma("GCC optimize(\\"O3\\")")\n', "pragma"),
+    ("Source/Conv/a.c", '#define A __attri ## bute__((optimize("O3")))\n', "attribute"),
+    ("Source/Conv/a.c", '%:define P _Pra %:%: gma("GCC optimize(\\"O3\\")")\n', "pragma"),
+    ("Source/Conv/a.c", '#define A __attri %:%: bute__((optimize("O3")))\n', "attribute"),
+    ("Source/Conv/a.c", '#ifdef BOARD_X\n%:  pragma GCC optimize("O3")\n#endif\n', "pragma"),
+    ("Source/Conv/a.c", '__attribute ( (section(".s")) ) int a;\n', "attribute"),
+    ("Source/Conv/a.c", '#line 1 "/usr/include/x.h"\n', "build_probe"),
+    ("Source/Conv/a.c", '# 1 "<x>"\n', "build_probe"),
+    ("Source/Conv/a.c", "#ifdef __OPTIMIZE__\n", "build_probe"),
+    ("Source/Conv/a.c", '#if __has_include("am_bsp.h")\n', "build_probe"),
     ("Source/Conv/a.c", "#include KERNEL_PATH\n", "include_escape"),
     ("Source/Conv/a.c", '%:include "../../Tests/t.c"\n', "include_escape"),
     ("Source/Conv/a.c", '%:pragma GCC optimize("O3")\n', "pragma"),
@@ -421,6 +439,96 @@ def test_forbidden_change_fails(kernels: Path, rel: str, text: str, rule: str) -
     (kernels / rel).parent.mkdir(parents=True, exist_ok=True)
     (kernels / rel).write_text(text, encoding="utf-8")
     assert rule in _rules(kernels)
+
+
+@pytest.mark.parametrize(("value", "hit"), [
+    ("3758096383u", False), ("3758096384u", True), ("3759144959UL", True), ("3759144960", False),
+    ("0xDFFFFFFF", False), ("0xE0000000", True), ("0xe00fffffu", True), ("0xE0100000", False),
+    ("3758000000", False), ("0xE000'1004", True), ("034000010004", True),
+])
+def test_scs_bounds(kernels: Path, value: str, hit: bool) -> None:
+    (kernels / "Source/Conv/a.c").write_text(f"volatile int *c = (volatile int *){value};\n", encoding="utf-8")
+    assert ("measurement_access" in _rules(kernels)) == hit
+
+
+@pytest.mark.parametrize("text", [
+    '#define CAT(a,b) a##b\n#if CAT(__has_, include)("board.h")\n_Pragma("GCC optimize(\\"O3\\")")\n#endif\n',
+    # Unchanged-style #if reaching a new macro.
+    '#define CAT(a,b) a##b\n#define B CAT(__has_, include)("board.h")\n#define A B\n#if A\nint z;\n#endif\n',
+])
+def test_macro_probe_fails(kernels: Path, text: str) -> None:
+    (kernels / "Source/Conv/a.c").write_text(text, encoding="utf-8")
+    assert "build_probe" in _rules(kernels)
+
+
+def test_probe_after_comment_fails(kernels: Path) -> None:
+    text = ('#define CAT(a,b) a##b\n/* note\n */ #if CAT(__has_, include)("missing.h")\n'
+            'CAT(_Pra,gma)("GCC optimize(\\"O3\\")")\n#endif\n')
+    (kernels / "Source/Conv/a.c").write_text(text, encoding="utf-8")
+    assert "build_probe" in _rules(kernels)
+
+
+def test_spliced_comment_hides_directive(kernels: Path) -> None:
+    # gcc splices first: the pragma is comment.
+    (kernels / "Source/Conv/a.c").write_text('// note \\\n#pragma GCC optimize("O3")\nint a;\n', encoding="utf-8")
+    assert check_candidate(kernels, _sha(kernels))["ok"]
+
+
+def test_comment_start_in_literal(kernels: Path) -> None:
+    text = 'static const char s[] = "/*";\n_Pragma("GCC optimize(\\"O3\\")")\n// */\n'
+    (kernels / "Source/Conv/a.c").write_text(text, encoding="utf-8")
+    assert "pragma" in _rules(kernels)
+
+
+def test_finding_lines_match_file(kernels: Path) -> None:
+    text = 'int a;\n/* x\n y */\n#pragma GCC optimize("O3")\n#define D \\\n  _Pragma("x")\n'
+    (kernels / "Source/Conv/a.c").write_text(text, encoding="utf-8")
+    report = check_candidate(kernels, _sha(kernels))
+    assert {f["line"] for f in report["findings"] if f["rule"] == "pragma"} == {4, 5}
+
+
+def test_trigraph_fails(kernels: Path) -> None:
+    (kernels / "Source/Conv/a.c").write_text('??=pragma GCC optimize("O3")\n', encoding="utf-8")
+    assert "build_probe" in _rules(kernels)
+
+
+PROBE_BASE = {
+    "Include/p.h": '#define CAT(a, b) a##b\n#define B CAT(__has_, include)("board.h")\n#define A 1\n',
+    "Source/Conv/p.c": '#include "p.h"\n#if A\nint p;\n#endif\nint q(int x) { return x; }\n',
+}
+
+
+@pytest.mark.parametrize(("rel", "text", "want"), [
+    # Base probe routed into a base #if.
+    ("Include/p.h", PROBE_BASE["Include/p.h"].replace("A 1", "A B"), "conditional reaches A"),
+    ("Source/Conv/p.c", PROBE_BASE["Source/Conv/p.c"].replace(
+        "int p;", 'CAT(_Pra,gma)("GCC optimize(\\"O3\\")")'), "uses pasting macro CAT"),
+    ("Include/p.h", PROBE_BASE["Include/p.h"].replace("#define A 1\n", ""), "removed A, base line 3"),
+    ("Include/p.h", PROBE_BASE["Include/p.h"] + "#undef A\n", "conditional reaches A"),
+])
+def test_conditional_macro_edit_fails(tmp_path: Path, rel: str, text: str, want: str) -> None:
+    root = _repo(tmp_path / "nn", PROBE_BASE)
+    (root / rel).write_text(text, encoding="utf-8")
+    texts = {f.get("text") for f in check_candidate(root, _git(root, "rev-parse", "HEAD").strip())["findings"]
+             if f["rule"] == "build_probe"}
+    assert want in texts
+
+
+def test_clean_edit_near_probe_passes(tmp_path: Path) -> None:
+    root = _repo(tmp_path / "nn", PROBE_BASE)
+    (root / "Source/Conv/p.c").write_text(
+        PROBE_BASE["Source/Conv/p.c"].replace("return x;", "return x + 1;"), encoding="utf-8")
+    (root / "Include/Internal").mkdir()
+    (root / "Include/Internal/new.h").write_text("#ifndef NEW_H\n#define NEW_H\n#define TWICE(x) ((x) * 2)\n#endif\n",
+                                                 encoding="utf-8")
+    report = check_candidate(root, _git(root, "rev-parse", "HEAD").strip())
+    assert report["ok"], report["findings"]
+
+
+def test_plain_conditional_passes(kernels: Path) -> None:
+    text = "#if defined(ARM_MATH_MVEI) && __has_builtin(__builtin_expect)\nint z;\n#endif\n"
+    (kernels / "Source/Conv/a.c").write_text(text, encoding="utf-8")
+    assert check_candidate(kernels, _sha(kernels))["ok"]
 
 
 def test_internal_header_passes(kernels: Path) -> None:

@@ -21,14 +21,29 @@ Include/, nothing else. Rules, each a finding in the JSON report:
 - harness_reference: added lines naming harness or golden internals.
 - include_escape: #include with an absolute path, "..", or a macro;
   .incbin and .include in assembly.
+- build_probe: #line, line markers, __has_include and macros the
+  build flags set (__OPTIMIZE__, __FAST_MATH__), which can hide code
+  from the gcc -E scan. Since the scan configs and the real build can
+  disagree on which branches are live, also: an added #if/#elif that
+  calls a macro or pastes; an added or removed #define/#undef of a name
+  any conditional in Source/ or Include/ reaches, through macro bodies,
+  whatever its body (include guards excepted); and an added line that
+  uses a macro whose body (transitively) pastes.
 - hidden_index_entry: any path flagged skip-worktree or
   assume-unchanged, which git diff and status would skip.
 - guard_change: an added or removed #if/#ifdef/#else/#define/#undef
   in a file that already holds a forbidden construct, which it could
   enable.
 
+Every rule reads one normalized view of a file, as translation
+phases 1-3 make it: line splices joined, then each comment turned into
+one space (keeping its newlines), string and char literals respected.
+Line numbers in findings stay those of the original file.
+
 Rules also run on text with adjacent string literals joined, per line
-and over all added lines of a file, as C joins them before asm sees them.
+and over all added lines of a file, as C joins them before asm sees them,
+and on text with `##` (or `%:%:`) pastes joined. candidate_scan then reruns the
+rules on `gcc -E` output of base and candidate.
 
 Literal tensor shapes from descriptors are not grepped: too many false
 hits on common dims. Trees the build copies (Source, Include, cmake, nsx)
@@ -63,6 +78,8 @@ from typing import Iterator, Optional
 
 import typer
 
+from .c_lex import NEWLINE, SPLICE, strip_comments
+from .candidate_scan import CONFIGS, SCAN_DEADLINE_S, preprocess_findings
 from .harness_lock import HARNESS_HEADERS, header_closure
 from .nsx_app import KERNEL_TREES, checkout_hash
 from .pathutil import is_relative_to
@@ -80,16 +97,30 @@ SAFE_ATTRIBUTES = frozenset((
     "always_inline", "noinline", "noipa", "unused", "maybe_unused", "aligned", "packed", "fallthrough",
     "const", "pure", "nonnull", "may_alias", "inline",
 ))
-_ATTRIBUTE = re.compile(r"__attribute__\s*\(\((.*?)\)\)|\[\[(.*?)\]\]")
+_ATTRIBUTE = re.compile(r"__attribute(?:__)?\s*\(\s*\((.*?)\)\s*\)|\[\[(.*?)\]\]", re.DOTALL)
 _ADJACENT_LITERALS = re.compile(r'"\s*"')
+# "%:%:" is the "##" digraph.
+_PASTE = re.compile(r"\s*(?:##|%:%:)\s*")
 _ESCAPE = re.compile(r"\\([0-7]{1,3}|[xX][0-9a-fA-F]+)")
 _ATTRIBUTE_HINT = re.compile(r"__attribute|__declspec|\[\[")
 # "%:" is the "#" digraph.
 _PRAGMA = re.compile(r"(?:#|%:)\s*pragma|_Pragma|__pragma")
 # Checked per occurrence; _Pragma is never safe.
 _SAFE_PRAGMA = re.compile(r"(?:#|%:)\s*pragma\s+(?:once|GCC\s+unroll\s+\d+|GCC\s+diagnostic\b)")
-_COMMENT = re.compile(r"/\*.*?\*/|//.*$")
 _GUARD = re.compile(r"^\s*(?:#|%:)\s*(?:if|ifdef|ifndef|elif|elifdef|elifndef|else|endif|define|undef)\b")
+_CONDITION = re.compile(r"^\s*(?:#|%:)\s*(?:if|elif)\b(.*)", re.DOTALL)
+_NAME_TEST = re.compile(r"^\s*(?:#|%:)\s*(?:el)?ifn?def\s+([A-Za-z_]\w*)")
+_DEFINE = re.compile(r"^\s*(?:#|%:)\s*define\s+([A-Za-z_]\w*)(\([^)]*\))?(.*)", re.DOTALL)
+_IFNDEF = re.compile(r"^\s*(?:#|%:)\s*ifndef\s+([A-Za-z_]\w*)\s*$")
+_DEFINE_UNDEF = re.compile(r"^\s*(?:#|%:)\s*(?:define|undef)\s+([A-Za-z_]\w*)")
+_PASTES = re.compile(r"##|%:%:")
+_IDENT = re.compile(r"[A-Za-z_]\w*")
+# Pastes, or calls besides defined/__has_*.
+_MACRO_CALL = re.compile(r"##|%:%:|\b(?!defined\b|__has_\w+\b)[A-Za-z_]\w*\s*\(")
+# Integer literals, any base and suffix.
+_INTEGER = re.compile(r"(?<![\w.'])(0[xX][0-9a-fA-F']+|0[bB][01']+|\d[\d']*)[uUlLzZ]*(?![\w.])")
+# SCS: debug, timer and NVIC registers.
+SCS_RANGE = range(0xE0000000, 0xE0100000)
 LINE_RULES = (
     ("special_section", re.compile(
         r"\.(?:push)?section\b|\b_*section_*\s*\(|\b(?:ITCM|DTCM|__RAMFUNC|RAMFUNC|AM_SHARED_RW|NS_PUT_IN_TCM)\b",
@@ -104,7 +135,12 @@ LINE_RULES = (
         r"golden|\bhct_|\bhctp|benchmark_server|unittest|RefactoredTestGen", re.IGNORECASE,
     )),
     ("include_escape", re.compile(r'(?:#|%:)\s*include\s*(?:["<](?:/|[^">]*\.\.)|[^"<\s])|\.(?:incbin|include)\b')),
+    ("build_probe", re.compile(
+        r"(?:^|\n)\s*(?:#|%:)\s*(?:line\b|\d)|\?\?[=/'()!<>-]|__has_include|__OPTIMIZE(?:_SIZE)?__|__FAST_MATH__|__NO_INLINE__",
+    )),
 )
+# An empty tar: 1024 zero bytes.
+_EMPTY_TAR = bytes(1024)
 # Largest kernel file today: 0.5 MiB.
 MAX_FILE_BYTES = 4 << 20
 # Ignore user and system git config.
@@ -282,53 +318,64 @@ def path_findings(path: str, status: str, tree: Path, frozen: frozenset[str]) ->
         yield {"rule": "file_type", "path": path, "message": "not a regular file under 4 MiB"}
 
 
-def _logical_lines(lines: list[str]) -> list[int]:
-    """Each line's spliced-line start index."""
-    starts, start = [], 0
-    for index, line in enumerate(lines):
-        starts.append(start)
-        if not line.endswith("\\"):
-            start = index + 1
-    return starts
+def _physical(source: str) -> list[str]:
+    """Lines as gcc splits them."""
+    return NEWLINE.split(source)
+
+
+def normalize(source: str) -> tuple[list[str], list[int]]:
+    """Logical lines after phases 1-3.
+
+    Also each physical line's logical index.
+    """
+    owner, logical = [], 0
+    for line in _physical(source):
+        owner.append(logical)
+        # Same splice rule as strip_comments.
+        logical += not SPLICE.search(line)
+    return strip_comments(source).split("\n"), owner
+
+
+def _sources(tree: Path, base: dict, path: str) -> tuple[str, str]:
+    """Base and candidate text of a path."""
+    new = _text(tree / path)
+    old = _git(tree, "cat-file", "blob", base[path][1]).decode(errors="replace") if path in base else ""
+    return old, new
+
+
+def _changed(old: list[str], new: list[str], removed: bool = False) -> Iterator[int]:
+    """Indexes of added (or removed) lines."""
+    kinds = ("replace", "delete") if removed else ("replace", "insert")
+    for tag, old_first, old_last, first, last in difflib.SequenceMatcher(None, old, new, autojunk=False).get_opcodes():
+        if tag in kinds:
+            yield from range(old_first, old_last) if removed else range(first, last)
 
 
 def added_lines(tree: Path, base: dict, path: str, status: str) -> Iterator[tuple[int, str]]:
-    """Spliced lines holding an added line.
+    """Normalized logical lines that changed.
 
-    C and assembly join backslash-newline before parsing, so rules see the
-    joined text; the number is the first added line in it.
+    The number is the first added physical line in it, else its first.
     """
     if status == "D":
         return
-    new = _text(tree / path).splitlines()
-    old = _git(tree, "cat-file", "blob", base[path][1]).decode(errors="replace").splitlines() if path in base else []
-    starts = _logical_lines(new)
-    seen: set[int] = set()
-    for tag, _, _, first, last in difflib.SequenceMatcher(None, old, new, autojunk=False).get_opcodes():
-        if tag not in ("replace", "insert"):
-            continue
-        for index in range(first, last):
-            start = starts[index]
-            if start in seen:
-                continue
-            seen.add(start)
-            end = start
-            while end + 1 < len(new) and starts[end + 1] == start:
-                end += 1
-            text = "".join(line[:-1] if line.endswith("\\") else line for line in new[start:end + 1])
-            yield index + 1, text
+    old_source, new_source = _sources(tree, base, path)
+    new, owner = normalize(new_source)
+    old = normalize(old_source)[0] if old_source else []
+    numbers: dict[int, int] = {}
+    for index in _changed(_physical(old_source) if old_source else [], _physical(new_source)):
+        numbers.setdefault(owner[index], index)
+    for index, logical in enumerate(owner):
+        numbers.setdefault(logical, index)
+    for logical in _changed(old, new):
+        yield numbers[logical] + 1, new[logical]
 
 
 def _removed_guard(tree: Path, base: dict, path: str, status: str) -> bool:
     """A deleted line was a guard."""
     if status == "D" or path not in base:
         return False
-    new = _text(tree / path).splitlines()
-    old = _git(tree, "cat-file", "blob", base[path][1]).decode(errors="replace").splitlines()
-    for tag, first, last, _, _ in difflib.SequenceMatcher(None, old, new, autojunk=False).get_opcodes():
-        if tag in ("replace", "delete") and any(_GUARD.match(line) for line in old[first:last]):
-            return True
-    return False
+    old, new = (normalize(text)[0] for text in _sources(tree, base, path))
+    return any(_GUARD.match(old[index]) for index in _changed(old, new, removed=True))
 
 
 def _unsafe_attribute(text: str) -> bool:
@@ -349,8 +396,8 @@ def _unsafe_attribute(text: str) -> bool:
 def line_rules(text: str) -> Iterator[str]:
     """Rule names one added line hits."""
     seen = set()
-    # C joins adjacent string literals.
-    for variant in (text, _literal_text(text)):
+    # C joins literals and pasted tokens.
+    for variant in (text, _literal_text(text), _PASTE.sub("", text)):
         for rule in _raw_rules(variant):
             if rule not in seen:
                 seen.add(rule)
@@ -359,8 +406,7 @@ def line_rules(text: str) -> Iterator[str]:
 
 def _literal_text(text: str) -> str:
     """Text as the compiler sees literals."""
-    joined = _ADJACENT_LITERALS.sub("", _COMMENT.sub(" ", text))
-    return _ESCAPE.sub(_unescape, joined)
+    return _ESCAPE.sub(_unescape, _ADJACENT_LITERALS.sub("", text))
 
 
 def _unescape(match: re.Match) -> str:
@@ -369,37 +415,135 @@ def _unescape(match: re.Match) -> str:
     return chr(value) if value < 0x110000 else match.group(0)
 
 
+def _scs_count(text: str) -> int:
+    """Integer literals inside SCS_RANGE."""
+    count = 0
+    for match in _INTEGER.finditer(text):
+        digits = match.group(1).replace("'", "").lower()
+        base = {"0x": 16, "0b": 2}.get(digits[:2], 8 if digits[:1] == "0" else 10)
+        try:
+            count += int(digits, base) in SCS_RANGE
+        except ValueError:
+            continue
+    return count
+
+
 def _raw_rules(text: str) -> Iterator[str]:
     if _unsafe_attribute(text):
         yield "attribute"
-    code = _COMMENT.sub(" ", text)
-    if any(not _SAFE_PRAGMA.match(code, hit.start()) for hit in _PRAGMA.finditer(code)):
+    if any(not _SAFE_PRAGMA.match(text, hit.start()) for hit in _PRAGMA.finditer(text)):
         yield "pragma"
+    if _scs_count(text):
+        yield "measurement_access"
     yield from (rule for rule, pattern in LINE_RULES if pattern.search(text))
 
 
 def _grandfathered(tree: Path, path: str) -> bool:
     """File already holds a rule hit."""
-    lines = _text(tree / path).splitlines()
-    starts = _logical_lines(lines)
-    joined: dict[int, str] = {}
-    for index, line in enumerate(lines):
-        joined[starts[index]] = joined.get(starts[index], "") + (line[:-1] if line.endswith("\\") else line)
-    return any(next(line_rules(text), None) for text in joined.values())
+    lines = normalize(_text(tree / path))[0]
+    return any(next(line_rules(text), None) for text in lines)
 
 
 def rule_counts(source: str) -> Counter:
     """Rule matches over a whole file."""
-    lines = source.splitlines()
-    text = _literal_text(" ".join(line[:-1] if line.endswith("\\") else line for line in lines))
+    text = _literal_text("\n".join(normalize(source)[0]))
     counts: Counter = Counter()
-    counts["attribute"] = sum(_unsafe_attribute("".join(groups).join(("__attribute__((", "))")))
-                              for groups in _ATTRIBUTE.findall(text))
-    code = _COMMENT.sub(" ", text)
-    counts["pragma"] = sum(not _SAFE_PRAGMA.match(code, hit.start()) for hit in _PRAGMA.finditer(code))
+    found = _ATTRIBUTE.findall(text)
+    # Unparsed attribute spellings count as unsafe.
+    counts["attribute"] = sum(_unsafe_attribute("".join(groups).join(("__attribute__((", "))"))) for groups in found)
+    counts["attribute"] += max(0, len(_ATTRIBUTE_HINT.findall(text)) - len(found))
+    counts["pragma"] = sum(not _SAFE_PRAGMA.match(text, hit.start()) for hit in _PRAGMA.finditer(text))
     for rule, pattern in LINE_RULES:
         counts[rule] += len(pattern.findall(text))
+    counts["measurement_access"] += _scs_count(text)
     return counts
+
+
+def _closure(seed: set[str], edges: dict[str, set[str]]) -> set[str]:
+    """Names reachable from seed."""
+    found, todo = set(seed), list(seed)
+    while todo:
+        for name in edges.get(todo.pop(), ()):
+            if name not in found:
+                found.add(name)
+                todo.append(name)
+    return found
+
+
+def _tree_macros(tree: Path) -> tuple[set[str], set[str]]:
+    """Names conditionals reach; pasting macros."""
+    tested: set[str] = set()
+    bodies: dict[str, set[str]] = {}
+    users: dict[str, set[str]] = {}
+    pasting: set[str] = set()
+    for top in ALLOWED_DIRS:
+        for path in sorted((tree / top).rglob("*")):
+            if path.is_symlink() or not path.is_file() or not path.name.endswith(ALLOWED_SUFFIXES):
+                continue
+            for code in normalize(_text(path))[0]:
+                if match := _CONDITION.match(code):
+                    tested |= set(_IDENT.findall(match.group(1)))
+                elif match := _NAME_TEST.match(code):
+                    tested.add(match.group(1))
+                elif match := _DEFINE.match(code):
+                    name, body = match.group(1), match.group(3)
+                    bodies.setdefault(name, set()).update(_IDENT.findall(body))
+                    for ref in _IDENT.findall(body):
+                        users.setdefault(ref, set()).add(name)
+                    if _PASTES.search(body):
+                        pasting.add(name)
+    # Users of pasting macros paste too.
+    return _closure(tested, bodies), _closure(pasting, users)
+
+
+def _guard_name(lines: list[str]) -> Optional[str]:
+    """The file's include guard, if any."""
+    code = [line for line in lines if line.strip()]
+    if len(code) < 2 or not (match := _IFNDEF.match(code[0])):
+        return None
+    define = _DEFINE.match(code[1])
+    if define and define.group(1) == match.group(1) and not define.group(2) and not define.group(3).strip():
+        return match.group(1)
+    return None
+
+
+def removed_lines(tree: Path, base: dict, path: str, status: str) -> list[tuple[int, str]]:
+    """Base logical lines the candidate dropped."""
+    if path not in base:
+        return []
+    old_source = _git(tree, "cat-file", "blob", base[path][1]).decode(errors="replace")
+    old, owner = normalize(old_source)
+    new = [] if status == "D" else normalize(_text(tree / path))[0]
+    first = {logical: index for index, logical in reversed(list(enumerate(owner)))}
+    return [(first[logical] + 1, old[logical]) for logical in _changed(old, new, removed=True)]
+
+
+def probe_findings(tree: Path, added: dict[str, list[tuple[int, str]]],
+                   removed: dict[str, list[tuple[int, str]]]) -> Iterator[dict]:
+    """Edits that can flip a build-only branch.
+
+    gcc -E drops code under a false #if, and the scan configs need not
+    match the real build, so code behind a probe stays unseen.
+    """
+    if not any(added.values()) and not any(removed.values()):
+        return
+    reached, pasting = _tree_macros(tree)
+    for path in sorted(added.keys() | removed.keys()):
+        guard = None
+        if (tree / path).is_file():
+            guard = _guard_name(normalize(_text(tree / path))[0])
+        for line_no, code in added.get(path, []):
+            define = _DEFINE.match(code)
+            if (match := _CONDITION.match(code)) and _MACRO_CALL.search(match.group(1)):
+                yield {"rule": "build_probe", "path": path, "line": line_no, "text": "macro call in #if"}
+            elif (match := _DEFINE_UNDEF.match(code)) and match.group(1) in reached and match.group(1) != guard:
+                yield {"rule": "build_probe", "path": path, "line": line_no, "text": f"conditional reaches {match.group(1)}"}
+            elif (names := set(_IDENT.findall(code)) & pasting - {define.group(1) if define else ""}):
+                yield {"rule": "build_probe", "path": path, "line": line_no, "text": f"uses pasting macro {min(names)}"}
+        for line_no, code in removed.get(path, []):
+            if (match := _DEFINE_UNDEF.match(code)) and match.group(1) in reached:
+                yield {"rule": "build_probe", "path": path, "line": line_no,
+                       "text": f"removed {match.group(1)}, base line {line_no}"}
 
 
 def hidden_entries(tree: Path) -> list[str]:
@@ -408,7 +552,7 @@ def hidden_entries(tree: Path) -> list[str]:
     return [entry[2:] for entry in out if entry[:1] == "S" or entry[:1].islower()]
 
 
-def check_candidate(tree: Path, base: str) -> dict:
+def check_candidate(tree: Path, base: str, scan_deadline: float = SCAN_DEADLINE_S) -> dict:
     """The JSON report for one candidate."""
     tree = tree.resolve()
     unsafe = unsafe_config(tree)
@@ -422,12 +566,15 @@ def check_candidate(tree: Path, base: str) -> dict:
     base_blobs = base_files(tree, commit)
     frozen = frozen_files(tree, base_blobs)
     findings: list[dict] = []
+    added_by_path: dict[str, list[tuple[int, str]]] = {}
+    removed_by_path: dict[str, list[tuple[int, str]]] = {}
     for path, status in sorted(changes.items()):
         hits = list(path_findings(path, status, tree, frozen))
         findings += hits
         if hits:
             continue
-        added = list(added_lines(tree, base_blobs, path, status))
+        added = added_by_path[path] = list(added_lines(tree, base_blobs, path, status))
+        removed_by_path[path] = removed_lines(tree, base_blobs, path, status)
         hit_rules: set[str] = set()
         for line_no, text in added:
             for rule in line_rules(text):
@@ -452,8 +599,13 @@ def check_candidate(tree: Path, base: str) -> dict:
             before, after = rule_counts(old), rule_counts(_text(tree / path))
             findings += ({"rule": rule, "path": path, "line": added[0][0], "text": "more matches in whole file"}
                          for rule in sorted(after) if after[rule] > before[rule] and rule not in hit_rules)
+    findings += probe_findings(tree, added_by_path, removed_by_path)
     findings += ({"rule": "hidden_index_entry", "path": path, "message": "skip-worktree or assume-unchanged set"}
                  for path in hidden_entries(tree))
+    if any(path.startswith(ALLOWED_DIRS) for path in changes):
+        tops = sorted({path.split("/", 1)[0] + "/" for path in base_blobs if path.startswith(ALLOWED_DIRS)})
+        archive = _git(tree, "archive", commit, "--", *tops) if tops else _EMPTY_TAR
+        findings += preprocess_findings(tree, archive, rule_counts, CONFIGS, scan_deadline)
     return {
         "schema": "hct.candidate_check",
         "schema_version": 2,
@@ -475,10 +627,11 @@ candidate_app = typer.Typer(help="Check candidate kernel trees.", no_args_is_hel
 def check_command(
     tree: Path = typer.Argument(..., exists=True, file_okay=False, help="Candidate ns-cmsis-nn checkout."),
     base: str = typer.Option(..., "--base", help="Base commit SHA the candidate started from."),
+    scan_deadline: float = typer.Option(SCAN_DEADLINE_S, "--scan-deadline", help="Seconds the gcc -E scan may take."),
 ) -> None:
     """Fail when the candidate diff leaves Source/Include."""
     try:
-        report = check_candidate(tree, base)
+        report = check_candidate(tree, base, scan_deadline)
     except CheckError as exc:
         typer.echo(json.dumps({"ok": False, "error": str(exc)}))
         raise typer.Exit(2)
