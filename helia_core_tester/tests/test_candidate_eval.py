@@ -394,3 +394,43 @@ def test_unknown_tester_counts_as_dirty(monkeypatch, dirty, expected) -> None:
 
     monkeypatch.setattr(harness_lock, "tester_state", lambda root: {"dirty": dirty})
     assert REAL_TESTER_DIRTY() is expected
+
+
+def test_readme_lists_every_stage() -> None:
+    from helia_core_tester.hardware.boards import repo_root
+
+    readme = (repo_root() / "README.md").read_text(encoding="utf-8")
+    line = readme[readme.index("`stage`:"):readme.index("- `findings`")]
+    assert all(f"`{stage}`" in line for stage in candidate_eval.STAGES)
+
+
+def test_unreadable_tester_state_is_a_tester_verdict(tmp_path, kernels, monkeypatch) -> None:
+    """A non-UTF-8 name must not crash."""
+    tester = _repo(tmp_path / "tester", {"a.txt": "a\n"})
+    (tester / b"bad\xff".decode("utf-8", "surrogateescape")).write_text("x")
+    monkeypatch.setattr(candidate_eval, "repo_root", lambda: tester)
+    monkeypatch.setattr(candidate_eval, "tester_dirty", REAL_TESTER_DIRTY)
+    assert REAL_TESTER_DIRTY() is True
+    out = tmp_path / "base"
+    out.mkdir()
+    result, verdict = _cli_eval(kernels, out)
+    assert result.exit_code == 3 and verdict["stage"] == "tester"
+
+
+def test_eval_never_exits_without_a_verdict(tmp_path, kernels, monkeypatch) -> None:
+    out, _ = _baseline(tmp_path, kernels)
+
+    def _boom():
+        raise KeyError("bug")
+
+    monkeypatch.setattr(candidate_eval, "read_baseline", lambda path: _boom())
+    result, verdict = _cli_eval(kernels, out)
+    assert result.exit_code == 5 and verdict["verdict"] == "error" and verdict["stage"] == "eval"
+
+
+@pytest.mark.parametrize(("board", "placement"), [("apollo510_evb", "sram"), ("apollo3p_evb", "mram")])
+def test_baseline_refuses_bad_placement_before_mkdir(tmp_path, kernels, board, placement) -> None:
+    out = tmp_path / "new"
+    result = runner.invoke(app, ["candidate", "baseline", "--kernels", str(kernels), "--board", board,
+                                 "--placement", placement, "--out", str(out)])
+    assert result.exit_code == 2 and not out.exists()

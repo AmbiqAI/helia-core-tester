@@ -356,7 +356,8 @@ the agent's view.
 
 The verdict (schema `hct.candidate_eval`) has these fields:
 
-- `verdict`, `exit_code`, and `stage`: `check`, `run`, `objects` (once
+- `verdict`, `exit_code`, and `stage`: `tester` (dirty tester),
+  `baseline` (unusable baseline dir), `check`, `run`, `objects` (once
   `candidate check` scans built objects), `score`, or `eval` for an
   unexpected error.
 - `findings`: the check's findings, on rejection.

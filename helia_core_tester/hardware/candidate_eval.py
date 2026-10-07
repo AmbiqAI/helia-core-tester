@@ -38,10 +38,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
+import click
 import typer
 
 from .boards import UnknownBoardError, repo_root, resolve_board
 from .candidate_check import CheckError, _git, candidate_app, check_candidate
+from .cli import _check_placement
 from .errors import RunRefused
 from . import nsx_cli
 from .nsx_app import KERNEL_TREES, AppRenderError, write_kernels
@@ -52,6 +54,8 @@ SCHEMA = "hct.candidate_eval"
 BASELINE_SCHEMA = "hct.candidate_baseline"
 SCHEMA_VERSION = 1
 BASELINE_FILE = "baseline.json"
+# Every verdict stage, in order.
+STAGES = ("tester", "baseline", "check", "run", "objects", "score", "eval")
 # Files eval and score read.
 BUNDLE_FILES = ("case_summary.csv", "session_manifest.json", "cases.json")
 EXIT_ERROR = 5
@@ -208,7 +212,10 @@ def tester_dirty() -> bool:
     """Dirty or unknown tester state."""
     from .harness_lock import tester_state
 
-    return tester_state(repo_root())["dirty"] is not False
+    try:
+        return tester_state(repo_root())["dirty"] is not False
+    except Exception:  # noqa: BLE001 -- unreadable state is unknown
+        return True
 
 
 # --- eval ---------------------------------------------------------------------------
@@ -449,6 +456,8 @@ def baseline_command(
                        hidden_set, agent_pmu(board))
     except UnknownBoardError as exc:
         raise typer.BadParameter(str(exc), param_hint="--board") from exc
+    # Same rules as hardware run.
+    _check_placement(placement, resolve_board(board))
     out.mkdir(parents=True, exist_ok=True)
     try:
         meta = write_baseline(spec, out, repeats)
@@ -478,25 +487,43 @@ def eval_command(
     """
     if not math.isfinite(min_score):
         raise typer.BadParameter("--min-score must be finite", param_hint="--min-score")
-    # No opt-out: verdicts need a committed tester.
-    if tester_dirty():
-        _emit({"schema": SCHEMA, "schema_version": SCHEMA_VERSION, "verdict": "refused", "stage": "tester",
-               "reason": "Tester worktree is dirty or unknown"})
+    budget = CopyBudget(max_file_bytes, max_total_bytes, max_files)
     try:
-        meta = read_baseline(baseline)
-    except ValueError as exc:
-        _emit({"schema": SCHEMA, "schema_version": SCHEMA_VERSION, "verdict": "refused", "stage": "baseline", "reason": str(exc)})
-    if board is not None and board != meta["run"]["board"]:
-        raise typer.BadParameter(f"baseline ran on {meta['run']['board']}", param_hint="--board")
-    try:
-        verdict = evaluate(kernels, baseline, meta, min_score, budget=CopyBudget(max_file_bytes, max_total_bytes, max_files))
+        verdict = _eval_verdict(kernels, baseline, board, min_score, budget)
     except KeyboardInterrupt:
         # Shells report Ctrl-C as 130.
         raise typer.Exit(130)
+    except click.ClickException:
+        raise
     except Exception as exc:  # noqa: BLE001 -- one verdict, always
+        _log_crash(baseline)
+        verdict = _refusal("eval", type(exc).__name__, "error")
+    _emit(verdict)
+
+
+def _refusal(stage: str, reason: str, verdict: str = "refused") -> dict:
+    return {"schema": SCHEMA, "schema_version": SCHEMA_VERSION, "verdict": verdict, "stage": stage, "reason": reason}
+
+
+def _log_crash(baseline: Path) -> None:
+    """Traceback to logs, if writable."""
+    try:
         log = baseline / "logs" / f"eval-error-{_stamp()}.log"
         log.parent.mkdir(parents=True, exist_ok=True)
         log.write_text(traceback.format_exc(), encoding="utf-8")
-        verdict = {"schema": SCHEMA, "schema_version": SCHEMA_VERSION, "verdict": "error", "stage": "eval",
-                   "reason": type(exc).__name__}
-    _emit(verdict)
+    except OSError:
+        pass
+
+
+def _eval_verdict(kernels: Path, baseline: Path, board: Optional[str], min_score: float, budget: CopyBudget) -> dict:
+    """Tester, baseline, then evaluate."""
+    # No opt-out: verdicts need a committed tester.
+    if tester_dirty():
+        return _refusal("tester", "Tester worktree is dirty or unknown")
+    try:
+        meta = read_baseline(baseline)
+    except ValueError as exc:
+        return _refusal("baseline", str(exc))
+    if board is not None and board != meta["run"]["board"]:
+        raise typer.BadParameter(f"baseline ran on {meta['run']['board']}", param_hint="--board")
+    return evaluate(kernels, baseline, meta, min_score, budget=budget)
