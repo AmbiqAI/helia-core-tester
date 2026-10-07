@@ -183,6 +183,55 @@ def test_module_under_the_checkout_is_allowed(tmp_path: Path) -> None:
     assert (module / "Include").is_dir()
 
 
+def _snapshot(root: Path) -> dict:
+    return {p: (p.is_symlink(), p.read_bytes() if p.is_file() and not p.is_symlink() else None) for p in root.rglob("*")}
+
+
+@pytest.mark.parametrize("case", ["root-link-to-itself", "module-link-into-source"])
+def test_linked_overlap_refused_untouched(tmp_path: Path, case: str) -> None:
+    checkout = make_checkout(tmp_path / "ns-cmsis-nn")
+    link = tmp_path / "link"
+    if case == "root-link-to-itself":
+        link.symlink_to(checkout)
+        root, module = link, link
+    else:
+        link.symlink_to(checkout / "Source")
+        root, module = checkout, link
+    before = _snapshot(checkout)
+    with pytest.raises(nsx_app.AppRenderError, match="overlaps"):
+        nsx_app.write_kernels(root, module)
+    assert _snapshot(checkout) == before and link.is_symlink()
+
+
+def test_stale_entry_types_replaced(tmp_path: Path) -> None:
+    from helia_core_tester.hardware.nsx_cli import tree_hash
+
+    checkout = make_checkout(tmp_path / "ns-cmsis-nn")
+    clean = tmp_path / "clean"
+    nsx_app.write_kernels(checkout, clean)
+    stale = tmp_path / "stale"
+    _write(stale / "nsx", "a file, not a dir\n")
+    (stale / "CMakeLists.txt").mkdir()
+    (stale / "nsx-module.yaml").mkdir()
+    _write(stale / "Tests" / "old.c", "old\n")
+    nsx_app.write_kernels(checkout, stale)
+    assert tree_hash(stale) == tree_hash(clean)
+    assert not [p for p in tmp_path.iterdir() if p.name.startswith(".stale.")]
+
+
+def test_rewrite_keeps_mtimes(tmp_path: Path) -> None:
+    checkout = make_checkout(tmp_path / "ns-cmsis-nn")
+    module = tmp_path / "module"
+    nsx_app.write_kernels(checkout, module)
+    paths = ("CMakeLists.txt", "nsx/CMakeLists.txt", "Source/arm_add.c")
+    for rel in paths:
+        os.utime(module / rel, ns=(1_000_000_000, 1_000_000_000))
+    os.utime(checkout / "Source/arm_add.c", ns=(1_000_000_000, 1_000_000_000))
+    os.utime(checkout / "nsx/CMakeLists.txt", ns=(1_000_000_000, 1_000_000_000))
+    nsx_app.write_kernels(checkout, module)
+    assert all((module / rel).stat().st_mtime_ns == 1_000_000_000 for rel in paths)
+
+
 @pytest.mark.parametrize("name", ["Include", "Source", "nsx/nsx-module.yaml"])
 def test_checkout_entries_must_have_the_right_kind(tmp_path: Path, name: str) -> None:
     # A file named Source is not a checkout.

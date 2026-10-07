@@ -6,8 +6,8 @@ Include/, nothing else. Rules, each a finding in the JSON report:
 - outside_allowlist: any path outside Source/ or Include/ (Tests/,
   cmake/, nsx/, CMakeLists, scripts, build files).
 - frozen_file: public API headers the adapters compile against, every
-  kernel header they include (closure at base), and arm_nntables.c,
-  which the s16 golden generator reads.
+  kernel header they include (the union of the base and candidate
+  closures), and arm_nntables.c, which the s16 golden generator reads.
 - header_shadow: a new file under Include/ outside Include/Internal/,
   which -I Include would find before a system header.
 - file_type: Source/Include files that are not .c/.h/.s/.S.

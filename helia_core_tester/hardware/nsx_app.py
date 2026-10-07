@@ -316,58 +316,73 @@ def _write_if_changed(path: Path, text: str) -> None:
 
 def _check_no_overlap(root: Path, module_dir: Path) -> None:
     """Refuse copies that would delete sources."""
-    # rmtree of the module must not reach root.
-    src, dst = root.resolve(), module_dir.resolve()
+    # Lexical and resolved, both directions.
+    sources = {Path(os.path.abspath(root)), root.resolve()}
+    targets = {Path(os.path.abspath(module_dir)), module_dir.resolve(), module_dir.parent.resolve() / module_dir.name}
     copied = (*KERNEL_TREES, "nsx")
-    inside_tree = any(is_relative_to(dst, src / name) for name in copied)
-    if dst == src or is_relative_to(src, dst) or inside_tree:
-        raise AppRenderError(f"Kernel root overlaps the app: {root}")
+    for src in sources:
+        for dst in targets:
+            inside_tree = any(is_relative_to(dst, src / name) for name in copied)
+            if dst == src or is_relative_to(src, dst) or inside_tree:
+                raise AppRenderError(f"Kernel root overlaps the app: {root}")
 
 
-def _drop_stale(module_dir: Path) -> None:
-    """Remove links and files a vendored copy lacks."""
-    keep = {*KERNEL_TREES, "nsx", "nsx-module.yaml", "CMakeLists.txt"}
-    # An old clone may share the dir.
-    stale = [e for e in _entries(module_dir) if e.is_symlink() or e.name not in keep]
-    nsx = module_dir / "nsx"
-    if nsx.is_dir() and not nsx.is_symlink():
-        stale += [e for e in _entries(nsx) if e.name != "CMakeLists.txt" or not e.is_file(follow_symlinks=False)]
-    for entry in stale:
-        if entry.is_dir(follow_symlinks=False):
-            shutil.rmtree(entry.path)
-        else:
-            os.unlink(entry.path)
+def _remove(path: Path) -> None:
+    """Delete a path; never follow links."""
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    elif os.path.lexists(path):
+        path.unlink()
 
 
-def _entries(path: Path) -> list[os.DirEntry]:
-    """Dir entries; links stay unfollowed."""
-    if not path.is_dir() or path.is_symlink():
-        return []
-    with os.scandir(path) as scan:
-        return list(scan)
+def _swap_in(fresh: Path, module_dir: Path) -> None:
+    """Replace module_dir with fresh in one step."""
+    old = None
+    # A link goes; its target stays.
+    if module_dir.is_symlink():
+        module_dir.unlink()
+    elif os.path.lexists(module_dir):
+        old = fresh.with_name(fresh.name + ".old")
+        os.rename(module_dir, old)
+    os.replace(fresh, module_dir)
+    if old is not None:
+        _remove(old)
 
 
 def write_kernels(root: Path, module_dir: Path) -> None:
-    """Vendor a local checkout, as hpx does."""
+    """Vendor a local checkout, as hpx does.
+
+    Builds a fresh sibling dir, then swaps it in.
+    """
+    import tempfile
+
     missing = _checkout_missing(root)
     if missing:
         raise AppRenderError(f"Not an ns-cmsis-nn checkout: {root} lacks {missing[0]}")
-    # Never write through a linked module dir.
-    if module_dir.is_symlink():
-        module_dir.unlink()
     _check_no_overlap(root, module_dir)
-    _drop_stale(module_dir)
-    (module_dir / "nsx").mkdir(parents=True, exist_ok=True)
-    # Native manifest at the module root.
-    shutil.copy2(root / "nsx" / "nsx-module.yaml", module_dir / "nsx-module.yaml")
-    shutil.copy2(root / "nsx" / "CMakeLists.txt", module_dir / "nsx" / "CMakeLists.txt")
-    # A fresh mtime would rerun CMake.
-    _write_if_changed(module_dir / "CMakeLists.txt", KERNEL_SHIM)
-    # copytree keeps mtimes: ninja skips unchanged.
-    for name in KERNEL_TREES:
-        shutil.rmtree(module_dir / name, ignore_errors=True)
-        if (root / name).is_dir():
-            shutil.copytree(root / name, module_dir / name)
+    module_dir.parent.mkdir(parents=True, exist_ok=True)
+    fresh = Path(tempfile.mkdtemp(prefix=f".{module_dir.name}.", dir=module_dir.parent))
+    try:
+        (fresh / "nsx").mkdir()
+        # Native manifest at the module root.
+        shutil.copy2(root / "nsx" / "nsx-module.yaml", fresh / "nsx-module.yaml")
+        shutil.copy2(root / "nsx" / "CMakeLists.txt", fresh / "nsx" / "CMakeLists.txt")
+        # Keep the shim's mtime: CMake reruns otherwise.
+        shim = module_dir / "CMakeLists.txt"
+        if not module_dir.is_symlink() and shim.is_file() and not shim.is_symlink() and shim.read_text(
+            encoding="utf-8", errors="replace",
+        ) == KERNEL_SHIM:
+            shutil.copy2(shim, fresh / "CMakeLists.txt")
+        else:
+            (fresh / "CMakeLists.txt").write_text(KERNEL_SHIM, encoding="utf-8")
+        # copytree keeps mtimes: ninja skips unchanged.
+        for name in KERNEL_TREES:
+            if (root / name).is_dir():
+                shutil.copytree(root / name, fresh / name)
+        _swap_in(fresh, module_dir)
+    except BaseException:
+        _remove(fresh)
+        raise
 
 
 def checkout_hash(root: Path) -> Optional[str]:
