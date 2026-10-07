@@ -8,6 +8,9 @@ is slower than its noise band: max(board floor, mad_k * 1.4826 * MAD /
 baseline median), with the baseline's MAD: the larger of its in-run
 MAD and the spread of its repeat medians. A case timed valid in the
 baseline but not in the candidate fails. Only timing_status "valid" cases are timed.
+Code layout moves untouched kernels, so given the touched case set
+(cases whose kernel code changed) the per-case gate covers only those;
+the rest still count in family geomeans and gates.
 With repeat baselines the floor is the small session floor instead of
 the board floor. Each family also fails when its geomean is slower than
 max(family floor, median case band / sqrt(cases)). Prepare cycles move
@@ -391,7 +394,10 @@ def _retired(base: list[dict], cand: list[dict]) -> dict:
     return out
 
 
-def _case(case_id: str, baselines: list[Bundle], candidates: list[Bundle], scoring: dict, focus: dict | None = None) -> dict:
+def _case(
+    case_id: str, baselines: list[Bundle], candidates: list[Bundle], scoring: dict, focus: dict | None = None,
+    touched: frozenset[str] | None = None,
+) -> dict:
     base = [b.rows[case_id] for b in baselines if case_id in b.rows]
     cand = [c.rows[case_id] for c in candidates]
     statuses = sorted({_status(row) for row in base + cand} - {"valid"})
@@ -429,6 +435,7 @@ def _case(case_id: str, baselines: list[Bundle], candidates: list[Bundle], scori
         "pct_of_peak_baseline": _peak_pct(cpu, base_route, cpm_a),
         "pct_of_peak_candidate": _peak_pct(cpu, inner or symbol, cpm_b),
         "prepare": _prepare(base, cand, (a, b), scoring),
+        "touched": None if touched is None else case_id in touched,
         "retired": _retired(base, cand),
     }
     case["in_focus"] = in_focus(base_route, symbol, case["dtype"], focus)
@@ -437,7 +444,9 @@ def _case(case_id: str, baselines: list[Bundle], candidates: list[Bundle], scori
         floor = scoring["session_floor_pct"] if len(baselines) > 1 else scoring["floor_pct"]
         band = max(floor, scoring["mad_k"] * _spread(base) / a * 100.0)
         delta = (b - a) / a * 100.0
-        case.update(speedup=a / b, delta_pct=delta, band_pct=band, within_noise=abs(delta) <= band, regression=delta > band)
+        # Untouched cases move with layout only.
+        gated = case["touched"] is not False
+        case.update(speedup=a / b, delta_pct=delta, band_pct=band, within_noise=abs(delta) <= band, regression=gated and delta > band)
     elif case["excluded_by"] is None:
         case["excluded_by"] = "zero_cycles"
     return case
@@ -478,7 +487,8 @@ def _family_gate(subset: str, cases: list[dict], scoring: dict) -> dict:
 
 
 def score_bundles(
-    baselines: list[Bundle], candidates: list[Bundle], scoring: dict, check: dict | None = None, focus: dict | None = None
+    baselines: list[Bundle], candidates: list[Bundle], scoring: dict, check: dict | None = None, focus: dict | None = None,
+    touched: frozenset[str] | None = None,
 ) -> dict:
     """The score report; `schema_version` bumps on breaking change.
 
@@ -492,11 +502,15 @@ def score_bundles(
     and excluded rows), failures [{kind,
     case_id, reason}]. settings.check is the trusted {tree_hash,
     base_commit}, or null when unchecked; settings.focus is {routes,
-    dtypes} or null. Failure kinds: not_comparable, comparison_failed,
+    dtypes} or null; settings.case_gate is "touched" when `touched`
+    (case ids whose kernel code changed) is given, else "all". Each
+    case's `touched` is a bool, or null when unknown; untouched cases
+    never fail the per-case regression gate. Failure kinds: not_comparable, comparison_failed,
     missing_case, input_digest, timing_lost, regression,
     family_regression, prepare_regression, no_eligible_cases.
 
-    Correctness, case, family and prepare gates cover every case; under
+    Correctness, family and prepare gates cover every case, the case
+    gate every touched case; under
     focus the family gate judges the focus and rest subsets apart. The score covers
     focus cases only (by baseline route), with family weights
     renormalized over the families they hit.
@@ -516,6 +530,7 @@ def score_bundles(
             "band_source": "session" if len(baselines) > 1 else "board",
             "check": None if check is None else {k: check.get(k) for k in ("tree_hash", "base_commit")},
             "focus": focus or None,
+            "case_gate": "all" if touched is None else "touched",
         },
         "families": {},
         "subscores": None,
@@ -552,7 +567,7 @@ def score_bundles(
         elif base_digests != cand_digests:
             failures.append({"kind": "input_digest", "case_id": case_id, "reason": "inputs differ between runs"})
 
-    report["cases"] = cases = [_case(case_id, baselines, candidates, scoring, focus) for case_id in present]
+    report["cases"] = cases = [_case(case_id, baselines, candidates, scoring, focus, touched) for case_id in present]
     eligible = [case for case in cases if case["eligible"]]
     for case in cases:
         if case["timing_lost"]:

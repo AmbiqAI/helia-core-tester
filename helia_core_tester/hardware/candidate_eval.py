@@ -14,6 +14,12 @@ to `hardware run --json`; its stderr, which names every case, goes to
 --out/logs. Hidden cases (bundle column `hidden`) count in the verdict
 and in family totals, but their ids never print.
 
+The baseline also keeps code_graph.json: digests and references of
+every kernel function and data object, read from the built objects.
+Eval reads the candidate build the same way, and only cases whose
+kernel code changed face the per-case regression gate (see
+code_graph). A baseline without the file gates every case.
+
 Exit codes: 0 pass, 1 fail, 2 usage, 3 refused, rejected or not
 comparable, 4 no_gain, 5 error (build, board, transport), 130
 interrupted (no verdict).
@@ -28,6 +34,7 @@ import re
 import tempfile
 import shutil
 import stat
+import struct
 import subprocess
 import sys
 import traceback
@@ -42,6 +49,7 @@ import typer
 
 from .boards import UnknownBoardError, repo_root, resolve_board
 from .candidate_check import CheckError, _git, candidate_app, check_candidate
+from .code_graph import changed_nodes, code_graph, is_touched, read_graph
 from .cli import _check_placement
 from .errors import RunRefused
 from . import nsx_cli
@@ -55,6 +63,7 @@ BASELINE_SCHEMA = "hct.candidate_baseline"
 SCHEMA_VERSION = 2
 BASELINE_VERSION = 1
 BASELINE_FILE = "baseline.json"
+GRAPH_FILE = "code_graph.json"
 # Every verdict stage, in order.
 STAGES = ("tester", "baseline", "check", "run", "objects", "score", "eval")
 # Files eval and score read.
@@ -173,6 +182,13 @@ def write_baseline(spec: RunSpec, out: Path, repeats: int, run=None) -> dict:
             raise RuntimeError(f"Baseline run {session} failed {summary['totals']['failed']} case(s).")
         shutil.copytree(summary["bundle"], out / "bundles" / session)
         sessions.append(session)
+    try:
+        graph = kernel_graph(spec.board)
+    except (OSError, ValueError, KeyError, struct.error):
+        # Eval then gates every case.
+        graph = None
+    if graph is not None:
+        (out / GRAPH_FILE).write_text(json.dumps(graph) + "\n", encoding="utf-8")
     meta = {
         "schema": BASELINE_SCHEMA, "schema_version": BASELINE_VERSION, "created_at": _stamp(),
         "base_commit": base, "run": spec.to_json(), "sessions": sessions,
@@ -340,6 +356,49 @@ def object_check(snap: Path, base: str, board: str) -> Optional[dict]:
     return report
 
 
+def kernel_graph(board: str) -> Optional[dict]:
+    """Code graph of the board's last build."""
+    from .firmware_build import resolve_build_dir
+
+    return code_graph(resolve_build_dir(repo_root(), resolve_board(board), None))
+
+
+def stored_graph(baseline: Path) -> Optional[dict]:
+    """The baseline's code graph nodes, if any."""
+    try:
+        return read_graph(json.loads((baseline / GRAPH_FILE).read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        return None
+
+
+def touched_cases(baselines: list, candidate, base: dict, cand: dict) -> frozenset[str]:
+    """Cases whose kernel code changed."""
+    changed, out = changed_nodes(base, cand), set()
+    rows = [*baselines[0].rows.values(), *candidate.rows.values()]
+    routes = frozenset(row.get("inner_symbol") for row in rows if row.get("inner_symbol"))
+    for case_id, row in baselines[0].rows.items():
+        timed = baselines[0].symbol(case_id)
+        # The candidate may route elsewhere.
+        inners = {row.get("inner_symbol") or None, (candidate.rows.get(case_id) or {}).get("inner_symbol") or None}
+        if any(is_touched(timed, inner, base, cand, changed, routes) for inner in inners):
+            out.add(case_id)
+    return frozenset(out)
+
+
+def case_gate(baseline: Path, board: str, baselines: list, candidate) -> tuple[Optional[frozenset[str]], Optional[str]]:
+    """Touched cases, or None and why."""
+    base = stored_graph(baseline)
+    if base is None:
+        return None, "baseline has no code graph"
+    try:
+        cand = read_graph(kernel_graph(board))
+    except (OSError, ValueError, KeyError, struct.error) as exc:
+        return None, f"candidate objects unreadable: {exc}"
+    if cand is None:
+        return None, "candidate has no code graph"
+    return touched_cases(baselines, candidate, base, cand), None
+
+
 def _hidden_ids(bundles: list) -> set[str]:
     return {case_id for b in bundles for case_id, row in b.rows.items() if row.get("hidden") == "true"}
 
@@ -354,7 +413,7 @@ def snapshot_hash(snap: Path) -> str:
 
 def _case_view(case: dict) -> dict:
     keys = ("case_id", "family", "timed_symbol", "excluded_by", "timing_lost", "baseline_cycles", "candidate_cycles",
-            "speedup", "delta_pct", "band_pct", "regression", "cycles_per_mac_candidate")
+            "speedup", "delta_pct", "band_pct", "touched", "regression", "cycles_per_mac_candidate")
     return {key: case.get(key) for key in keys}
 
 
@@ -370,7 +429,7 @@ def _hints(bundle: Path, hidden: set[str]) -> list[dict]:
     ]
 
 
-def verdict_from(report: dict, hidden: set[str], candidate: Path) -> dict:
+def verdict_from(report: dict, hidden: set[str], candidate: Path, gate_reason: Optional[str] = None) -> dict:
     """The agent-facing verdict; hidden ids redacted."""
     public = [c for c in report["cases"] if c["case_id"] not in hidden and not c.get("hidden")]
     failures, hidden_kinds = [], Counter()
@@ -388,7 +447,10 @@ def verdict_from(report: dict, hidden: set[str], candidate: Path) -> dict:
         "verdict": verdict, "stage": "score", "score": report["score"], "board": report["board"],
         "candidate_session": report["candidate"][0], "baseline_sessions": report["baseline"],
         "families": report["families"], "failures": failures, "cases": [_case_view(c) for c in public],
+        "case_gate": {"scope": report["settings"]["case_gate"], "reason": gate_reason},
         "hidden": {"cases": len(hidden), "failures": dict(hidden_kinds),
+                   "touched": None if report["settings"]["case_gate"] == "all" else
+                   sum(bool(c["touched"]) for c in report["cases"] if c["case_id"] in hidden),
                    "subscores": (report.get("subscores") or {}).get("hidden")} if hidden else None,
         "hints": _hints(candidate, hidden),
     }
@@ -421,8 +483,9 @@ def evaluate(kernels: Path, baseline: Path, meta: dict, min_score: float, run=No
         return {**head, "verdict": "rejected", "stage": "objects", "findings": built["findings"]}
     baselines, candidate = [load_bundle(path) for path in bundles], load_bundle(Path(summary["bundle"]))
     scoring = load_scoring(head["board"]) | {"min_score": min_score}
-    report = score_bundles(baselines, [candidate], scoring, check=check)
-    return {**head, **verdict_from(report, _hidden_ids(baselines + [candidate]), candidate.path)}
+    touched, reason = case_gate(baseline, head["board"], baselines, candidate)
+    report = score_bundles(baselines, [candidate], scoring, check=check, touched=touched)
+    return {**head, **verdict_from(report, _hidden_ids(baselines + [candidate]), candidate.path, reason)}
 
 
 # --- commands -----------------------------------------------------------------------
