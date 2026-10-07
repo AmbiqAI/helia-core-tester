@@ -101,7 +101,9 @@ _INTEGER = re.compile(r"(?<![\w.'])(0[xX][0-9a-fA-F']+|0[bB][01']+|\d[\d']*)[uUl
 SCS_RANGE = range(0xE0000000, 0xE0100000)
 LINE_RULES = (
     ("special_section", re.compile(
-        r"\.(?:push)?section\b|\b_*section_*\s*\(|\b(?:ITCM|DTCM|__RAMFUNC|RAMFUNC|AM_SHARED_RW|NS_PUT_IN_TCM)\b",
+        r"\.(?:push)?section\b|\b_*section_*\s*\(|\b(?:ITCM|DTCM|__RAMFUNC|RAMFUNC|AM_SHARED_RW|NS_PUT_IN_TCM)\b"
+        # Assembly .data/.bss switch sections.
+        r"|(?<![\w\])\]])\.(?:data|bss)\b(?!\s*=)",
     )),
     ("measurement_access", re.compile(
         r"\b(?:DWT|CoreDebug|DCB|SysTick|ITM|TPI|NVIC|SCB|PMU|MEMSYSCTL|CYCCNT)\b|\bARM_PMU_|\bam_hal_"

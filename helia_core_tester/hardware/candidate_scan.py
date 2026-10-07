@@ -198,12 +198,15 @@ _SECTION_OK = re.compile(
     r"^(?:\.rela?(?=\.))?(?:(?:\.text|\.rodata|\.data|\.bss|\.debug_\w+)(?:\..*)?"
     r"|\.ARM\.(?:attributes|exidx|extab)|\.comment|\.note\.GNU-stack|\.group|\.(?:sym|str|shstr)tab|)$"
 )
-_SECTION_ROW = re.compile(r"^\s*\[\s*\d+\]\s+(\S*)\s+([A-Z][A-Z0-9_]*)\s+[0-9a-f]{8}\s+\S+\s+\S+\s+\S+\s+([A-Z]*)")
+_SECTION_ROW = re.compile(r"^\s*\[\s*(\d+)\]\s+(\S*)\s+([A-Z][A-Z0-9_]*)\s+[0-9a-f]{8}\s+\S+\s+\S+\s+\S+\s+([A-Z]*)")
 _ADDRESS_INSN = re.compile(r"\t(?:mov|movw|movt|ldr)\S*\t|\t\.word\t")
 _IMMEDIATE = re.compile(r"#(-?(?:0x[0-9a-fA-F]+|\d+))|\.word\t(0x[0-9a-fA-F]+)")
 _CONTENTS = re.compile(r"^Contents of section (\S+):")
 _DUMP_ROW = re.compile(r"^ [0-9a-f]+ ((?:[0-9a-f]{2,8} ){1,4})")
 _RELOC_SECTION = re.compile(r"^Relocation section '\.rela?(\S+)'")
+_SYMBOL_ROW = re.compile(r"^\s*\d+:\s+[0-9a-f]+\s+\d+\s+(\w+)\s+\w+\s+\w+\s+(\d+)\s+(\S+)")
+# Mapping symbols mark code: $t, $a.
+_CODE_SYMBOL = re.compile(r"^\$[ta](?:\.|$)")
 _RELOC_ROW = re.compile(r"^([0-9a-f]{8})\s+[0-9a-f]{8}\s+(R_ARM_\w+)\s+[0-9a-f]{8}\s+(\S+)")
 _CALLS = frozenset(("R_ARM_THM_CALL", "R_ARM_THM_JUMP24", "R_ARM_THM_JUMP19", "R_ARM_CALL", "R_ARM_JUMP24"))
 # Kernel tables stay below 1 MiB.
@@ -273,19 +276,33 @@ def _section_bytes(obj: Path, names: list[str]) -> dict[str, bytes]:
 
 def _object_hits(source: str, obj: Path, defined: frozenset[str]) -> list[dict]:
     """Section, SCS and reference hits."""
-    hits, sections = [], {}
+    hits, sections, names = [], {}, {}
     # Locals resolve only inside this object.
     local = _defined_symbols([obj], local=True)
     for row in run_tool("arm-none-eabi-readelf", ["-SW", str(obj)]).splitlines():
         match = _SECTION_ROW.match(row)
         if not match:
             continue
-        name, kind, flags = match.groups()
+        index, name, kind, flags = match.groups()
+        names[index] = name
         # Code may live in .text only.
         if not _SECTION_OK.match(name) or ("X" in flags and not name.startswith(".text")):
             hits.append({"rule": "object_section", "path": source, "text": f"{name} {flags}"})
         if kind == "PROGBITS" and "A" in flags:
             sections[name] = flags
+
+    # Code outside .text, whatever its flags.
+    homes = {}
+    for row in run_tool("arm-none-eabi-readelf", ["-sW", str(obj)]).splitlines():
+        match = _SYMBOL_ROW.match(row)
+        if not match:
+            continue
+        kind, index, symbol = match.groups()
+        home = names.get(index, "")
+        homes[symbol] = home
+        code = kind == "FUNC" or _CODE_SYMBOL.match(symbol)
+        if code and not home.startswith(".text"):
+            hits.append({"rule": "object_section", "path": source, "text": f"code {symbol} in {home}"})
 
     def hit(text: str) -> None:
         hits.append({"rule": "object_address", "path": source, "text": text[:200]})
@@ -319,6 +336,9 @@ def _object_hits(source: str, obj: Path, defined: frozenset[str]) -> list[dict]:
             addend = int.from_bytes(contents[section][offset:offset + 4], "little", signed=True)
             if not 0 <= addend < _ADDEND_MAX:
                 hit(f"{symbol}{addend:+#x} in {section}")
+        home = homes.get(symbol, "")
+        if kind in _CALLS and home and not home.startswith(".text"):
+            hits.append({"rule": "object_section", "path": source, "text": f"branch to {symbol} in {home}"})
         if kind not in _CALLS and not symbol.startswith(".") and symbol not in defined | local:
             hit(f"{kind} to {symbol} in {section}")
     return hits

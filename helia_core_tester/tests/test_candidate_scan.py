@@ -77,10 +77,10 @@ def test_missing_compiler_fails(kernels: Path, monkeypatch) -> None:
     assert [f["rule"] for f in found] == ["scan_error"]
 
 
-def _build(tmp_path: Path, source: str, define: str = "-DBOARD_X") -> Path:
+def _build(tmp_path: Path, source: str, define: str = "-DBOARD_X", name: str = "k.c") -> Path:
     """A build dir with one kernel object."""
     build = tmp_path / "build"
-    src = build / "nsx_app/modules/nsx-cmsis-nn/Source/k.c"
+    src = build / "nsx_app/modules/nsx-cmsis-nn/Source" / name
     src.parent.mkdir(parents=True)
     src.write_text(source, encoding="utf-8")
     gcc = arm_tool("arm-none-eabi-gcc")
@@ -102,12 +102,38 @@ def test_object_scan_flags_sections_and_scs(tmp_path: Path) -> None:
     )
     findings, summary, flags = candidate_scan.object_findings(_build(tmp_path, source))
     texts = {f["text"].split()[0] for f in findings if f["rule"] == "object_section"}
-    assert texts == {".itcm_text", ".data.fast"} and summary["count"] == 1
+    assert texts == {".itcm_text", ".data.fast", "code"} and summary["count"] == 1
     assert len([f for f in findings if f["rule"] == "object_address"]) >= 2
     assert flags["*"] == flags["Source/k.c"] == ("-DBOARD_X", "-IInclude")
 
 
+RAM_ROUTINE = """.syntax unified
+.thumb
+.data
+.global ramfn
+.type ramfn, %function
+.thumb_func
+ramfn:
+  bx lr
+lab:
+  bx lr
+.text
+.global caller
+.type caller, %function
+.thumb_func
+caller:
+  bl lab
+  b ramfn
+"""
+
+
 @needs_gcc
+def test_object_scan_flags_code_in_data(tmp_path: Path) -> None:
+    findings, _, _ = candidate_scan.object_findings(_build(tmp_path, RAM_ROUTINE, name="k.S"))
+    texts = {f["text"] for f in findings if f["rule"] == "object_section"}
+    assert {"code ramfn in .data", "branch to .data in .data"} <= texts
+
+
 def test_object_scan_clean(tmp_path: Path) -> None:
     source = "unsigned f(unsigned x) { return x > 0xE0000000u ? x : ~x; }\nconst int t[2] = {1, 2};\n"
     findings, summary, _ = candidate_scan.object_findings(_build(tmp_path, source))
