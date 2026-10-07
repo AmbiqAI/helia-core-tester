@@ -327,3 +327,33 @@ def test_file_growing_during_copy_hits_total(tmp_path, kernels, monkeypatch) -> 
     verdict = candidate_eval.evaluate(kernels, out, candidate_eval.read_baseline(out), 0.005,
                                       run=FakeRun(tmp_path / "reports"), budget=budget)
     assert verdict["verdict"] == "refused" and "in total" in verdict["reason"]
+
+
+def test_baseline_keeps_run_refusal(tmp_path, kernels, monkeypatch) -> None:
+    """A refused run refuses the baseline (3)."""
+    monkeypatch.setattr(candidate_eval, "hardware_run", lambda args, log: (3, None))
+    out = tmp_path / "base"
+    result = runner.invoke(app, ["candidate", "baseline", "--kernels", str(kernels), "--board", "apollo510_evb", "--out", str(out)])
+    assert result.exit_code == 3
+    monkeypatch.setattr(candidate_eval, "hardware_run", lambda args, log: (5, None))
+    result = runner.invoke(app, ["candidate", "baseline", "--kernels", str(kernels), "--board", "apollo510_evb",
+                                 "--out", str(tmp_path / "base2")])
+    assert result.exit_code == 5
+
+
+def test_default_budget_spans_trees(tmp_path, kernels, monkeypatch) -> None:
+    out, _ = _baseline(tmp_path, kernels)
+    small = candidate_eval.CopyBudget
+    monkeypatch.setattr(candidate_eval, "CopyBudget", lambda: small(total_bytes=3000))
+    (kernels / "Source/s.c").write_bytes(b"s" * 2000)
+    (kernels / "Include/i.h").write_bytes(b"i" * 2000)
+    # Each tree fits; together they do not.
+    with pytest.raises(candidate_eval.TooLarge, match="in total"):
+        candidate_eval.snapshot(kernels, out, candidate_eval.read_baseline(out)["base_commit"])
+
+
+def test_hidden_count_survives_not_comparable(tmp_path, kernels, monkeypatch) -> None:
+    monkeypatch.setattr(sb, "FIELDS", sb.FIELDS + ["hidden"])
+    out, _ = _baseline(tmp_path, kernels, rows={"dw_a": {"hidden": "true"}, "fc_a": {"hidden": "true"}})
+    verdict = _eval(kernels, out, OtherBuild(tmp_path / "reports", rows={"dw_a": {"hidden": "true"}, "fc_a": {"hidden": "true"}}))
+    assert verdict["verdict"] == "not_comparable" and verdict["hidden"]["cases"] == 2

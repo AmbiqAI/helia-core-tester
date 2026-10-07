@@ -42,6 +42,7 @@ import typer
 
 from .boards import UnknownBoardError, repo_root, resolve_board
 from .candidate_check import CheckError, _git, candidate_app, check_candidate
+from .errors import RunRefused
 from . import nsx_cli
 from .nsx_app import KERNEL_TREES, AppRenderError, write_kernels
 from .pmu_explain import AGENT_PMU_SELECTION, explain_bundle
@@ -158,7 +159,9 @@ def write_baseline(spec: RunSpec, out: Path, repeats: int, run=None) -> dict:
         # Repeats reuse the first build.
         rc, summary = run(run_args(spec, session, skip_generate=index > 0, skip_flash=index > 0), out / "logs" / f"{session}.log")
         if summary is None:
-            raise RuntimeError(f"Baseline run {session} exited {rc} without a bundle.")
+            # Keep hardware run's refusal.
+            error = RunRefused if rc == RUN_REFUSED else RuntimeError
+            raise error(f"Baseline run {session} exited {rc} without a bundle.")
         if summary["totals"]["failed"]:
             raise RuntimeError(f"Baseline run {session} failed {summary['totals']['failed']} case(s).")
         shutil.copytree(summary["bundle"], out / "bundles" / session)
@@ -290,6 +293,8 @@ def snapshot(candidate: Path, baseline: Path, base: str, budget: Optional[CopyBu
     _git(baseline, "clone", "-q", "--branch", "base", str(baseline / "kernels.git"), "snapshot")
     if _git(snap, "rev-parse", "HEAD").decode().strip() != base:
         raise CheckError("Baseline base copy does not match.")
+    # One budget spans every tree.
+    budget = budget or CopyBudget()
     for name in SNAPSHOT_TREES:
         src, dst = candidate / name, snap / name
         shutil.rmtree(dst, ignore_errors=True)
@@ -297,7 +302,7 @@ def snapshot(candidate: Path, baseline: Path, base: str, budget: Optional[CopyBu
             # The check flags symlinks.
             dst.symlink_to(src.readlink())
         elif src.is_dir():
-            copy_tree(src, dst, budget or CopyBudget())
+            copy_tree(src, dst, budget)
     return snap
 
 
@@ -364,7 +369,7 @@ def verdict_from(report: dict, hidden: set[str], candidate: Path) -> dict:
         "verdict": verdict, "stage": "score", "score": report["score"], "board": report["board"],
         "candidate_session": report["candidate"][0], "baseline_sessions": report["baseline"],
         "families": report["families"], "failures": failures, "cases": [_case_view(c) for c in public],
-        "hidden": {"cases": len(report["cases"]) - len(public), "failures": dict(hidden_kinds),
+        "hidden": {"cases": len(hidden), "failures": dict(hidden_kinds),
                    "subscores": (report.get("subscores") or {}).get("hidden")} if hidden else None,
         "hints": _hints(candidate, hidden),
     }
@@ -430,8 +435,8 @@ def baseline_command(
     out.mkdir(parents=True, exist_ok=True)
     try:
         meta = write_baseline(spec, out, repeats)
-    except CheckError as exc:
-        typer.echo(f"✗ {exc}", err=True)
+    except (CheckError, RunRefused) as exc:
+        typer.echo(f"✗ {exc} Logs: {out / 'logs'}", err=True)
         raise typer.Exit(EXIT_REFUSED)
     except RuntimeError as exc:
         typer.echo(f"✗ {exc} Logs: {out / 'logs'}", err=True)
