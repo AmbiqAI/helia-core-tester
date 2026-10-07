@@ -17,8 +17,7 @@ prepare, prepare_timed_pct of timed) and also either pass
 prepare_max_ratio times the baseline or could pay for a timed gain:
 the case got faster than max(board floor, k * timed spread) and
 prepare grew past prepare_share_pct of the cycles saved. MLPerf layer
-cases weigh mlperf_case_weight
-in geomeans. The score is sum(weight * ln(family geomean speedup)) with
+cases weigh mlperf_case_weight in geomeans. The score is sum(weight * ln(family geomean speedup)) with
 weights from assets/scoring/family_weights.yaml; with weights that sum
 to 1 it approximates ln(whole-model speedup). --focus limits the score
 (not the gates) to some routes or dtypes, weights renormalized. A
@@ -291,7 +290,7 @@ def _spread(rows: list[dict], key: str = "median_cycles", mad_key: str | None = 
     return MAD_SIGMA * max(repeat_mad, run_mad)
 
 
-# Version 2 added focus and gate keys.
+# v2 focus and gates; floors v3 prepare intent.
 SCORING_SCHEMAS = {"family_weights.yaml": 2, "noise_floors.yaml": 3}
 
 
@@ -362,7 +361,7 @@ def _prepare_cause(a: float, b: float | None, allowed: float, saved: float, scor
     return "pays_for_gain" if saved > 0 and growth > saved * scoring["prepare_share_pct"] / 100.0 else None
 
 
-def _prepare(base: list[dict], cand: list[dict], timed: tuple, scoring: dict) -> dict | None:
+def _prepare(base: list[dict], cand: list[dict], timed: tuple[float | None, float | None], scoring: dict) -> dict | None:
     """Prepare cycles; None when the baseline lacks them."""
     a = _pool(base, "prepare_cycles")
     if a is None:
