@@ -34,6 +34,8 @@ dependencies = [
     "pylink-square>=1.2.0,<3.0.0",
     # Same pin helia-profiler carries.
     "neuralspotx==0.8.1",
+    # CA bundle for downloads (NixOS).
+    "certifi>=2023.7.22",
 ]
 
 [project.scripts]
