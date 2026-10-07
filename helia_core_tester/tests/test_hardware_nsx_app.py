@@ -268,6 +268,7 @@ def test_lock_serializes_writers(tmp_path: Path) -> None:
     import sys
     import time
 
+    pytest.importorskip("fcntl")
     checkout = make_checkout(tmp_path / "ns-cmsis-nn")
     module = tmp_path / "module"
     ready = tmp_path / "ready"
@@ -280,7 +281,9 @@ def test_lock_serializes_writers(tmp_path: Path) -> None:
     )
     proc = subprocess.Popen([sys.executable, "-c", holder])
     try:
+        deadline = time.monotonic() + 10
         while not ready.exists():
+            assert proc.poll() is None and time.monotonic() < deadline, "lock holder never started"
             time.sleep(0.01)
         start = time.monotonic()
         nsx_app.write_kernels(checkout, module)
