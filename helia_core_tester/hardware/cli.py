@@ -18,10 +18,10 @@ run_summary.py.
 Exit codes, shared with `score`: 0 pass; 1 a case failed correctness; 2 bad
 flags; 3 refused before running (dirty tester, a --skip-flash or --golden-from
 mismatch, no case matches); 5 error (cmake, J-Link, transport, probe, or a
-tester bug); 130 interrupted (Ctrl-C). Failures print one line;
-the traceback is shown with `--verbosity 1` or higher (also
+tester bug); 130 interrupted (Ctrl-C). Known operational failures print one
+line; their traceback is shown with `--verbosity 1` or higher (also
 `$HELIA_CORE_TESTER_VERBOSITY`, the same knob the generate/build/run commands
-use).
+use). Unexpected tester bugs always print a traceback.
 """
 
 from __future__ import annotations
