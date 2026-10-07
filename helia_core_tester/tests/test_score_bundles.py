@@ -12,7 +12,7 @@ from helia_core_tester.cli import app
 from helia_core_tester.hardware.score import FAMILY_KEYS, GATE_KEYS, kernel_commit, load_bundle, load_scoring, parse_focus, score_bundles
 
 FIELDS = ["case_id", "kernel_id", "comparison_passed", "median_cycles", "mad_cycles", "timed_symbol", "inner_symbol", "macs",
-          "ARM_PMU_INST_RETIRED", "ARM_PMU_MVE_INST_RETIRED", "timing_status", "prepare_cycles"]
+          "ARM_PMU_INST_RETIRED", "ARM_PMU_MVE_INST_RETIRED", "timing_status", "prepare_cycles", "hidden"]
 CASES = {
     "conv_a": ("arm_convolve_wrapper_s8", 1000.0),
     "dw_a": ("arm_depthwise_conv_wrapper_s8", 2000.0),
@@ -447,6 +447,35 @@ def test_cli_refuses_unknown_focus(tmp_path):
     result = CliRunner().invoke(app, [*argv, "arm_convolve_typo_s8"])
     assert result.exit_code == 2 and "no baseline case matches" in result.output
     assert CliRunner().invoke(app, [*argv, "s8"]).exit_code == 4
+
+
+def _hide(root: Path, name: str, cases: tuple = ("conv_a",), commitment: str | None = "c1", **kwargs) -> Path:
+    """A bundle with hidden cases and a commitment."""
+    rows = {case_id: {"hidden": "true"} for case_id in cases}
+    path = _bundle(root, name, rows=rows, **kwargs)
+    selection = {"hidden_set": {"seed_commitment": commitment, "cases": len(cases)}} if commitment else {}
+    (path / "session_summary.json").write_text(json.dumps({"selection": selection}))
+    return path
+
+
+def test_hidden_cases_score_apart(tmp_path):
+    base = _hide(tmp_path, "a")
+    report = _score([base], [_hide(tmp_path, "b", cycles={"conv_a": 800.0, "dw_a": 1000.0})])
+    hidden = next(case for case in report["cases"] if case["case_id"] == "conv_a")
+    assert hidden["hidden"] and report["verdict"] == "pass"
+    assert report["subscores"]["hidden"] == {"cases": 1, "score": pytest.approx(math.log(1.25))}
+    assert report["subscores"]["public"]["cases"] == 3
+    assert _score([_bundle(tmp_path, "c")], [_bundle(tmp_path, "d")])["subscores"] is None
+
+
+@pytest.mark.parametrize(("cases", "commitment", "reason"), [
+    (("conv_a",), "c2", "commitment differs"),
+    (("conv_a", "fc_a"), "c1", "case set differs"),
+    ((), None, "commitment differs"),
+])
+def test_hidden_sets_must_match(tmp_path, cases, commitment, reason):
+    report = _score([_hide(tmp_path, "a")], [_hide(tmp_path, "b", cases, commitment)])
+    assert report["verdict"] == "not_comparable" and reason in report["failures"][0]["reason"]
 
 
 @pytest.mark.parametrize(("kernels", "commit"), [
