@@ -31,7 +31,7 @@ Include/, nothing else. Rules, each a finding in the JSON report:
 
 Rules also run on text with adjacent string literals joined, per line
 and over all added lines of a file, as C joins them before asm sees them,
-and on text with `##` pastes joined. candidate_scan then reruns the
+and on text with `##` (or `%:%:`) pastes joined. candidate_scan then reruns the
 rules on `gcc -E` output of base and candidate.
 
 Literal tensor shapes from descriptors are not grepped: too many false
@@ -78,7 +78,8 @@ SAFE_ATTRIBUTES = frozenset((
 ))
 _ATTRIBUTE = re.compile(r"__attribute(?:__)?\s*\(\s*\((.*?)\)\s*\)|\[\[(.*?)\]\]", re.DOTALL)
 _ADJACENT_LITERALS = re.compile(r'"\s*"')
-_PASTE = re.compile(r"\s*##\s*")
+# "%:%:" is the "##" digraph.
+_PASTE = re.compile(r"\s*(?:##|%:%:)\s*")
 _ESCAPE = re.compile(r"\\([0-7]{1,3}|[xX][0-9a-fA-F]+)")
 _ATTRIBUTE_HINT = re.compile(r"__attribute|__declspec|\[\[")
 # "%:" is the "#" digraph.
