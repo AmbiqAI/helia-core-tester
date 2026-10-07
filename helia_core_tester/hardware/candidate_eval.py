@@ -51,7 +51,9 @@ from .score import DEFAULT_MIN_SCORE, EXIT_REFUSED, EXITS, load_bundle, load_sco
 
 SCHEMA = "hct.candidate_eval"
 BASELINE_SCHEMA = "hct.candidate_baseline"
-SCHEMA_VERSION = 1
+# Verdict 2: hints pct_of_peak in percent.
+SCHEMA_VERSION = 2
+BASELINE_VERSION = 1
 BASELINE_FILE = "baseline.json"
 # Every verdict stage, in order.
 STAGES = ("tester", "baseline", "check", "run", "objects", "score", "eval")
@@ -172,7 +174,7 @@ def write_baseline(spec: RunSpec, out: Path, repeats: int, run=None) -> dict:
         shutil.copytree(summary["bundle"], out / "bundles" / session)
         sessions.append(session)
     meta = {
-        "schema": BASELINE_SCHEMA, "schema_version": SCHEMA_VERSION, "created_at": _stamp(),
+        "schema": BASELINE_SCHEMA, "schema_version": BASELINE_VERSION, "created_at": _stamp(),
         "base_commit": base, "run": spec.to_json(), "sessions": sessions,
     }
     (out / BASELINE_FILE).write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
@@ -187,7 +189,7 @@ def read_baseline(path: Path) -> dict:
         raise ValueError(f"{path}: no readable {BASELINE_FILE}") from exc
     if not isinstance(meta, dict) or meta.get("schema") != BASELINE_SCHEMA:
         raise ValueError(f"{path}: not a candidate baseline")
-    if meta.get("schema_version") != SCHEMA_VERSION:
+    if meta.get("schema_version") != BASELINE_VERSION:
         raise ValueError(f"{path}: unsupported baseline version {meta.get('schema_version')!r}")
     base, sessions, run = meta.get("base_commit"), meta.get("sessions"), meta.get("run")
     if not (isinstance(base, str) and re.fullmatch(r"[0-9a-f]{40}", base)):

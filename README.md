@@ -266,8 +266,8 @@ bundles) and prints at most four lines per MAC case: cycles/MAC against a ceilin
 from `assets/scoring/ceilings.yaml`, where the cycles go (IPC, MVE share, MVE MAC
 instructions against the ideal count, stall shares, L1D refills, prepare share), a
 diagnosis and up to three ranked hints. `--op` takes conv, depthwise or fc. `--json` emits schema `hct.pmu_explain`
-v2: `bundles` (board, cpu, placement per bundle) and one flat `cases` list,
-each case naming its `bundle`; `pmu_explain.explain_case` gives the same result for one case row. Rules live
+v3: `bundles` (board, cpu, placement per bundle) and one flat `cases` list,
+each case naming its `bundle` and its `pct_of_peak` (0-100); `pmu_explain.explain_case` gives the same result for one case row. Rules live
 in `helia_core_tester/hardware/pmu_explain.py` (`_rule_*`); each ranks by the share
 of cycles it explains. Cycles-only bundles (Cortex-M4) get % of peak only.
 
@@ -368,7 +368,7 @@ the agent's view.
    On apollo330mP, 50 DW s8 cases took about 1 minute per eval and the
    two-repeat baseline about 2 minutes (measured).
 
-The verdict (schema `hct.candidate_eval`) has these fields:
+The verdict (schema `hct.candidate_eval` v2) has these fields:
 
 - `verdict`, `exit_code`, and `stage`: `tester` (dirty tester),
   `baseline` (unusable baseline dir), `check`, `run`, `objects` (once
@@ -378,7 +378,7 @@ The verdict (schema `hct.candidate_eval`) has these fields:
 - `score`, `families` and `failures`.
 - `cases`: one entry per public case, with cycles, speedup, delta and noise
   band.
-- `hints`: % of peak, a diagnosis and ranked hints for each public MAC case
+- `hints`: `pct_of_peak` (0-100), a diagnosis and ranked hints for each public MAC case
   (from `explain`).
 - `hidden`: null without hidden cases; otherwise case and failure counts,
   plus the scorer's hidden `subscores` when it reports them.

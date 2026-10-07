@@ -436,3 +436,15 @@ def test_baseline_refuses_bad_placement_before_mkdir(tmp_path, kernels, board, p
     result = runner.invoke(app, ["candidate", "baseline", "--kernels", str(kernels), "--board", board,
                                  "--placement", placement, "--out", str(out)])
     assert result.exit_code == 2 and not out.exists()
+
+
+def test_hints_report_percent_of_peak(tmp_path, monkeypatch) -> None:
+    """Hints carry percent, like the score's peak fields."""
+    from helia_core_tester.hardware.pmu_explain import explain_case
+
+    row = {"case_id": "c", "timed_symbol": "arm_convolve_wrapper_s8", "inner_symbol": "arm_convolve_s8",
+           "median_cycles": 4000, "macs": 16000, "timing_status": "valid"}
+    case = explain_case(row, cpu="cortex-m55")
+    monkeypatch.setattr(candidate_eval, "explain_bundle", lambda bundle: {"cases": [case]})
+    [hint] = candidate_eval._hints(tmp_path, hidden=set())
+    assert hint["pct_of_peak"] == pytest.approx(50.0)
