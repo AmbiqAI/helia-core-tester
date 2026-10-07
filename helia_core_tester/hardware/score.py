@@ -71,6 +71,8 @@ class Bundle:
     rows: dict[str, dict[str, str]]
     digests: dict[str, str]
     symbols: dict[str, str]
+    hidden: frozenset[str] = frozenset()
+    commitment: str | None = None
 
     @property
     def session_id(self) -> str:
@@ -102,7 +104,11 @@ def load_bundle(path: Path) -> Bundle:
     catalog = json.loads(catalog_path.read_text(encoding="utf-8")) if catalog_path.exists() else []
     digests = {case["case_id"]: case["input_digest"] for case in cases if case.get("input_digest")}
     symbols = {str(entry["kernel_id"]): str(entry.get("canonical_name", "")) for entry in catalog}
-    return Bundle(root, manifest, rows, digests, symbols)
+    hidden = frozenset(case_id for case_id, row in rows.items() if row.get("hidden") == "true")
+    summary_path = root / "session_summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8")) if summary_path.exists() else {}
+    hidden_set = (summary.get("selection") or {}).get("hidden_set") or {}
+    return Bundle(root, manifest, rows, digests, symbols, hidden, hidden_set.get("seed_commitment"))
 
 
 def harness_print(manifest: dict) -> dict:
@@ -147,6 +153,12 @@ def refusals(baselines: list[Bundle], candidates: list[Bundle], check: dict | No
         if changed:
             reasons.append(f"{bundle.session_id}: harness differs in {', '.join(changed)}")
     reasons += _compare_refusals(baselines, candidates)
+    # Hidden sets must match exactly.
+    for bundle in baselines[1:] + candidates:
+        if bundle.commitment != baselines[0].commitment:
+            reasons.append(f"{bundle.session_id}: hidden seed commitment differs")
+        elif bundle.hidden != baselines[0].hidden:
+            reasons.append(f"{bundle.session_id}: hidden case set differs")
     for side, bundles in (("baseline", baselines), ("candidate", candidates)):
         kernels = [_kernel_id(b) for b in bundles]
         if len(bundles) > 1 and None in kernels:
@@ -380,6 +392,7 @@ def _case(case_id: str, baselines: list[Bundle], candidates: list[Bundle], scori
         "inner_symbol": inner,
         "dtype": _dtype(base_route, case_id),
         "mlperf": mlperf,
+        "hidden": case_id in baselines[0].hidden,
         "weight": scoring["mlperf_weight"] if mlperf else 1.0,
         "eligible": not statuses and bool(a) and bool(b),
         "excluded_by": statuses[0] if statuses else None,
@@ -417,6 +430,16 @@ def _family_band(cases: list[dict], scoring: dict) -> float:
     return max(scoring["family_floor_pct"], spread)
 
 
+def _contributions(cases: list[dict], scoring: dict, renorm: bool) -> dict[str, float]:
+    """Weighted ln geomean per family."""
+    weights = {case["family"]: scoring["weights"].get(case["family"], 0.0) for case in cases}
+    norm = sum(weights.values()) if renorm else 1.0
+    return {
+        family: weight / norm * math.log(_geomean([c for c in cases if c["family"] == family])) if norm else 0.0
+        for family, weight in sorted(weights.items())
+    }
+
+
 # Documented in score_bundles; tests pin it.
 FAMILY_KEYS = ("weight", "cases", "geomean_speedup", "band_pct", "gates", "regression", "focus_cases", "focus_geomean", "contribution")
 GATE_KEYS = ("subset", "cases", "slowdown_pct", "band_pct", "regression")
@@ -439,7 +462,9 @@ def score_bundles(
     candidate session ids, settings, families {name: {weight, cases,
     geomean_speedup, band_pct, gates [{subset, cases, slowdown_pct,
     band_pct, regression}], regression, focus_cases, focus_geomean,
-    contribution}}, cases (eligible and excluded rows), failures [{kind,
+    contribution}}, subscores ({public, hidden: {cases, score}} when the
+    run has hidden cases, else null; each renormalized), cases (eligible
+    and excluded rows), failures [{kind,
     case_id, reason}]. settings.check is the trusted {tree_hash,
     base_commit}, or null when unchecked; settings.focus is {routes,
     dtypes} or null. Failure kinds: not_comparable, comparison_failed,
@@ -468,6 +493,7 @@ def score_bundles(
             "focus": focus or None,
         },
         "families": {},
+        "subscores": None,
         "cases": [],
         "failures": [],
     }
@@ -535,13 +561,15 @@ def score_bundles(
             "band_pct": _family_band(members, scoring), "gates": gates, "regression": any(g["regression"] for g in gates),
             "focus_cases": len(hits), "focus_geomean": _geomean(hits) if hits else None, "contribution": 0.0,
         }
-    hit_families = {name: fam for name, fam in report["families"].items() if fam["focus_cases"]}
-    norm = sum(fam["weight"] for fam in hit_families.values()) if focus else 1.0
-    total = 0.0
-    for fam in hit_families.values():
-        fam["contribution"] = fam["weight"] / norm * math.log(fam["focus_geomean"]) if norm else 0.0
-        total += fam["contribution"]
-    report["score"] = total
+    for family, contribution in _contributions(focused, scoring, bool(focus)).items():
+        report["families"][family]["contribution"] = contribution
+    report["score"] = total = sum(fam["contribution"] for fam in report["families"].values())
+    if any(case["hidden"] for case in cases):
+        parts = {name: [c for c in focused if c["hidden"] == hidden] for name, hidden in (("public", False), ("hidden", True))}
+        report["subscores"] = {
+            name: {"cases": len(part), "score": sum(_contributions(part, scoring, True).values()) if part else None}
+            for name, part in parts.items()
+        }
     if failures:
         report["verdict"] = "fail"
     elif total <= scoring["min_score"]:
@@ -593,6 +621,8 @@ def format_report(report: dict) -> str:
     if report["failures"]:
         lines += ["", f"failures ({len(report['failures'])}):"]
         lines += [f"  {f['kind']}: {f['case_id'] or '-'}: {f['reason']}" for f in report["failures"]]
+    for name, part in (report["subscores"] or {}).items():
+        lines.append(f"{name} score {_cell(part['score'], '+.5f')}  cases {part['cases']}")
     score = "-" if report["score"] is None else f"{report['score']:+.5f}"
     lines += ["", f"== {report['verdict'].upper()}  score {score}  timed cases {len(timed)}"]
     return "\n".join(lines)
