@@ -450,7 +450,6 @@ def test_git_tricks_cannot_hide_changes(kernels: Path) -> None:
     (kernels / "Tests/t.c").write_text("int t2;\n", encoding="utf-8")
     _git(kernels, "update-index", "--skip-worktree", "Tests/t.c")
     (kernels / "Source/Conv/a.c").write_text('#pragma GCC optimize("O3")\n', encoding="utf-8")
-    _git(kernels, "config", "diff.external", "true")
     (kernels / ".git/info/exclude").write_text("Source/Conv/hidden.c\n", encoding="utf-8")
     (kernels / "Source/Conv/hidden.c").write_text('__attribute__((section(".x"))) int h;\n', encoding="utf-8")
     report = check_candidate(kernels, _sha(kernels))
@@ -484,6 +483,87 @@ def test_token_inside_unchanged_attribute_fails(tmp_path: Path) -> None:
     text = '__attribute__((\n    noinline,\n    optimize("O3")))\nint a(void);\n'
     (root / "Source/Conv/a.c").write_text(text, encoding="utf-8")
     assert "attribute" in _rules(root)
+
+
+@pytest.mark.parametrize(("key", "value"), [
+    ("core.fsmonitor", "touch {pwned}; false #"),
+    ("filter.x.clean", "touch {pwned}; cat"),
+    ("core.worktree", "/"),
+    ("diff.external", "true"),
+    ("include.path", "{pwned}.cfg"),
+    ("Core.FSMonitor", "touch {pwned}; false #"),
+])
+def test_unsafe_git_config_refused(kernels: Path, tmp_path: Path, key: str, value: str) -> None:
+    from helia_core_tester.hardware.candidate_check import CheckError
+
+    pwned = tmp_path / "pwned"
+    (tmp_path / "pwned.cfg").write_text(f'[filter "x"]\n\tclean = touch {pwned}; cat\n', encoding="utf-8")
+    (kernels / ".gitattributes").write_text("*.c filter=x\n", encoding="utf-8")
+    (kernels / "Source/Conv/a.c").write_text("int a2;\n", encoding="utf-8")
+    _git(kernels, "config", key, value.format(pwned=pwned))
+    expected = {"include.path": "filter.x.clean", "Core.FSMonitor": "core.fsmonitor"}.get(key, key)
+    with pytest.raises(CheckError, match=expected):
+        check_candidate(kernels, _sha(kernels))
+    assert not pwned.exists()
+
+
+@pytest.mark.parametrize("key", ["filter..clean", "diff..textconv", "merge..driver", "FILTER.X.Smudge", "diff.A.b.command"])
+def test_unsafe_key_any_subsection(key: str) -> None:
+    from helia_core_tester.hardware.candidate_check import _UNSAFE_CONFIG, _key_parts
+
+    assert _key_parts(key) in _UNSAFE_CONFIG
+
+
+def test_empty_driver_name_refused(kernels: Path, tmp_path: Path) -> None:
+    from helia_core_tester.hardware.candidate_check import CheckError
+
+    pwned = tmp_path / "pwned"
+    (kernels / ".git/config").open("a", encoding="utf-8").write(f'[filter ""]\n\tclean = touch {pwned}; cat\n')
+    (kernels / ".gitattributes").write_text("*.c filter=\n", encoding="utf-8")
+    with pytest.raises(CheckError, match=r"filter\.\.clean"):
+        check_candidate(kernels, _sha(kernels))
+    assert not pwned.exists()
+
+
+def test_safe_config_keys_pass(kernels: Path) -> None:
+    safe = (("core.fsmonitorHookVersion", "2"), ("filter.lfs.required", "true"), ("diff.x.binary", "true"),
+            ("core.hooksPath", "hooks"))
+    for key, value in safe:
+        _git(kernels, "config", key, value)
+    assert check_candidate(kernels, _sha(kernels))["ok"]
+
+
+def test_nested_repo_config_never_runs(kernels: Path, tmp_path: Path) -> None:
+    pwned = tmp_path / "pwned"
+    nested = _repo(kernels / "ext" / "n", {"x": "1\n", ".gitattributes": "x filter=ev\n"})
+    _git(nested, "config", "filter.ev.clean", f"touch {pwned}; cat")
+    (nested / "x").write_text("2\n", encoding="utf-8")
+    _git(kernels, "add", "ext/n")
+    rules = {(f["path"], f["rule"]) for f in check_candidate(kernels, _sha(kernels))["findings"]}
+    assert ("ext/n", "outside_allowlist") in rules
+    assert not pwned.exists()
+
+
+@pytest.mark.parametrize("kind", ["fifo", "symlink", "big"])
+def test_special_file_never_read(kernels: Path, tmp_path: Path, kind: str) -> None:
+    import os
+    import threading
+
+    path = kernels / "Source/Conv/a.c"
+    path.unlink()
+    if kind == "fifo":
+        os.mkfifo(path)
+    elif kind == "symlink":
+        path.symlink_to(tmp_path / "elsewhere.c")
+        (tmp_path / "elsewhere.c").write_text("int e;\n", encoding="utf-8")
+    else:
+        path.write_bytes(b" " * ((4 << 20) + 1))
+    result: list = []
+    worker = threading.Thread(target=lambda: result.append(_rules(kernels)), daemon=True)
+    worker.start()
+    worker.join(timeout=30)
+    assert result, "check hung"
+    assert result[0] & {"file_type", "symlink"}
 
 
 def test_hidden_index_entry_fails(kernels: Path) -> None:
