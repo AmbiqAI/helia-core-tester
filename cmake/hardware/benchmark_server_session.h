@@ -36,6 +36,8 @@ extern "C" {
 #define HCT_SERVER_BLOB_CHUNK_BYTES 64u
 /* Timed output differs from first call. */
 #define HCT_STATUS_OUTPUT_CHANGED (-1000)
+/* Kernel changed a read-only operand. */
+#define HCT_STATUS_OPERAND_CHANGED (-1001)
 
 typedef enum
 {
@@ -66,6 +68,9 @@ typedef struct
     uint32_t bytes_received;
     /* Read-only copy outside the workspace. */
     const uint8_t *placed;
+    /* Second input copy, if twinned. */
+    uint32_t twin_offset;
+    uint8_t twinned;
 } hct_server_blob_t;
 
 /* One PMU measurement pass from SESSION_PLAN: which event ids to program into the
@@ -294,6 +299,8 @@ typedef struct
     /* First-call output; 0 bytes skips checks. */
     uint32_t checked_bytes;
     uint32_t checked_digest;
+    /* Workspace end past the input twins. */
+    uint32_t twin_end;
 } hct_server_session_t;
 
 void hct_server_session_init(hct_server_session_t *session,

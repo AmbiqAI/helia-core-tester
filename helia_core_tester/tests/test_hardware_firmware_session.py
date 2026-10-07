@@ -77,6 +77,9 @@ def test_c_firmware_session_loop_executes_abs_correctness_flow(tmp_path: Path, p
     # before the module's read resets them, and each counter's overflow slot.
     assert "samples=6 passes=2" in result.stdout
     # Refusals end one case; the next runs.
+    # 2 passes x 3 samples x 4 calls.
+    assert "input_moves=24" in result.stdout
+    assert "misaligned=0" in result.stdout
     # Skipped timed calls fail the output check.
     for line in (
         "rejected correctness samples_dropped=0",
@@ -84,6 +87,7 @@ def test_c_firmware_session_loop_executes_abs_correctness_flow(tmp_path: Path, p
         "rejected sampling samples_dropped=3",
         "rejected memoized samples_dropped=0",
         "rejected memoized-late samples_dropped=5",
+        "rejected mutated samples_dropped=6",
     ):
         assert line in result.stdout
 

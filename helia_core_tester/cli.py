@@ -23,6 +23,8 @@ from helia_core_tester.hardware.cli import boards as boards_command
 from helia_core_tester.hardware.cli import explain as explain_command
 from helia_core_tester.hardware.cli import hardware_app, probes_app
 from helia_core_tester.hardware.candidate_check import candidate_app
+# Registers candidate baseline and eval.
+import helia_core_tester.hardware.candidate_eval  # noqa: F401
 from helia_core_tester.hardware.score import score as score_command
 
 # Once, for every subcommand (including the hardware group's) for the lifetime of

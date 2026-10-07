@@ -5,8 +5,11 @@ Include/, nothing else. Rules, each a finding in the JSON report:
 
 - outside_allowlist: any path outside Source/ or Include/ (Tests/,
   cmake/, nsx/, CMakeLists, scripts, build files).
-- frozen_file: public API headers the adapters compile against, and
-  arm_nntables.c, which the s16 golden generator reads.
+- frozen_file: public API headers the adapters compile against, every
+  kernel header they include (the union of the base and candidate
+  closures), and arm_nntables.c, which the s16 golden generator reads.
+- header_shadow: a new file under Include/ outside Include/Internal/,
+  which -I Include would find before a system header.
 - file_type: Source/Include files that are not .c/.h/.s/.S.
 - symlink: a symlink in the candidate change set.
 - attribute: added attributes beyond a safe list (inline, unused,
@@ -33,6 +36,16 @@ and Tests/ are compared file by file on disk against `git ls-tree`, so
 index flags, ignore rules and diff config cannot hide a change. Other
 paths come from a hardened `git diff`. Pass --base as a full commit SHA:
 a branch or tag lives in the candidate repo and can be moved.
+
+The candidate repo is untrusted. Repo config that can run commands
+or move the worktree (core.fsmonitor, filter drivers, textconv, diff
+and merge drivers, core.worktree...) refuses the check. Keys pulled in
+through include.path or includeIf count the same; the include keys
+themselves are allowed. core.hooksPath is allowed: git always runs
+with fsmonitor off and hooks pointed at /dev/null. The outer diff
+skips nested repos' dirty state, so their config never runs. Base objects come from the candidate's object
+store, which the candidate can forge: check a copy whose objects came
+from a trusted clone.
 """
 
 from __future__ import annotations
@@ -42,6 +55,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import subprocess
 from collections import Counter
 from pathlib import Path
@@ -49,16 +63,15 @@ from typing import Iterator, Optional
 
 import typer
 
-from .nsx_app import KERNEL_TREES
+from .harness_lock import HARNESS_HEADERS, header_closure
+from .nsx_app import KERNEL_TREES, checkout_hash
+from .pathutil import is_relative_to
 
 ALLOWED_DIRS = ("Source/", "Include/")
 ALLOWED_SUFFIXES = (".c", ".h", ".s", ".S")
 # Adapters and goldens read these.
 FROZEN_FILES = (
-    "Include/arm_nnfunctions.h",
-    "Include/arm_nnfunctions_flt.h",
-    "Include/arm_nn_types.h",
-    "Include/arm_nn_types_flt.h",
+    *HARNESS_HEADERS,
     "Source/NNSupportFunctions/arm_nntables.c",
 )
 # Trees the build or generation reads.
@@ -92,8 +105,27 @@ LINE_RULES = (
     )),
     ("include_escape", re.compile(r'(?:#|%:)\s*include\s*(?:["<](?:/|[^">]*\.\.)|[^"<\s])|\.(?:incbin|include)\b')),
 )
+# Largest kernel file today: 0.5 MiB.
+MAX_FILE_BYTES = 4 << 20
 # Ignore user and system git config.
 _GIT_ENV = {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_NO_REPLACE_OBJECTS": "1"}
+
+
+# Never let repo config run code.
+_GIT_FLAGS = ("-c", "core.fsmonitor=false", "-c", f"core.hooksPath={os.devnull}")
+# A FIFO in config or tree blocks git.
+_GIT_TIMEOUT = 300
+# Config keys that run commands or redirect.
+# (section, name); any subsection, even empty.
+_UNSAFE_CONFIG = frozenset((
+    *(("core", name) for name in (
+        "fsmonitor", "sshcommand", "gitproxy", "askpass", "pager", "editor", "worktree", "alternaterefscommand",
+    )),
+    ("extensions", "partialclone"), ("remote", "promisor"),
+    ("filter", "clean"), ("filter", "smudge"), ("filter", "process"),
+    ("diff", "external"), ("diff", "textconv"), ("diff", "command"), ("merge", "driver"),
+    ("uploadpack", "packobjectshook"), ("sequence", "editor"),
+))
 
 
 class CheckError(RuntimeError):
@@ -101,12 +133,30 @@ class CheckError(RuntimeError):
 
 
 def _git(tree: Path, *args: str) -> bytes:
-    done = subprocess.run(
-        ["git", "-C", str(tree), *args], capture_output=True, check=False, env={**os.environ, **_GIT_ENV},
-    )
+    try:
+        done = subprocess.run(
+            ["git", *_GIT_FLAGS, "-C", str(tree), *args], capture_output=True, check=False,
+            env={**os.environ, **_GIT_ENV}, timeout=_GIT_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise CheckError(f"git {args[0]} timed out") from exc
     if done.returncode != 0:
         raise CheckError(done.stderr.decode(errors="replace").strip() or f"git {args[0]} failed")
     return done.stdout
+
+
+def unsafe_config(tree: Path) -> list[str]:
+    """Repo config keys that could run code."""
+    parts = _git(tree, "config", "--list", "--show-scope", "--name-only", "-z").decode(errors="replace").split("\0")
+    # Pairs: scope, key. Our -c flags are "command".
+    keys = {key for scope, key in zip(parts[::2], parts[1::2]) if scope != "command"}
+    return sorted(key for key in keys if _key_parts(key) in _UNSAFE_CONFIG)
+
+
+def _key_parts(key: str) -> tuple[str, str]:
+    """(section, name), lowercased; subsection dropped."""
+    section, _, rest = key.partition(".")
+    return section.lower(), rest.rpartition(".")[2].lower()
 
 
 def _split(out: bytes) -> list[str]:
@@ -123,9 +173,30 @@ def base_files(tree: Path, commit: str) -> dict[str, tuple[str, str]]:
     return files
 
 
-def _blob_id(path: Path, algo: str) -> str:
-    data = path.read_bytes()
-    return hashlib.new(algo, b"blob %d\0" % len(data) + data).hexdigest()
+def read_regular(path: Path) -> Optional[bytes]:
+    """Bytes of a small regular file, else None."""
+    try:
+        if not stat.S_ISREG(os.lstat(path).st_mode):
+            return None
+        # FIFOs and devices must never block.
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return None
+    with os.fdopen(fd, "rb") as handle:
+        info = os.fstat(handle.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_FILE_BYTES:
+            return None
+        return handle.read(MAX_FILE_BYTES + 1)
+
+
+def _text(path: Path) -> str:
+    """A regular file's text; else empty."""
+    return (read_regular(path) or b"").decode("utf-8", errors="replace")
+
+
+def _blob_id(path: Path, algo: str) -> Optional[str]:
+    data = read_regular(path)
+    return None if data is None else hashlib.new(algo, b"blob %d\0" % len(data) + data).hexdigest()
 
 
 def _disk_files(tree: Path, skip: set[str]) -> Iterator[str]:
@@ -154,30 +225,61 @@ def changed_paths(tree: Path, commit: str) -> dict[str, str]:
         path = tree / rel
         if rel not in base:
             changes[rel] = "A"
-        elif path.is_symlink() or base[rel][0] == "120000" or _blob_id(path, algo) != base[rel][1]:
+        elif base[rel][0] == "120000" or _blob_id(path, algo) != base[rel][1]:
             changes[rel] = "M"
     changes.update((rel, "D") for rel in base if not os.path.lexists(tree / rel))
     for rel in submodules & changes.keys():
         del changes[rel]
     # Elsewhere: hardened git diff.
     outside = [f":(exclude){top}" for top in WATCHED]
-    out = _split(_git(tree, "diff", "--name-status", "--no-renames", "--no-ext-diff", "-z", commit, "--", ".", *outside))
+    # Nested repos' dirty state would run their config.
+    diff = ("diff", "--name-status", "--no-renames", "--no-ext-diff", "--ignore-submodules=dirty", "-z")
+    out = _split(_git(tree, *diff, commit, "--", ".", *outside))
     changes.update(zip(out[1::2], out[0::2]))
     untracked = _split(_git(tree, "ls-files", "--others", "--exclude-standard", "-z", "--", ".", *outside))
     changes.update((rel, "A") for rel in untracked)
     return changes
 
 
-def path_findings(path: str, status: str, tree: Path) -> Iterator[dict]:
+def frozen_files(tree: Path, base: dict[str, tuple[str, str]]) -> frozenset[str]:
+    """Files the harness reads, base or candidate."""
+
+    def read(rel: str) -> Optional[str]:
+        if rel not in base or base[rel][0] not in ("100644", "100755"):
+            return None
+        return _git(tree, "cat-file", "blob", base[rel][1]).decode(errors="replace")
+
+    def read_disk(rel: str) -> Optional[str]:
+        path = tree / rel
+        # Stay in the tree; never follow links.
+        try:
+            if path.resolve() != path or not is_relative_to(path, tree) or not path.is_file():
+                return None
+        # Link loops: path_findings reports symlink.
+        except (RuntimeError, OSError):
+            return None
+        return path.read_text(encoding="utf-8", errors="replace")
+
+    # A new header can shadow a base one.
+    return frozenset((*FROZEN_FILES, *header_closure(read), *header_closure(read_disk)))
+
+
+def path_findings(path: str, status: str, tree: Path, frozen: frozenset[str]) -> Iterator[dict]:
     """Rule hits from the path alone."""
     if not path.startswith(ALLOWED_DIRS):
         yield {"rule": "outside_allowlist", "path": path, "message": "only Source/ and Include/ may change"}
-    elif path in FROZEN_FILES:
+    elif path in frozen:
         yield {"rule": "frozen_file", "path": path, "message": "harness reads this file"}
+    elif status == "A" and path.startswith("Include/") and not path.startswith("Include/Internal/"):
+        yield {"rule": "header_shadow", "path": path, "message": "new headers go under Include/Internal/"}
     elif not path.endswith(ALLOWED_SUFFIXES):
         yield {"rule": "file_type", "path": path, "message": "only .c .h .s .S files"}
-    if status != "D" and (tree / path).is_symlink():
+    if status == "D":
+        return
+    if (tree / path).is_symlink():
         yield {"rule": "symlink", "path": path, "message": "symlinks are not allowed"}
+    elif path.startswith(ALLOWED_DIRS) and read_regular(tree / path) is None:
+        yield {"rule": "file_type", "path": path, "message": "not a regular file under 4 MiB"}
 
 
 def _logical_lines(lines: list[str]) -> list[int]:
@@ -198,7 +300,7 @@ def added_lines(tree: Path, base: dict, path: str, status: str) -> Iterator[tupl
     """
     if status == "D":
         return
-    new = (tree / path).read_text(encoding="utf-8", errors="replace").splitlines()
+    new = _text(tree / path).splitlines()
     old = _git(tree, "cat-file", "blob", base[path][1]).decode(errors="replace").splitlines() if path in base else []
     starts = _logical_lines(new)
     seen: set[int] = set()
@@ -221,7 +323,7 @@ def _removed_guard(tree: Path, base: dict, path: str, status: str) -> bool:
     """A deleted line was a guard."""
     if status == "D" or path not in base:
         return False
-    new = (tree / path).read_text(encoding="utf-8", errors="replace").splitlines()
+    new = _text(tree / path).splitlines()
     old = _git(tree, "cat-file", "blob", base[path][1]).decode(errors="replace").splitlines()
     for tag, first, last, _, _ in difflib.SequenceMatcher(None, old, new, autojunk=False).get_opcodes():
         if tag in ("replace", "delete") and any(_GUARD.match(line) for line in old[first:last]):
@@ -278,7 +380,7 @@ def _raw_rules(text: str) -> Iterator[str]:
 
 def _grandfathered(tree: Path, path: str) -> bool:
     """File already holds a rule hit."""
-    lines = (tree / path).read_text(encoding="utf-8", errors="replace").splitlines()
+    lines = _text(tree / path).splitlines()
     starts = _logical_lines(lines)
     joined: dict[int, str] = {}
     for index, line in enumerate(lines):
@@ -309,15 +411,19 @@ def hidden_entries(tree: Path) -> list[str]:
 def check_candidate(tree: Path, base: str) -> dict:
     """The JSON report for one candidate."""
     tree = tree.resolve()
+    unsafe = unsafe_config(tree)
+    if unsafe:
+        raise CheckError(f"unsafe git config: {', '.join(unsafe)}")
     commit = _git(tree, "rev-parse", "--verify", f"{base}^{{commit}}").decode().strip()
     # Branches and tags can be moved.
     if base.lower() != commit:
         raise CheckError(f"--base must be a full commit SHA, got {base!r}")
     changes = changed_paths(tree, commit)
     base_blobs = base_files(tree, commit)
+    frozen = frozen_files(tree, base_blobs)
     findings: list[dict] = []
     for path, status in sorted(changes.items()):
-        hits = list(path_findings(path, status, tree))
+        hits = list(path_findings(path, status, tree, frozen))
         findings += hits
         if hits:
             continue
@@ -343,17 +449,19 @@ def check_candidate(tree: Path, base: str) -> dict:
                     findings.append({"rule": rule, "path": path, "line": added[0][0], "text": "joined added lines"})
             # Edits inside unchanged constructs.
             old = _git(tree, "cat-file", "blob", base_blobs[path][1]).decode(errors="replace") if path in base_blobs else ""
-            before, after = rule_counts(old), rule_counts((tree / path).read_text(encoding="utf-8", errors="replace"))
+            before, after = rule_counts(old), rule_counts(_text(tree / path))
             findings += ({"rule": rule, "path": path, "line": added[0][0], "text": "more matches in whole file"}
                          for rule in sorted(after) if after[rule] > before[rule] and rule not in hit_rules)
     findings += ({"rule": "hidden_index_entry", "path": path, "message": "skip-worktree or assume-unchanged set"}
                  for path in hidden_entries(tree))
     return {
         "schema": "hct.candidate_check",
-        "schema_version": 1,
+        "schema_version": 2,
         "tree": str(tree),
         "base": base,
         "base_commit": commit,
+        # Equals build.kernels.tree_hash; null on failure.
+        "tree_hash": None if findings else checkout_hash(tree),
         "ok": not findings,
         "files": [{"path": path, "status": status} for path, status in sorted(changes.items())],
         "findings": findings,
