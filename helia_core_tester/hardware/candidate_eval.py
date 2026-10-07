@@ -23,7 +23,9 @@ from __future__ import annotations
 
 import inspect
 import json
+import math
 import os
+import re
 import tempfile
 import shutil
 import stat
@@ -170,9 +172,25 @@ def write_baseline(spec: RunSpec, out: Path, repeats: int, run=None) -> dict:
 
 
 def read_baseline(path: Path) -> dict:
-    meta = json.loads((path / BASELINE_FILE).read_text(encoding="utf-8"))
-    if meta.get("schema") != BASELINE_SCHEMA:
+    """baseline.json, validated; ValueError if unusable."""
+    try:
+        meta = json.loads((path / BASELINE_FILE).read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise ValueError(f"{path}: no readable {BASELINE_FILE}") from exc
+    if not isinstance(meta, dict) or meta.get("schema") != BASELINE_SCHEMA:
         raise ValueError(f"{path}: not a candidate baseline")
+    if meta.get("schema_version") != SCHEMA_VERSION:
+        raise ValueError(f"{path}: unsupported baseline version {meta.get('schema_version')!r}")
+    base, sessions, run = meta.get("base_commit"), meta.get("sessions"), meta.get("run")
+    if not (isinstance(base, str) and re.fullmatch(r"[0-9a-f]{40}", base)):
+        raise ValueError(f"{path}: base_commit is not a full SHA")
+    if not (isinstance(sessions, list) and sessions and all(isinstance(s, str) and s for s in sessions)):
+        raise ValueError(f"{path}: no baseline sessions")
+    try:
+        RunSpec.from_json(run, path)
+        resolve_board(run["board"])
+    except (TypeError, KeyError, AttributeError, UnknownBoardError) as exc:
+        raise ValueError(f"{path}: bad run options ({exc})") from exc
     return meta
 
 
@@ -277,8 +295,9 @@ def verdict_from(report: dict, hidden: set[str], candidate: Path) -> dict:
         else:
             failures.append(failure)
     verdict = report["verdict"]
-    # Lost cases mean the tests moved.
-    if failures and all(f["kind"] == "missing_case" for f in failures) and not hidden_kinds:
+    # Lost cases, hidden too: tests moved.
+    kinds = [f["kind"] for f in report["failures"]]
+    if kinds and all(kind == "missing_case" for kind in kinds):
         verdict = "refused"
     return {
         "verdict": verdict, "stage": "score", "score": report["score"], "board": report["board"],
@@ -372,10 +391,12 @@ def eval_command(
     Exit 0 pass, 1 fail, 2 usage, 3 refused, rejected or not comparable,
     4 no gain, 5 error.
     """
+    if not math.isfinite(min_score):
+        raise typer.BadParameter("--min-score must be finite", param_hint="--min-score")
     try:
         meta = read_baseline(baseline)
-    except (OSError, ValueError) as exc:
-        raise typer.BadParameter(str(exc), param_hint="--baseline") from exc
+    except ValueError as exc:
+        _emit({"schema": SCHEMA, "schema_version": SCHEMA_VERSION, "verdict": "refused", "stage": "baseline", "reason": str(exc)})
     if board is not None and board != meta["run"]["board"]:
         raise typer.BadParameter(f"baseline ran on {meta['run']['board']}", param_hint="--board")
     try:
