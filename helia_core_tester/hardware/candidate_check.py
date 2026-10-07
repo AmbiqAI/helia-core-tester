@@ -64,7 +64,7 @@ from typing import Iterator, Optional
 
 import typer
 
-from .candidate_scan import preprocess_findings
+from .candidate_scan import CONFIGS, SCAN_DEADLINE_S, preprocess_findings
 from .nsx_app import KERNEL_TREES
 
 ALLOWED_DIRS = ("Source/", "Include/")
@@ -473,7 +473,7 @@ def hidden_entries(tree: Path) -> list[str]:
     return [entry[2:] for entry in out if entry[:1] == "S" or entry[:1].islower()]
 
 
-def check_candidate(tree: Path, base: str) -> dict:
+def check_candidate(tree: Path, base: str, scan_deadline: float = SCAN_DEADLINE_S) -> dict:
     """The JSON report for one candidate."""
     tree = tree.resolve()
     commit = _git(tree, "rev-parse", "--verify", f"{base}^{{commit}}").decode().strip()
@@ -522,7 +522,7 @@ def check_candidate(tree: Path, base: str) -> dict:
     if any(path.startswith(ALLOWED_DIRS) for path in changes):
         tops = sorted({path.split("/", 1)[0] + "/" for path in base_blobs if path.startswith(ALLOWED_DIRS)})
         archive = _git(tree, "archive", commit, "--", *tops) if tops else _EMPTY_TAR
-        findings += preprocess_findings(tree, archive, rule_counts)
+        findings += preprocess_findings(tree, archive, rule_counts, CONFIGS, scan_deadline)
     return {
         "schema": "hct.candidate_check",
         "schema_version": 1,
@@ -542,10 +542,11 @@ candidate_app = typer.Typer(help="Check candidate kernel trees.", no_args_is_hel
 def check_command(
     tree: Path = typer.Argument(..., exists=True, file_okay=False, help="Candidate ns-cmsis-nn checkout."),
     base: str = typer.Option(..., "--base", help="Base commit SHA the candidate started from."),
+    scan_deadline: float = typer.Option(SCAN_DEADLINE_S, "--scan-deadline", help="Seconds the gcc -E scan may take."),
 ) -> None:
     """Fail when the candidate diff leaves Source/Include."""
     try:
-        report = check_candidate(tree, base)
+        report = check_candidate(tree, base, scan_deadline)
     except CheckError as exc:
         typer.echo(json.dumps({"ok": False, "error": str(exc)}))
         raise typer.Exit(2)
