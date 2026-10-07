@@ -50,6 +50,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import subprocess
 from collections import Counter
 from pathlib import Path
@@ -100,6 +101,8 @@ LINE_RULES = (
     )),
     ("include_escape", re.compile(r'(?:#|%:)\s*include\s*(?:["<](?:/|[^">]*\.\.)|[^"<\s])|\.(?:incbin|include)\b')),
 )
+# Largest kernel file today: 0.5 MiB.
+MAX_FILE_BYTES = 4 << 20
 # Ignore user and system git config.
 _GIT_ENV = {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_NO_REPLACE_OBJECTS": "1"}
 
@@ -156,9 +159,30 @@ def base_files(tree: Path, commit: str) -> dict[str, tuple[str, str]]:
     return files
 
 
-def _blob_id(path: Path, algo: str) -> str:
-    data = path.read_bytes()
-    return hashlib.new(algo, b"blob %d\0" % len(data) + data).hexdigest()
+def read_regular(path: Path) -> Optional[bytes]:
+    """Bytes of a small regular file, else None."""
+    try:
+        if not stat.S_ISREG(os.lstat(path).st_mode):
+            return None
+        # FIFOs and devices must never block.
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return None
+    with os.fdopen(fd, "rb") as handle:
+        info = os.fstat(handle.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_FILE_BYTES:
+            return None
+        return handle.read(MAX_FILE_BYTES + 1)
+
+
+def _text(path: Path) -> str:
+    """A regular file's text; else empty."""
+    return (read_regular(path) or b"").decode("utf-8", errors="replace")
+
+
+def _blob_id(path: Path, algo: str) -> Optional[str]:
+    data = read_regular(path)
+    return None if data is None else hashlib.new(algo, b"blob %d\0" % len(data) + data).hexdigest()
 
 
 def _disk_files(tree: Path, skip: set[str]) -> Iterator[str]:
@@ -187,7 +211,7 @@ def changed_paths(tree: Path, commit: str) -> dict[str, str]:
         path = tree / rel
         if rel not in base:
             changes[rel] = "A"
-        elif path.is_symlink() or base[rel][0] == "120000" or _blob_id(path, algo) != base[rel][1]:
+        elif base[rel][0] == "120000" or _blob_id(path, algo) != base[rel][1]:
             changes[rel] = "M"
     changes.update((rel, "D") for rel in base if not os.path.lexists(tree / rel))
     for rel in submodules & changes.keys():
@@ -211,8 +235,12 @@ def path_findings(path: str, status: str, tree: Path) -> Iterator[dict]:
         yield {"rule": "frozen_file", "path": path, "message": "harness reads this file"}
     elif not path.endswith(ALLOWED_SUFFIXES):
         yield {"rule": "file_type", "path": path, "message": "only .c .h .s .S files"}
-    if status != "D" and (tree / path).is_symlink():
+    if status == "D":
+        return
+    if (tree / path).is_symlink():
         yield {"rule": "symlink", "path": path, "message": "symlinks are not allowed"}
+    elif path.startswith(ALLOWED_DIRS) and read_regular(tree / path) is None:
+        yield {"rule": "file_type", "path": path, "message": "not a regular file under 4 MiB"}
 
 
 def _logical_lines(lines: list[str]) -> list[int]:
@@ -233,7 +261,7 @@ def added_lines(tree: Path, base: dict, path: str, status: str) -> Iterator[tupl
     """
     if status == "D":
         return
-    new = (tree / path).read_text(encoding="utf-8", errors="replace").splitlines()
+    new = _text(tree / path).splitlines()
     old = _git(tree, "cat-file", "blob", base[path][1]).decode(errors="replace").splitlines() if path in base else []
     starts = _logical_lines(new)
     seen: set[int] = set()
@@ -256,7 +284,7 @@ def _removed_guard(tree: Path, base: dict, path: str, status: str) -> bool:
     """A deleted line was a guard."""
     if status == "D" or path not in base:
         return False
-    new = (tree / path).read_text(encoding="utf-8", errors="replace").splitlines()
+    new = _text(tree / path).splitlines()
     old = _git(tree, "cat-file", "blob", base[path][1]).decode(errors="replace").splitlines()
     for tag, first, last, _, _ in difflib.SequenceMatcher(None, old, new, autojunk=False).get_opcodes():
         if tag in ("replace", "delete") and any(_GUARD.match(line) for line in old[first:last]):
@@ -313,7 +341,7 @@ def _raw_rules(text: str) -> Iterator[str]:
 
 def _grandfathered(tree: Path, path: str) -> bool:
     """File already holds a rule hit."""
-    lines = (tree / path).read_text(encoding="utf-8", errors="replace").splitlines()
+    lines = _text(tree / path).splitlines()
     starts = _logical_lines(lines)
     joined: dict[int, str] = {}
     for index, line in enumerate(lines):
@@ -381,7 +409,7 @@ def check_candidate(tree: Path, base: str) -> dict:
                     findings.append({"rule": rule, "path": path, "line": added[0][0], "text": "joined added lines"})
             # Edits inside unchanged constructs.
             old = _git(tree, "cat-file", "blob", base_blobs[path][1]).decode(errors="replace") if path in base_blobs else ""
-            before, after = rule_counts(old), rule_counts((tree / path).read_text(encoding="utf-8", errors="replace"))
+            before, after = rule_counts(old), rule_counts(_text(tree / path))
             findings += ({"rule": rule, "path": path, "line": added[0][0], "text": "more matches in whole file"}
                          for rule in sorted(after) if after[rule] > before[rule] and rule not in hit_rules)
     findings += ({"rule": "hidden_index_entry", "path": path, "message": "skip-worktree or assume-unchanged set"}

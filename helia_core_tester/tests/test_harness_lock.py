@@ -345,6 +345,28 @@ def test_nested_repo_config_never_runs(kernels: Path, tmp_path: Path) -> None:
     assert not pwned.exists()
 
 
+@pytest.mark.parametrize("kind", ["fifo", "symlink", "big"])
+def test_special_file_never_read(kernels: Path, tmp_path: Path, kind: str) -> None:
+    import os
+    import threading
+
+    path = kernels / "Source/Conv/a.c"
+    path.unlink()
+    if kind == "fifo":
+        os.mkfifo(path)
+    elif kind == "symlink":
+        path.symlink_to(tmp_path / "elsewhere.c")
+        (tmp_path / "elsewhere.c").write_text("int e;\n", encoding="utf-8")
+    else:
+        path.write_bytes(b" " * ((4 << 20) + 1))
+    result: list = []
+    worker = threading.Thread(target=lambda: result.append(_rules(kernels)), daemon=True)
+    worker.start()
+    worker.join(timeout=30)
+    assert result, "check hung"
+    assert result[0] & {"file_type", "symlink"}
+
+
 def test_hidden_index_entry_fails(kernels: Path) -> None:
     _git(kernels, "update-index", "--skip-worktree", ".gitignore")
     report = check_candidate(kernels, _sha(kernels))
