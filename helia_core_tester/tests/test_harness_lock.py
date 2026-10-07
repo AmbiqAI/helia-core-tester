@@ -178,6 +178,34 @@ def test_escaping_include_not_read(kernels: Path, name: str, monkeypatch) -> Non
     assert not [path for path in opened if not path.resolve().is_relative_to(kernels.resolve())]
 
 
+def test_angle_include_skips_beside() -> None:
+    files = {
+        "Include/arm_nnfunctions.h": '#include "Internal/cfg.h"\n',
+        "Include/Internal/cfg.h": "#include <common.h>\n",
+        "Include/Internal/common.h": "beside\n",
+        "Include/common.h": "root\n",
+    }
+    assert "Include/common.h" in harness_lock.header_closure(files.get)
+    assert "Include/Internal/common.h" not in harness_lock.header_closure(files.get)
+
+
+def test_linked_module_dir_spares_target(tmp_path: Path) -> None:
+    from helia_core_tester.hardware.nsx_app import write_kernels
+
+    root = _repo(tmp_path / "nn", {"Source/a.c": "int a;\n", "Include/a.h": "\n", "nsx/CMakeLists.txt": "x\n",
+                                   "nsx/nsx-module.yaml": "m\n"})
+    outside = tmp_path / "outside"
+    _write(outside, {"Source/keep.c": "keep\n", "CMakeLists.txt": "keep\n"})
+    module = tmp_path / "module"
+    module.symlink_to(outside)
+    write_kernels(root, module)
+    assert not module.is_symlink() and (module / "Source/a.c").is_file()
+    assert sorted(p.relative_to(outside).as_posix() for p in outside.rglob("*")) == [
+        "CMakeLists.txt", "Source", "Source/keep.c",
+    ]
+    assert (outside / "CMakeLists.txt").read_text(encoding="utf-8") == "keep\n"
+
+
 def test_header_closure_follows_includes() -> None:
     files = {
         "Include/arm_nnfunctions.h": '#include "arm_nn_math_types.h"\n#include <stdint.h>\n',

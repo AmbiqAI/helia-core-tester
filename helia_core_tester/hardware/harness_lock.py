@@ -49,7 +49,7 @@ _FLAG_CACHE = re.compile(
 HARNESS_HEADERS = ("Include/arm_nnfunctions.h", "Include/arm_nn_types.h")
 # Kernel module files the build reads.
 KERNEL_BUILD_FILES = ("nsx/CMakeLists.txt", "nsx/nsx-module.yaml")
-_INCLUDE = re.compile(r'^[ \t]*(?:#|%:)[ \t]*include[ \t]*[<"]([^">]+)[">]', re.MULTILINE)
+_INCLUDE = re.compile(r'^[ \t]*(?:#|%:)[ \t]*include[ \t]*([<"])([^">]+)[">]', re.MULTILINE)
 # Lock keys that vary per sync.
 _LOCK_VOLATILE = ("generated_at", "acquired_at", "manifest")
 
@@ -210,7 +210,7 @@ def module_trees(app_dir: Path) -> dict[str, str]:
 
 def header_closure(read: Callable[[str], Optional[str]]) -> list[str]:
     """Kernel headers the harness includes."""
-    # Every #include: beside, then Include/.
+    # "x": beside, then Include/; <x>: Include/.
     found: dict[str, Optional[str]] = {}
 
     def load(rel: str) -> Optional[str]:
@@ -228,8 +228,9 @@ def header_closure(read: Callable[[str], Optional[str]]) -> list[str]:
         seen.add(rel)
         here = posixpath.dirname(rel)
         # Splice backslash-newline first.
-        for name in _INCLUDE.findall(re.sub(r"\\\r?\n", "", text)):
-            paths = (posixpath.normpath(posixpath.join(here, name)), posixpath.normpath(f"Include/{name}"))
+        for delimiter, name in _INCLUDE.findall(re.sub(r"\\\r?\n", "", text)):
+            beside = (posixpath.normpath(posixpath.join(here, name)),) if delimiter == '"' else ()
+            paths = (*beside, posixpath.normpath(f"Include/{name}"))
             # Only kernel headers: no absolute, no "..".
             paths = tuple(path for path in paths if path.startswith("Include/") and not posixpath.isabs(name))
             todo.extend(next(([path] for path in paths if load(path) is not None), []))

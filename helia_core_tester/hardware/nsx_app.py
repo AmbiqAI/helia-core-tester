@@ -341,6 +341,9 @@ def write_kernels(root: Path, module_dir: Path) -> None:
     missing = _checkout_missing(root)
     if missing:
         raise AppRenderError(f"Not an ns-cmsis-nn checkout: {root} lacks {missing[0]}")
+    # Never write through a linked module dir.
+    if module_dir.is_symlink():
+        module_dir.unlink()
     _check_no_overlap(root, module_dir)
     _drop_stale(module_dir)
     (module_dir / "nsx").mkdir(parents=True, exist_ok=True)
