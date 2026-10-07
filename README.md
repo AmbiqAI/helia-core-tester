@@ -375,7 +375,11 @@ The verdict (schema `hct.candidate_eval` v2) has these fields:
   `candidate check` scans built objects), `score`, or `eval` for an
   unexpected error.
 - `findings`: the check's findings, on rejection.
-- `score`, `families` and `failures`.
+- `score`, `families` and `failures`. Prepare cycles move with code layout,
+  so `prepare_regression` fires only when they go missing, pass
+  `prepare_max_ratio` times the baseline, or grow enough to pay for the
+  case's timed gain (`prepare_share_pct` of the cycles saved; see
+  `assets/scoring/noise_floors.yaml`).
 - `cases`: one entry per public case, with cycles, speedup, delta and noise
   band.
 - `hints`: `pct_of_peak` (0-100), a diagnosis and ranked hints for each public MAC case
