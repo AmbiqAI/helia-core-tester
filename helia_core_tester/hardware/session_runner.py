@@ -22,6 +22,7 @@ from .case_bundle import (
     build_floor_bundle, load_case_bundle,
 )
 from .case_validity import apply_floor
+from .errors import RunRefused
 from .firmware_build import elf_path
 from .generated_test_bridge import (
     CaseSelection,
@@ -392,6 +393,7 @@ def build_generated_test_case_bundles(
     fvp_gate: str | None = None,
     board_id: str | None = None,
     select: CaseSelection | None = None,
+    tests_root: Path | None = None,
 ) -> tuple[list[CaseBundle], list[tuple[GeneratedTestCase, str]]]:
     """Discover generated (`helia_core_tester generate`) kernel tests and bridge the
     ones with real hardware benchmark firmware dispatch support into CaseBundles.
@@ -414,6 +416,7 @@ def build_generated_test_case_bundles(
 
     `board_id` keys staged cases per board, so boards run concurrently.
     `select` narrows by op, dtype or case id.
+    `tests_root` reads and stages cases under another root.
 
     Returns (bridged_case_bundles, [(skipped_test, reason), ...]).
     """
@@ -422,12 +425,12 @@ def build_generated_test_case_bundles(
     skipped: list[tuple[GeneratedTestCase, str]] = []
     for suite_name in normalize_suites(suite):
         families = [family] if family is not None else [
-            *bridged, *unbridged_families(project_root, cpu=cpu, suite=suite_name, bridged=bridged),
+            *bridged, *unbridged_families(tests_root or project_root, cpu=cpu, suite=suite_name, bridged=bridged),
         ]
         for fam in families:
             discovered = discover_generated_tests(
                 project_root, cpu=cpu, family=fam, name_filter=name_filter, limit=limit, suite=suite_name,
-                select=select,
+                select=select, tests_root=tests_root,
             )
             for test in discovered:
                 test = replace(test, board=board_id)
@@ -437,7 +440,8 @@ def build_generated_test_case_bundles(
                     continue
                 try:
                     bundles.append(build_case_bundle_from_generated_test(
-                        project_root, test, require_fvp_pass=require_fvp_pass, fvp_gate=fvp_gate))
+                        project_root, test, output_root=tests_root, require_fvp_pass=require_fvp_pass,
+                        fvp_gate=fvp_gate))
                 except UnsupportedGeneratedTestError as exc:
                     skipped.append((test, str(exc)))
     return bundles, skipped
@@ -458,7 +462,7 @@ def no_bridgeable_cases_error(
     family: str | None,
     name_filter: str | None,
     suite: str,
-) -> RuntimeError:
+) -> RunRefused:
     """The error to raise when discovery bridged nothing, leading with the reasons
     cases were rejected (an all-FVP-gate rejection in particular is fixed by refreshing
     or bypassing the gate, not by regenerating)."""
@@ -468,7 +472,7 @@ def no_bridgeable_cases_error(
         f"name_filter={name_filter!r} suite={suite!r} (skipped {len(skipped)})"
     )
     if not skipped:
-        return RuntimeError(f"{base}; run `helia_core_tester generate` first.")
+        return RunRefused(f"{base}; run `helia_core_tester generate` first.")
     fvp_skips = [(t, r) for t, r in skipped if "FVP" in r or "artifact" in r]
     adapter_gaps = sum(r.startswith(NO_ADAPTER) for _, r in skipped)
     detail = "\n".join(f"  - {t.name}: {r}" for t, r in skipped[:5])
@@ -493,4 +497,4 @@ def no_bridgeable_cases_error(
                 "report. Investigate before overriding; --fvp-gate off will run them anyway and "
                 "record fvp_status=failed in case_summary.csv."
             )
-    return RuntimeError(f"{base}:\n{detail}{hint}")
+    return RunRefused(f"{base}:\n{detail}{hint}")

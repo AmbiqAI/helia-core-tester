@@ -22,6 +22,8 @@ uv run helia_core_tester --help
 - `uv run helia_core_tester boards` / `probes list` / `probes match`
 - `uv run helia_core_tester hardware run|build|flash|stream|memory-report`
 - `uv run helia_core_tester explain <bundle> [--case ID] [--op OP] [--json]`
+- `uv run helia_core_tester score <baseline...> --candidate <bundle> --check <check.json>` (`--no-check` instead, for humans scoring harness changes; `candidate eval` runs this for you)
+- `uv run helia_core_tester candidate check <tree> --base <sha>`, `candidate baseline`, `candidate eval` (see [Agent loop](#agent-loop))
 
 Removed interfaces:
 - `gap-check` subcommand
@@ -47,8 +49,10 @@ unless the board already confirms (via its TARGET_INFO build id) that it runs th
 build, streams every bridged case,
 writes the result bundle under `artifacts/reports/hardware/<session-id>/`,
 and prints the pass/fail summary (`--json` prints one JSON document on stdout
-instead, with the human output on stderr; the exit code is non-zero on any
-correctness failure). Useful narrowing flags: `--suite int|float|both`,
+instead, with the human output on stderr). Exit codes match `score`: 0 pass,
+1 a case failed correctness, 2 bad flags, 3 refused before running (dirty
+tester, a `--skip-flash` or `--golden-from` mismatch, no case matches the
+selection), 5 error (cmake, J-Link, transport, probe, or a tester bug), 130 interrupted (Ctrl-C). Useful narrowing flags: `--suite int|float|both`,
 `--family`, `--test-name`, `--limit`, `--precision fp16|fp32` (float-only shortcut,
 not combinable with `--suite both` or `--test-name`), `--fvp-gate off|advisory|strict`,
 `--op`/`--dtype` (repeatable, matched like `generate --op/--dtype`; a case's dtype is its
@@ -65,6 +69,20 @@ the smallest board workspace. The descriptors and a per-route count land in
 the fixed ones. Run them with
 `hardware run --skip-generate --test-name rs<S>_`. A draw with a flat golden is
 dropped and counted as `skipped_degenerate`.
+
+Hidden shapes: `generate --random-shapes N --hidden-dir DIR` draws the same
+kind of cases from a secret seed instead (env `HCT_HIDDEN_SEED`, or
+`--hidden-seed-file F`; 16+ characters, e.g. `python -c "import secrets; print(secrets.token_hex(16))"`). DIR and
+F must sit outside the tester tree. DIR mirrors a tester root: descriptors in
+`DIR/artifacts/random_shapes/<cpu>/`, cases in `DIR/artifacts/generated_tests/`,
+reports in `DIR/artifacts/reports/`. Case ids are opaque keyed hashes
+(`h<12 hex>`), and summaries record only `seed_commitment`, a SHA-256 of the secret.
+`hardware run --hidden-set DIR` adds every DIR case for the board's CPU to
+the run, whatever the other filters; it needs only DIR, not the secret. Pass the
+same DIR to baseline and candidate runs. The bundle marks them with a `hidden`
+column (`true`/`false`) in `case_summary.csv` and cases.json, and records
+`selection.hidden_set` (`seed_commitment`, `cases`) in session_summary.json. A DIR
+with no set for the board's CPU, or with a case that cannot run, is refused.
 
 Correctness: int cases use the per-operator LSB tolerance in
 `generation/io/dtypes.py`, and every case records `max_abs_diff` and `diff_count`
@@ -115,9 +133,12 @@ checkout, or for a ref the clone NSX syncs into `nsx_app/modules/ns-cmsis-nn`.
 `--no-inline-asm` builds requantize without inline assembly (`--inline-asm`
 turns it back on); `--update-dependencies` re-resolves the NSX modules into
 `nsx.lock`. Each build saves its kernel options in `nsx_app/.hct-options.json`.
-`hardware build`, `flash` and `run` reuse them for any kernel flag you leave
-out, so a bare `hardware flash` flashes what `hardware build` built. A flag that
-differs from the saved options rebuilds and prints one line naming the change. A
+`hardware build`, `flash` and `run` reuse the saved kernel source
+(`--cmsis-nn-root` or `--cmsis-nn-ref`) when you leave it out. Switches
+(`--inline-asm`, `--placement`) do not persist: an unpassed switch builds its
+default, so pass the same switches to `build`, `flash` and `run`. An option that
+differs from the saved build rebuilds and prints one line naming the change.
+`--skip-flash` keeps the flashed build's options and refuses a different flag. A
 saved ref you did not pass with `--cmsis-nn-ref` follows the pinned release, so
 a pin bump rebuilds those build dirs the same way. Every build, flash, run and
 stream prints the kernel source, inline asm setting and placement.
@@ -245,7 +266,8 @@ bundles) and prints at most four lines per MAC case: cycles/MAC against a ceilin
 from `assets/scoring/ceilings.yaml`, where the cycles go (IPC, MVE share, MVE MAC
 instructions against the ideal count, stall shares, L1D refills, prepare share), a
 diagnosis and up to three ranked hints. `--op` takes conv, depthwise or fc. `--json` emits schema `hct.pmu_explain`
-v1; `pmu_explain.explain_case` gives the same result for one case row. Rules live
+v2: `bundles` (board, cpu, placement per bundle) and one flat `cases` list,
+each case naming its `bundle`; `pmu_explain.explain_case` gives the same result for one case row. Rules live
 in `helia_core_tester/hardware/pmu_explain.py` (`_rule_*`); each ranks by the share
 of cycles it explains. Cycles-only bundles (Cortex-M4) get % of peak only.
 
@@ -257,6 +279,128 @@ only what the rules read (4 passes, `pmu_explain.AGENT_PMU_SELECTION`):
 --pmu-counters memory:ARM_PMU_L1D_CACHE_REFILL
 --pmu-counters mve:ARM_PMU_MVE_INST_RETIRED,ARM_PMU_MVE_INT_MAC_RETIRED,ARM_PMU_MVE_FP_MAC_RETIRED,ARM_PMU_MVE_PRED,ARM_PMU_MVE_STALL_RESOURCE_MEM,ARM_PMU_MVE_STALL_DEPENDENCY
 ```
+
+## Agent loop
+
+An optimization agent edits ns-cmsis-nn kernels. It submits each candidate
+with one command and gets one JSON verdict back. Everything trusted (this
+tester, the baseline bundles, hidden cases and their seed) stays outside
+the agent's view.
+
+### Trust boundary
+
+- The agent runs in a sandbox where only its own ns-cmsis-nn worktree is
+  writable. It cannot read this tester tree, the baseline dir, the hidden
+  set, its seed file, result bundles or logs.
+- The evaluator runs `candidate eval` as the human user, outside the
+  sandbox, and hands the agent only stdout and the exit code.
+  - On the bench host, wrap it in `bench-agent run`. The command runs in
+    `$HOME`, so use absolute paths:
+
+    ```bash
+    bench-agent run apollo510_evb --reason <sha> -- timeout 30m \
+      uv --directory /abs/helia-core-tester run helia_core_tester \
+      candidate eval --kernels /abs/agent-tree --baseline /abs/baseline
+    ```
+
+  - From elsewhere, use the `hct-run` client from nixos-config (its
+    `candidate eval` mode is a follow-up).
+- `candidate eval` reads the agent's tree as plain files and never runs git
+  in it. It copies `Source/`, `Include/`, `cmake/` and `nsx/` into a fresh
+  checkout of the base commit, then checks and builds that copy. Edits made
+  after the copy, and anything in the agent's `.git`, do not reach the
+  build. The copy walks by directory handle and never follows a symlink:
+  symlinks are copied as links, and the check rejects them. FIFOs, sockets
+  and devices are skipped. The copy refuses past 4 MiB per file (sparse
+  files count at their full size), 64 MiB copied in total, 5000 files and
+  dirs, or 64 levels of dirs; the real trees are about 4.4 MiB in 448
+  files. Bytes count as they are read, so a file that grows mid-copy is
+  caught. `--max-file-bytes`, `--max-total-bytes` and `--max-files` change
+  the limits.
+- `hardware run` stderr names every case, so it goes to
+  `<baseline>/logs/`, never to the agent.
+- Hidden case ids never print. Hidden cases still count in the verdict and
+  in the family totals.
+- The tester must be committed: `candidate baseline` and `candidate eval`
+  refuse a dirty or unknown tester (exit 3, stage `tester`) before any
+  check or run, with no opt-out.
+- Run one eval at a time per baseline dir: each eval rebuilds
+  `<baseline>/snapshot`.
+
+### Flow
+
+1. Baseline, once per base commit, by the human. Use a clean checkout at
+   that commit:
+
+   ```bash
+   uv run helia_core_tester candidate baseline --kernels ~/ns-cmsis-nn \
+     --board apollo510_evb --out ~/hct-eval/dw-s8 --repeats 3 \
+     --op DepthwiseConv --dtype S8
+   ```
+
+   - The first run generates, builds, flashes and streams. The other runs
+     stream the same build again, so the scorer gets a noise band.
+   - Every eval reuses the baseline's placement and inline asm (defaults
+     `tcm` and on), the agent PMU counters (see [PMU feedback](#pmu-feedback);
+     none on DWT boards) and `--fvp-gate off`.
+   - `--out` receives the bundles, `baseline.json` (base commit and run
+     options), `kernels.git` (the base commit, fetched from the clean tree)
+     and `logs/`.
+   - Hidden cases (`--hidden-set DIR`, made by `generate --hidden-dir DIR
+     --hidden-seed-file F`) need the hidden-set PRs; until they merge, the
+     flag fails the first run. Keep DIR and F outside the sandbox.
+2. Candidate, as often as needed, one at a time. The agent edits `Source/` and `Include/`
+   in its worktree, and the evaluator runs:
+
+   ```bash
+   uv run helia_core_tester candidate eval --kernels <agent worktree> \
+     --baseline ~/hct-eval/dw-s8
+   ```
+
+   It does five things:
+   1. Snapshot the agent's trees.
+   2. Run `candidate check` against the base commit.
+   3. Run `hardware run` with the baseline's options, `--golden-from` its first
+      run (bit-exact) and `--skip-generate`.
+   4. Run `score` against every baseline repeat.
+   5. Print the verdict.
+
+   On apollo330mP, 50 DW s8 cases took about 1 minute per eval and the
+   two-repeat baseline about 2 minutes (measured).
+
+The verdict (schema `hct.candidate_eval`) has these fields:
+
+- `verdict`, `exit_code`, and `stage`: `tester` (dirty tester),
+  `baseline` (unusable baseline dir), `check`, `run`, `objects` (once
+  `candidate check` scans built objects), `score`, or `eval` for an
+  unexpected error.
+- `findings`: the check's findings, on rejection.
+- `score`, `families` and `failures`.
+- `cases`: one entry per public case, with cycles, speedup, delta and noise
+  band.
+- `hints`: % of peak, a diagnosis and ranked hints for each public MAC case
+  (from `explain`).
+- `hidden`: null without hidden cases; otherwise case and failure counts,
+  plus the scorer's hidden `subscores` when it reports them.
+
+| Exit | Verdict | Meaning |
+|---|---|---|
+| 0 | `pass` | Correct, no regression, score above `--min-score` |
+| 1 | `fail` | Output mismatch, regression, lost timing or changed inputs |
+| 2 | | Bad flags, such as a non-finite `--min-score` or a file as `--out` |
+| 3 | `rejected` | The diff leaves `Source/`/`Include/` or uses a banned construct |
+| 3 | `refused` / `not_comparable` | Bad baseline dir, oversized candidate, dirty tester, golden misfit, moved cases, other build |
+| 4 | `no_gain` | Correct but not faster |
+| 5 | `error` | Build, board, transport or tester error; see `<baseline>/logs/` |
+
+### `--skip-generate`
+
+- `candidate eval` always passes `--skip-generate`. The baseline generated
+  the cases into this tester's `artifacts/generated_tests`, and
+  `--golden-from` refuses any case whose inputs changed.
+- Do not regenerate between the baseline and its evals, for example with a
+  plain `hardware run` on the same tester. A baseline case that disappears
+  makes eval refuse (`missing_case`, exit 3); rerun `candidate baseline`.
 
 ## Suite-Based Runs
 

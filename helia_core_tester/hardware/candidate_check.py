@@ -5,8 +5,11 @@ Include/, nothing else. Rules, each a finding in the JSON report:
 
 - outside_allowlist: any path outside Source/ or Include/ (Tests/,
   cmake/, nsx/, CMakeLists, scripts, build files).
-- frozen_file: public API headers the adapters compile against, and
-  arm_nntables.c, which the s16 golden generator reads.
+- frozen_file: public API headers the adapters compile against, every
+  kernel header they include (the union of the base and candidate
+  closures), and arm_nntables.c, which the s16 golden generator reads.
+- header_shadow: a new file under Include/ outside Include/Internal/,
+  which -I Include would find before a system header.
 - file_type: Source/Include files that are not .c/.h/.s/.S.
 - symlink: a symlink in the candidate change set.
 - attribute: added attributes beyond a safe list (inline, unused,
@@ -49,6 +52,16 @@ and Tests/ are compared file by file on disk against `git ls-tree`, so
 index flags, ignore rules and diff config cannot hide a change. Other
 paths come from a hardened `git diff`. Pass --base as a full commit SHA:
 a branch or tag lives in the candidate repo and can be moved.
+
+The candidate repo is untrusted. Repo config that can run commands
+or move the worktree (core.fsmonitor, filter drivers, textconv, diff
+and merge drivers, core.worktree...) refuses the check. Keys pulled in
+through include.path or includeIf count the same; the include keys
+themselves are allowed. core.hooksPath is allowed: git always runs
+with fsmonitor off and hooks pointed at /dev/null. The outer diff
+skips nested repos' dirty state, so their config never runs. Base objects come from the candidate's object
+store, which the candidate can forge: check a copy whose objects came
+from a trusted clone.
 """
 
 from __future__ import annotations
@@ -58,6 +71,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import subprocess
 from collections import Counter
 from pathlib import Path
@@ -65,18 +79,18 @@ from typing import Iterator, Optional
 
 import typer
 
+from .c_lex import NEWLINE, SPLICE, strip_comments
 from .candidate_scan import CONFIGS, SCAN_DEADLINE_S, object_findings, preprocess_findings
 from .firmware_build import nsx_app_dir
-from .nsx_app import CMSIS_NN_MODULE, KERNEL_TREES, kernels_match
+from .harness_lock import HARNESS_HEADERS, header_closure
+from .nsx_app import CMSIS_NN_MODULE, KERNEL_TREES, checkout_hash, kernels_match
+from .pathutil import is_relative_to
 
 ALLOWED_DIRS = ("Source/", "Include/")
 ALLOWED_SUFFIXES = (".c", ".h", ".s", ".S")
 # Adapters and goldens read these.
 FROZEN_FILES = (
-    "Include/arm_nnfunctions.h",
-    "Include/arm_nnfunctions_flt.h",
-    "Include/arm_nn_types.h",
-    "Include/arm_nn_types_flt.h",
+    *HARNESS_HEADERS,
     "Source/NNSupportFunctions/arm_nntables.c",
 )
 # Trees the build or generation reads.
@@ -95,17 +109,6 @@ _ATTRIBUTE_HINT = re.compile(r"__attribute|__declspec|\[\[")
 _PRAGMA = re.compile(r"(?:#|%:)\s*pragma|_Pragma|__pragma")
 # Checked per occurrence; _Pragma is never safe.
 _SAFE_PRAGMA = re.compile(r"(?:#|%:)\s*pragma\s+(?:once|GCC\s+unroll\s+\d+|GCC\s+diagnostic\b)")
-_NEWLINE = re.compile(r"\r\n|\r|\n")
-# gcc also splices after trailing blanks.
-_SPLICE = re.compile(r"\\[ \t\f\v]*$")
-# Code runs, literals, comments: phase 3.
-_LEX = re.compile(
-    r"(?P<code>(?:[^\W\d]\w*|\.?\d(?:[eEpP][+-]|'\w|[\w.])*|[^\"'/\w]|/(?![*/]))+)"
-    r"|(?P<literal>\"(?:\\[^\n]|[^\"\\\n])*\"?|'(?:\\[^\n]|[^'\\\n])*'?)"
-    r"|(?P<block>/\*.*?(?:\*/|\Z))"
-    r"|(?P<line>//[^\n]*)",
-    re.DOTALL,
-)
 _GUARD = re.compile(r"^\s*(?:#|%:)\s*(?:if|ifdef|ifndef|elif|elifdef|elifndef|else|endif|define|undef)\b")
 _CONDITION = re.compile(r"^\s*(?:#|%:)\s*(?:if|elif)\b(.*)", re.DOTALL)
 _NAME_TEST = re.compile(r"^\s*(?:#|%:)\s*(?:el)?ifn?def\s+([A-Za-z_]\w*)")
@@ -142,8 +145,27 @@ LINE_RULES = (
 )
 # An empty tar: 1024 zero bytes.
 _EMPTY_TAR = bytes(1024)
+# Largest kernel file today: 0.5 MiB.
+MAX_FILE_BYTES = 4 << 20
 # Ignore user and system git config.
 _GIT_ENV = {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_NO_REPLACE_OBJECTS": "1"}
+
+
+# Never let repo config run code.
+_GIT_FLAGS = ("-c", "core.fsmonitor=false", "-c", f"core.hooksPath={os.devnull}")
+# A FIFO in config or tree blocks git.
+_GIT_TIMEOUT = 300
+# Config keys that run commands or redirect.
+# (section, name); any subsection, even empty.
+_UNSAFE_CONFIG = frozenset((
+    *(("core", name) for name in (
+        "fsmonitor", "sshcommand", "gitproxy", "askpass", "pager", "editor", "worktree", "alternaterefscommand",
+    )),
+    ("extensions", "partialclone"), ("remote", "promisor"),
+    ("filter", "clean"), ("filter", "smudge"), ("filter", "process"),
+    ("diff", "external"), ("diff", "textconv"), ("diff", "command"), ("merge", "driver"),
+    ("uploadpack", "packobjectshook"), ("sequence", "editor"),
+))
 
 
 class CheckError(RuntimeError):
@@ -151,12 +173,30 @@ class CheckError(RuntimeError):
 
 
 def _git(tree: Path, *args: str) -> bytes:
-    done = subprocess.run(
-        ["git", "-C", str(tree), *args], capture_output=True, check=False, env={**os.environ, **_GIT_ENV},
-    )
+    try:
+        done = subprocess.run(
+            ["git", *_GIT_FLAGS, "-C", str(tree), *args], capture_output=True, check=False,
+            env={**os.environ, **_GIT_ENV}, timeout=_GIT_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise CheckError(f"git {args[0]} timed out") from exc
     if done.returncode != 0:
         raise CheckError(done.stderr.decode(errors="replace").strip() or f"git {args[0]} failed")
     return done.stdout
+
+
+def unsafe_config(tree: Path) -> list[str]:
+    """Repo config keys that could run code."""
+    parts = _git(tree, "config", "--list", "--show-scope", "--name-only", "-z").decode(errors="replace").split("\0")
+    # Pairs: scope, key. Our -c flags are "command".
+    keys = {key for scope, key in zip(parts[::2], parts[1::2]) if scope != "command"}
+    return sorted(key for key in keys if _key_parts(key) in _UNSAFE_CONFIG)
+
+
+def _key_parts(key: str) -> tuple[str, str]:
+    """(section, name), lowercased; subsection dropped."""
+    section, _, rest = key.partition(".")
+    return section.lower(), rest.rpartition(".")[2].lower()
 
 
 def _split(out: bytes) -> list[str]:
@@ -173,9 +213,30 @@ def base_files(tree: Path, commit: str) -> dict[str, tuple[str, str]]:
     return files
 
 
-def _blob_id(path: Path, algo: str) -> str:
-    data = path.read_bytes()
-    return hashlib.new(algo, b"blob %d\0" % len(data) + data).hexdigest()
+def read_regular(path: Path) -> Optional[bytes]:
+    """Bytes of a small regular file, else None."""
+    try:
+        if not stat.S_ISREG(os.lstat(path).st_mode):
+            return None
+        # FIFOs and devices must never block.
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return None
+    with os.fdopen(fd, "rb") as handle:
+        info = os.fstat(handle.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_FILE_BYTES:
+            return None
+        return handle.read(MAX_FILE_BYTES + 1)
+
+
+def _text(path: Path) -> str:
+    """A regular file's text; else empty."""
+    return (read_regular(path) or b"").decode("utf-8", errors="replace")
+
+
+def _blob_id(path: Path, algo: str) -> Optional[str]:
+    data = read_regular(path)
+    return None if data is None else hashlib.new(algo, b"blob %d\0" % len(data) + data).hexdigest()
 
 
 def _disk_files(tree: Path, skip: set[str]) -> Iterator[str]:
@@ -204,41 +265,66 @@ def changed_paths(tree: Path, commit: str) -> dict[str, str]:
         path = tree / rel
         if rel not in base:
             changes[rel] = "A"
-        elif path.is_symlink() or base[rel][0] == "120000" or _blob_id(path, algo) != base[rel][1]:
+        elif base[rel][0] == "120000" or _blob_id(path, algo) != base[rel][1]:
             changes[rel] = "M"
     changes.update((rel, "D") for rel in base if not os.path.lexists(tree / rel))
     for rel in submodules & changes.keys():
         del changes[rel]
     # Elsewhere: hardened git diff.
     outside = [f":(exclude){top}" for top in WATCHED]
-    out = _split(_git(tree, "diff", "--name-status", "--no-renames", "--no-ext-diff", "-z", commit, "--", ".", *outside))
+    # Nested repos' dirty state would run their config.
+    diff = ("diff", "--name-status", "--no-renames", "--no-ext-diff", "--ignore-submodules=dirty", "-z")
+    out = _split(_git(tree, *diff, commit, "--", ".", *outside))
     changes.update(zip(out[1::2], out[0::2]))
     untracked = _split(_git(tree, "ls-files", "--others", "--exclude-standard", "-z", "--", ".", *outside))
     changes.update((rel, "A") for rel in untracked)
     return changes
 
 
-def path_findings(path: str, status: str, tree: Path) -> Iterator[dict]:
+def frozen_files(tree: Path, base: dict[str, tuple[str, str]]) -> frozenset[str]:
+    """Files the harness reads, base or candidate."""
+
+    def read(rel: str) -> Optional[str]:
+        if rel not in base or base[rel][0] not in ("100644", "100755"):
+            return None
+        return _git(tree, "cat-file", "blob", base[rel][1]).decode(errors="replace")
+
+    def read_disk(rel: str) -> Optional[str]:
+        path = tree / rel
+        # Stay in the tree; never follow links.
+        try:
+            if path.resolve() != path or not is_relative_to(path, tree) or not path.is_file():
+                return None
+        # Link loops: path_findings reports symlink.
+        except (RuntimeError, OSError):
+            return None
+        return path.read_text(encoding="utf-8", errors="replace")
+
+    # A new header can shadow a base one.
+    return frozenset((*FROZEN_FILES, *header_closure(read), *header_closure(read_disk)))
+
+
+def path_findings(path: str, status: str, tree: Path, frozen: frozenset[str]) -> Iterator[dict]:
     """Rule hits from the path alone."""
     if not path.startswith(ALLOWED_DIRS):
         yield {"rule": "outside_allowlist", "path": path, "message": "only Source/ and Include/ may change"}
-    elif path in FROZEN_FILES:
+    elif path in frozen:
         yield {"rule": "frozen_file", "path": path, "message": "harness reads this file"}
+    elif status == "A" and path.startswith("Include/") and not path.startswith("Include/Internal/"):
+        yield {"rule": "header_shadow", "path": path, "message": "new headers go under Include/Internal/"}
     elif not path.endswith(ALLOWED_SUFFIXES):
         yield {"rule": "file_type", "path": path, "message": "only .c .h .s .S files"}
-    if status != "D" and (tree / path).is_symlink():
+    if status == "D":
+        return
+    if (tree / path).is_symlink():
         yield {"rule": "symlink", "path": path, "message": "symlinks are not allowed"}
+    elif path.startswith(ALLOWED_DIRS) and read_regular(tree / path) is None:
+        yield {"rule": "file_type", "path": path, "message": "not a regular file under 4 MiB"}
 
 
 def _physical(source: str) -> list[str]:
     """Lines as gcc splits them."""
-    return _NEWLINE.split(source)
-
-
-def _blank(match: re.Match) -> str:
-    if match.lastgroup == "block":
-        return "\n" * match.group().count("\n") + " "
-    return " " if match.lastgroup == "line" else match.group()
+    return NEWLINE.split(source)
 
 
 def normalize(source: str) -> tuple[list[str], list[int]]:
@@ -246,24 +332,17 @@ def normalize(source: str) -> tuple[list[str], list[int]]:
 
     Also each physical line's logical index.
     """
-    logical: list[str] = []
-    owner: list[int] = []
-    parts: list[str] = []
+    owner, logical = [], 0
     for line in _physical(source):
-        owner.append(len(logical))
-        spliced = _SPLICE.sub("", line)
-        parts.append(spliced)
-        if spliced == line:
-            logical.append("".join(parts))
-            parts = []
-    if parts:
-        logical.append("".join(parts))
-    return _LEX.sub(_blank, "\n".join(logical)).split("\n"), owner
+        owner.append(logical)
+        # Same splice rule as strip_comments.
+        logical += not SPLICE.search(line)
+    return strip_comments(source).split("\n"), owner
 
 
 def _sources(tree: Path, base: dict, path: str) -> tuple[str, str]:
     """Base and candidate text of a path."""
-    new = (tree / path).read_text(encoding="utf-8", errors="replace")
+    new = _text(tree / path)
     old = _git(tree, "cat-file", "blob", base[path][1]).decode(errors="replace") if path in base else ""
     return old, new
 
@@ -365,7 +444,7 @@ def _raw_rules(text: str) -> Iterator[str]:
 
 def _grandfathered(tree: Path, path: str) -> bool:
     """File already holds a rule hit."""
-    lines = normalize((tree / path).read_text(encoding="utf-8", errors="replace"))[0]
+    lines = normalize(_text(tree / path))[0]
     return any(next(line_rules(text), None) for text in lines)
 
 
@@ -405,7 +484,7 @@ def _tree_macros(tree: Path) -> tuple[set[str], set[str]]:
         for path in sorted((tree / top).rglob("*")):
             if path.is_symlink() or not path.is_file() or not path.name.endswith(ALLOWED_SUFFIXES):
                 continue
-            for code in normalize(path.read_text(encoding="utf-8", errors="replace"))[0]:
+            for code in normalize(_text(path))[0]:
                 if match := _CONDITION.match(code):
                     tested |= set(_IDENT.findall(match.group(1)))
                 elif match := _NAME_TEST.match(code):
@@ -438,7 +517,7 @@ def removed_lines(tree: Path, base: dict, path: str, status: str) -> list[tuple[
         return []
     old_source = _git(tree, "cat-file", "blob", base[path][1]).decode(errors="replace")
     old, owner = normalize(old_source)
-    new = [] if status == "D" else normalize((tree / path).read_text(encoding="utf-8", errors="replace"))[0]
+    new = [] if status == "D" else normalize(_text(tree / path))[0]
     first = {logical: index for index, logical in reversed(list(enumerate(owner)))}
     return [(first[logical] + 1, old[logical]) for logical in _changed(old, new, removed=True)]
 
@@ -456,7 +535,7 @@ def probe_findings(tree: Path, added: dict[str, list[tuple[int, str]]],
     for path in sorted(added.keys() | removed.keys()):
         guard = None
         if (tree / path).is_file():
-            guard = _guard_name(normalize((tree / path).read_text(encoding="utf-8", errors="replace"))[0])
+            guard = _guard_name(normalize(_text(tree / path))[0])
         for line_no, code in added.get(path, []):
             define = _DEFINE.match(code)
             if (match := _CONDITION.match(code)) and _MACRO_CALL.search(match.group(1)):
@@ -482,17 +561,21 @@ def check_candidate(
 ) -> dict:
     """The JSON report for one candidate."""
     tree = tree.resolve()
+    unsafe = unsafe_config(tree)
+    if unsafe:
+        raise CheckError(f"unsafe git config: {', '.join(unsafe)}")
     commit = _git(tree, "rev-parse", "--verify", f"{base}^{{commit}}").decode().strip()
     # Branches and tags can be moved.
     if base.lower() != commit:
         raise CheckError(f"--base must be a full commit SHA, got {base!r}")
     changes = changed_paths(tree, commit)
     base_blobs = base_files(tree, commit)
+    frozen = frozen_files(tree, base_blobs)
     findings: list[dict] = []
     added_by_path: dict[str, list[tuple[int, str]]] = {}
     removed_by_path: dict[str, list[tuple[int, str]]] = {}
     for path, status in sorted(changes.items()):
-        hits = list(path_findings(path, status, tree))
+        hits = list(path_findings(path, status, tree, frozen))
         findings += hits
         if hits:
             continue
@@ -519,7 +602,7 @@ def check_candidate(
                     findings.append({"rule": rule, "path": path, "line": added[0][0], "text": "joined added lines"})
             # Edits inside unchanged constructs.
             old = _git(tree, "cat-file", "blob", base_blobs[path][1]).decode(errors="replace") if path in base_blobs else ""
-            before, after = rule_counts(old), rule_counts((tree / path).read_text(encoding="utf-8", errors="replace"))
+            before, after = rule_counts(old), rule_counts(_text(tree / path))
             findings += ({"rule": rule, "path": path, "line": added[0][0], "text": "more matches in whole file"}
                          for rule in sorted(after) if after[rule] > before[rule] and rule not in hit_rules)
     findings += probe_findings(tree, added_by_path, removed_by_path)
@@ -539,10 +622,12 @@ def check_candidate(
         findings += preprocess_findings(tree, archive, rule_counts, configs, scan_deadline)
     return {
         "schema": "hct.candidate_check",
-        "schema_version": 1,
+        "schema_version": 2,
         "tree": str(tree),
         "base": base,
         "base_commit": commit,
+        # Equals build.kernels.tree_hash; null on failure.
+        "tree_hash": None if findings else checkout_hash(tree),
         "ok": not findings,
         "files": [{"path": path, "status": status} for path, status in sorted(changes.items())],
         "objects": objects,

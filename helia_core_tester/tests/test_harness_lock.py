@@ -61,11 +61,15 @@ def _git(root: Path, *args: str) -> str:
     return subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True, text=True).stdout
 
 
-def _repo(root: Path, files: dict[str, str]) -> Path:
-    """A committed git repo with files."""
+def _write(root: Path, files: dict[str, str]) -> None:
     for rel, text in files.items():
         (root / rel).parent.mkdir(parents=True, exist_ok=True)
         (root / rel).write_text(text, encoding="utf-8")
+
+
+def _repo(root: Path, files: dict[str, str]) -> Path:
+    """A committed git repo with files."""
+    _write(root, files)
     _git(root.parent, "init", "-q", str(root))
     _git(root, "add", "-A")
     _git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base")
@@ -133,6 +137,155 @@ def test_module_source_edit_moves_digest(tester: Path, tmp_path: Path) -> None:
     assert "nsx-cmsis-nn" not in first["harness"]["inputs"]["firmware"]["module_trees"]
 
 
+@pytest.mark.parametrize(("rel", "text"), [
+    ("nsx/CMakeLists.txt", "target_compile_options(nsx_cmsis_nn PRIVATE -O3)\n"),
+    ("nsx-module.yaml", "edited\n"),
+    ("cmake/ns_cmsis_nn.cmake", "edited\n"),
+    ("Include/Internal/arm_nn_config.h", "#undef HELIA_HARDWARE_BUILD\n"),
+])
+def test_kernel_harness_edit_moves_digest(tester: Path, tmp_path: Path, rel: str, text: str) -> None:
+    module = kernel_dir(nsx_app_dir(tmp_path / "b"), AppOptions(cmsis_nn_root=tmp_path / "kernels"))
+    _write(module, {
+        "nsx/CMakeLists.txt": "add_library(nsx_cmsis_nn)\n",
+        "nsx-module.yaml": "m\n",
+        "cmake/ns_cmsis_nn.cmake": "c\n",
+        "Include/arm_nnfunctions.h": '#include "arm_nn_math_types.h"\n',
+        "Include/arm_nn_math_types.h": '#include "Internal/arm_nn_config.h"\n',
+        "Include/Internal/arm_nn_config.h": "#define HELIA_HARDWARE_BUILD 1\n",
+        "Include/arm_nnsupportfunctions.h": "int s;\n",
+        # A stale clone's manifest.
+        "nsx/nsx-module.yaml": "stale\n",
+    })
+    base = _build(tmp_path / "b")
+    # Non-harness headers are kernel code.
+    (module / "Include/arm_nnsupportfunctions.h").write_text("int s2;\n", encoding="utf-8")
+    assert harness_lock.same_harness(base, _build(tmp_path / "b"))
+    (module / rel).write_text(text, encoding="utf-8")
+    assert not harness_lock.same_harness(base, _build(tmp_path / "b"))
+
+
+@pytest.mark.parametrize("name", ["/etc/hosts", "../../../../../../etc/hosts", "../Source/a.c"])
+def test_header_closure_stays_in_include(name: str) -> None:
+    files = {"Include/arm_nnfunctions.h": f'#include "{name}"\n', "Source/a.c": "int a;\n"}
+    read = []
+    closure = harness_lock.header_closure(lambda rel: read.append(rel) or files.get(rel))
+    assert closure == ["Include/arm_nnfunctions.h"]
+    assert all(rel.startswith("Include/") for rel in read)
+
+
+@pytest.mark.parametrize("name", ["/etc/hosts", "../../../../../../../../etc/hosts"])
+def test_escaping_include_not_read(kernels: Path, name: str, monkeypatch) -> None:
+    (kernels / "Include/arm_nn_math_types.h").write_text(f'#include "{name}"\n', encoding="utf-8")
+    real = Path.read_text
+    opened = []
+    monkeypatch.setattr(Path, "read_text", lambda self, *a, **k: opened.append(self) or real(self, *a, **k))
+    rules = _rules(kernels)
+    assert "frozen_file" in rules
+    assert not [path for path in opened if not path.resolve().is_relative_to(kernels.resolve())]
+
+
+def test_angle_include_skips_beside() -> None:
+    files = {
+        "Include/arm_nnfunctions.h": '#include "Internal/cfg.h"\n',
+        "Include/Internal/cfg.h": "#include <common.h>\n",
+        "Include/Internal/common.h": "beside\n",
+        "Include/common.h": "root\n",
+    }
+    assert "Include/common.h" in harness_lock.header_closure(files.get)
+    assert "Include/Internal/common.h" not in harness_lock.header_closure(files.get)
+
+
+def test_linked_module_dir_spares_target(tmp_path: Path) -> None:
+    from helia_core_tester.hardware.nsx_app import write_kernels
+
+    root = _repo(tmp_path / "nn", {"Source/a.c": "int a;\n", "Include/a.h": "\n", "nsx/CMakeLists.txt": "x\n",
+                                   "nsx/nsx-module.yaml": "m\n"})
+    outside = tmp_path / "outside"
+    _write(outside, {"Source/keep.c": "keep\n", "CMakeLists.txt": "keep\n"})
+    module = tmp_path / "module"
+    module.symlink_to(outside)
+    write_kernels(root, module)
+    assert not module.is_symlink() and (module / "Source/a.c").is_file()
+    assert sorted(p.relative_to(outside).as_posix() for p in outside.rglob("*")) == [
+        "CMakeLists.txt", "Source", "Source/keep.c",
+    ]
+    assert (outside / "CMakeLists.txt").read_text(encoding="utf-8") == "keep\n"
+
+
+def test_float_header_is_a_root() -> None:
+    files = {
+        "Include/arm_nnfunctions.h": "int f;\n",
+        "Include/arm_nnfunctions_flt.h": '#include "Internal/flt_cfg.h"\n',
+        "Include/Internal/flt_cfg.h": "\n",
+    }
+    closure = harness_lock.header_closure(files.get)
+    assert {"Include/arm_nnfunctions_flt.h", "Include/Internal/flt_cfg.h"} <= set(closure)
+
+
+@pytest.mark.parametrize(("text", "found"), [
+    ('#include /* configuration */ "Internal/private.h"\n', True),
+    ('/*\n#include "Internal/private.h"\n*/\n', False),
+    ('// note \\\n#include "Internal/private.h"\n', False),
+    ('const char *s = "/*";\n#include "Internal/private.h"\n// */\n', True),
+])
+def test_closure_lexes_comments(text: str, found: bool) -> None:
+    files = {"Include/arm_nnfunctions.h": text, "Include/Internal/private.h": "\n"}
+    assert ("Include/Internal/private.h" in harness_lock.header_closure(files.get)) is found
+
+
+@pytest.mark.parametrize("text", ['#\vinclude "Internal/private.h"\n', '#include\f"Internal/private.h"\n',
+                                  '\f#include <Internal/private.h>\n'])
+def test_closure_vt_ff_whitespace(text: str) -> None:
+    files = {"Include/arm_nnfunctions.h": text, "Include/Internal/private.h": "\n"}
+    assert "Include/Internal/private.h" in harness_lock.header_closure(files.get)
+
+
+def test_module_lock_without_fcntl(tmp_path: Path, monkeypatch) -> None:
+    import sys
+
+    from helia_core_tester.hardware.nsx_app import write_kernels
+
+    monkeypatch.setitem(sys.modules, "fcntl", None)
+    root = _repo(tmp_path / "nn", {"Source/a.c": "int a;\n", "Include/a.h": "\n", "nsx/CMakeLists.txt": "x\n",
+                                   "nsx/nsx-module.yaml": "m\n"})
+    write_kernels(root, tmp_path / "module")
+    assert (tmp_path / "module/Source/a.c").is_file()
+
+
+def test_strip_comments_keeps_header_names() -> None:
+    from helia_core_tester.hardware.c_lex import strip_comments
+
+    assert strip_comments("#include <a//b.h>\nx /* y\nz */ w\n") == "#include <a//b.h>\nx \n  w\n"
+
+
+@pytest.mark.parametrize("cycle", [1, 2])
+def test_link_loop_header_reported(kernels: Path, cycle: int) -> None:
+    header = kernels / "Include/arm_nn_math_types.h"
+    header.unlink()
+    if cycle == 1:
+        header.symlink_to(header.name)
+    else:
+        (kernels / "Include/loop.h").symlink_to(header.name)
+        header.symlink_to("loop.h")
+    report = check_candidate(kernels, _sha(kernels))
+    assert ("Include/arm_nn_math_types.h", "symlink") in {(f["path"], f["rule"]) for f in report["findings"]}
+
+
+def test_header_closure_follows_includes() -> None:
+    files = {
+        "Include/arm_nnfunctions.h": '#include "arm_nn_math_types.h"\n#include <stdint.h>\n',
+        "Include/arm_nn_math_types.h": '#if 0\n  #include "Internal/arm_nn_config.h"\n#endif\n',
+        "Include/Internal/arm_nn_config.h": '#include "arm_nnfunctions.h"\n',
+        "Include/Internal/arm_nnfunctions.h": "beside wins\n",
+        "Include/arm_nnfunctions_flt.h": "spliced\n",
+    }
+    files["Include/arm_nnfunctions.h"] += '#include \\\n  "arm_nnfunctions_flt.h"\n'
+    assert harness_lock.header_closure(files.get) == [
+        "Include/Internal/arm_nn_config.h", "Include/Internal/arm_nnfunctions.h",
+        "Include/arm_nn_math_types.h", "Include/arm_nnfunctions.h", "Include/arm_nnfunctions_flt.h",
+    ]
+
+
 @pytest.mark.parametrize("change", ["source", "flags", "switch", "board"])
 def test_harness_change_moves_digest(tester: Path, tmp_path: Path, change: str) -> None:
     base = _build(tmp_path / "b")
@@ -186,11 +339,12 @@ def test_run_refuses_dirty_tester(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(hardware_pipeline, "run_hardware_pipeline", _pipeline)
     monkeypatch.setenv("HPX_JLINK_SERIAL", "1160003180")
     args = ["hardware", "run", "--skip-generate", "--build-dir", str(tmp_path / "b"), "--cmsis-nn-root", str(tmp_path)]
-    assert runner.invoke(app, args).exit_code == 1 and called, "clean tester runs"
+    assert runner.invoke(app, args).exit_code == 5 and called, "clean tester runs"
     called.clear()
     state["dirty"] = True
     result = runner.invoke(app, args)
-    assert result.exit_code == 1 and "dirty" in result.output and not called
+    # Refused, not a correctness failure.
+    assert result.exit_code == 3 and "dirty" in result.output and not called
     result = runner.invoke(app, [*args, "--allow-dirty-tester"])
     assert called and "tester is dirty" in result.output
 
@@ -203,9 +357,13 @@ def kernels(tmp_path: Path) -> Path:
     root = _repo(tmp_path / "nn", {
         "Source/Conv/a.c": "int a;\n",
         "Include/arm_nnsupportfunctions.h": "int s;\n",
-        "Include/arm_nnfunctions.h": "int f;\n",
+        "Include/arm_nnfunctions.h": '#include "arm_nn_math_types.h"\nint f;\n',
+        "Include/arm_nn_math_types.h": '#include <stdint.h>\n#include "Internal/arm_nn_config.h"\n',
+        "Include/Internal/arm_nn_config.h": '#include "common.h"\n#define HELIA_HARDWARE_BUILD 1\n',
+        "Include/common.h": "int c;\n",
         "Tests/t.c": "int t;\n",
         "nsx/CMakeLists.txt": "x\n",
+        "nsx/nsx-module.yaml": "m\n",
         ".gitignore": "*.o\n",
     })
     _git(root, "tag", "base")
@@ -236,6 +394,11 @@ def test_source_change_passes(kernels: Path) -> None:
     ("Source/CMakeLists.txt", "y\n", "file_type"),
     ("Source/Conv/a.o", "y\n", "file_type"),
     ("Include/arm_nnfunctions.h", "int g;\n", "frozen_file"),
+    ("Include/Internal/arm_nn_config.h", "#undef HELIA_HARDWARE_BUILD\n", "frozen_file"),
+    ("Include/arm_nn_math_types.h", "\n", "frozen_file"),
+    ("Include/string.h", "int s;\n", "header_shadow"),
+    # Beside-first lookup shadows Include/common.h.
+    ("Include/Internal/common.h", "int s;\n", "frozen_file"),
     ("Source/Conv/a.c", '__attribute__((section(".itcm"))) int a;\n', "attribute"),
     ("Source/Conv/a.c", '__attribute__((__section__(".itcm"))) int a;\n', "special_section"),
     ("Source/Conv/a.c", '[[gnu::section(".itcm")]] int a;\n', "attribute"),
@@ -357,8 +520,9 @@ def test_clean_edit_near_probe_passes(tmp_path: Path) -> None:
     root = _repo(tmp_path / "nn", PROBE_BASE)
     (root / "Source/Conv/p.c").write_text(
         PROBE_BASE["Source/Conv/p.c"].replace("return x;", "return x + 1;"), encoding="utf-8")
-    (root / "Include/new.h").write_text("#ifndef NEW_H\n#define NEW_H\n#define TWICE(x) ((x) * 2)\n#endif\n",
-                                        encoding="utf-8")
+    (root / "Include/Internal").mkdir()
+    (root / "Include/Internal/new.h").write_text("#ifndef NEW_H\n#define NEW_H\n#define TWICE(x) ((x) * 2)\n#endif\n",
+                                                 encoding="utf-8")
     report = check_candidate(root, _git(root, "rev-parse", "HEAD").strip())
     assert report["ok"], report["findings"]
 
@@ -367,6 +531,23 @@ def test_plain_conditional_passes(kernels: Path) -> None:
     text = "#if defined(ARM_MATH_MVEI) && __has_builtin(__builtin_expect)\nint z;\n#endif\n"
     (kernels / "Source/Conv/a.c").write_text(text, encoding="utf-8")
     assert check_candidate(kernels, _sha(kernels))["ok"]
+
+
+def test_internal_header_passes(kernels: Path) -> None:
+    (kernels / "Include/Internal/new.h").write_text("int n;\n", encoding="utf-8")
+    (kernels / "Include/arm_nnsupportfunctions.h").write_text("int s2;\n", encoding="utf-8")
+    assert check_candidate(kernels, _sha(kernels))["ok"]
+
+
+def test_tree_hash_matches_vendored_copy(kernels: Path, tmp_path: Path) -> None:
+    from helia_core_tester.hardware.nsx_app import write_kernels
+    from helia_core_tester.hardware.nsx_cli import tree_hash
+
+    _write(tmp_path / "module", {"AGENTS.md": "old clone\n", "nsx/nsx-module.yaml": "old\n"})
+    write_kernels(kernels, tmp_path / "module")
+    assert check_candidate(kernels, _sha(kernels))["tree_hash"] == tree_hash(tmp_path / "module")
+    (kernels / "Source/Conv/a.c").write_text("int a2;\n", encoding="utf-8")
+    assert check_candidate(kernels, _sha(kernels))["tree_hash"] != tree_hash(tmp_path / "module")
 
 
 def test_safe_attributes_pass(kernels: Path) -> None:
@@ -379,7 +560,6 @@ def test_git_tricks_cannot_hide_changes(kernels: Path) -> None:
     (kernels / "Tests/t.c").write_text("int t2;\n", encoding="utf-8")
     _git(kernels, "update-index", "--skip-worktree", "Tests/t.c")
     (kernels / "Source/Conv/a.c").write_text('#pragma GCC optimize("O3")\n', encoding="utf-8")
-    _git(kernels, "config", "diff.external", "true")
     (kernels / ".git/info/exclude").write_text("Source/Conv/hidden.c\n", encoding="utf-8")
     (kernels / "Source/Conv/hidden.c").write_text('__attribute__((section(".x"))) int h;\n', encoding="utf-8")
     report = check_candidate(kernels, _sha(kernels))
@@ -415,6 +595,87 @@ def test_token_inside_unchanged_attribute_fails(tmp_path: Path) -> None:
     assert "attribute" in _rules(root)
 
 
+@pytest.mark.parametrize(("key", "value"), [
+    ("core.fsmonitor", "touch {pwned}; false #"),
+    ("filter.x.clean", "touch {pwned}; cat"),
+    ("core.worktree", "/"),
+    ("diff.external", "true"),
+    ("include.path", "{pwned}.cfg"),
+    ("Core.FSMonitor", "touch {pwned}; false #"),
+])
+def test_unsafe_git_config_refused(kernels: Path, tmp_path: Path, key: str, value: str) -> None:
+    from helia_core_tester.hardware.candidate_check import CheckError
+
+    pwned = tmp_path / "pwned"
+    (tmp_path / "pwned.cfg").write_text(f'[filter "x"]\n\tclean = touch {pwned}; cat\n', encoding="utf-8")
+    (kernels / ".gitattributes").write_text("*.c filter=x\n", encoding="utf-8")
+    (kernels / "Source/Conv/a.c").write_text("int a2;\n", encoding="utf-8")
+    _git(kernels, "config", key, value.format(pwned=pwned))
+    expected = {"include.path": "filter.x.clean", "Core.FSMonitor": "core.fsmonitor"}.get(key, key)
+    with pytest.raises(CheckError, match=expected):
+        check_candidate(kernels, _sha(kernels))
+    assert not pwned.exists()
+
+
+@pytest.mark.parametrize("key", ["filter..clean", "diff..textconv", "merge..driver", "FILTER.X.Smudge", "diff.A.b.command"])
+def test_unsafe_key_any_subsection(key: str) -> None:
+    from helia_core_tester.hardware.candidate_check import _UNSAFE_CONFIG, _key_parts
+
+    assert _key_parts(key) in _UNSAFE_CONFIG
+
+
+def test_empty_driver_name_refused(kernels: Path, tmp_path: Path) -> None:
+    from helia_core_tester.hardware.candidate_check import CheckError
+
+    pwned = tmp_path / "pwned"
+    (kernels / ".git/config").open("a", encoding="utf-8").write(f'[filter ""]\n\tclean = touch {pwned}; cat\n')
+    (kernels / ".gitattributes").write_text("*.c filter=\n", encoding="utf-8")
+    with pytest.raises(CheckError, match=r"filter\.\.clean"):
+        check_candidate(kernels, _sha(kernels))
+    assert not pwned.exists()
+
+
+def test_safe_config_keys_pass(kernels: Path) -> None:
+    safe = (("core.fsmonitorHookVersion", "2"), ("filter.lfs.required", "true"), ("diff.x.binary", "true"),
+            ("core.hooksPath", "hooks"))
+    for key, value in safe:
+        _git(kernels, "config", key, value)
+    assert check_candidate(kernels, _sha(kernels))["ok"]
+
+
+def test_nested_repo_config_never_runs(kernels: Path, tmp_path: Path) -> None:
+    pwned = tmp_path / "pwned"
+    nested = _repo(kernels / "ext" / "n", {"x": "1\n", ".gitattributes": "x filter=ev\n"})
+    _git(nested, "config", "filter.ev.clean", f"touch {pwned}; cat")
+    (nested / "x").write_text("2\n", encoding="utf-8")
+    _git(kernels, "add", "ext/n")
+    rules = {(f["path"], f["rule"]) for f in check_candidate(kernels, _sha(kernels))["findings"]}
+    assert ("ext/n", "outside_allowlist") in rules
+    assert not pwned.exists()
+
+
+@pytest.mark.parametrize("kind", ["fifo", "symlink", "big"])
+def test_special_file_never_read(kernels: Path, tmp_path: Path, kind: str) -> None:
+    import os
+    import threading
+
+    path = kernels / "Source/Conv/a.c"
+    path.unlink()
+    if kind == "fifo":
+        os.mkfifo(path)
+    elif kind == "symlink":
+        path.symlink_to(tmp_path / "elsewhere.c")
+        (tmp_path / "elsewhere.c").write_text("int e;\n", encoding="utf-8")
+    else:
+        path.write_bytes(b" " * ((4 << 20) + 1))
+    result: list = []
+    worker = threading.Thread(target=lambda: result.append(_rules(kernels)), daemon=True)
+    worker.start()
+    worker.join(timeout=30)
+    assert result, "check hung"
+    assert result[0] & {"file_type", "symlink"}
+
+
 def test_hidden_index_entry_fails(kernels: Path) -> None:
     _git(kernels, "update-index", "--skip-worktree", ".gitignore")
     report = check_candidate(kernels, _sha(kernels))
@@ -426,13 +687,43 @@ def test_symlink_fails(kernels: Path) -> None:
     assert "symlink" in _rules(kernels)
 
 
-def test_symlinked_root_fails(kernels: Path, tmp_path: Path) -> None:
+def test_symlinked_root_fails(kernels: Path, tmp_path: Path, monkeypatch) -> None:
     import shutil
 
     shutil.copytree(kernels / "Source", tmp_path / "elsewhere")
     shutil.rmtree(kernels / "Source")
     (kernels / "Source").symlink_to(tmp_path / "elsewhere")
     assert "symlink" in _rules(kernels)
+    # A failed check never vendors the tree.
+    monkeypatch.setattr(candidate_check, "checkout_hash", lambda root: pytest.fail("hashed a failed tree"))
+    assert check_candidate(kernels, _sha(kernels))["tree_hash"] is None
+
+
+def test_symlinked_header_not_followed(kernels: Path, tmp_path: Path) -> None:
+    (tmp_path / "host.h").write_text('#include "Internal/new.h"\n', encoding="utf-8")
+    (kernels / "Include/Internal/new.h").write_text("int n;\n", encoding="utf-8")
+    (kernels / "Include/arm_nn_math_types.h").unlink()
+    (kernels / "Include/arm_nn_math_types.h").symlink_to(tmp_path / "host.h")
+    findings = {(f["rule"], f["path"]) for f in check_candidate(kernels, _sha(kernels))["findings"]}
+    assert ("symlink", "Include/arm_nn_math_types.h") in findings
+    assert ("frozen_file", "Include/Internal/new.h") not in findings
+
+
+def test_stale_nsx_link_spares_target(tmp_path: Path) -> None:
+    from helia_core_tester.hardware.nsx_app import write_kernels
+
+    root = _repo(tmp_path / "nn", {"Source/a.c": "int a;\n", "Include/a.h": "\n", "nsx/CMakeLists.txt": "x\n",
+                                   "nsx/nsx-module.yaml": "m\n"})
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "keep.txt").write_text("keep\n", encoding="utf-8")
+    module = tmp_path / "module"
+    module.mkdir()
+    (module / "nsx").symlink_to(outside)
+    (module / "CMakeLists.txt").symlink_to(outside / "keep.txt")
+    write_kernels(root, module)
+    assert (outside / "keep.txt").read_text(encoding="utf-8") == "keep\n"
+    assert not (module / "nsx").is_symlink() and not (module / "CMakeLists.txt").is_symlink()
 
 
 @pytest.mark.parametrize("text", [
