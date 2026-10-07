@@ -45,6 +45,8 @@ def test_c_firmware_session_loop_executes_abs_correctness_flow(tmp_path: Path, p
             "-Wextra",
             "-Werror",
             "-DHCT_HOST_ABS_ONLY",
+            # Target ABI: one-byte status enums.
+            "-fshort-enums",
             *(PMU_STUB_FLAGS if pmu else []),
             "-I",
             str(PROJECT_ROOT / "cmake" / "hardware"),
@@ -75,7 +77,14 @@ def test_c_firmware_session_loop_executes_abs_correctness_flow(tmp_path: Path, p
     # before the module's read resets them, and each counter's overflow slot.
     assert "samples=6 passes=2" in result.stdout
     # Refusals end one case; the next runs.
-    for line in ("rejected correctness samples_dropped=0", "rejected warmup samples_dropped=0", "rejected sampling samples_dropped=3"):
+    # Skipped timed calls fail the output check.
+    for line in (
+        "rejected correctness samples_dropped=0",
+        "rejected warmup samples_dropped=0",
+        "rejected sampling samples_dropped=3",
+        "rejected memoized samples_dropped=0",
+        "rejected memoized-late samples_dropped=5",
+    ):
         assert line in result.stdout
 
 

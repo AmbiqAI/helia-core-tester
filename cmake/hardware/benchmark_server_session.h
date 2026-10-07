@@ -34,6 +34,8 @@ extern "C" {
 #endif
 #define HCT_SERVER_MAX_OUTBOX_BYTES 32768u
 #define HCT_SERVER_BLOB_CHUNK_BYTES 64u
+/* Timed output differs from first call. */
+#define HCT_STATUS_OUTPUT_CHANGED (-1000)
 
 typedef enum
 {
@@ -289,6 +291,9 @@ typedef struct
     size_t outbox_length;
     /* Untimed adapter cycles; last keeps offsets. */
     uint32_t prepare_cycles;
+    /* First-call output; 0 bytes skips checks. */
+    uint32_t checked_bytes;
+    uint32_t checked_digest;
 } hct_server_session_t;
 
 void hct_server_session_init(hct_server_session_t *session,
