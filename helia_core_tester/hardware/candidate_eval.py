@@ -24,6 +24,7 @@ from __future__ import annotations
 import inspect
 import json
 import os
+import tempfile
 import shutil
 import stat
 import subprocess
@@ -39,7 +40,8 @@ import typer
 
 from .boards import UnknownBoardError, repo_root, resolve_board
 from .candidate_check import CheckError, _git, candidate_app, check_candidate
-from .nsx_app import KERNEL_TREES
+from . import nsx_cli
+from .nsx_app import KERNEL_TREES, AppRenderError, write_kernels
 from .pmu_explain import AGENT_PMU_SELECTION, explain_bundle
 from .score import DEFAULT_MIN_SCORE, EXIT_REFUSED, EXITS, load_bundle, load_scoring, score_bundles
 
@@ -239,11 +241,12 @@ def _hidden_ids(bundles: list) -> set[str]:
     return {case_id for b in bundles for case_id, row in b.rows.items() if row.get("hidden") == "true"}
 
 
-def _score(baselines: list, candidate, scoring: dict, check: dict) -> dict:
-    # TODO(score-trust): always pass check once merged.
-    if "check" in inspect.signature(score_bundles).parameters:
-        return score_bundles(baselines, [candidate], scoring, check=check)
-    return score_bundles(baselines, [candidate], scoring)
+def snapshot_hash(snap: Path) -> str:
+    """The tree hash a build of snap records."""
+    with tempfile.TemporaryDirectory() as tmp:
+        module = Path(tmp) / "module"
+        write_kernels(snap, module)
+        return nsx_cli.tree_hash(module)
 
 
 def _case_view(case: dict) -> dict:
@@ -296,7 +299,10 @@ def evaluate(kernels: Path, baseline: Path, meta: dict, min_score: float, run=No
     try:
         snap = snapshot(kernels, baseline, meta["base_commit"])
         check = check_candidate(snap, meta["base_commit"])
-    except (CheckError, OSError) as exc:
+        # TODO(lock-scope): the check reports tree_hash.
+        if check["ok"] and not check.get("tree_hash"):
+            check = {**check, "tree_hash": snapshot_hash(snap)}
+    except (CheckError, AppRenderError, OSError) as exc:
         return {**head, "verdict": "refused", "stage": "check", "reason": str(exc)}
     if not check["ok"]:
         return {**head, "verdict": "rejected", "stage": "check", "findings": check["findings"]}
@@ -312,7 +318,7 @@ def evaluate(kernels: Path, baseline: Path, meta: dict, min_score: float, run=No
         return {**head, "verdict": "rejected", "stage": "objects", "findings": built["findings"]}
     baselines, candidate = [load_bundle(path) for path in bundles], load_bundle(Path(summary["bundle"]))
     scoring = load_scoring(head["board"]) | {"min_score": min_score}
-    report = _score(baselines, candidate, scoring, check)
+    report = score_bundles(baselines, [candidate], scoring, check=check)
     return {**head, **verdict_from(report, _hidden_ids(baselines + [candidate]), candidate.path)}
 
 

@@ -294,8 +294,8 @@ def explain_case(
     entry = cpu_table.get("ops", {}).get(op, {}).get(dtype)
     ceiling = None
     if entry:
-        ceiling = dict(entry, key=f"{cpu}/{op}/{dtype}",
-                       target_inst_per_mac_instr=cpu_table.get("target_inst_per_mac_instr"))
+        target = (cpu_table.get("op_targets") or {}).get(op, cpu_table.get("target_inst_per_mac_instr"))
+        ceiling = dict(entry, key=f"{cpu}/{op}/{dtype}", target_inst_per_mac_instr=target)
     cpm = _number(row.get("cycles_per_mac")) or _ratio(cycles, macs)
     lanes = int(ceiling["lanes"]) if ceiling else 0
     metrics, missing = _metrics(row, cycles, macs, lanes, dtype)
