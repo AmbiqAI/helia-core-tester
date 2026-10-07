@@ -10,6 +10,7 @@ from typing import Optional
 from helia_core_tester.core.steps.base import StepBase, StepPlan, StepResult, StepStatus
 from helia_core_tester.core.errors import GenerationError
 from helia_core_tester.core.logging import get_logger
+from helia_core_tester.core.path_layout import generated_tests_dir, generated_tests_root
 from helia_core_tester.utils.command_runner import run_command
 
 
@@ -32,10 +33,34 @@ class GenerateStep(StepBase):
         """Validate prerequisites for generation."""
         if not self.config.generation_dir.exists():
             return f"Generation directory not found: {self.config.generation_dir}"
+        if self.config.hidden_dir is not None:
+            try:
+                self._hidden_env()
+            except (OSError, ValueError) as exc:
+                return str(exc)
         return None
 
     def _cpu_generated_tests_dir(self, cpu: str, suite: str) -> Path:
+        if self.config.hidden_dir is not None:
+            return generated_tests_dir(self.config.hidden_dir, cpu, suite=suite)
         return self.config.generated_tests_dir_for(cpu, suite=suite)
+
+    def _output_root(self) -> Path:
+        """Generated tests root this run writes."""
+        if self.config.hidden_dir is not None:
+            return generated_tests_root(self.config.hidden_dir)
+        return self.config.generated_tests_root
+
+    def _hidden_env(self) -> dict[str, str]:
+        """Environment carrying the checked secret."""
+        from helia_core_tester.generation.random_shapes import SECRET_ENV, hidden_secret
+
+        env = dict(os.environ)
+        if self.config.hidden_seed_file is not None:
+            # Env, not argv: ps shows argv.
+            env[SECRET_ENV] = self.config.hidden_seed_file.read_text(encoding="utf-8").strip()
+        hidden_secret(env.get(SECRET_ENV, ""))
+        return env
 
     def _build_cmd(
         self,
@@ -48,7 +73,8 @@ class GenerateStep(StepBase):
         cmd = ["pytest", "test_ops.py::test_generation", "-v"]
         cmd.extend(["--cpu", cpu])
         cmd.extend(["--suite", suite])
-        cmd.extend(["--generated-tests-dir", str(self._cpu_generated_tests_dir(cpu, suite=suite))])
+        if self.config.hidden_dir is None:
+            cmd.extend(["--generated-tests-dir", str(self._cpu_generated_tests_dir(cpu, suite=suite))])
         if self.config.op_filter:
             cmd.extend(["--op", self.config.op_filter])
         if self.config.dtype_filter:
@@ -71,6 +97,10 @@ class GenerateStep(StepBase):
             cmd.append("--keep-unselected")
         if self.config.random_shapes:
             cmd.extend(["--random-shapes", str(self.config.random_shapes)])
+        if self.config.hidden_dir is not None:
+            # Long tracebacks print the derived seed.
+            cmd.extend(["--hidden-dir", str(self.config.hidden_dir), "--tb=native"])
+        elif self.config.random_shapes:
             cmd.extend(["--shape-seed", str(self.config.shape_seed)])
         return cmd
     
@@ -84,9 +114,9 @@ class GenerateStep(StepBase):
         # CMSIS_NN_ROOT (matching the CMake cache var name), distinct from
         # CMSIS_NN_REPO_ROOT which overrides helia-core-tester's own repo
         # root discovery.
-        subprocess_env = None
+        subprocess_env = self._hidden_env() if self.config.hidden_dir is not None else None
         if self.config.cmsis_nn_root:
-            subprocess_env = {**os.environ, "CMSIS_NN_ROOT": str(self.config.cmsis_nn_root)}
+            subprocess_env = {**(subprocess_env or os.environ), "CMSIS_NN_ROOT": str(self.config.cmsis_nn_root)}
         try:
             commands = []
             generation_targets = self._targets()
@@ -115,7 +145,7 @@ class GenerateStep(StepBase):
                 status=StepStatus.SUCCESS,
                 message="TFLite models generated successfully",
                 outputs={
-                    "generated_tests_root": str(self.config.generated_tests_root)
+                    "generated_tests_root": str(self._output_root())
                 },
                 details={
                     "commands": commands,
@@ -139,7 +169,7 @@ class GenerateStep(StepBase):
                 message=error_msg,
                 error=gen_error,
                 outputs={
-                    "generated_tests_root": str(self.config.generated_tests_root)
+                    "generated_tests_root": str(self._output_root())
                 },
                 details={"cpus": self.config.cpus},
             )
@@ -168,7 +198,7 @@ class GenerateStep(StepBase):
             status=StepStatus.SKIPPED,
             message=f"DRY RUN: Would run {len(cmd_preview)} generation command(s) in {self.config.generation_dir}",
             outputs={
-                "generated_tests_root": str(self.config.generated_tests_root)
+                "generated_tests_root": str(self._output_root())
             },
             details={"commands": cmd_preview},
         )
@@ -188,6 +218,6 @@ class GenerateStep(StepBase):
             will_run=True,
             reason="ready",
             commands=cmd_preview,
-            outputs={"generated_tests_root": str(self.config.generated_tests_root)},
+            outputs={"generated_tests_root": str(self._output_root())},
             details={"cwd": str(self.config.generation_dir)}
         )

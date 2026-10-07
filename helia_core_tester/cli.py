@@ -137,6 +137,8 @@ def generate(
     force_generate: bool = typer.Option(False, "--force-generate", help="Regenerate every case even when its reuse stamp still matches"),
     random_shapes: Optional[int] = typer.Option(None, "--random-shapes", help="Draw N random s8 conv shapes per op"),
     shape_seed: Optional[int] = typer.Option(None, "--shape-seed", help="Seed for --random-shapes, 0 to 2**32-1 (default 0)"),
+    hidden_dir: Optional[Path] = typer.Option(None, "--hidden-dir", help="Write secret-seeded shapes here, outside the tree"),
+    hidden_seed_file: Optional[Path] = typer.Option(None, "--hidden-seed-file", help="Secret seed file; else HCT_HIDDEN_SEED"),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help="Verbosity level (0-3)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be done"),
     plan: bool = typer.Option(False, "--plan", help="Print execution plan and exit"),
@@ -159,6 +161,8 @@ def generate(
         force_generate=force_generate,
         random_shapes=random_shapes,
         shape_seed=shape_seed,
+        hidden_dir=hidden_dir,
+        hidden_seed_file=hidden_seed_file,
     )
     if config.plan:
         _print_plan_item(GenerateStep(config).plan())

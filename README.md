@@ -70,6 +70,14 @@ the fixed ones. Run them with
 `hardware run --skip-generate --test-name rs<S>_`. A draw with a flat golden is
 dropped and counted as `skipped_degenerate`.
 
+Hidden shapes: `generate --random-shapes N --hidden-dir DIR` draws the same
+kind of cases from a secret seed instead (env `HCT_HIDDEN_SEED`, or
+`--hidden-seed-file F`; 16+ characters, e.g. `python -c "import secrets; print(secrets.token_hex(16))"`). DIR and
+F must sit outside the tester tree. DIR mirrors a tester root: descriptors in
+`DIR/artifacts/random_shapes/<cpu>/`, cases in `DIR/artifacts/generated_tests/`,
+reports in `DIR/artifacts/reports/`. Case ids are opaque keyed hashes
+(`h<12 hex>`), and summaries record only `seed_commitment`, a SHA-256 of the secret.
+
 Correctness: int cases use the per-operator LSB tolerance in
 `generation/io/dtypes.py`, and every case records `max_abs_diff` and `diff_count`
 (elements differing at all) in `case_summary.csv` and `cases.json`; both are null
