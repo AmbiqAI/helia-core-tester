@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from pathlib import Path
 
@@ -262,5 +263,38 @@ def test_missing_hidden_case_refuses_without_its_id(tmp_path, kernels, monkeypat
     monkeypatch.setattr(sb, "FIELDS", sb.FIELDS + ["hidden"])
     out, _ = _baseline(tmp_path, kernels, rows={"dw_a": {"hidden": "true"}})
     verdict = _eval(kernels, out, FakeRun(tmp_path / "reports", drop=("dw_a", "fc_a")))
-    assert verdict["verdict"] == "refused" and verdict["hidden"]["failures"] == {"missing_case": 1}
-    assert "dw_a" not in json.dumps(verdict)
+    # Score refuses a changed hidden set.
+    assert verdict["verdict"] == "not_comparable" and "dw_a" not in json.dumps(verdict)
+
+
+def test_all_cases_missing_refuses(tmp_path, kernels) -> None:
+    out, _ = _baseline(tmp_path, kernels)
+    verdict = _eval(kernels, out, FakeRun(tmp_path / "reports", drop=tuple(sb.CASES)))
+    assert verdict["verdict"] == "refused"
+
+
+@pytest.mark.parametrize(("budget", "make"), [
+    (candidate_eval.CopyBudget(file_bytes=1000), lambda k: (k / "Source/big.c").write_bytes(b"x" * 2000)),
+    # Sparse: few blocks, huge size.
+    (candidate_eval.CopyBudget(), lambda k: os.truncate(_touch(k / "Source/sparse.c"), 1 << 40)),
+    (candidate_eval.CopyBudget(total_bytes=100), lambda k: [(k / f"Source/f{i}.c").write_bytes(b"y" * 60) for i in range(2)]),
+    (candidate_eval.CopyBudget(files=5), lambda k: [_touch(k / f"Source/n{i}.c") for i in range(3)]),
+])
+def test_oversized_candidate_refuses(tmp_path, kernels, budget, make) -> None:
+    out, _ = _baseline(tmp_path, kernels)
+    make(kernels)
+    run = FakeRun(tmp_path / "reports")
+    verdict = candidate_eval.evaluate(kernels, out, candidate_eval.read_baseline(out), 0.005, run=run, budget=budget)
+    assert verdict["verdict"] == "refused" and verdict["stage"] == "check" and not run.calls
+
+
+def _touch(path: Path) -> Path:
+    path.write_bytes(b"")
+    return path
+
+
+def test_baseline_out_must_be_a_dir(tmp_path, kernels) -> None:
+    out = tmp_path / "file"
+    out.write_text("x")
+    result = runner.invoke(app, ["candidate", "baseline", "--kernels", str(kernels), "--board", "apollo510_evb", "--out", str(out)])
+    assert result.exit_code == 2

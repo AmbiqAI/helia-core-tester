@@ -197,32 +197,69 @@ def read_baseline(path: Path) -> dict:
 # --- eval ---------------------------------------------------------------------------
 
 
-def copy_tree(src: Path, dst: Path) -> None:
+class TooLarge(CheckError):
+    """The candidate trees exceed the copy limits."""
+
+
+@dataclass
+class CopyBudget:
+    """Size and count limits for one snapshot."""
+
+    file_bytes: int = 4 << 20
+    total_bytes: int = 64 << 20
+    files: int = 5000
+    used_bytes: int = 0
+    used_files: int = 0
+
+    def charge(self, size: int, path: str) -> None:
+        """Count one file; refuse past a limit."""
+        self.used_files += 1
+        self.used_bytes += size
+        if size > self.file_bytes:
+            raise TooLarge(f"{path}: over {self.file_bytes} bytes")
+        if self.used_files > self.files:
+            raise TooLarge(f"Over {self.files} files")
+        if self.used_bytes > self.total_bytes:
+            raise TooLarge(f"Over {self.total_bytes} bytes in total")
+
+
+def copy_tree(src: Path, dst: Path, budget: CopyBudget) -> None:
     """Copy by dir fd; never follow links.
 
     A racing agent cannot swap a dir for a symlink mid-copy. Symlinks
-    copy as links; FIFOs, sockets and devices are skipped.
+    copy as links; FIFOs, sockets and devices are skipped. Sizes are
+    charged before any byte is read.
     """
     for root, dirs, files, root_fd in os.fwalk(src, follow_symlinks=False):
         out = dst / Path(root).relative_to(src)
         out.mkdir(parents=True, exist_ok=True)
         for name in dirs + files:
-            mode = os.stat(name, dir_fd=root_fd, follow_symlinks=False).st_mode
-            if stat.S_ISLNK(mode):
+            info = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+            if stat.S_ISLNK(info.st_mode):
+                budget.charge(0, name)
                 (out / name).symlink_to(os.readlink(name, dir_fd=root_fd))
-            elif stat.S_ISREG(mode):
-                _copy_file(name, root_fd, out / name)
+            elif stat.S_ISREG(info.st_mode):
+                # Sparse files: apparent size counts.
+                budget.charge(max(info.st_size, info.st_blocks * 512), f"{root}/{name}")
+                _copy_file(name, root_fd, out / name, budget.file_bytes)
 
 
-def _copy_file(name: str, dir_fd: int, dst: Path) -> None:
+def _copy_file(name: str, dir_fd: int, dst: Path, limit: int) -> None:
     fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dir_fd)
-    with os.fdopen(fd, "rb") as handle:
+    with os.fdopen(fd, "rb") as handle, dst.open("wb") as out:
         # Swapped for a FIFO since stat.
-        if stat.S_ISREG(os.fstat(fd).st_mode):
-            dst.write_bytes(handle.read())
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return
+        copied = 0
+        while chunk := handle.read(1 << 16):
+            copied += len(chunk)
+            # Grew after the stat.
+            if copied > limit:
+                raise TooLarge(f"{name}: over {limit} bytes")
+            out.write(chunk)
 
 
-def snapshot(candidate: Path, baseline: Path, base: str) -> Path:
+def snapshot(candidate: Path, baseline: Path, base: str, budget: Optional[CopyBudget] = None) -> Path:
     """Base checkout with the candidate's trees copied in."""
     snap = baseline / "snapshot"
     shutil.rmtree(snap, ignore_errors=True)
@@ -236,7 +273,7 @@ def snapshot(candidate: Path, baseline: Path, base: str) -> Path:
             # The check flags symlinks.
             dst.symlink_to(src.readlink())
         elif src.is_dir():
-            copy_tree(src, dst)
+            copy_tree(src, dst, budget or CopyBudget())
     return snap
 
 
@@ -287,7 +324,7 @@ def _hints(bundle: Path, hidden: set[str]) -> list[dict]:
 
 def verdict_from(report: dict, hidden: set[str], candidate: Path) -> dict:
     """The agent-facing verdict; hidden ids redacted."""
-    public = [c for c in report["cases"] if c["case_id"] not in hidden]
+    public = [c for c in report["cases"] if c["case_id"] not in hidden and not c.get("hidden")]
     failures, hidden_kinds = [], Counter()
     for failure in report["failures"]:
         if failure.get("case_id") in hidden:
@@ -296,27 +333,26 @@ def verdict_from(report: dict, hidden: set[str], candidate: Path) -> dict:
             failures.append(failure)
     verdict = report["verdict"]
     # Lost cases, hidden too: tests moved.
-    kinds = [f["kind"] for f in report["failures"]]
+    kinds = [f["kind"] for f in report["failures"] if f["kind"] != "no_eligible_cases"]
     if kinds and all(kind == "missing_case" for kind in kinds):
         verdict = "refused"
     return {
         "verdict": verdict, "stage": "score", "score": report["score"], "board": report["board"],
         "candidate_session": report["candidate"][0], "baseline_sessions": report["baseline"],
         "families": report["families"], "failures": failures, "cases": [_case_view(c) for c in public],
-        # TODO(score-hidden): subscores land with score-hidden.
         "hidden": {"cases": len(report["cases"]) - len(public), "failures": dict(hidden_kinds),
                    "subscores": (report.get("subscores") or {}).get("hidden")} if hidden else None,
         "hints": _hints(candidate, hidden),
     }
 
 
-def evaluate(kernels: Path, baseline: Path, meta: dict, min_score: float, run=None) -> dict:
+def evaluate(kernels: Path, baseline: Path, meta: dict, min_score: float, run=None, budget: Optional[CopyBudget] = None) -> dict:
     """Snapshot, check, run, score: one verdict dict."""
     run = run or hardware_run
     head = {"schema": SCHEMA, "schema_version": SCHEMA_VERSION, "board": meta["run"]["board"], "base_commit": meta["base_commit"]}
     session = f"eval-{_stamp()}"
     try:
-        snap = snapshot(kernels, baseline, meta["base_commit"])
+        snap = snapshot(kernels, baseline, meta["base_commit"], budget)
         check = check_candidate(snap, meta["base_commit"])
         # TODO(lock-scope): the check reports tree_hash.
         if check["ok"] and not check.get("tree_hash"):
@@ -348,7 +384,7 @@ def evaluate(kernels: Path, baseline: Path, meta: dict, min_score: float, run=No
 def baseline_command(
     kernels: Path = typer.Option(..., "--kernels", exists=True, file_okay=False, resolve_path=True, help="Clean ns-cmsis-nn checkout at the base."),
     board: str = typer.Option(..., "--board", help="Board id from assets/hardware_boards.yaml."),
-    out: Path = typer.Option(..., "--out", resolve_path=True, help="New directory for bundles and baseline.json."),
+    out: Path = typer.Option(..., "--out", file_okay=False, resolve_path=True, help="New directory for bundles and baseline.json."),
     repeats: int = typer.Option(3, "--repeats", min=1, help="Runs to pool for the noise band."),
     placement: str = typer.Option("tcm", "--placement", help="tcm or mram."),
     inline_asm: bool = typer.Option(True, "--inline-asm/--no-inline-asm", help="Requantize inline asm."),
@@ -385,6 +421,9 @@ def eval_command(
     baseline: Path = typer.Option(..., "--baseline", exists=True, file_okay=False, resolve_path=True, help="Dir from `candidate baseline`."),
     board: Optional[str] = typer.Option(None, "--board", help="Must match the baseline's board."),
     min_score: float = typer.Option(DEFAULT_MIN_SCORE, "--min-score", help="Score to beat; 0.005 is about 0.5 % gain."),
+    max_file_bytes: int = typer.Option(CopyBudget.file_bytes, "--max-file-bytes", min=1, help="Largest candidate file to copy."),
+    max_total_bytes: int = typer.Option(CopyBudget.total_bytes, "--max-total-bytes", min=1, help="Most candidate bytes to copy."),
+    max_files: int = typer.Option(CopyBudget.files, "--max-files", min=1, help="Most candidate files to copy."),
 ) -> None:
     """Check, run and score a candidate; print one JSON verdict.
 
@@ -400,7 +439,7 @@ def eval_command(
     if board is not None and board != meta["run"]["board"]:
         raise typer.BadParameter(f"baseline ran on {meta['run']['board']}", param_hint="--board")
     try:
-        verdict = evaluate(kernels, baseline, meta, min_score)
+        verdict = evaluate(kernels, baseline, meta, min_score, budget=CopyBudget(max_file_bytes, max_total_bytes, max_files))
     except KeyboardInterrupt:
         # Shells report Ctrl-C as 130.
         raise typer.Exit(130)
