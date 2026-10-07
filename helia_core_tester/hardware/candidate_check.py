@@ -346,7 +346,7 @@ def rule_counts(source: str, preprocessed: bool = False) -> Counter:
 
 
 def _tree_macros(tree: Path) -> set[str]:
-    """Names #if lines use; define bodies."""
+    """Names any #if reaches via defines."""
     used: set[str] = set()
     bodies: dict[str, set[str]] = {}
     for top in ALLOWED_DIRS:
