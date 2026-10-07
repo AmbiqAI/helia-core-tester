@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -390,3 +391,33 @@ def test_hidden_outputs_report_hidden_root(tmp_path: Path, monkeypatch: pytest.M
 
     monkeypatch.setattr(generate_module, "run_command", _fail)
     assert step._do_execute().outputs["generated_tests_root"] == expected
+
+
+def test_hard_linked_report_refused(tmp_path: Path) -> None:
+    from helia_core_tester.core.errors import ConfigurationError
+
+    public = tmp_path / "checkout_summary.json"
+    public.write_text("public")
+    hidden = tmp_path / "hidden"
+    report = hidden / "artifacts" / "reports" / "generation" / "int" / "cortex-m55"
+    report.mkdir(parents=True)
+    os.link(public, report / "generation_summary.json")
+    with pytest.raises(ConfigurationError, match="hard-linked"):
+        Config(project_root=Path.cwd(), random_shapes=2, hidden_dir=hidden)
+    assert public.read_text() == "public"
+
+
+@pytest.mark.parametrize("seed", [0, 7])
+def test_hidden_constructor_refuses_shape_seed(tmp_path: Path, seed: int) -> None:
+    from helia_core_tester.core.errors import ConfigurationError
+
+    with pytest.raises(ConfigurationError, match="not shape_seed"):
+        Config(project_root=Path.cwd(), random_shapes=2, hidden_dir=tmp_path, shape_seed=seed)
+
+
+@pytest.mark.parametrize("seed", [0, 4])
+def test_direct_hidden_refuses_shape_seed(tmp_path: Path, seed: int) -> None:
+    from helia_core_tester.generation import conftest
+
+    with pytest.raises(pytest.UsageError, match="not --shape-seed"):
+        conftest._guard_hidden(_guard_options(**{"--hidden-dir": str(tmp_path), "--shape-seed": seed}))
