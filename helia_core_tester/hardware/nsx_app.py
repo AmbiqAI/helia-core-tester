@@ -61,6 +61,9 @@ CHECKOUT_DIRS = ("Include", "Source")
 CHECKOUT_FILES = ("nsx/CMakeLists.txt", "nsx/nsx-module.yaml")
 KERNEL_SHIM = "# Shim: delegates to the native ns-cmsis-nn NSX build.\nadd_subdirectory(nsx)\n"
 
+# Kernel entry alignment; 64 is the max.
+KERNEL_ALIGN_BYTES = 64
+
 # tcm: all operands in DTCM. mram: weights, bias in MRAM.
 PLACEMENTS = ("tcm", "mram")
 
@@ -409,6 +412,7 @@ def render_app(
         scripts_dir=repo_root / "scripts",
         kernel_dir=kernel_dir(app_dir, options).name,
         kernel_id=options.kernel_id(),
+        kernel_align=KERNEL_ALIGN_BYTES,
         image_dir="probe" if probe else IMAGE_SUBDIR,
         build_id_txt=BUILD_ID_TXT,
         link_pmu=PMU_MODULE in modules,
