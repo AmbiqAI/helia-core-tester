@@ -1,7 +1,8 @@
 """Harness digest: what shapes measurement, minus kernels.
 
 A build records the firmware inputs (tester files, NSX lock minus the
-kernel module, build options and flags, toolchain); the bundle adds the
+kernel module, build options and flags, toolchain, the kernel module's
+build files and the kernel headers the harness includes); the bundle adds the
 tester state at run time and hashes both into one hex digest, written
 to the session manifest's top-level `harness_digest` (null for
 unverified firmware). The inputs sit under `harness`. Two bundles
@@ -13,17 +14,20 @@ from __future__ import annotations
 
 import hashlib
 import json
+import posixpath
 import re
 import subprocess
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import yaml
+
+from .c_lex import strip_comments
 
 # Session manifest keys; scorers read the digest.
 HARNESS_FIELD = "harness_digest"
 HARNESS_INPUTS = "harness"
-HARNESS_SCHEMA = 1
+HARNESS_SCHEMA = 2
 
 # Tester files the firmware build reads.
 FIRMWARE_INPUTS = (
@@ -43,6 +47,17 @@ _FLAG_CACHE = re.compile(
     r":[^=-]*=(.*)$",
     re.MULTILINE,
 )
+# Headers the harness includes or reads.
+HARNESS_HEADERS = (
+    "Include/arm_nnfunctions.h",
+    "Include/arm_nn_types.h",
+    # Symbol refs and float adapters read these.
+    "Include/arm_nnfunctions_flt.h",
+    "Include/arm_nn_types_flt.h",
+)
+# Kernel module files the build reads.
+KERNEL_BUILD_FILES = ("nsx/CMakeLists.txt", "nsx/nsx-module.yaml")
+_INCLUDE = re.compile(r'^[ \t\v\f]*(?:#|%:)[ \t\v\f]*include[ \t\v\f]*([<"])([^">]+)[">]', re.MULTILINE)
 # Lock keys that vary per sync.
 _LOCK_VOLATILE = ("generated_at", "acquired_at", "manifest")
 
@@ -165,6 +180,7 @@ def lock_modules(app_dir: Path) -> Optional[dict[str, Any]]:
 def firmware_record(repo_root: Path, build_dir: Path, options: Any, toolchain: Any, nsx_version: str) -> dict:
     """Firmware inputs a build used, minus kernels."""
     from .firmware_build import nsx_app_dir
+    from .nsx_app import kernel_dir
 
     app_dir = nsx_app_dir(build_dir)
     # Kernel source fields stay out.
@@ -181,6 +197,7 @@ def firmware_record(repo_root: Path, build_dir: Path, options: Any, toolchain: A
         "nsx_lock": lock_modules(app_dir),
         "app_trees": {rel: path_hash(app_dir / rel) for rel in APP_TREES},
         "module_trees": module_trees(app_dir),
+        "kernel_harness": kernel_inputs(kernel_dir(app_dir, options)),
         "toolchain": toolchain,
     }
 
@@ -197,6 +214,49 @@ def module_trees(app_dir: Path) -> dict[str, str]:
     # Lock pins revisions; sources can drift.
     kernels = {CMSIS_NN_MODULE, CMSIS_NN_PROJECT}
     return {path.name: hash_tree(path) for path in sorted(root.iterdir()) if path.is_dir() and path.name not in kernels}
+
+
+def header_closure(read: Callable[[str], Optional[str]]) -> list[str]:
+    """Kernel headers the harness includes."""
+    # "x": beside, then Include/; <x>: Include/.
+    found: dict[str, Optional[str]] = {}
+
+    def load(rel: str) -> Optional[str]:
+        if rel not in found:
+            found[rel] = read(rel)
+        return found[rel]
+
+    seen: set[str] = set()
+    todo = list(HARNESS_HEADERS)
+    while todo:
+        rel = todo.pop()
+        text = None if rel in seen else load(rel)
+        if text is None:
+            continue
+        seen.add(rel)
+        here = posixpath.dirname(rel)
+        # Splice lines, blank comments first.
+        for delimiter, name in _INCLUDE.findall(strip_comments(text)):
+            beside = (posixpath.normpath(posixpath.join(here, name)),) if delimiter == '"' else ()
+            paths = (*beside, posixpath.normpath(f"Include/{name}"))
+            # Only kernel headers: no absolute, no "..".
+            paths = tuple(path for path in paths if path.startswith("Include/") and not posixpath.isabs(name))
+            todo.extend(next(([path] for path in paths if load(path) is not None), []))
+    return sorted(seen)
+
+
+def kernel_inputs(module: Path) -> dict[str, Optional[str]]:
+    """Kernel build files and harness headers."""
+    def read(rel: str) -> Optional[str]:
+        path = module / rel
+        return path.read_text(encoding="utf-8", errors="replace") if path.is_file() else None
+
+    files = {rel: module / rel for rel in (*KERNEL_BUILD_FILES, "cmake")}
+    # Vendored builds read the root manifest.
+    if (module / "nsx-module.yaml").is_file():
+        files["nsx/nsx-module.yaml"] = module / "nsx-module.yaml"
+    files.update((rel, module / rel) for rel in header_closure(read))
+    return {rel: path_hash(path) for rel, path in files.items()}
 
 
 def harness_record(firmware: Optional[dict], repo_root: Path) -> tuple[Optional[str], dict[str, Any]]:

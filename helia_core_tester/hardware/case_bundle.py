@@ -129,6 +129,11 @@ def strict_bundle(bundle: CaseBundle) -> CaseBundle:
     return replace(bundle, manifest=manifest)
 
 
+def hidden_bundle(bundle: CaseBundle) -> CaseBundle:
+    """The bundle, marked as a hidden case."""
+    return replace(bundle, manifest={**bundle.manifest, "hidden": True})
+
+
 def input_digest(bundle: CaseBundle) -> str:
     """Hash of everything streamed but the golden."""
     entries = [_manifest_blob_entry(blob) for blob in bundle.blobs]
