@@ -20,7 +20,9 @@ Include/, nothing else. Rules, each a finding in the JSON report:
   .incbin and .include in assembly.
 - build_probe: #line, line markers, __has_include and macros the
   build flags set (__OPTIMIZE__, __FAST_MATH__), which can hide code
-  from the gcc -E scan.
+  from the gcc -E scan. Also an added #if/#elif that calls a macro or
+  pastes, and an added #define that calls or pastes when any #if in
+  Source/ or Include/ reaches it: these can build a probe.
 - hidden_index_entry: any path flagged skip-worktree or
   assume-unchanged, which git diff and status would skip.
 - guard_change: an added or removed #if/#ifdef/#else/#define/#undef
@@ -85,6 +87,15 @@ _PRAGMA = re.compile(r"(?:#|%:)\s*pragma|_Pragma|__pragma")
 _SAFE_PRAGMA = re.compile(r"(?:#|%:)\s*pragma\s+(?:once|GCC\s+unroll\s+\d+|GCC\s+diagnostic\b)")
 _COMMENT = re.compile(r"/\*.*?\*/|//[^\n]*", re.DOTALL)
 _GUARD = re.compile(r"^\s*(?:#|%:)\s*(?:if|ifdef|ifndef|elif|elifdef|elifndef|else|endif|define|undef)\b")
+_CONDITION = re.compile(r"^\s*(?:#|%:)\s*(?:if|elif)\b(.*)", re.DOTALL)
+_DEFINE = re.compile(r"^\s*(?:#|%:)\s*define\s+([A-Za-z_]\w*)(.*)", re.DOTALL)
+_IDENT = re.compile(r"[A-Za-z_]\w*")
+# Pastes, or calls besides defined/__has_*.
+_MACRO_CALL = re.compile(r"##|%:%:|\b(?!defined\b|__has_\w+\b)[A-Za-z_]\w*\s*\(")
+# Integer literals, any base and suffix.
+_INTEGER = re.compile(r"(?<![\w.'])(0[xX][0-9a-fA-F']+|0[bB][01']+|\d[\d']*)[uUlLzZ]*(?![\w.])")
+# SCS: debug, timer and NVIC registers.
+SCS_RANGE = range(0xE0000000, 0xE0100000)
 LINE_RULES = (
     ("special_section", re.compile(
         r"\.(?:push)?section\b|\b_*section_*\s*\(|\b(?:ITCM|DTCM|__RAMFUNC|RAMFUNC|AM_SHARED_RW|NS_PUT_IN_TCM)\b",
@@ -92,8 +103,6 @@ LINE_RULES = (
     ("measurement_access", re.compile(
         r"\b(?:DWT|CoreDebug|DCB|SysTick|ITM|TPI|NVIC|SCB|PMU|MEMSYSCTL|CYCCNT)\b|\bARM_PMU_|\bam_hal_"
         r"|__(?:disable|enable)_(?:irq|fault_irq)|__WF[IE]\b|__set_(?:BASEPRI|PRIMASK|FAULTMASK)"
-        # SCS addresses: 0xE0000000-0xE00FFFFF.
-        r"|\b0[xX]0*[eE]00[0-9a-fA-F]{5}(?![0-9a-fA-F])|\b375[89]\d{6}(?!\d)"
         # Same, as assembly.
         r"|(?i:\bcpsi[de]\b|\bmsr\s+(?:primask|basepri(?:_max)?|faultmask|control)\b|\bwf[ie]\b)",
     )),
@@ -282,12 +291,27 @@ def _unescape(match: re.Match) -> str:
     return chr(value) if value < 0x110000 else match.group(0)
 
 
+def _scs_count(text: str) -> int:
+    """Integer literals inside SCS_RANGE."""
+    count = 0
+    for match in _INTEGER.finditer(text):
+        digits = match.group(1).replace("'", "").lower()
+        base = {"0x": 16, "0b": 2}.get(digits[:2], 8 if digits[:1] == "0" else 10)
+        try:
+            count += int(digits, base) in SCS_RANGE
+        except ValueError:
+            continue
+    return count
+
+
 def _raw_rules(text: str) -> Iterator[str]:
     if _unsafe_attribute(text):
         yield "attribute"
     code = _COMMENT.sub(" ", text)
     if any(not _SAFE_PRAGMA.match(code, hit.start()) for hit in _PRAGMA.finditer(code)):
         yield "pragma"
+    if _scs_count(text):
+        yield "measurement_access"
     yield from (rule for rule, pattern in LINE_RULES if pattern.search(text))
 
 
@@ -317,7 +341,55 @@ def rule_counts(source: str, preprocessed: bool = False) -> Counter:
     counts["pragma"] = sum(not _SAFE_PRAGMA.match(code, hit.start()) for hit in _PRAGMA.finditer(code))
     for rule, pattern in LINE_RULES:
         counts[rule] += len(pattern.findall(text))
+    counts["measurement_access"] += _scs_count(text)
     return counts
+
+
+def _tree_macros(tree: Path) -> set[str]:
+    """Names #if lines use; define bodies."""
+    used: set[str] = set()
+    bodies: dict[str, set[str]] = {}
+    for top in ALLOWED_DIRS:
+        for path in sorted((tree / top).rglob("*")):
+            if path.is_symlink() or not path.is_file() or not path.name.endswith(ALLOWED_SUFFIXES):
+                continue
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+            starts = _logical_lines(lines)
+            joined: dict[int, str] = {}
+            for index, line in enumerate(lines):
+                joined[starts[index]] = joined.get(starts[index], "") + (line[:-1] if line.endswith("\\") else line)
+            for text in joined.values():
+                code = _COMMENT.sub(" ", text)
+                if match := _CONDITION.match(code):
+                    used |= set(_IDENT.findall(match.group(1)))
+                elif match := _DEFINE.match(code):
+                    bodies.setdefault(match.group(1), set()).update(_IDENT.findall(match.group(2)))
+    # Names reached through macro bodies.
+    todo = list(used)
+    while todo:
+        for name in bodies.get(todo.pop(), ()):
+            if name not in used:
+                used.add(name)
+                todo.append(name)
+    return used
+
+
+def probe_findings(tree: Path, added: dict[str, list[tuple[int, str]]]) -> Iterator[dict]:
+    """Conditionals built from macro calls.
+
+    gcc -E drops code under a false #if, so a probe the scan cannot
+    see (a pasted __has_include) can hide a pragma.
+    """
+    used: Optional[set[str]] = None
+    for path, lines in sorted(added.items()):
+        for line_no, text in lines:
+            code = _COMMENT.sub(" ", text)
+            if (match := _CONDITION.match(code)) and _MACRO_CALL.search(match.group(1)):
+                yield {"rule": "build_probe", "path": path, "line": line_no, "text": "macro call in #if"}
+            elif (match := _DEFINE.match(code)) and _MACRO_CALL.search(match.group(2)):
+                used = _tree_macros(tree) if used is None else used
+                if match.group(1) in used:
+                    yield {"rule": "build_probe", "path": path, "line": line_no, "text": "#if reaches computed macro"}
 
 
 def hidden_entries(tree: Path) -> list[str]:
@@ -336,12 +408,13 @@ def check_candidate(tree: Path, base: str) -> dict:
     changes = changed_paths(tree, commit)
     base_blobs = base_files(tree, commit)
     findings: list[dict] = []
+    added_by_path: dict[str, list[tuple[int, str]]] = {}
     for path, status in sorted(changes.items()):
         hits = list(path_findings(path, status, tree))
         findings += hits
         if hits:
             continue
-        added = list(added_lines(tree, base_blobs, path, status))
+        added = added_by_path[path] = list(added_lines(tree, base_blobs, path, status))
         hit_rules: set[str] = set()
         for line_no, text in added:
             for rule in line_rules(text):
@@ -366,6 +439,7 @@ def check_candidate(tree: Path, base: str) -> dict:
             before, after = rule_counts(old), rule_counts((tree / path).read_text(encoding="utf-8", errors="replace"))
             findings += ({"rule": rule, "path": path, "line": added[0][0], "text": "more matches in whole file"}
                          for rule in sorted(after) if after[rule] > before[rule] and rule not in hit_rules)
+    findings += probe_findings(tree, added_by_path)
     findings += ({"rule": "hidden_index_entry", "path": path, "message": "skip-worktree or assume-unchanged set"}
                  for path in hidden_entries(tree))
     if any(path.startswith(ALLOWED_DIRS) for path in changes):

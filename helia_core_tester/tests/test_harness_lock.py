@@ -275,6 +275,32 @@ def test_forbidden_change_fails(kernels: Path, rel: str, text: str, rule: str) -
     assert rule in _rules(kernels)
 
 
+@pytest.mark.parametrize(("value", "hit"), [
+    ("3758096383u", False), ("3758096384u", True), ("3759144959UL", True), ("3759144960", False),
+    ("0xDFFFFFFF", False), ("0xE0000000", True), ("0xe00fffffu", True), ("0xE0100000", False),
+    ("3758000000", False), ("0xE000'1004", True), ("034000010004", True),
+])
+def test_scs_bounds(kernels: Path, value: str, hit: bool) -> None:
+    (kernels / "Source/Conv/a.c").write_text(f"volatile int *c = (volatile int *){value};\n", encoding="utf-8")
+    assert ("measurement_access" in _rules(kernels)) == hit
+
+
+@pytest.mark.parametrize("text", [
+    '#define CAT(a,b) a##b\n#if CAT(__has_, include)("board.h")\n_Pragma("GCC optimize(\\"O3\\")")\n#endif\n',
+    # Unchanged-style #if reaching a new macro.
+    '#define CAT(a,b) a##b\n#define B CAT(__has_, include)("board.h")\n#define A B\n#if A\nint z;\n#endif\n',
+])
+def test_macro_probe_fails(kernels: Path, text: str) -> None:
+    (kernels / "Source/Conv/a.c").write_text(text, encoding="utf-8")
+    assert "build_probe" in _rules(kernels)
+
+
+def test_plain_conditional_passes(kernels: Path) -> None:
+    text = "#define N 4\n#if defined(ARM_MATH_MVEI) && N > 2 && __has_builtin(__builtin_expect)\nint z;\n#endif\n"
+    (kernels / "Source/Conv/a.c").write_text(text, encoding="utf-8")
+    assert check_candidate(kernels, _sha(kernels))["ok"]
+
+
 def test_safe_attributes_pass(kernels: Path) -> None:
     text = "__attribute__((always_inline, aligned(4))) static int a;\n#pragma GCC unroll 4\n"
     (kernels / "Source/Conv/a.c").write_text(text, encoding="utf-8")
