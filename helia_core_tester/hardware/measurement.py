@@ -22,6 +22,7 @@ from .pmu_catalog import (  # noqa: F401 -- CounterDescriptor is re-exported for
     counter_name_for_event_id,
     counters_in_group,
 )
+from .errors import RunRefused
 from .hctp import HEADER_SIZE
 
 # Cortex-M55 has 8 PMU event counters, each 16 bits wide. Chaining an even/odd pair
@@ -141,7 +142,7 @@ def check_pass_count(passes: Iterable[CounterPass], *, limit: int = MAX_PASSES_P
     )
 
 
-class OutboxOverflowError(RuntimeError):
+class OutboxOverflowError(RunRefused):
     """One case's performance frames overflow the firmware outbox."""
 
 

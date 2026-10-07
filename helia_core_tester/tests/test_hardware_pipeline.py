@@ -15,7 +15,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from helia_core_tester.hardware.nsx_cli import HardwareBuildError
+from helia_core_tester.hardware.errors import RunRefused
 from helia_core_tester.hardware import firmware_build, nsx_cli
 from helia_core_tester.hardware.boards import resolve_board
 from helia_core_tester.hardware.case_bundle import build_abs_s8_case_bundle, load_case_bundle
@@ -1089,7 +1089,7 @@ def test_skip_flash_refuses_edits_in_the_synced_kernels(tmp_path: Path, monkeypa
     options = nsx_app.AppOptions(cmsis_nn_ref="v9")
     nsx_app.kernel_dir(app_dir, options).mkdir(parents=True)
     monkeypatch.setattr(nsx_cli, "tree_hash", lambda _root: "k2")
-    with pytest.raises(HardwareBuildError, match="Kernels changed since the build"):
+    with pytest.raises(RunRefused, match="Kernels changed since the build"):
         _skip_flash_run(tmp_path, monkeypatch, build_dir, app_options=options)
 
 
@@ -1099,7 +1099,7 @@ def test_skip_flash_refuses_a_moved_lock(tmp_path: Path, monkeypatch, digest, cu
     from helia_core_tester.hardware import nsx_app
 
     build_dir, _ = _built_app(tmp_path, monkeypatch, digest=digest, current=current)
-    with pytest.raises(HardwareBuildError, match="Kernels changed since the build"):
+    with pytest.raises(RunRefused, match="Kernels changed since the build"):
         _skip_flash_run(tmp_path, monkeypatch, build_dir, app_options=nsx_app.AppOptions())
 
 
@@ -1124,7 +1124,7 @@ def test_skip_flash_refuses_an_edited_checkout(tmp_path: Path, monkeypatch) -> N
     assert _skip_flash_run(tmp_path, monkeypatch, build_dir, app_options=options)["generate"] == options.cmsis_nn_root
     edited = next(path for path in (root / "Source").rglob("*") if path.is_file())
     edited.write_text(edited.read_text(encoding="utf-8") + "\n// edit\n", encoding="utf-8")
-    with pytest.raises(HardwareBuildError, match="Kernel checkout edited since the build"):
+    with pytest.raises(RunRefused, match="Kernel checkout edited since the build"):
         _skip_flash_run(tmp_path, monkeypatch, build_dir, app_options=options)
 
 
@@ -1132,7 +1132,7 @@ def test_skip_flash_refuses_dependency_updates(tmp_path: Path, monkeypatch) -> N
     from helia_core_tester.hardware import nsx_app
 
     build_dir, _ = _built_app(tmp_path, monkeypatch)
-    with pytest.raises(HardwareBuildError, match="cannot update dependencies"):
+    with pytest.raises(RunRefused, match="cannot update dependencies"):
         _skip_flash_run(tmp_path, monkeypatch, build_dir, app_options=nsx_app.AppOptions(), update_dependencies=True)
 
 
