@@ -22,8 +22,8 @@ uv run helia_core_tester --help
 - `uv run helia_core_tester boards` / `probes list` / `probes match`
 - `uv run helia_core_tester hardware run|build|flash|stream|memory-report`
 - `uv run helia_core_tester explain <bundle> [--case ID] [--op OP] [--json]`
-- `uv run helia_core_tester score <baseline...> --candidate <bundle>` (used by `candidate eval`)
-- `uv run helia_core_tester candidate check|baseline|eval` (see [Agent loop](#agent-loop))
+- `uv run helia_core_tester score <baseline...> --candidate <bundle> --check <check.json>` (`--no-check` instead, for humans scoring harness changes; `candidate eval` runs this for you)
+- `uv run helia_core_tester candidate check <tree> --base <sha>`, `candidate baseline`, `candidate eval` (see [Agent loop](#agent-loop))
 
 Removed interfaces:
 - `gap-check` subcommand
@@ -297,7 +297,10 @@ the agent's view.
   after the copy, and anything in the agent's `.git`, do not reach the
   build. The copy walks by directory handle and never follows a symlink:
   symlinks are copied as links, and the check rejects them. FIFOs, sockets
-  and devices are skipped.
+  and devices are skipped. The copy refuses past 4 MiB per file (sparse
+  files count at their full size), 64 MiB in total or 5000 files; the real
+  trees are about 4.4 MiB in 448 files. `--max-file-bytes`,
+  `--max-total-bytes` and `--max-files` change the limits.
 - `hardware run` stderr names every case, so it goes to
   `<baseline>/logs/`, never to the agent.
 - Hidden case ids never print. Hidden cases still count in the verdict and
@@ -314,7 +317,7 @@ the agent's view.
    ```bash
    uv run helia_core_tester candidate baseline --kernels ~/ns-cmsis-nn \
      --board apollo510_evb --out ~/hct-eval/dw-s8 --repeats 3 \
-     --op DepthwiseConv --dtype S8 [--hidden-set ~/hct-eval/hidden]
+     --op DepthwiseConv --dtype S8
    ```
 
    - The first run generates, builds, flashes and streams. The other runs
@@ -325,8 +328,9 @@ the agent's view.
    - `--out` receives the bundles, `baseline.json` (base commit and run
      options), `kernels.git` (the base commit, fetched from the clean tree)
      and `logs/`.
-   - A hidden set comes from `generate --hidden-dir DIR --hidden-seed-file
-     F`. Keep DIR and F outside the sandbox.
+   - Hidden cases (`--hidden-set DIR`, made by `generate --hidden-dir DIR
+     --hidden-seed-file F`) need the hidden-set PRs; until they merge, the
+     flag fails the first run. Keep DIR and F outside the sandbox.
 2. Candidate, as often as needed, one at a time. The agent edits `Source/` and `Include/`
    in its worktree, and the evaluator runs:
 
@@ -364,9 +368,9 @@ The verdict (schema `hct.candidate_eval`) has these fields:
 |---|---|---|
 | 0 | `pass` | Correct, no regression, score above `--min-score` |
 | 1 | `fail` | Output mismatch, regression, lost timing or changed inputs |
-| 2 | | Bad flags or baseline dir |
+| 2 | | Bad flags, such as a non-finite `--min-score` or a file as `--out` |
 | 3 | `rejected` | The diff leaves `Source/`/`Include/` or uses a banned construct |
-| 3 | `refused` / `not_comparable` | Dirty tester, golden misfit, moved cases, other build |
+| 3 | `refused` / `not_comparable` | Bad baseline dir, oversized candidate, dirty tester, golden misfit, moved cases, other build |
 | 4 | `no_gain` | Correct but not faster |
 | 5 | `error` | Build, board, transport or tester error; see `<baseline>/logs/` |
 
