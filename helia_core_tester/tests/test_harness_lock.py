@@ -311,6 +311,7 @@ def test_token_inside_unchanged_attribute_fails(tmp_path: Path) -> None:
     ("core.worktree", "/"),
     ("diff.external", "true"),
     ("include.path", "{pwned}.cfg"),
+    ("Core.FSMonitor", "touch {pwned}; false #"),
 ])
 def test_unsafe_git_config_refused(kernels: Path, tmp_path: Path, key: str, value: str) -> None:
     from helia_core_tester.hardware.candidate_check import CheckError
@@ -320,9 +321,16 @@ def test_unsafe_git_config_refused(kernels: Path, tmp_path: Path, key: str, valu
     (kernels / ".gitattributes").write_text("*.c filter=x\n", encoding="utf-8")
     (kernels / "Source/Conv/a.c").write_text("int a2;\n", encoding="utf-8")
     _git(kernels, "config", key, value.format(pwned=pwned))
-    with pytest.raises(CheckError, match="filter.x.clean" if key == "include.path" else key):
+    expected = {"include.path": "filter.x.clean", "Core.FSMonitor": "core.fsmonitor"}.get(key, key)
+    with pytest.raises(CheckError, match=expected):
         check_candidate(kernels, _sha(kernels))
     assert not pwned.exists()
+
+
+def test_safe_config_keys_pass(kernels: Path) -> None:
+    for key, value in (("core.fsmonitorHookVersion", "2"), ("filter.lfs.required", "true"), ("diff.x.binary", "true")):
+        _git(kernels, "config", key, value)
+    assert check_candidate(kernels, _sha(kernels))["ok"]
 
 
 def test_nested_repo_config_never_runs(kernels: Path, tmp_path: Path) -> None:

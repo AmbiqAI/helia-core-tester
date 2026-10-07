@@ -110,8 +110,10 @@ _GIT_FLAGS = ("-c", "core.fsmonitor=false", "-c", f"core.hooksPath={os.devnull}"
 _GIT_TIMEOUT = 300
 # Config keys that run commands or redirect.
 _UNSAFE_CONFIG = re.compile(
-    r"^(?:core\.(?:fsmonitor|sshcommand|gitproxy|askpass|pager|editor|worktree|alternaterefscommand)"
-    r"|filter\.|diff\.external|diff\..*\.(?:textconv|command)|merge\..*\.driver|uploadpack\.|sequence\.editor)",
+    r"core\.(?:fsmonitor|sshcommand|gitproxy|askpass|pager|editor|worktree|alternaterefscommand)"
+    r"|filter\..+\.(?:clean|smudge|process)|diff\.external|diff\..+\.(?:textconv|command)|merge\..+\.driver"
+    r"|uploadpack\.packobjectshook|sequence\.editor",
+    re.IGNORECASE,
 )
 
 
@@ -137,7 +139,7 @@ def unsafe_config(tree: Path) -> list[str]:
     parts = _git(tree, "config", "--list", "--show-scope", "--name-only", "-z").decode(errors="replace").split("\0")
     # Pairs: scope, key. Our -c flags are "command".
     keys = {key.lower() for scope, key in zip(parts[::2], parts[1::2]) if scope != "command"}
-    return sorted(key for key in keys if _UNSAFE_CONFIG.match(key))
+    return sorted(key for key in keys if _UNSAFE_CONFIG.fullmatch(key))
 
 
 def _split(out: bytes) -> list[str]:
