@@ -208,7 +208,8 @@ def test_explain_cli_json(tmp_path):
     assert result.exit_code == 0, result.output
     data = json.loads(result.output)
     assert data["schema_version"] == SCHEMA_VERSION
-    assert [case["case_id"] for case in data["bundles"][0]["cases"]] == ["c"]
+    assert [case["case_id"] for case in data["cases"]] == ["c"]
+    assert data["cases"][0]["bundle"] == str(bundle) and "cases" not in data["bundles"][0]
     result = CliRunner().invoke(app, ["explain", str(tmp_path), "--op", "softmax", "--all"])
     assert result.exit_code == 0 and "softmax" in result.output
     result = CliRunner().invoke(app, ["explain", str(tmp_path), "--op", "depthwise"])

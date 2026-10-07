@@ -12,6 +12,12 @@ The score is sum(weight * ln(family geomean speedup)) with weights from
 assets/scoring/family_weights.yaml; with weights that sum to 1 it
 approximates ln(whole-model speedup). A candidate with no failures
 but score <= min_score (default 0.005, about ln 1.005) gets verdict no_gain. JSON schema: see `score_bundles`.
+
+A case missing its input digest on either side fails. Trust:
+`--check` takes the `candidate check` report; scoring refuses unless it
+passed, its tree hash is the candidate build's, its base commit is the
+baseline's kernel commit, and the candidate compared strictly.
+`--no-check` skips this for humans scoring harness changes.
 """
 
 from __future__ import annotations
@@ -29,6 +35,7 @@ import typer
 import yaml
 
 from .boards import repo_root
+from .harness_lock import kernel_digest
 from .nsx_app import CMSIS_NN_MODULE
 from .work_count import per_unit
 
@@ -112,9 +119,12 @@ def _identity(bundle: Bundle) -> dict:
     }
 
 
-def refusals(baselines: list[Bundle], candidates: list[Bundle]) -> list[str]:
-    """Why these bundles cannot be compared."""
-    reasons = []
+def refusals(baselines: list[Bundle], candidates: list[Bundle], check: dict | None = None) -> list[str]:
+    """Why these bundles cannot be compared.
+
+    `check` is the candidate check report; None skips trust.
+    """
+    reasons = [] if check is None else trust_refusals(baselines, candidates, check)
     first = _identity(baselines[0])
     for bundle in baselines[1:] + candidates:
         other = _identity(bundle)
@@ -140,30 +150,72 @@ def _compare_refusals(baselines: list[Bundle], candidates: list[Bundle]) -> list
     The kernel loop runs the baseline on default goldens and the candidate
     with --golden-from that baseline (strict), so stricter is allowed.
     """
-    compare = lambda b: b.manifest.get("compare") or {}  # noqa: E731
     reasons = []
-    if len({bool(compare(b).get("strict")) for b in baselines}) > 1:
+    if len({bool(_compare(b).get("strict")) for b in baselines}) > 1:
         reasons.append("baseline repeats differ in compare mode")
-    strict_base = any(compare(b).get("strict") for b in baselines)
+    strict_base = any(_compare(b).get("strict") for b in baselines)
     # Goldens must come from these baselines.
-    sources = {b.session_id for b in baselines} | {compare(b).get("golden_session_id") for b in baselines}
+    sources = {b.session_id for b in baselines} | {_compare(b).get("golden_session_id") for b in baselines}
     for c in candidates:
-        if strict_base and not compare(c).get("strict"):
+        if strict_base and not _compare(c).get("strict"):
             reasons.append(f"{c.session_id}: looser compare than baseline")
-        source = compare(c).get("golden_session_id")
+        source = _compare(c).get("golden_session_id")
         if source and source not in sources:
             reasons.append(f"{c.session_id}: goldens from {source}, not a baseline")
     return reasons
 
 
+def _compare(bundle: Bundle) -> dict:
+    return bundle.manifest.get("compare") or {}
+
+
+def _kernels(bundle: Bundle) -> dict:
+    return (bundle.manifest.get("build") or {}).get("kernels") or {}
+
+
+def _module_commit(bundle: Bundle) -> str | None:
+    modules = (bundle.manifest.get("build") or {}).get("modules") or []
+    return next((m.get("commit") for m in modules if m.get("name") == CMSIS_NN_MODULE), None)
+
+
+def kernel_commit(bundle: Bundle) -> str | None:
+    """The clean commit a bundle built."""
+    kernels = _kernels(bundle)
+    # Local roots need a known clean HEAD.
+    if any(kernels.get(k) is not None for k in ("root", "root_head", "root_dirty")):
+        return kernels.get("root_head") if kernels.get("root_dirty") is False else None
+    return kernels.get("commit") or _module_commit(bundle)
+
+
+def trust_refusals(baselines: list[Bundle], candidates: list[Bundle], check: dict) -> list[str]:
+    """Tie the candidate to a passed check."""
+    if check.get("schema") != "hct.candidate_check":
+        return ["check report has the wrong schema"]
+    reasons = [] if check.get("ok") is True else ["candidate check did not pass"]
+    tree, base = check.get("tree_hash"), check.get("base_commit")
+    if not tree:
+        reasons.append("check report lacks tree_hash")
+    if not base:
+        reasons.append("check report lacks base_commit")
+    for b in baselines:
+        commit = kernel_commit(b)
+        if base and commit != base:
+            reasons.append(f"{b.session_id}: kernel commit {commit} != check base {base}")
+    for c in candidates:
+        built = kernel_digest(c.manifest)
+        if tree and built != tree:
+            reasons.append(f"{c.session_id}: tree hash {built} != checked {tree}")
+        if not _compare(c).get("strict"):
+            reasons.append(f"{c.session_id}: tolerant compare; run with --golden-from")
+    return reasons
+
+
 def _kernel_id(bundle: Bundle) -> tuple | None:
     """Kernel tree identity; None when unknown."""
-    build = bundle.manifest.get("build") or {}
-    kernels = build.get("kernels") or {}
+    kernels = _kernels(bundle)
     if kernels.get("tree_hash"):
         return ("tree_hash", kernels["tree_hash"])
-    module = next((m.get("commit") for m in build.get("modules") or [] if m.get("name") == CMSIS_NN_MODULE), None)
-    known = (kernels.get("commit") or module, kernels.get("ref"), kernels.get("root_head"), kernels.get("root_dirty"))
+    known = (kernels.get("commit") or _module_commit(bundle), kernels.get("ref"), kernels.get("root_head"), kernels.get("root_dirty"))
     return ("provenance", known) if any(v is not None for v in known) else None
 
 
@@ -278,14 +330,15 @@ def _case(case_id: str, baselines: list[Bundle], candidates: list[Bundle], scori
     return case
 
 
-def score_bundles(baselines: list[Bundle], candidates: list[Bundle], scoring: dict) -> dict:
+def score_bundles(baselines: list[Bundle], candidates: list[Bundle], scoring: dict, check: dict | None = None) -> dict:
     """The score report; `schema_version` bumps on breaking change.
 
     Keys: schema, schema_version, verdict (pass | fail | not_comparable | no_gain),
     score (null unless comparable), board, placement, baseline and
     candidate session ids, settings, families {name: {weight, cases,
     geomean_speedup, contribution}}, cases (eligible and excluded rows),
-    failures [{kind, case_id, reason}]. Failure kinds: not_comparable,
+    failures [{kind, case_id, reason}]. settings.check is the trusted
+    {tree_hash, base_commit}, or null when unchecked. Failure kinds: not_comparable,
     comparison_failed, missing_case, input_digest, timing_lost, regression,
     no_eligible_cases.
     """
@@ -299,13 +352,16 @@ def score_bundles(baselines: list[Bundle], candidates: list[Bundle], scoring: di
         "placement": identity["placement"],
         "baseline": [b.session_id for b in baselines],
         "candidate": [c.session_id for c in candidates],
-        "settings": {k: scoring[k] for k in ("weights_version", "weights_board", "weights", "floor_pct", "mad_k", "min_score")},
+        "settings": {
+            **{k: scoring[k] for k in ("weights_version", "weights_board", "weights", "floor_pct", "mad_k", "min_score")},
+            "check": None if check is None else {k: check.get(k) for k in ("tree_hash", "base_commit")},
+        },
         "families": {},
         "cases": [],
         "failures": [],
     }
     failures = report["failures"]
-    refused = refusals(baselines, candidates)
+    refused = refusals(baselines, candidates, check)
     if refused:
         report["verdict"] = "not_comparable"
         failures.extend({"kind": "not_comparable", "case_id": None, "reason": reason} for reason in refused)
@@ -323,12 +379,15 @@ def score_bundles(baselines: list[Bundle], candidates: list[Bundle], scoring: di
             failures.append({"kind": "missing_case", "case_id": case_id, "reason": f"absent from {', '.join(missing)}"})
             continue
         present.append(case_id)
-        base_digests = {b.digests[case_id] for b in baselines if case_id in b.digests}
-        cand_digests = {c.digests[case_id] for c in candidates if case_id in c.digests}
-        # One side only: nothing to compare.
+        unhashed = [b.session_id for b in baselines + candidates if case_id not in b.digests]
+        if unhashed:
+            failures.append({"kind": "input_digest", "case_id": case_id, "reason": f"no input digest in {', '.join(unhashed)}"})
+            continue
+        base_digests = {b.digests[case_id] for b in baselines}
+        cand_digests = {c.digests[case_id] for c in candidates}
         if len(base_digests) > 1 or len(cand_digests) > 1:
             failures.append({"kind": "input_digest", "case_id": case_id, "reason": "inputs differ between repeats"})
-        elif base_digests and cand_digests and base_digests != cand_digests:
+        elif base_digests != cand_digests:
             failures.append({"kind": "input_digest", "case_id": case_id, "reason": "inputs differ between runs"})
 
     report["cases"] = cases = [_case(case_id, baselines, candidates, scoring) for case_id in present]
@@ -404,6 +463,8 @@ def format_report(report: dict) -> str:
 def score(
     baseline: list[Path] = typer.Argument(..., help="Baseline bundle dirs (repeat runs pool)."),
     candidate: list[Path] = typer.Option(..., "--candidate", help="Candidate bundle dir (repeatable)."),
+    check_path: Optional[Path] = typer.Option(None, "--check", exists=True, dir_okay=False, help="Candidate check JSON report."),
+    no_check: bool = typer.Option(False, "--no-check", help="Score without a check, for harness changes."),
     as_json: bool = typer.Option(False, "--json", help="Print the JSON report."),
     floor_pct: Optional[float] = typer.Option(None, "--floor-pct", min=0.0, help="Noise floor in percent (default: per board)."),
     mad_k: Optional[float] = typer.Option(None, "--mad-k", min=0.0, help="MAD multiplier for the band."),
@@ -413,6 +474,8 @@ def score(
 
     Exit 0 pass, 1 fail, 3 not comparable, 4 no gain.
     """
+    if (check_path is None) != no_check:
+        raise typer.BadParameter("pass exactly one of --check or --no-check", param_hint="--check")
     for flag, value in (("--floor-pct", floor_pct), ("--mad-k", mad_k), ("--min-score", min_score)):
         if value is not None and not math.isfinite(value):
             raise typer.BadParameter(f"{flag} must be finite", param_hint=flag)
@@ -424,6 +487,14 @@ def score(
     if mad_k is not None:
         scoring["mad_k"] = mad_k
     scoring["min_score"] = min_score
-    report = score_bundles(baselines, candidates, scoring)
+    check = None
+    if check_path is not None:
+        try:
+            check = json.loads(check_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise typer.BadParameter(f"unreadable check report: {exc}", param_hint="--check") from exc
+        if not isinstance(check, dict):
+            raise typer.BadParameter("check report is not an object", param_hint="--check")
+    report = score_bundles(baselines, candidates, scoring, check)
     typer.echo(json.dumps(report, indent=2) if as_json else format_report(report))
     raise typer.Exit(EXITS[report["verdict"]])

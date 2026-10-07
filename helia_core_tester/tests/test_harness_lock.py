@@ -180,11 +180,12 @@ def test_run_refuses_dirty_tester(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(hardware_pipeline, "run_hardware_pipeline", _pipeline)
     monkeypatch.setenv("HPX_JLINK_SERIAL", "1160003180")
     args = ["hardware", "run", "--skip-generate", "--build-dir", str(tmp_path / "b"), "--cmsis-nn-root", str(tmp_path)]
-    assert runner.invoke(app, args).exit_code == 1 and called, "clean tester runs"
+    assert runner.invoke(app, args).exit_code == 5 and called, "clean tester runs"
     called.clear()
     state["dirty"] = True
     result = runner.invoke(app, args)
-    assert result.exit_code == 1 and "dirty" in result.output and not called
+    # Refused, not a correctness failure.
+    assert result.exit_code == 3 and "dirty" in result.output and not called
     result = runner.invoke(app, [*args, "--allow-dirty-tester"])
     assert called and "tester is dirty" in result.output
 

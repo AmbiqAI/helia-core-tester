@@ -273,6 +273,8 @@ def test_server_sources_compile_out_of_this_checkout(tmp_path: Path) -> None:
     assert "patch_build_id.py" in text, "the post-link build-id stamp must survive"
     # MVE in the harness skews MVE counters.
     assert "-fno-tree-vectorize" in text
+    # Pinned kernel alignment: no layout drift.
+    assert "target_compile_options(nsx_cmsis_nn PRIVATE -falign-functions=64)" in text
     assert 'RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/hardware"' in text
     assert '"$<TARGET_FILE_DIR:hct_benchmark_server>/hct_benchmark_server.elf"' in text
 
