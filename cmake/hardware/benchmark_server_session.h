@@ -1,6 +1,7 @@
 #ifndef HCT_BENCHMARK_SERVER_SESSION_H
 #define HCT_BENCHMARK_SERVER_SESSION_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -38,6 +39,10 @@ extern "C" {
 #define HCT_STATUS_OUTPUT_CHANGED (-1000)
 /* Kernel changed a read-only operand. */
 #define HCT_STATUS_OPERAND_CHANGED (-1001)
+/* Kernel executed code from RAM. */
+#define HCT_STATUS_EXEC_FROM_RAM (-1002)
+/* Kernel wrote protected memory. */
+#define HCT_STATUS_PROTECTED_WRITE (-1003)
 
 typedef enum
 {
@@ -302,6 +307,13 @@ typedef struct
     /* Workspace end past the input twins. */
     uint32_t twin_end;
 } hct_server_session_t;
+
+/* Is a kernel call guarded? */
+bool hct_fault_armed(void);
+/* Fail the case with status; no return. */
+void hct_fault_unwind(int32_t status);
+/* MPU setup unchanged since boot. */
+bool hct_mpu_intact(void);
 
 void hct_server_session_init(hct_server_session_t *session,
                              uint32_t session_id,

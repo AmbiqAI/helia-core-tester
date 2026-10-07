@@ -8,6 +8,7 @@
 #include "benchmark_server_adapter.h"
 #include "benchmark_server_catalog.h"
 #include "benchmark_server_messages.h"
+#include "benchmark_server_mpu.h"
 #include "benchmark_server_session.h"
 #include "benchmark_server_transport.h"
 #include "nsx_system.h"
@@ -36,6 +37,7 @@ volatile uint32_t g_hct_last_conv_dispatch_status;
 volatile uint32_t g_hct_catalog_entry_count;
 volatile uint32_t g_hct_last_transport_read_bytes;
 volatile uint32_t g_hct_last_session_status;
+volatile uint32_t g_hct_mpu_xn;
 
 static hct_server_session_t g_hct_session;
 __attribute__((aligned(16))) static uint8_t g_hct_rx_buffer[HCT_SERVER_RX_BUFFER_BYTES];
@@ -199,6 +201,7 @@ int main(void)
     boot.boot_status = (int32_t)nsx_system_init(&system_cfg);
     boot.core_clock_hz = hct_core_clock_hz();
     boot.fpscr_boot = hct_pin_fpscr(&boot.fpscr);
+    g_hct_mpu_xn = hct_mpu_protect() ? 1u : 0u;
     (void)hct_anchor_all_symbols();
     (void)hct_benchmark_server_catalog(&count);
     g_hct_catalog_entry_count = (uint32_t)count;

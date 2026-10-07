@@ -88,6 +88,8 @@ def test_c_firmware_session_loop_executes_abs_correctness_flow(tmp_path: Path, p
         "rejected memoized samples_dropped=0",
         "rejected memoized-late samples_dropped=5",
         "rejected mutated samples_dropped=6",
+        "rejected fault-correctness samples_dropped=0",
+        "rejected fault-sampling samples_dropped=3",
     ):
         assert line in result.stdout
 

@@ -91,6 +91,8 @@ def check_case_ids_unique(case_ids: Sequence[str]) -> None:
 # HCT_STATUS_* in benchmark_server_session.h.
 OUTPUT_CHANGED_STATUS = -1000
 OPERAND_CHANGED_STATUS = -1001
+EXEC_FROM_RAM_STATUS = -1002
+PROTECTED_WRITE_STATUS = -1003
 
 
 @dataclass(frozen=True)
@@ -106,6 +108,10 @@ class CaseRejection:
             return "timed output differs from first call"
         if self.kernel_status == OPERAND_CHANGED_STATUS:
             return "kernel changed a read-only operand"
+        if self.kernel_status == EXEC_FROM_RAM_STATUS:
+            return "kernel executed code from RAM"
+        if self.kernel_status == PROTECTED_WRITE_STATUS:
+            return "kernel wrote protected memory"
         return f"kernel returned {self.kernel_status} in {self.stage} run"
 
 

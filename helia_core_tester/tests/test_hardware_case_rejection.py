@@ -23,7 +23,13 @@ from helia_core_tester.hardware.fake_target import FakeTargetTransport
 from helia_core_tester.hardware.hctp import MessageType
 from helia_core_tester.hardware.measurement import CounterPass, counter_passes_for_selection
 from helia_core_tester.hardware.pmu_catalog import CounterDescriptor
-from helia_core_tester.hardware.session import OPERAND_CHANGED_STATUS, OUTPUT_CHANGED_STATUS, HostSession
+from helia_core_tester.hardware.session import (
+    EXEC_FROM_RAM_STATUS,
+    OPERAND_CHANGED_STATUS,
+    OUTPUT_CHANGED_STATUS,
+    PROTECTED_WRITE_STATUS,
+    HostSession,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PASSES = counter_passes_for_selection({"cpu": "default"})
@@ -72,6 +78,8 @@ def test_rejected_case_fails_alone_and_the_session_continues(tmp_path: Path, sta
     [
         (OUTPUT_CHANGED_STATUS, "timed output differs from first call"),
         (OPERAND_CHANGED_STATUS, "kernel changed a read-only operand"),
+        (EXEC_FROM_RAM_STATUS, "kernel executed code from RAM"),
+        (PROTECTED_WRITE_STATUS, "kernel wrote protected memory"),
     ],
 )
 def test_integrity_failure_names_the_cause(tmp_path: Path, status: int, reason: str) -> None:

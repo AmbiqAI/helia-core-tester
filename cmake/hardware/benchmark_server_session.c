@@ -2,6 +2,7 @@
 #include "benchmark_server_adapters.h"
 #include "benchmark_server_validation.h"
 
+#include <setjmp.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -846,6 +847,14 @@ arm_cmsis_nn_status hct_run_empty_once(hct_server_session_t *session)
 uint32_t hct_host_fail_call;
 /* Host tests: Nth call on skips work. */
 uint32_t hct_host_skip_call;
+/* Host tests: Nth call faults like XN. */
+uint32_t hct_host_fault_call;
+
+/* Host build: no MPU to check. */
+bool hct_mpu_intact(void)
+{
+    return true;
+}
 /* Host tests: Nth call flips an input bit. */
 uint32_t hct_host_mutate_call;
 /* Host tests: calls with a new input address. */
@@ -865,6 +874,10 @@ arm_cmsis_nn_status hct_run_kernel_once(hct_server_session_t *session)
     if (hct_host_fail_call != 0u && --hct_host_fail_call == 0u)
     {
         return ARM_CMSIS_NN_ARG_ERROR;
+    }
+    if (hct_host_fault_call != 0u && --hct_host_fault_call == 0u)
+    {
+        hct_fault_unwind(HCT_STATUS_EXEC_FROM_RAM);
     }
     if (hct_host_skip_call == 1u)
     {
@@ -894,6 +907,40 @@ arm_cmsis_nn_status hct_run_kernel_once(hct_server_session_t *session)
 }
 #endif
 
+/* Fault unwind target for one case run. */
+static jmp_buf s_fault_jmp;
+static volatile bool s_fault_armed;
+static volatile int32_t s_fault_status;
+
+bool hct_fault_armed(void)
+{
+    return s_fault_armed;
+}
+
+void hct_fault_unwind(int32_t status)
+{
+    s_fault_status = status;
+    s_fault_armed = false;
+    longjmp(s_fault_jmp, 1);
+}
+
+/* Faults unwind only from kernel calls. */
+static arm_cmsis_nn_status guarded_kernel_call(hct_server_session_t *session)
+{
+    arm_cmsis_nn_status status;
+    s_fault_armed = true;
+    status = hct_run_kernel_once(session);
+    s_fault_armed = false;
+    return status;
+}
+
+/* Counters off; next case starts clean. */
+static void window_reset(void)
+{
+    window_disarm();
+    enable_dwt();
+}
+
 static uint32_t resolve_iterations(hct_server_session_t *session)
 {
     uint32_t iterations = session->planned_iterations;
@@ -910,7 +957,7 @@ static uint32_t resolve_iterations(hct_server_session_t *session)
         const uint32_t start = dwt_cycles();
         for (index = 0u; index < iterations; ++index)
         {
-            arm_cmsis_nn_status status = hct_run_kernel_once(session);
+            arm_cmsis_nn_status status = guarded_kernel_call(session);
             session->last_kernel_status = status;
             if (kernel_status_is_fatal(session, status))
             {
@@ -1409,7 +1456,7 @@ static arm_cmsis_nn_status run_counting_prepare(hct_server_session_t *session)
     enable_dwt();
     window_arm_inverted();
     start = dwt_cycles();
-    status = hct_run_kernel_once(session);
+    status = guarded_kernel_call(session);
     session->prepare_cycles = dwt_cycles() - start;
     hct_window = saved;
     return status;
@@ -1417,7 +1464,19 @@ static arm_cmsis_nn_status run_counting_prepare(hct_server_session_t *session)
 
 static hctp_status_t handle_run_correctness(hct_server_session_t *session)
 {
-    arm_cmsis_nn_status status = run_counting_prepare(session);
+    arm_cmsis_nn_status status;
+    if (setjmp(s_fault_jmp) != 0)
+    {
+        window_reset();
+        session->last_kernel_status = s_fault_status;
+        return finish_case(session, 0u, 0u);
+    }
+    status = run_counting_prepare(session);
+    if (!hct_mpu_intact())
+    {
+        session->last_kernel_status = HCT_STATUS_PROTECTED_WRITE;
+        return finish_case(session, 0u, 0u);
+    }
     session->last_kernel_status = status;
     if (kernel_status_is_fatal(session, status))
     {
@@ -1546,7 +1605,7 @@ __attribute__((noinline)) static bool time_one_sample(hct_server_session_t *sess
         /* Counters pause between kernel calls. */
         poison_output(session);
         swap_input_twins(session);
-        status = hct_run_kernel_once(session);
+        status = guarded_kernel_call(session);
         session->last_kernel_status = status;
         if (status == ARM_CMSIS_NN_SUCCESS &&
             output_digest(hct_output_ptr(session), session->checked_bytes) != session->checked_digest)
@@ -1574,7 +1633,14 @@ static hctp_status_t handle_run_performance(hct_server_session_t *session)
     uint32_t pass_index;
     uint32_t sample_index;
     uint32_t warmup;
-    const uint32_t iterations = resolve_iterations(session);
+    uint32_t iterations;
+    if (setjmp(s_fault_jmp) != 0)
+    {
+        window_reset();
+        session->last_kernel_status = s_fault_status;
+        return finish_case(session, 1u, 0u);
+    }
+    iterations = resolve_iterations(session);
 
     place_input_twins(session);
 
@@ -1585,7 +1651,7 @@ static hctp_status_t handle_run_performance(hct_server_session_t *session)
         pmu_pass_program(pass);
         for (warmup = 0u; warmup < session->planned_warmups; ++warmup)
         {
-            arm_cmsis_nn_status status = hct_run_kernel_once(session);
+            arm_cmsis_nn_status status = guarded_kernel_call(session);
             session->last_kernel_status = status;
             if (kernel_status_is_fatal(session, status))
             {
@@ -1610,6 +1676,11 @@ static hctp_status_t handle_run_performance(hct_server_session_t *session)
     if (!operands_intact(session))
     {
         session->last_kernel_status = HCT_STATUS_OPERAND_CHANGED;
+        return finish_case(session, 1u, 0u);
+    }
+    if (!hct_mpu_intact())
+    {
+        session->last_kernel_status = HCT_STATUS_PROTECTED_WRITE;
         return finish_case(session, 1u, 0u);
     }
     return finish_case(session, 1u, 1u);

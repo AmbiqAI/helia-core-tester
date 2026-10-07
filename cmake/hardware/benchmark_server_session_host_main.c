@@ -106,6 +106,7 @@ static uint8_t inbound_frame[1024];
 static uint32_t next_host_sequence = 0u;
 extern uint32_t hct_host_fail_call;
 extern uint32_t hct_host_skip_call;
+extern uint32_t hct_host_fault_call;
 extern uint32_t hct_host_mutate_call;
 extern uint32_t hct_host_input_moves;
 extern const uint8_t *hct_host_last_input;
@@ -232,7 +233,7 @@ static int run_next_case(hct_server_session_t *session)
 }
 
 /* A refused case ends alone, with its status. */
-static int probe_rejection(const hct_server_session_t *session, uint16_t trigger, uint32_t fail_call, uint32_t skip_call, uint32_t mutate_call, uint8_t correctness_ran, int samples, const char *label)
+static int probe_rejection(const hct_server_session_t *session, uint16_t trigger, uint32_t fail_call, uint32_t skip_call, uint32_t mutate_call, uint32_t fault_call, uint8_t correctness_ran, int samples, const char *label)
 {
     static hct_server_session_t probe;
     static uint8_t probe_workspace[sizeof(workspace)];
@@ -248,11 +249,14 @@ static int probe_rejection(const hct_server_session_t *session, uint16_t trigger
     hct_host_fail_call = fail_call;
     hct_host_skip_call = skip_call;
     hct_host_mutate_call = mutate_call;
+    hct_host_fault_call = fault_call;
     if (send_frame(&probe, trigger, payload, 0u) != HCTP_STATUS_OK) return 50;
     hct_host_skip_call = 0u;
     hct_host_mutate_call = 0u;
+    hct_host_fault_call = 0u;
     status = expect_case_complete(&probe, correctness_ran, 0u, samples,
-                                  skip_call != 0u     ? HCT_STATUS_OUTPUT_CHANGED
+                                  fault_call != 0u    ? HCT_STATUS_EXEC_FROM_RAM
+                                  : skip_call != 0u   ? HCT_STATUS_OUTPUT_CHANGED
                                   : mutate_call != 0u ? HCT_STATUS_OPERAND_CHANGED
                                                       : ARM_CMSIS_NN_ARG_ERROR);
     if (status == 0) status = run_next_case(&probe);
@@ -363,7 +367,9 @@ int main(void)
 
     /* Kernel refusals: correctness, warmup, mid-sampling. */
     session.output_capacity_bytes = 4u;
-    status = probe_rejection(&session, HCTP_MSG_RUN_CORRECTNESS, 0u, 0u, 0u, 0u, 0, "correctness");
+    status = probe_rejection(&session, HCTP_MSG_RUN_CORRECTNESS, 0u, 0u, 0u, 0u, 0u, 0, "correctness");
+    /* XN fault unwinds; the next case runs. */
+    if (status == 0) status = probe_rejection(&session, HCTP_MSG_RUN_CORRECTNESS, 0u, 0u, 0u, 1u, 0u, 0, "fault-correctness");
     session.output_capacity_bytes = (uint32_t)sizeof(kExpected);
     if (status != 0) return status;
     if (hct_server_session_accept_frame(&session, inbound_frame, encode_frame(HCTP_MSG_RUN_CORRECTNESS, session.session_id, next_host_sequence++, inbound_payload, 0u, inbound_frame)) != HCTP_STATUS_OK) return 20;
@@ -406,14 +412,15 @@ int main(void)
     write_u8(inbound_payload, &offset, 1u);
     if (hct_server_session_accept_frame(&session, inbound_frame, encode_frame(HCTP_MSG_CORRECTNESS_ACK, session.session_id, next_host_sequence++, inbound_payload, offset, inbound_frame)) != HCTP_STATUS_OK) return 27;
     /* Call 1: warmup. Call 19: pass 1 sampling. */
-    status = probe_rejection(&session, HCTP_MSG_RUN_PERFORMANCE, 1u, 0u, 0u, 1u, 0, "warmup");
-    if (status == 0) status = probe_rejection(&session, HCTP_MSG_RUN_PERFORMANCE, 19u, 0u, 0u, 1u, 3, "sampling");
+    status = probe_rejection(&session, HCTP_MSG_RUN_PERFORMANCE, 1u, 0u, 0u, 0u, 1u, 0, "warmup");
+    if (status == 0) status = probe_rejection(&session, HCTP_MSG_RUN_PERFORMANCE, 19u, 0u, 0u, 0u, 1u, 3, "sampling");
     /* Call 3, the first timed call, skips. */
-    if (status == 0) status = probe_rejection(&session, HCTP_MSG_RUN_PERFORMANCE, 0u, 3u, 0u, 1u, 0, "memoized");
+    if (status == 0) status = probe_rejection(&session, HCTP_MSG_RUN_PERFORMANCE, 0u, 3u, 0u, 0u, 1u, 0, "memoized");
     /* Last timed call skips. */
-    if (status == 0) status = probe_rejection(&session, HCTP_MSG_RUN_PERFORMANCE, 0u, 26u, 0u, 1u, 5, "memoized-late");
+    if (status == 0) status = probe_rejection(&session, HCTP_MSG_RUN_PERFORMANCE, 0u, 26u, 0u, 0u, 1u, 5, "memoized-late");
+    if (status == 0) status = probe_rejection(&session, HCTP_MSG_RUN_PERFORMANCE, 0u, 0u, 0u, 20u, 1u, 3, "fault-sampling");
     /* Last call corrupts its input after running. */
-    if (status == 0) status = probe_rejection(&session, HCTP_MSG_RUN_PERFORMANCE, 0u, 0u, 28u, 1u, 6, "mutated");
+    if (status == 0) status = probe_rejection(&session, HCTP_MSG_RUN_PERFORMANCE, 0u, 0u, 28u, 0u, 1u, 6, "mutated");
     if (status != 0) return status;
     hct_host_input_moves = 0u;
     hct_host_last_input = NULL;

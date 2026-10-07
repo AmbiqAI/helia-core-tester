@@ -82,6 +82,7 @@ _SERVER_SOURCES = (
     "benchmark_server_messages.c",
     "benchmark_server_adapter.c",
     "benchmark_server_session.c",
+    "benchmark_server_mpu.c",
     "benchmark_server_adapters.gen.c",
     "benchmark_server_transport_rtt.c",
     "hct_build_id.c",
