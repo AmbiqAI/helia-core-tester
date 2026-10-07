@@ -317,7 +317,7 @@ def test_stream_requires_the_build_id_stamp_unless_allowed(monkeypatch, tmp_path
 
 @pytest.mark.parametrize("command", ["build", "flash", "run"])
 def test_inline_asm_flag_is_tri_state(monkeypatch, tmp_path, command) -> None:
-    """Unset reuses the build dir's saved setting."""
+    """Unset builds the default, not the saved setting."""
     from helia_core_tester.hardware import firmware_build, hardware_pipeline, nsx_app
 
     monkeypatch.setenv("HPX_JLINK_SERIAL", "1")
@@ -335,7 +335,7 @@ def test_inline_asm_flag_is_tri_state(monkeypatch, tmp_path, command) -> None:
     built = nsx_app.AppOptions(cmsis_nn_ref="v9", cmsis_nn_ref_explicit=True, requantize_inline_asm=False)
     nsx_app.save_options(app_dir, built)
     base = ["hardware", command, "--build-dir", str(tmp_path)]
-    for flags, inline_asm in (([], False), (["--inline-asm"], True), (["--no-inline-asm"], False)):
+    for flags, inline_asm in (([], True), (["--inline-asm"], True), (["--no-inline-asm"], False)):
         runner.invoke(app, base + flags)
         assert seen["options"] == dataclasses.replace(built, requantize_inline_asm=inline_asm), flags
 
@@ -357,6 +357,21 @@ def test_stream_only_run_skips_option_resolution(monkeypatch, tmp_path) -> None:
     nsx_app.save_options(app_dir, nsx_app.AppOptions(cmsis_nn_root=tmp_path / "moved", requantize_inline_asm=False))
     result = runner.invoke(app, ["hardware", "run", "--build-dir", str(tmp_path), "--skip-generate", "--skip-flash"])
     assert seen["app_options"] is None and "inline asm off" in _result_text(result)
+
+
+@pytest.mark.parametrize(("flag", "refused"), [("--no-inline-asm", False), ("--inline-asm", True)])
+def test_stream_only_checks_flags_without_the_checkout(monkeypatch, tmp_path, flag, refused) -> None:
+    """A moved checkout cannot block streaming."""
+    from helia_core_tester.hardware import firmware_build, nsx_app
+
+    seen: dict = {}
+    _capture_run(monkeypatch, seen)
+    app_dir = firmware_build.nsx_app_dir(tmp_path)
+    app_dir.mkdir(parents=True)
+    nsx_app.save_options(app_dir, nsx_app.AppOptions(cmsis_nn_root=tmp_path / "moved", requantize_inline_asm=False))
+    args = ["hardware", "run", "--build-dir", str(tmp_path), "--skip-generate", "--skip-flash", flag]
+    text = _result_text(runner.invoke(app, args))
+    assert ("--skip-flash keeps the built kernels" in text) is refused and bool(seen) is not refused, text
 
 
 def _capture_run(monkeypatch, seen: dict) -> None:
@@ -389,7 +404,9 @@ def test_skip_flash_generates_from_the_built_kernels(monkeypatch, tmp_path) -> N
     assert seen["app_options"] == built
 
 
-@pytest.mark.parametrize("flags", [["--cmsis-nn-ref", "v10"], ["--inline-asm"]])
+@pytest.mark.parametrize("flags", [
+    ["--cmsis-nn-ref", "v10"], ["--inline-asm"], ["--skip-generate", "--inline-asm"], ["--skip-generate", "--cmsis-nn-ref", "v10"],
+])
 def test_skip_flash_refuses_new_kernel_flags(monkeypatch, tmp_path, flags) -> None:
     """New flags would not reach the firmware."""
     from helia_core_tester.hardware import firmware_build, nsx_app
