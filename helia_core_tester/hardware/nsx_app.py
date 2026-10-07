@@ -338,13 +338,16 @@ def _remove(path: Path) -> None:
 def _swap_in(fresh: Path, module_dir: Path) -> None:
     """Replace module_dir with fresh in one step."""
     old = None
-    # A link goes; its target stays.
-    if module_dir.is_symlink():
-        module_dir.unlink()
-    elif os.path.lexists(module_dir):
+    # Move links and dirs aside; never follow.
+    if os.path.lexists(module_dir):
         old = fresh.with_name(fresh.name + ".old")
         os.rename(module_dir, old)
-    os.replace(fresh, module_dir)
+    try:
+        os.replace(fresh, module_dir)
+    except BaseException:
+        if old is not None:
+            os.rename(old, module_dir)
+        raise
     if old is not None:
         _remove(old)
 

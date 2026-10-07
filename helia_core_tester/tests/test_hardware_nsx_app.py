@@ -219,6 +219,26 @@ def test_stale_entry_types_replaced(tmp_path: Path) -> None:
     assert not [p for p in tmp_path.iterdir() if p.name.startswith(".stale.")]
 
 
+@pytest.mark.parametrize("linked", [False, True])
+def test_failed_swap_restores_module(tmp_path: Path, monkeypatch, linked: bool) -> None:
+    checkout = make_checkout(tmp_path / "ns-cmsis-nn")
+    module = tmp_path / "module"
+    nsx_app.write_kernels(checkout, tmp_path / "real")
+    if linked:
+        module.symlink_to(tmp_path / "real")
+    else:
+        os.rename(tmp_path / "real", module)
+    before = _snapshot(tmp_path)
+
+    def fail(src, dst):
+        raise OSError("target appeared")
+
+    monkeypatch.setattr(nsx_app.os, "replace", fail)
+    with pytest.raises(OSError, match="target appeared"):
+        nsx_app.write_kernels(checkout, module)
+    assert _snapshot(tmp_path) == before and module.is_symlink() == linked
+
+
 def test_rewrite_keeps_mtimes(tmp_path: Path) -> None:
     checkout = make_checkout(tmp_path / "ns-cmsis-nn")
     module = tmp_path / "module"
