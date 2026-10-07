@@ -48,6 +48,8 @@ CONFIGS = {
 # Caps per gcc -E run.
 TIMEOUT_S = 30.0
 OUTPUT_CAP = 64 << 20
+# Output all workers may buffer.
+SCAN_MEMORY_BUDGET = 256 << 20
 _MARKER = re.compile(r'^#\s*\d+\s+"([^"]*)".*$', re.MULTILINE)
 
 
@@ -124,6 +126,11 @@ def extract_tar(archive: bytes, dest: Path) -> None:
             target.write_bytes(source.read())
 
 
+def scan_workers() -> int:
+    """Pool size that fits the budget."""
+    return max(1, min(os.cpu_count() or 1, SCAN_MEMORY_BUDGET // OUTPUT_CAP))
+
+
 def _preprocess(gcc: str, root: Path, unit: str, flags: tuple[str, ...]) -> Optional[dict[str, str]]:
     """Kernel text of one unit, by origin."""
     out = run_capped([gcc, "-E", *flags, "-IInclude", unit], root, TIMEOUT_S, OUTPUT_CAP)
@@ -153,7 +160,7 @@ def _tree_counts(gcc: str, root: Path, rule_counts: Callable[[str], Counter], co
     failed: set[str] = set()
     jobs = [(config, unit) for config in configs for unit in _units(root)]
     # Parsing gcc -E output is CPU bound.
-    with ProcessPoolExecutor() as pool:
+    with ProcessPoolExecutor(max_workers=scan_workers()) as pool:
         # A dict config holds per-unit flags.
         flags = [_unit_flags(configs[config], unit) for config, unit in jobs]
         results = pool.map(_preprocess, repeat(gcc), repeat(root), [unit for _, unit in jobs], flags, chunksize=8)
@@ -373,7 +380,7 @@ def object_findings(build_dir: Path) -> tuple[list[dict], dict, dict]:
             message = f"kernel object missing: {missing[0]}" if missing else "no kernel objects found"
             return [{"rule": "scan_error", "path": "", "message": message}], summary, {}
         defined = _defined_symbols([obj for _, obj, _ in units])
-        with ThreadPoolExecutor() as pool:
+        with ThreadPoolExecutor(max_workers=scan_workers()) as pool:
             found = pool.map(lambda unit: _object_hits(unit[0], unit[1], defined), units)
             findings = [hit for hits in found for hit in hits]
     except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as exc:

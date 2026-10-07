@@ -318,3 +318,11 @@ def test_real_tree_clean(tmp_path: Path) -> None:
     unit.write_text(unit.read_text(encoding="utf-8") + "/* note */\n", encoding="utf-8")
     report = check_candidate(root, _git(root, "rev-parse", "HEAD").strip())
     assert report["ok"], report["findings"][:5]
+
+
+@pytest.mark.parametrize(("cpus", "cap", "want"), [(64, 64 << 20, 4), (2, 64 << 20, 2), (None, 64 << 20, 1),
+                                                   (64, 1 << 30, 1)])
+def test_workers_fit_budget(monkeypatch, cpus, cap: int, want: int) -> None:
+    monkeypatch.setattr(candidate_scan.os, "cpu_count", lambda: cpus)
+    monkeypatch.setattr(candidate_scan, "OUTPUT_CAP", cap)
+    assert candidate_scan.scan_workers() == want
