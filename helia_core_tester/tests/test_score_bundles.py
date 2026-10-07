@@ -557,3 +557,20 @@ def test_family_keys_match_docs(tmp_path, focus):
         assert tuple(family) == FAMILY_KEYS and all(tuple(g) == GATE_KEYS for g in family["gates"])
     doc = " ".join(score_bundles.__doc__.split())
     assert all(key in doc for key in FAMILY_KEYS + GATE_KEYS) and "gated_cases" not in doc
+
+
+@pytest.mark.parametrize("touched, pairs", [
+    (None, [("regression", "conv_a")]),
+    (frozenset(), []),
+    (frozenset({"conv_a"}), [("regression", "conv_a")]),
+])
+def test_case_gate_covers_touched_cases(tmp_path, touched, pairs):
+    base, cand = _bundle(tmp_path, "a"), _bundle(tmp_path, "b", cycles={"conv_a": 1100.0})
+    scoring = load_scoring("apollo510_evb") | {"min_score": -math.inf, "family_floor_pct": 50.0}
+    report = score_bundles([load_bundle(base)], [load_bundle(cand)], scoring, touched=touched)
+    assert _pairs(report) == pairs
+    assert report["settings"]["case_gate"] == ("all" if touched is None else "touched")
+    conv = next(c for c in report["cases"] if c["case_id"] == "conv_a")
+    assert conv["touched"] == (None if touched is None else "conv_a" in touched)
+    # Untouched slowdowns still count.
+    assert report["families"]["conv"]["geomean_speedup"] < 1.0

@@ -344,8 +344,9 @@ the agent's view.
      `tcm` and on), the agent PMU counters (see [PMU feedback](#pmu-feedback);
      none on DWT boards) and `--fvp-gate off`.
    - `--out` receives the bundles, `baseline.json` (base commit and run
-     options), `kernels.git` (the base commit, fetched from the clean tree)
-     and `logs/`.
+     options), `code_graph.json` (a digest and references per kernel
+     function and data object, from the built objects), `kernels.git` (the
+     base commit, fetched from the clean tree) and `logs/`.
    - Hidden cases (`--hidden-set DIR`, made by `generate --hidden-dir DIR
      --hidden-seed-file F`) need the hidden-set PRs; until they merge, the
      flag fails the first run. Keep DIR and F outside the sandbox.
@@ -380,11 +381,17 @@ The verdict (schema `hct.candidate_eval` v2) has these fields:
   `prepare_max_ratio` times the baseline, or grow enough to pay for the
   case's timed gain (`prepare_share_pct` of the cycles saved; see
   `assets/scoring/noise_floors.yaml`).
-- `cases`: one entry per public case, with cycles, speedup, delta and noise
-  band.
+- `cases`: one entry per public case, with cycles, speedup, delta, noise
+  band and `touched`: whether code reachable from the case's inner symbol,
+  or its timed symbol itself, changed in the built objects.
+- `case_gate`: `{scope, reason}`. Code layout moves untouched kernels by
+  a few percent, so with scope `touched` only touched cases face the
+  per-case regression gate; untouched ones still count in family geomeans
+  and gates. Scope `all` (with a reason) when the baseline predates
+  `code_graph.json` or the candidate objects are unreadable.
 - `hints`: `pct_of_peak` (0-100), a diagnosis and ranked hints for each public MAC case
   (from `explain`).
-- `hidden`: null without hidden cases; otherwise case and failure counts,
+- `hidden`: null without hidden cases; otherwise case, touched and failure counts,
   plus the scorer's hidden `subscores` when it reports them.
 
 | Exit | Verdict | Meaning |

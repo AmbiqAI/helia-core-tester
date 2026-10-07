@@ -24,6 +24,7 @@ def clean_tester(monkeypatch) -> None:
     monkeypatch.setattr(candidate_eval, "tester_dirty", lambda: False)
     # Fake runs build no objects.
     monkeypatch.setattr(candidate_eval, "object_check", lambda *args: None)
+    monkeypatch.setattr(candidate_eval, "kernel_graph", lambda board: None)
 
 
 @pytest.fixture
@@ -448,3 +449,43 @@ def test_hints_report_percent_of_peak(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(candidate_eval, "explain_bundle", lambda bundle: {"cases": [case]})
     [hint] = candidate_eval._hints(tmp_path, hidden=set())
     assert hint["pct_of_peak"] == pytest.approx(50.0)
+
+
+CONV4 = {f"conv_{i}": ("arm_convolve_wrapper_s8", 1000.0) for i in "abcd"}
+
+
+def _graph(digest: str) -> dict:
+    nodes = {"arm_convolve_wrapper_s8": {"digest": digest, "refs": ["arm_nn_mat_mult_s8"]},
+             "arm_nn_mat_mult_s8": {"digest": "m", "refs": []}}
+    return {"schema": "hct.code_graph", "schema_version": 1, "nodes": nodes}
+
+
+@pytest.mark.parametrize("base_graph, cand_graph, verdict, scope, reason", [
+    (_graph("w"), _graph("w"), "no_gain", "touched", None),
+    (_graph("w"), _graph("x"), "fail", "touched", None),
+    (None, _graph("w"), "fail", "all", "baseline has no code graph"),
+])
+def test_case_gate_needs_changed_code(tmp_path, kernels, monkeypatch, base_graph, cand_graph, verdict, scope, reason) -> None:
+    monkeypatch.setattr(candidate_eval, "kernel_graph", lambda board: base_graph)
+    out, _ = _baseline(tmp_path, kernels, cases=CONV4)
+    assert (out / candidate_eval.GRAPH_FILE).is_file() == (base_graph is not None)
+    monkeypatch.setattr(candidate_eval, "kernel_graph", lambda board: cand_graph)
+    # Within the family band, past the case band.
+    result = _eval(kernels, out, FakeRun(tmp_path / "reports", cases=CONV4, cycles={"conv_a": 1015.0}))
+    assert result["verdict"] == verdict
+    assert [f["kind"] for f in result["failures"]] == (["regression"] if verdict == "fail" else [])
+    assert result["case_gate"] == {"scope": scope, "reason": reason}
+    conv = next(c for c in result["cases"] if c["case_id"] == "conv_a")
+    assert conv["touched"] == (None if scope == "all" else cand_graph != base_graph)
+
+
+def test_unreadable_candidate_objects_gate_all(tmp_path, kernels, monkeypatch) -> None:
+    monkeypatch.setattr(candidate_eval, "kernel_graph", lambda board: _graph("w"))
+    out, _ = _baseline(tmp_path, kernels, cases=CONV4)
+
+    def broken(board):
+        raise ValueError("no kernel objects found")
+
+    monkeypatch.setattr(candidate_eval, "kernel_graph", broken)
+    result = _eval(kernels, out, FakeRun(tmp_path / "reports", cases=CONV4))
+    assert result["case_gate"]["scope"] == "all" and "unreadable" in result["case_gate"]["reason"]
