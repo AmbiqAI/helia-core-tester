@@ -4,10 +4,18 @@
 # identical firmware (adjacent nightlies, 2026-10), so one noisy
 # case in a full run does not fail the gate.
 schema: hct.scoring.noise_floors
-schema_version: 1
+schema_version: 2
 mad_k: 3.0
 default_floor_pct: 5.0
+# Family drift, nightlies: 0.05 % max.
+default_family_floor_pct: 0.5
+# Same-session repeats: 0.13 % max.
+session_floor_pct: 1.0
+# Same-session prepare repeats: 18 % max.
+prepare_floor_pct: 25.0
+# Prepare may grow by this much of timed.
+prepare_timed_pct: 1.0
 boards:
-  apollo510_evb: {floor_pct: 3.0, measured: "p99 0.6 %, max 2.7 %"}
-  apollo330mP_evb: {floor_pct: 4.5, measured: "p99 1.4 %, max 3.9 %"}
-  apollo3p_evb: {floor_pct: 0.5, measured: "p99 0.0 %, max 0.1 % (5 samples)"}
+  apollo510_evb: {floor_pct: 3.0, family_floor_pct: 0.25, measured: "p99 0.6 %, max 2.7 %"}
+  apollo330mP_evb: {floor_pct: 4.5, family_floor_pct: 0.25, measured: "p99 1.4 %, max 3.9 %"}
+  apollo3p_evb: {floor_pct: 0.5, family_floor_pct: 0.1, measured: "p99 0.0 %, max 0.1 % (5 samples)"}
