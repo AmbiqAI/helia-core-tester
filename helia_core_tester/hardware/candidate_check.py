@@ -119,6 +119,7 @@ _UNSAFE_CONFIG = frozenset((
     *(("core", name) for name in (
         "fsmonitor", "sshcommand", "gitproxy", "askpass", "pager", "editor", "worktree", "alternaterefscommand",
     )),
+    ("extensions", "partialclone"), ("remote", "promisor"),
     ("filter", "clean"), ("filter", "smudge"), ("filter", "process"),
     ("diff", "external"), ("diff", "textconv"), ("diff", "command"), ("merge", "driver"),
     ("uploadpack", "packobjectshook"), ("sequence", "editor"),
