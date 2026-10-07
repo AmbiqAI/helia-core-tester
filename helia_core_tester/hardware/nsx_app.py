@@ -365,8 +365,11 @@ def _swap_in(fresh: Path, module_dir: Path) -> None:
 @contextlib.contextmanager
 def _module_lock(module_dir: Path) -> Iterator[None]:
     """Serialize writers of one module dir."""
-    import fcntl
-
+    try:
+        import fcntl
+    except ImportError:  # pragma: no cover - no flock on Windows
+        yield
+        return
     lock = module_dir.with_name(module_dir.name + ".lock")
     fd = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o644)
     try:

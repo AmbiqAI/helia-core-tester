@@ -227,6 +227,25 @@ def test_closure_lexes_comments(text: str, found: bool) -> None:
     assert ("Include/Internal/private.h" in harness_lock.header_closure(files.get)) is found
 
 
+@pytest.mark.parametrize("text", ['#\vinclude "Internal/private.h"\n', '#include\f"Internal/private.h"\n',
+                                  '\f#include <Internal/private.h>\n'])
+def test_closure_vt_ff_whitespace(text: str) -> None:
+    files = {"Include/arm_nnfunctions.h": text, "Include/Internal/private.h": "\n"}
+    assert "Include/Internal/private.h" in harness_lock.header_closure(files.get)
+
+
+def test_module_lock_without_fcntl(tmp_path: Path, monkeypatch) -> None:
+    import sys
+
+    from helia_core_tester.hardware.nsx_app import write_kernels
+
+    monkeypatch.setitem(sys.modules, "fcntl", None)
+    root = _repo(tmp_path / "nn", {"Source/a.c": "int a;\n", "Include/a.h": "\n", "nsx/CMakeLists.txt": "x\n",
+                                   "nsx/nsx-module.yaml": "m\n"})
+    write_kernels(root, tmp_path / "module")
+    assert (tmp_path / "module/Source/a.c").is_file()
+
+
 def test_strip_comments_keeps_header_names() -> None:
     from helia_core_tester.hardware.c_lex import strip_comments
 

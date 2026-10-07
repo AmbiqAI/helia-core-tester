@@ -14,7 +14,7 @@ _NEWLINE = re.compile(r"\r\n|\r|\n")
 _SPLICE = re.compile(r"\\[ \t\f\v]*$")
 # Header names, code, literals, comments.
 _LEX = re.compile(
-    r"(?P<header>(?:#|%:)[ \t]*include[ \t]*<[^>\n]*>)"
+    r"(?P<header>(?:#|%:)[ \t\v\f]*include[ \t\v\f]*<[^>\n]*>)"
     r"|(?P<code>(?:[^\W\d]\w*|\.?\d(?:[eEpP][+-]|'\w|[\w.])*|[^\"'/\w#%]|/(?![*/]))+)"
     r"|(?P<literal>\"(?:\\[^\n]|[^\"\\\n])*\"?|'(?:\\[^\n]|[^'\\\n])*'?)"
     r"|(?P<block>/\*.*?(?:\*/|\Z))"

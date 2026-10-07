@@ -57,7 +57,7 @@ HARNESS_HEADERS = (
 )
 # Kernel module files the build reads.
 KERNEL_BUILD_FILES = ("nsx/CMakeLists.txt", "nsx/nsx-module.yaml")
-_INCLUDE = re.compile(r'^[ \t]*(?:#|%:)[ \t]*include[ \t]*([<"])([^">]+)[">]', re.MULTILINE)
+_INCLUDE = re.compile(r'^[ \t\v\f]*(?:#|%:)[ \t\v\f]*include[ \t\v\f]*([<"])([^">]+)[">]', re.MULTILINE)
 # Lock keys that vary per sync.
 _LOCK_VOLATILE = ("generated_at", "acquired_at", "manifest")
 
