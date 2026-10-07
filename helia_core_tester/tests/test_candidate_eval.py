@@ -278,7 +278,7 @@ def test_all_cases_missing_refuses(tmp_path, kernels) -> None:
     # Sparse: few blocks, huge size.
     (candidate_eval.CopyBudget(), lambda k: os.truncate(_touch(k / "Source/sparse.c"), 1 << 40)),
     (candidate_eval.CopyBudget(total_bytes=100), lambda k: [(k / f"Source/f{i}.c").write_bytes(b"y" * 60) for i in range(2)]),
-    (candidate_eval.CopyBudget(files=5), lambda k: [_touch(k / f"Source/n{i}.c") for i in range(3)]),
+    (candidate_eval.CopyBudget(entries=6), lambda k: [_touch(k / f"Source/n{i}.c") for i in range(3)]),
 ])
 def test_oversized_candidate_refuses(tmp_path, kernels, budget, make) -> None:
     out, _ = _baseline(tmp_path, kernels)
@@ -298,3 +298,32 @@ def test_baseline_out_must_be_a_dir(tmp_path, kernels) -> None:
     out.write_text("x")
     result = runner.invoke(app, ["candidate", "baseline", "--kernels", str(kernels), "--board", "apollo510_evb", "--out", str(out)])
     assert result.exit_code == 2
+
+
+@pytest.mark.parametrize("shape", ["deep", "wide"])
+def test_empty_dir_trees_refuse_before_mkdir(tmp_path, kernels, shape) -> None:
+    out, _ = _baseline(tmp_path, kernels)
+    if shape == "deep":
+        (kernels / "Source" / Path(*["d"] * 10)).mkdir(parents=True)
+        budget = candidate_eval.CopyBudget(depth=5)
+    else:
+        for i in range(20):
+            (kernels / "Include" / f"w{i}").mkdir()
+        budget = candidate_eval.CopyBudget(entries=10)
+    verdict = candidate_eval.evaluate(kernels, out, candidate_eval.read_baseline(out), 0.005,
+                                      run=FakeRun(tmp_path / "reports"), budget=budget)
+    assert verdict["verdict"] == "refused"
+    snap = out / "snapshot"
+    assert not (snap / "Source" / Path(*["d"] * 6)).exists() and len(list((snap / "Include").glob("w*"))) <= 10
+
+
+def test_file_growing_during_copy_hits_total(tmp_path, kernels, monkeypatch) -> None:
+    """Bytes read count, not the stat."""
+    out, _ = _baseline(tmp_path, kernels)
+    real = candidate_eval._read_chunks
+    # Each file "grows" by 1 KiB while read.
+    monkeypatch.setattr(candidate_eval, "_read_chunks", lambda handle: [*real(handle), b"z" * 1024])
+    budget = candidate_eval.CopyBudget(total_bytes=2048)
+    verdict = candidate_eval.evaluate(kernels, out, candidate_eval.read_baseline(out), 0.005,
+                                      run=FakeRun(tmp_path / "reports"), budget=budget)
+    assert verdict["verdict"] == "refused" and "in total" in verdict["reason"]

@@ -298,9 +298,11 @@ the agent's view.
   build. The copy walks by directory handle and never follows a symlink:
   symlinks are copied as links, and the check rejects them. FIFOs, sockets
   and devices are skipped. The copy refuses past 4 MiB per file (sparse
-  files count at their full size), 64 MiB in total or 5000 files; the real
-  trees are about 4.4 MiB in 448 files. `--max-file-bytes`,
-  `--max-total-bytes` and `--max-files` change the limits.
+  files count at their full size), 64 MiB copied in total, 5000 files and
+  dirs, or 64 levels of dirs; the real trees are about 4.4 MiB in 448
+  files. Bytes count as they are read, so a file that grows mid-copy is
+  caught. `--max-file-bytes`, `--max-total-bytes` and `--max-files` change
+  the limits.
 - `hardware run` stderr names every case, so it goes to
   `<baseline>/logs/`, never to the agent.
 - Hidden case ids never print. Hidden cases still count in the verdict and

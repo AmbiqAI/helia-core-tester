@@ -36,7 +36,7 @@ from collections import Counter
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 import typer
 
@@ -203,22 +203,33 @@ class TooLarge(CheckError):
 
 @dataclass
 class CopyBudget:
-    """Size and count limits for one snapshot."""
+    """Size, entry and depth limits for one snapshot."""
 
     file_bytes: int = 4 << 20
     total_bytes: int = 64 << 20
-    files: int = 5000
+    entries: int = 5000
+    depth: int = 64
     used_bytes: int = 0
-    used_files: int = 0
+    used_entries: int = 0
 
-    def charge(self, size: int, path: str) -> None:
-        """Count one file; refuse past a limit."""
-        self.used_files += 1
-        self.used_bytes += size
+    def entry(self, path: str) -> None:
+        """Count a file, dir or link."""
+        self.used_entries += 1
+        if self.used_entries > self.entries:
+            raise TooLarge(f"Over {self.entries} files and dirs")
+
+    def fits(self, size: int, path: str) -> None:
+        """Refuse a file before reading it."""
         if size > self.file_bytes:
             raise TooLarge(f"{path}: over {self.file_bytes} bytes")
-        if self.used_files > self.files:
-            raise TooLarge(f"Over {self.files} files")
+        if self.used_bytes + size > self.total_bytes:
+            raise TooLarge(f"Over {self.total_bytes} bytes in total")
+
+    def spend(self, copied: int, chunk: int, path: str) -> None:
+        """Charge bytes actually copied."""
+        self.used_bytes += chunk
+        if copied > self.file_bytes:
+            raise TooLarge(f"{path}: over {self.file_bytes} bytes")
         if self.used_bytes > self.total_bytes:
             raise TooLarge(f"Over {self.total_bytes} bytes in total")
 
@@ -227,36 +238,49 @@ def copy_tree(src: Path, dst: Path, budget: CopyBudget) -> None:
     """Copy by dir fd; never follow links.
 
     A racing agent cannot swap a dir for a symlink mid-copy. Symlinks
-    copy as links; FIFOs, sockets and devices are skipped. Sizes are
-    charged before any byte is read.
+    copy as links; FIFOs, sockets and devices are skipped. Every entry
+    and every copied byte is charged; dirs count before they are made.
     """
     for root, dirs, files, root_fd in os.fwalk(src, follow_symlinks=False):
-        out = dst / Path(root).relative_to(src)
+        rel = Path(root).relative_to(src)
+        out = dst / rel
+        # Charged when the parent listed it.
         out.mkdir(parents=True, exist_ok=True)
+        for name in dirs:
+            budget.entry(name)
+            if len(rel.parts) + 1 > budget.depth:
+                raise TooLarge(f"Dirs nest deeper than {budget.depth}")
+        for name in files:
+            budget.entry(name)
+        # Dir links sit in dirs, unwalked.
         for name in dirs + files:
-            info = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
-            if stat.S_ISLNK(info.st_mode):
-                budget.charge(0, name)
+            mode = os.stat(name, dir_fd=root_fd, follow_symlinks=False).st_mode
+            if stat.S_ISLNK(mode):
                 (out / name).symlink_to(os.readlink(name, dir_fd=root_fd))
-            elif stat.S_ISREG(info.st_mode):
-                # Sparse files: apparent size counts.
-                budget.charge(max(info.st_size, info.st_blocks * 512), f"{root}/{name}")
-                _copy_file(name, root_fd, out / name, budget.file_bytes)
+            elif stat.S_ISREG(mode):
+                _copy_file(name, root_fd, out / name, budget, f"{rel}/{name}")
 
 
-def _copy_file(name: str, dir_fd: int, dst: Path, limit: int) -> None:
+def _read_chunks(handle) -> Iterator[bytes]:
+    while chunk := handle.read(1 << 16):
+        yield chunk
+
+
+def _copy_file(name: str, dir_fd: int, dst: Path, budget: CopyBudget, path: str) -> None:
     fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dir_fd)
-    with os.fdopen(fd, "rb") as handle, dst.open("wb") as out:
+    with os.fdopen(fd, "rb") as handle:
+        info = os.fstat(fd)
         # Swapped for a FIFO since stat.
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
+        if not stat.S_ISREG(info.st_mode):
             return
+        # Sparse files: apparent size counts.
+        budget.fits(max(info.st_size, info.st_blocks * 512), path)
         copied = 0
-        while chunk := handle.read(1 << 16):
-            copied += len(chunk)
-            # Grew after the stat.
-            if copied > limit:
-                raise TooLarge(f"{name}: over {limit} bytes")
-            out.write(chunk)
+        with dst.open("wb") as out:
+            for chunk in _read_chunks(handle):
+                copied += len(chunk)
+                budget.spend(copied, len(chunk), path)
+                out.write(chunk)
 
 
 def snapshot(candidate: Path, baseline: Path, base: str, budget: Optional[CopyBudget] = None) -> Path:
@@ -423,7 +447,7 @@ def eval_command(
     min_score: float = typer.Option(DEFAULT_MIN_SCORE, "--min-score", help="Score to beat; 0.005 is about 0.5 % gain."),
     max_file_bytes: int = typer.Option(CopyBudget.file_bytes, "--max-file-bytes", min=1, help="Largest candidate file to copy."),
     max_total_bytes: int = typer.Option(CopyBudget.total_bytes, "--max-total-bytes", min=1, help="Most candidate bytes to copy."),
-    max_files: int = typer.Option(CopyBudget.files, "--max-files", min=1, help="Most candidate files to copy."),
+    max_files: int = typer.Option(CopyBudget.entries, "--max-files", min=1, help="Most candidate files and dirs to copy."),
 ) -> None:
     """Check, run and score a candidate; print one JSON verdict.
 
