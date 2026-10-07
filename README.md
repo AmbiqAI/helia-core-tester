@@ -364,9 +364,9 @@ The verdict (schema `hct.candidate_eval`) has these fields:
 |---|---|---|
 | 0 | `pass` | Correct, no regression, score above `--min-score` |
 | 1 | `fail` | Output mismatch, regression, lost timing or changed inputs |
-| 2 | | Bad flags or baseline dir |
+| 2 | | Bad flags, such as a non-finite `--min-score` |
 | 3 | `rejected` | The diff leaves `Source/`/`Include/` or uses a banned construct |
-| 3 | `refused` / `not_comparable` | Dirty tester, golden misfit, moved cases, other build |
+| 3 | `refused` / `not_comparable` | Bad baseline dir, dirty tester, golden misfit, moved cases, other build |
 | 4 | `no_gain` | Correct but not faster |
 | 5 | `error` | Build, board, transport or tester error; see `<baseline>/logs/` |
 | 130 | | Interrupted (Ctrl-C); no verdict printed |
