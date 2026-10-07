@@ -232,3 +232,35 @@ def test_build_of_other_kernels_is_not_comparable(tmp_path, kernels) -> None:
     verdict = _eval(kernels, out, OtherBuild(tmp_path / "reports"))
     assert verdict["verdict"] == "not_comparable"
     assert any("tree hash" in f["reason"] for f in verdict["failures"])
+
+
+@pytest.mark.parametrize("edit", [
+    lambda meta: [],
+    lambda meta: {**meta, "schema_version": 99},
+    lambda meta: {k: v for k, v in meta.items() if k != "run"},
+    lambda meta: {**meta, "sessions": []},
+    lambda meta: {**meta, "run": {**meta["run"], "board": "nope_evb"}},
+])
+def test_bad_baseline_is_a_refused_verdict(tmp_path, kernels, edit) -> None:
+    out, _ = _baseline(tmp_path, kernels)
+    path = out / candidate_eval.BASELINE_FILE
+    path.write_text(json.dumps(edit(json.loads(path.read_text()))))
+    with pytest.raises(ValueError):
+        candidate_eval.read_baseline(out)
+    result, verdict = _cli_eval(kernels, out)
+    assert result.exit_code == 3 and verdict["verdict"] == "refused" and verdict["stage"] == "baseline"
+
+
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf"])
+def test_min_score_must_be_finite(tmp_path, kernels, value) -> None:
+    out, _ = _baseline(tmp_path, kernels)
+    result, _ = _cli_eval(kernels, out, "--min-score", value)
+    assert result.exit_code == 2
+
+
+def test_missing_hidden_case_refuses_without_its_id(tmp_path, kernels, monkeypatch) -> None:
+    monkeypatch.setattr(sb, "FIELDS", sb.FIELDS + ["hidden"])
+    out, _ = _baseline(tmp_path, kernels, rows={"dw_a": {"hidden": "true"}})
+    verdict = _eval(kernels, out, FakeRun(tmp_path / "reports", drop=("dw_a", "fc_a")))
+    assert verdict["verdict"] == "refused" and verdict["hidden"]["failures"] == {"missing_case": 1}
+    assert "dw_a" not in json.dumps(verdict)
