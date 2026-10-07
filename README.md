@@ -47,8 +47,10 @@ unless the board already confirms (via its TARGET_INFO build id) that it runs th
 build, streams every bridged case,
 writes the result bundle under `artifacts/reports/hardware/<session-id>/`,
 and prints the pass/fail summary (`--json` prints one JSON document on stdout
-instead, with the human output on stderr; the exit code is non-zero on any
-correctness failure). Useful narrowing flags: `--suite int|float|both`,
+instead, with the human output on stderr). Exit codes match `score`: 0 pass,
+1 a case failed correctness, 2 bad flags, 3 refused before running (dirty
+tester, a `--skip-flash` or `--golden-from` mismatch, no case matches the
+selection), 5 error (cmake, J-Link, transport, probe, or a tester bug), 130 interrupted (Ctrl-C). Useful narrowing flags: `--suite int|float|both`,
 `--family`, `--test-name`, `--limit`, `--precision fp16|fp32` (float-only shortcut,
 not combinable with `--suite both` or `--test-name`), `--fvp-gate off|advisory|strict`,
 `--op`/`--dtype` (repeatable, matched like `generate --op/--dtype`; a case's dtype is its
@@ -248,7 +250,8 @@ bundles) and prints at most four lines per MAC case: cycles/MAC against a ceilin
 from `assets/scoring/ceilings.yaml`, where the cycles go (IPC, MVE share, MVE MAC
 instructions against the ideal count, stall shares, L1D refills, prepare share), a
 diagnosis and up to three ranked hints. `--op` takes conv, depthwise or fc. `--json` emits schema `hct.pmu_explain`
-v1; `pmu_explain.explain_case` gives the same result for one case row. Rules live
+v2: `bundles` (board, cpu, placement per bundle) and one flat `cases` list,
+each case naming its `bundle`; `pmu_explain.explain_case` gives the same result for one case row. Rules live
 in `helia_core_tester/hardware/pmu_explain.py` (`_rule_*`); each ranks by the share
 of cycles it explains. Cycles-only bundles (Cortex-M4) get % of peak only.
 
