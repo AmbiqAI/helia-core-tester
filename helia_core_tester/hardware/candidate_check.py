@@ -181,7 +181,11 @@ def frozen_files(tree: Path, base: dict[str, tuple[str, str]]) -> frozenset[str]
     def read_disk(rel: str) -> Optional[str]:
         path = tree / rel
         # Stay in the tree; never follow links.
-        if path.resolve() != path or not is_relative_to(path, tree) or not path.is_file():
+        try:
+            if path.resolve() != path or not is_relative_to(path, tree) or not path.is_file():
+                return None
+        # Link loops: path_findings reports symlink.
+        except (RuntimeError, OSError):
             return None
         return path.read_text(encoding="utf-8", errors="replace")
 

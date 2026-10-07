@@ -22,6 +22,8 @@ from typing import Any, Callable, Optional
 
 import yaml
 
+from .c_lex import strip_comments
+
 # Session manifest keys; scorers read the digest.
 HARNESS_FIELD = "harness_digest"
 HARNESS_INPUTS = "harness"
@@ -233,8 +235,8 @@ def header_closure(read: Callable[[str], Optional[str]]) -> list[str]:
             continue
         seen.add(rel)
         here = posixpath.dirname(rel)
-        # Splice backslash-newline first.
-        for delimiter, name in _INCLUDE.findall(re.sub(r"\\\r?\n", "", text)):
+        # Splice lines, blank comments first.
+        for delimiter, name in _INCLUDE.findall(strip_comments(text)):
             beside = (posixpath.normpath(posixpath.join(here, name)),) if delimiter == '"' else ()
             paths = (*beside, posixpath.normpath(f"Include/{name}"))
             # Only kernel headers: no absolute, no "..".

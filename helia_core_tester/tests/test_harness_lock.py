@@ -216,6 +216,36 @@ def test_float_header_is_a_root() -> None:
     assert {"Include/arm_nnfunctions_flt.h", "Include/Internal/flt_cfg.h"} <= set(closure)
 
 
+@pytest.mark.parametrize(("text", "found"), [
+    ('#include /* configuration */ "Internal/private.h"\n', True),
+    ('/*\n#include "Internal/private.h"\n*/\n', False),
+    ('// note \\\n#include "Internal/private.h"\n', False),
+    ('const char *s = "/*";\n#include "Internal/private.h"\n// */\n', True),
+])
+def test_closure_lexes_comments(text: str, found: bool) -> None:
+    files = {"Include/arm_nnfunctions.h": text, "Include/Internal/private.h": "\n"}
+    assert ("Include/Internal/private.h" in harness_lock.header_closure(files.get)) is found
+
+
+def test_strip_comments_keeps_header_names() -> None:
+    from helia_core_tester.hardware.c_lex import strip_comments
+
+    assert strip_comments("#include <a//b.h>\nx /* y\nz */ w\n") == "#include <a//b.h>\nx \n  w\n"
+
+
+@pytest.mark.parametrize("cycle", [1, 2])
+def test_link_loop_header_reported(kernels: Path, cycle: int) -> None:
+    header = kernels / "Include/arm_nn_math_types.h"
+    header.unlink()
+    if cycle == 1:
+        header.symlink_to(header.name)
+    else:
+        (kernels / "Include/loop.h").symlink_to(header.name)
+        header.symlink_to("loop.h")
+    report = check_candidate(kernels, _sha(kernels))
+    assert ("Include/arm_nn_math_types.h", "symlink") in {(f["path"], f["rule"]) for f in report["findings"]}
+
+
 def test_header_closure_follows_includes() -> None:
     files = {
         "Include/arm_nnfunctions.h": '#include "arm_nn_math_types.h"\n#include <stdint.h>\n',
