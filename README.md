@@ -307,7 +307,9 @@ the agent's view.
   `<baseline>/logs/`, never to the agent.
 - Hidden case ids never print. Hidden cases still count in the verdict and
   in the family totals.
-- The tester must be committed: a dirty tester is refused.
+- The tester must be committed: `candidate baseline` and `candidate eval`
+  refuse a dirty or unknown tester (exit 3, stage `tester`) before any
+  check or run, with no opt-out.
 - Run one eval at a time per baseline dir: each eval rebuilds
   `<baseline>/snapshot`.
 

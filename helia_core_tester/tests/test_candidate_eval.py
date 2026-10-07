@@ -15,6 +15,13 @@ from helia_core_tester.tests import test_score_bundles as sb
 from helia_core_tester.tests.test_harness_lock import _git, _repo
 
 runner = CliRunner()
+REAL_TESTER_DIRTY = candidate_eval.tester_dirty
+
+
+@pytest.fixture(autouse=True)
+def clean_tester(monkeypatch) -> None:
+    """CLI tests assume a committed tester."""
+    monkeypatch.setattr(candidate_eval, "tester_dirty", lambda: False)
 
 
 @pytest.fixture
@@ -357,3 +364,33 @@ def test_hidden_count_survives_not_comparable(tmp_path, kernels, monkeypatch) ->
     out, _ = _baseline(tmp_path, kernels, rows={"dw_a": {"hidden": "true"}, "fc_a": {"hidden": "true"}})
     verdict = _eval(kernels, out, OtherBuild(tmp_path / "reports", rows={"dw_a": {"hidden": "true"}, "fc_a": {"hidden": "true"}}))
     assert verdict["verdict"] == "not_comparable" and verdict["hidden"]["cases"] == 2
+
+
+def test_dirty_tester_refuses_before_check(tmp_path, kernels, monkeypatch) -> None:
+    out, _ = _baseline(tmp_path, kernels)
+    (kernels / "nsx/CMakeLists.txt").write_text("y\n")
+    monkeypatch.setattr(candidate_eval, "tester_dirty", lambda: True)
+    result, verdict = _cli_eval(kernels, out)
+    assert result.exit_code == 3 and verdict["verdict"] == "refused" and verdict["stage"] == "tester"
+    result = runner.invoke(app, ["candidate", "baseline", "--kernels", str(kernels), "--board", "apollo510_evb",
+                                 "--out", str(tmp_path / "b2")])
+    assert result.exit_code == 3
+
+
+@pytest.mark.parametrize("which", [0, -1])
+def test_missing_bundle_refuses_before_run(tmp_path, kernels, which, monkeypatch) -> None:
+    out, _ = _baseline(tmp_path, kernels, repeats=3)
+    meta = candidate_eval.read_baseline(out)
+    shutil.rmtree(out / "bundles" / meta["sessions"][which])
+    run = FakeRun(tmp_path / "reports")
+    monkeypatch.setattr(candidate_eval, "hardware_run", run)
+    result, verdict = _cli_eval(kernels, out)
+    assert result.exit_code == 3 and verdict["stage"] == "baseline" and not run.calls
+
+
+@pytest.mark.parametrize(("dirty", "expected"), [(False, False), (True, True), (None, True)])
+def test_unknown_tester_counts_as_dirty(monkeypatch, dirty, expected) -> None:
+    from helia_core_tester.hardware import harness_lock
+
+    monkeypatch.setattr(harness_lock, "tester_state", lambda root: {"dirty": dirty})
+    assert REAL_TESTER_DIRTY() is expected

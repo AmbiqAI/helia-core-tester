@@ -52,6 +52,8 @@ SCHEMA = "hct.candidate_eval"
 BASELINE_SCHEMA = "hct.candidate_baseline"
 SCHEMA_VERSION = 1
 BASELINE_FILE = "baseline.json"
+# Files eval and score read.
+BUNDLE_FILES = ("case_summary.csv", "session_manifest.json", "cases.json")
 EXIT_ERROR = 5
 # Needs hardware run's refusal code.
 RUN_REFUSED = 3
@@ -194,7 +196,19 @@ def read_baseline(path: Path) -> dict:
         resolve_board(run["board"])
     except (TypeError, KeyError, AttributeError, UnknownBoardError) as exc:
         raise ValueError(f"{path}: bad run options ({exc})") from exc
+    for session in sessions:
+        bundle = path / "bundles" / session
+        missing = [name for name in BUNDLE_FILES if not (bundle / name).is_file()]
+        if missing:
+            raise ValueError(f"{path}: bundle {session} lacks {missing[0]}")
     return meta
+
+
+def tester_dirty() -> bool:
+    """Dirty or unknown tester state."""
+    from .harness_lock import tester_state
+
+    return tester_state(repo_root())["dirty"] is not False
 
 
 # --- eval ---------------------------------------------------------------------------
@@ -425,6 +439,9 @@ def baseline_command(
     ),
 ) -> None:
     """Run a clean base tree N times for `candidate eval`."""
+    if tester_dirty():
+        typer.echo("✗ Tester worktree is dirty or unknown; commit it.", err=True)
+        raise typer.Exit(EXIT_REFUSED)
     if out.exists() and any(out.iterdir()):
         raise typer.BadParameter(f"{out} is not empty", param_hint="--out")
     try:
@@ -461,6 +478,10 @@ def eval_command(
     """
     if not math.isfinite(min_score):
         raise typer.BadParameter("--min-score must be finite", param_hint="--min-score")
+    # No opt-out: verdicts need a committed tester.
+    if tester_dirty():
+        _emit({"schema": SCHEMA, "schema_version": SCHEMA_VERSION, "verdict": "refused", "stage": "tester",
+               "reason": "Tester worktree is dirty or unknown"})
     try:
         meta = read_baseline(baseline)
     except ValueError as exc:
