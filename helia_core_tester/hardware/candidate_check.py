@@ -61,8 +61,6 @@ ALLOWED_SUFFIXES = (".c", ".h", ".s", ".S")
 # Adapters and goldens read these.
 FROZEN_FILES = (
     *HARNESS_HEADERS,
-    "Include/arm_nnfunctions_flt.h",
-    "Include/arm_nn_types_flt.h",
     "Source/NNSupportFunctions/arm_nntables.c",
 )
 # Trees the build or generation reads.

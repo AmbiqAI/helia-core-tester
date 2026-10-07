@@ -184,7 +184,10 @@ def test_module_under_the_checkout_is_allowed(tmp_path: Path) -> None:
 
 
 def _snapshot(root: Path) -> dict:
-    return {p: (p.is_symlink(), p.read_bytes() if p.is_file() and not p.is_symlink() else None) for p in root.rglob("*")}
+    return {
+        p: (p.is_symlink(), p.read_bytes() if p.is_file() and not p.is_symlink() else None)
+        for p in root.rglob("*") if p.suffix != ".lock"
+    }
 
 
 @pytest.mark.parametrize("case", ["root-link-to-itself", "module-link-into-source"])
@@ -237,6 +240,54 @@ def test_failed_swap_restores_module(tmp_path: Path, monkeypatch, linked: bool) 
     with pytest.raises(OSError, match="target appeared"):
         nsx_app.write_kernels(checkout, module)
     assert _snapshot(tmp_path) == before and module.is_symlink() == linked
+
+
+def test_raced_swap_names_both_paths(tmp_path: Path, monkeypatch) -> None:
+    checkout = make_checkout(tmp_path / "ns-cmsis-nn")
+    module = tmp_path / "module"
+    nsx_app.write_kernels(checkout, module)
+    original = _snapshot(module)
+    real_replace = os.replace
+
+    def racing(src, dst):
+        # Another writer recreates the target.
+        _write(Path(dst) / "other.txt", "other\n")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(nsx_app.os, "replace", racing)
+    with pytest.raises(nsx_app.SwapError) as info:
+        nsx_app.write_kernels(checkout, module)
+    stranded = info.value.stranded
+    assert str(stranded) in str(info.value) and str(module) in str(info.value) and isinstance(info.value.__cause__, OSError)
+    assert {p.relative_to(stranded) for p in _snapshot(stranded)} == {p.relative_to(module) for p in original}
+    assert (module / "other.txt").is_file()
+
+
+def test_lock_serializes_writers(tmp_path: Path) -> None:
+    import subprocess
+    import sys
+    import time
+
+    checkout = make_checkout(tmp_path / "ns-cmsis-nn")
+    module = tmp_path / "module"
+    ready = tmp_path / "ready"
+    holder = (
+        "import fcntl, os, sys, time\n"
+        f"fd = os.open({str(module) + '.lock'!r}, os.O_RDWR | os.O_CREAT)\n"
+        "fcntl.flock(fd, fcntl.LOCK_EX)\n"
+        f"open({str(ready)!r}, 'w').close()\n"
+        "time.sleep(1.5)\n"
+    )
+    proc = subprocess.Popen([sys.executable, "-c", holder])
+    try:
+        while not ready.exists():
+            time.sleep(0.01)
+        start = time.monotonic()
+        nsx_app.write_kernels(checkout, module)
+        waited = time.monotonic() - start
+    finally:
+        proc.wait(timeout=10)
+    assert waited > 1.0 and (module / "Source/arm_add.c").is_file()
 
 
 def test_rewrite_keeps_mtimes(tmp_path: Path) -> None:

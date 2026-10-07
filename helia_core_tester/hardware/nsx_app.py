@@ -11,6 +11,7 @@ out of its own wheel on every lock and sync, so the app never ships them.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import hashlib
 import json
@@ -18,7 +19,7 @@ import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 import jinja2
 import yaml
@@ -335,6 +336,10 @@ def _remove(path: Path) -> None:
         path.unlink()
 
 
+class SwapError(AppRenderError):
+    """A swap failed and left the old module aside."""
+
+
 def _swap_in(fresh: Path, module_dir: Path) -> None:
     """Replace module_dir with fresh in one step."""
     old = None
@@ -344,26 +349,52 @@ def _swap_in(fresh: Path, module_dir: Path) -> None:
         os.rename(module_dir, old)
     try:
         os.replace(fresh, module_dir)
-    except BaseException:
+    except BaseException as exc:
         if old is not None:
-            os.rename(old, module_dir)
+            try:
+                os.rename(old, module_dir)
+            except OSError:
+                error = SwapError(f"Old module left at {old}; {module_dir} taken by another writer")
+                error.stranded = old
+                raise error from exc
         raise
     if old is not None:
         _remove(old)
 
 
+@contextlib.contextmanager
+def _module_lock(module_dir: Path) -> Iterator[None]:
+    """Serialize writers of one module dir."""
+    import fcntl
+
+    lock = module_dir.with_name(module_dir.name + ".lock")
+    fd = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
 def write_kernels(root: Path, module_dir: Path) -> None:
     """Vendor a local checkout, as hpx does.
 
-    Builds a fresh sibling dir, then swaps it in.
+    Under a per-module lock, builds a fresh sibling dir, then swaps it in.
     """
-    import tempfile
-
     missing = _checkout_missing(root)
     if missing:
         raise AppRenderError(f"Not an ns-cmsis-nn checkout: {root} lacks {missing[0]}")
     _check_no_overlap(root, module_dir)
     module_dir.parent.mkdir(parents=True, exist_ok=True)
+    with _module_lock(module_dir):
+        _check_no_overlap(root, module_dir)
+        _vendor(root, module_dir)
+
+
+def _vendor(root: Path, module_dir: Path) -> None:
+    """Build fresh, then swap in."""
+    import tempfile
+
     fresh = Path(tempfile.mkdtemp(prefix=f".{module_dir.name}.", dir=module_dir.parent))
     try:
         (fresh / "nsx").mkdir()

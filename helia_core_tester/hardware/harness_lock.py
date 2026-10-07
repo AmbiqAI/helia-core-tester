@@ -45,8 +45,14 @@ _FLAG_CACHE = re.compile(
     r":[^=-]*=(.*)$",
     re.MULTILINE,
 )
-# Kernel headers the harness includes.
-HARNESS_HEADERS = ("Include/arm_nnfunctions.h", "Include/arm_nn_types.h")
+# Headers the harness includes or reads.
+HARNESS_HEADERS = (
+    "Include/arm_nnfunctions.h",
+    "Include/arm_nn_types.h",
+    # Symbol refs and float adapters read these.
+    "Include/arm_nnfunctions_flt.h",
+    "Include/arm_nn_types_flt.h",
+)
 # Kernel module files the build reads.
 KERNEL_BUILD_FILES = ("nsx/CMakeLists.txt", "nsx/nsx-module.yaml")
 _INCLUDE = re.compile(r'^[ \t]*(?:#|%:)[ \t]*include[ \t]*([<"])([^">]+)[">]', re.MULTILINE)

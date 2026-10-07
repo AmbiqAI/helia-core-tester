@@ -206,6 +206,16 @@ def test_linked_module_dir_spares_target(tmp_path: Path) -> None:
     assert (outside / "CMakeLists.txt").read_text(encoding="utf-8") == "keep\n"
 
 
+def test_float_header_is_a_root() -> None:
+    files = {
+        "Include/arm_nnfunctions.h": "int f;\n",
+        "Include/arm_nnfunctions_flt.h": '#include "Internal/flt_cfg.h"\n',
+        "Include/Internal/flt_cfg.h": "\n",
+    }
+    closure = harness_lock.header_closure(files.get)
+    assert {"Include/arm_nnfunctions_flt.h", "Include/Internal/flt_cfg.h"} <= set(closure)
+
+
 def test_header_closure_follows_includes() -> None:
     files = {
         "Include/arm_nnfunctions.h": '#include "arm_nn_math_types.h"\n#include <stdint.h>\n',
