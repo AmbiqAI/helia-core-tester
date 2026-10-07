@@ -9,7 +9,7 @@ import pytest
 from typer.testing import CliRunner
 
 from helia_core_tester.cli import app
-from helia_core_tester.hardware.score import kernel_commit, load_bundle, load_scoring, parse_focus, score_bundles
+from helia_core_tester.hardware.score import FAMILY_KEYS, GATE_KEYS, kernel_commit, load_bundle, load_scoring, parse_focus, score_bundles
 
 FIELDS = ["case_id", "kernel_id", "comparison_passed", "median_cycles", "mad_cycles", "timed_symbol", "inner_symbol", "macs",
           "ARM_PMU_INST_RETIRED", "ARM_PMU_MVE_INST_RETIRED", "timing_status", "prepare_cycles", "hidden"]
@@ -531,3 +531,12 @@ def test_focus_subsets_gate_apart(tmp_path, scale, failed):
     report = _score([_mix(tmp_path, "a", {})], [_mix(tmp_path, "b", scale)], focus=focus)
     reasons = [f["reason"].split(":")[0] for f in report["failures"] if f["kind"] == "family_regression"]
     assert reasons == failed and (report["verdict"] == "pass") == (not failed)
+
+
+@pytest.mark.parametrize("focus", [None, ["arm_convolve_1x1_s8_fast"]])
+def test_family_keys_match_docs(tmp_path, focus):
+    report = _score([_mix(tmp_path, "a", {})], [_mix(tmp_path, "b", {})], focus=parse_focus(focus or []))
+    for family in report["families"].values():
+        assert tuple(family) == FAMILY_KEYS and all(tuple(g) == GATE_KEYS for g in family["gates"])
+    doc = " ".join(score_bundles.__doc__.split())
+    assert all(key in doc for key in FAMILY_KEYS + GATE_KEYS) and "gated_cases" not in doc

@@ -440,6 +440,11 @@ def _contributions(cases: list[dict], scoring: dict, renorm: bool) -> dict[str, 
     }
 
 
+# Documented in score_bundles; tests pin it.
+FAMILY_KEYS = ("weight", "cases", "geomean_speedup", "band_pct", "gates", "regression", "focus_cases", "focus_geomean", "contribution")
+GATE_KEYS = ("subset", "cases", "slowdown_pct", "band_pct", "regression")
+
+
 def _family_gate(subset: str, cases: list[dict], scoring: dict) -> dict:
     """Fail a subset slower than its band."""
     band = _family_band(cases, scoring)
