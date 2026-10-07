@@ -34,6 +34,7 @@ import re
 import tempfile
 import shutil
 import stat
+import struct
 import subprocess
 import sys
 import traceback
@@ -181,9 +182,13 @@ def write_baseline(spec: RunSpec, out: Path, repeats: int, run=None) -> dict:
             raise RuntimeError(f"Baseline run {session} failed {summary['totals']['failed']} case(s).")
         shutil.copytree(summary["bundle"], out / "bundles" / session)
         sessions.append(session)
-        graph = kernel_graph(spec.board) if index == 0 else None
-        if graph is not None:
-            (out / GRAPH_FILE).write_text(json.dumps(graph) + "\n", encoding="utf-8")
+    try:
+        graph = kernel_graph(spec.board)
+    except (OSError, ValueError, KeyError, struct.error):
+        # Eval then gates every case.
+        graph = None
+    if graph is not None:
+        (out / GRAPH_FILE).write_text(json.dumps(graph) + "\n", encoding="utf-8")
     meta = {
         "schema": BASELINE_SCHEMA, "schema_version": BASELINE_VERSION, "created_at": _stamp(),
         "base_commit": base, "run": spec.to_json(), "sessions": sessions,
@@ -369,11 +374,13 @@ def stored_graph(baseline: Path) -> Optional[dict]:
 def touched_cases(baselines: list, candidate, base: dict, cand: dict) -> frozenset[str]:
     """Cases whose kernel code changed."""
     changed, out = changed_nodes(base, cand), set()
+    rows = [*baselines[0].rows.values(), *candidate.rows.values()]
+    routes = frozenset(row.get("inner_symbol") for row in rows if row.get("inner_symbol"))
     for case_id, row in baselines[0].rows.items():
         timed = baselines[0].symbol(case_id)
         # The candidate may route elsewhere.
         inners = {row.get("inner_symbol") or None, (candidate.rows.get(case_id) or {}).get("inner_symbol") or None}
-        if any(is_touched(timed, inner, base, cand, changed) for inner in inners):
+        if any(is_touched(timed, inner, base, cand, changed, routes) for inner in inners):
             out.add(case_id)
     return frozenset(out)
 
@@ -385,13 +392,10 @@ def case_gate(baseline: Path, board: str, baselines: list, candidate) -> tuple[O
         return None, "baseline has no code graph"
     try:
         cand = read_graph(kernel_graph(board))
-    except (OSError, ValueError, KeyError) as exc:
-        cand = None
-        reason = f"candidate objects unreadable: {exc}"
-    else:
-        reason = "candidate has no code graph"
+    except (OSError, ValueError, KeyError, struct.error) as exc:
+        return None, f"candidate objects unreadable: {exc}"
     if cand is None:
-        return None, reason
+        return None, "candidate has no code graph"
     return touched_cases(baselines, candidate, base, cand), None
 
 
@@ -445,7 +449,8 @@ def verdict_from(report: dict, hidden: set[str], candidate: Path, gate_reason: O
         "families": report["families"], "failures": failures, "cases": [_case_view(c) for c in public],
         "case_gate": {"scope": report["settings"]["case_gate"], "reason": gate_reason},
         "hidden": {"cases": len(hidden), "failures": dict(hidden_kinds),
-                   "touched": sum(bool(c["touched"]) for c in report["cases"] if c["case_id"] in hidden),
+                   "touched": None if report["settings"]["case_gate"] == "all" else
+                   sum(bool(c["touched"]) for c in report["cases"] if c["case_id"] in hidden),
                    "subscores": (report.get("subscores") or {}).get("hidden")} if hidden else None,
         "hints": _hints(candidate, hidden),
     }

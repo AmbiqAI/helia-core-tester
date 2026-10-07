@@ -470,7 +470,7 @@ def test_case_gate_needs_changed_code(tmp_path, kernels, monkeypatch, base_graph
     out, _ = _baseline(tmp_path, kernels, cases=CONV4)
     assert (out / candidate_eval.GRAPH_FILE).is_file() == (base_graph is not None)
     monkeypatch.setattr(candidate_eval, "kernel_graph", lambda board: cand_graph)
-    # Within the family band, past the case band.
+    # Past case band, inside family band.
     result = _eval(kernels, out, FakeRun(tmp_path / "reports", cases=CONV4, cycles={"conv_a": 1015.0}))
     assert result["verdict"] == verdict
     assert [f["kind"] for f in result["failures"]] == (["regression"] if verdict == "fail" else [])

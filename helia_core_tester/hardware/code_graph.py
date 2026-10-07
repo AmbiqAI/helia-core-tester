@@ -12,10 +12,13 @@ tables, literals. Locals are named `unit:name` and anonymous sections
 so renumbering stays unseen. Inlined helper edits change the caller's
 bytes.
 
-A case is touched when a node reachable from its inner symbol (else
-its timed symbol), in either build, changed or came or went, or the
-timed symbol's own node changed. A case whose symbol neither build
-defines counts as touched.
+A case is touched when a node it reaches, in either build, changed or
+came or went. It reaches everything reachable from its inner symbol
+(else its timed symbol), and from its timed symbol (the wrapper) all
+but `routes`, the other cases' inner symbols: the wrapper's own code,
+transposes and nested wrappers count, sibling kernels do not. A case
+whose symbol neither build defines counts as touched. Digests include
+section alignment, so a header cannot realign an untouched kernel.
 """
 
 from __future__ import annotations
@@ -25,11 +28,11 @@ import struct
 from pathlib import Path
 from typing import Iterable, Optional
 
-from .candidate_scan import _kernel_units, elf_sections
+from .candidate_scan import _NOBITS, _PROGBITS, _REL, _RELA, _kernel_units, elf_sections
 
 SCHEMA = "hct.code_graph"
 SCHEMA_VERSION = 1
-_SYMTAB, _PROGBITS, _NOBITS, _REL, _RELA = 2, 1, 8, 9, 4
+_SYMTAB = 2
 _LOCAL = 0
 # Symbol types that name a node.
 _NAMED = (1, 2)
@@ -62,12 +65,31 @@ def _node_names(unit: str, table: list, symbols: list) -> dict[int, str]:
     return names
 
 
+def _alignments(obj: Path) -> list[int]:
+    """sh_addralign per section."""
+    raw = obj.read_bytes()
+    shoff, = struct.unpack_from("<I", raw, 0x20)
+    entsize, count = struct.unpack_from("<HH", raw, 0x2E)
+    count = count or struct.unpack_from("<I", raw, shoff + 20)[0]
+    return [struct.unpack_from("<I", raw, shoff + i * entsize + 32)[0] for i in range(count)]
+
+
+def _fold(nodes: dict[str, dict], name: str, node: dict) -> None:
+    """Merge duplicate names (weak, COMDAT)."""
+    old = nodes.get(name)
+    if old is not None:
+        node = {"digest": hashlib.sha256((old["digest"] + node["digest"]).encode()).hexdigest(),
+                "refs": sorted(set(old["refs"]) | set(node["refs"]))}
+    nodes[name] = node
+
+
 def object_nodes(unit: str, obj: Path) -> dict[str, dict]:
     """Nodes {name: {digest, refs}} of one object."""
     table = elf_sections(obj)
     strtab = next((bytes(data) for name, kind, _, data, _ in table if name == ".strtab"), b"")
     symbols = _symbols(table, strtab)
     names = _node_names(unit, table, symbols)
+    aligns = _alignments(obj)
 
     def target(index: int) -> str:
         name, _, _, shndx = symbols[index]
@@ -88,7 +110,8 @@ def object_nodes(unit: str, obj: Path) -> dict[str, dict]:
     nodes: dict[str, dict] = {}
     for index, name in names.items():
         _, kind, flags, data, _ = table[index]
-        digest = hashlib.sha256(f"{kind}:{flags}:{len(data)}:".encode())
+        # Alignment moves code too.
+        digest = hashlib.sha256(f"{kind}:{flags}:{aligns[index]}:{len(data)}:".encode())
         if kind == _PROGBITS:
             digest.update(data)
         refs = set()
@@ -96,10 +119,7 @@ def object_nodes(unit: str, obj: Path) -> dict[str, dict]:
             digest.update(f"|{offset}:{rtype}:{ref}:{addend}".encode())
             refs.add(ref)
         refs.discard(name)
-        node = nodes.setdefault(name, {"digest": "", "refs": []})
-        # Duplicate names (weak, COMDAT) fold together.
-        node["digest"] = hashlib.sha256((node["digest"] + digest.hexdigest()).encode()).hexdigest()
-        node["refs"] = sorted(set(node["refs"]) | refs)
+        _fold(nodes, name, {"digest": digest.hexdigest(), "refs": sorted(refs)})
     # Other symbols sharing a section alias it.
     for name, bind, kind, shndx in symbols:
         alias = name if bind != _LOCAL else f"{unit}:{name}"
@@ -116,10 +136,7 @@ def code_graph(build_dir: Path) -> dict:
         raise ValueError("no kernel objects found")
     for unit, obj, _ in sorted(units):
         for name, node in object_nodes(unit, obj).items():
-            if name in nodes:
-                node = {"digest": hashlib.sha256((nodes[name]["digest"] + node["digest"]).encode()).hexdigest(),
-                        "refs": sorted(set(nodes[name]["refs"]) | set(node["refs"]))}
-            nodes[name] = node
+            _fold(nodes, name, node)
     return {"schema": SCHEMA, "schema_version": SCHEMA_VERSION, "nodes": nodes}
 
 
@@ -131,11 +148,11 @@ def read_graph(data: object) -> Optional[dict[str, dict]]:
     return nodes if isinstance(nodes, dict) else None
 
 
-def _reach(roots: Iterable[str], graphs: tuple[dict, dict]) -> set[str]:
+def _reach(roots: Iterable[str], graphs: tuple[dict, dict], skip: frozenset[str] = frozenset()) -> set[str]:
     seen, todo = set(), list(roots)
     while todo:
         name = todo.pop()
-        if name in seen:
+        if name in seen or name in skip:
             continue
         seen.add(name)
         for nodes in graphs:
@@ -148,9 +165,13 @@ def changed_nodes(base: dict[str, dict], cand: dict[str, dict]) -> set[str]:
     return {name for name in base.keys() | cand.keys() if (base.get(name) or {}).get("digest") != (cand.get(name) or {}).get("digest")}
 
 
-def is_touched(timed: str, inner: Optional[str], base: dict, cand: dict, changed: set[str]) -> bool:
+def is_touched(
+    timed: str, inner: Optional[str], base: dict, cand: dict, changed: set[str], routes: frozenset[str] = frozenset(),
+) -> bool:
     """Case code changed; unknown roots count."""
     root = inner or timed
     if root not in base and root not in cand:
         return True
-    return timed in changed or bool(_reach([root], (base, cand)) & changed)
+    graphs = (base, cand)
+    reached = _reach([root], graphs) | _reach([timed], graphs, routes - {root})
+    return bool(reached & changed)

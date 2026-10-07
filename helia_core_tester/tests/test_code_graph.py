@@ -22,6 +22,7 @@ KERNEL = """
 #include "k.h"
 const int table[4] = {1, 2, 3, TABLE_LAST};
 NEIGHBOUR
+DECL
 __attribute__((noinline)) static int inner(int x) { return helper(x) + table[x & 3]; }
 int kernel(int x) { return inner(x) BODY; }
 int other(int x) { return x - 7; }
@@ -33,13 +34,13 @@ int neighbour(int x) { int s = 0; for (int i = 0; i < x; i++) s += words[i % 3][
 """
 
 
-def _build(root: Path, *, body: str = "", k: int = 3, last: int = 4, neighbour: str = "") -> Path:
+def _build(root: Path, *, body: str = "", k: int = 3, last: int = 4, neighbour: str = "", decl: str = "") -> Path:
     """Compile a fake kernel tree; return its build dir."""
     module = root / "modules" / CMSIS_NN_MODULE
     (module / "Source").mkdir(parents=True)
     (module / "Include").mkdir()
     (module / "Include/k.h").write_text(f"#define HELPER_K {k}\n#define TABLE_LAST {last}\n" + HEADER)
-    sources = {"Source/k.c": KERNEL.replace("NEIGHBOUR", neighbour).replace("BODY", body), "Source/c.c": CALLER}
+    sources = {"Source/k.c": KERNEL.replace("NEIGHBOUR", neighbour).replace("DECL", decl).replace("BODY", body), "Source/c.c": CALLER}
     entries = []
     for rel, text in sources.items():
         (module / rel).write_text(text)
@@ -114,3 +115,19 @@ def test_object_nodes_name_locals_by_unit(tmp_path) -> None:
     root = _build(tmp_path)
     nodes = object_nodes("Source/k.c", root / "obj" / "k.c.obj")
     assert {"kernel", "other", "table", "Source/k.c:inner"} <= nodes.keys()
+
+
+def test_alignment_change_touches_kernel(tmp_path) -> None:
+    base, cand = _graphs(tmp_path, decl="int other(int x) __attribute__((aligned(256)));")
+    assert changed_nodes(base, cand) == {"other"}
+
+
+def test_wrapper_helpers_count_sibling_kernels_do_not() -> None:
+    def graph(transpose: str, sibling: str) -> dict:
+        return {"wrap": {"digest": "w", "refs": ["kern", "sibling", "transpose"]}, "kern": {"digest": "k", "refs": []},
+                "sibling": {"digest": sibling, "refs": []}, "transpose": {"digest": transpose, "refs": []}}
+
+    routes = frozenset({"kern", "sibling"})
+    base = graph("t", "s")
+    for cand, touched in ((graph("t2", "s"), True), (graph("t", "s2"), False)):
+        assert is_touched("wrap", "kern", base, cand, changed_nodes(base, cand), routes) is touched
