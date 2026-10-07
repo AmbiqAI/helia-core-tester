@@ -10,7 +10,7 @@ from typing import Optional
 from helia_core_tester.core.steps.base import StepBase, StepPlan, StepResult, StepStatus
 from helia_core_tester.core.errors import GenerationError
 from helia_core_tester.core.logging import get_logger
-from helia_core_tester.core.path_layout import generated_tests_dir
+from helia_core_tester.core.path_layout import generated_tests_dir, generated_tests_root
 from helia_core_tester.utils.command_runner import run_command
 
 
@@ -45,6 +45,12 @@ class GenerateStep(StepBase):
             return generated_tests_dir(self.config.hidden_dir, cpu, suite=suite)
         return self.config.generated_tests_dir_for(cpu, suite=suite)
 
+    def _output_root(self) -> Path:
+        """Generated tests root this run writes."""
+        if self.config.hidden_dir is not None:
+            return generated_tests_root(self.config.hidden_dir)
+        return self.config.generated_tests_root
+
     def _hidden_env(self) -> dict[str, str]:
         """Environment carrying the checked secret."""
         from helia_core_tester.generation.random_shapes import SECRET_ENV, hidden_secret
@@ -67,7 +73,8 @@ class GenerateStep(StepBase):
         cmd = ["pytest", "test_ops.py::test_generation", "-v"]
         cmd.extend(["--cpu", cpu])
         cmd.extend(["--suite", suite])
-        cmd.extend(["--generated-tests-dir", str(self._cpu_generated_tests_dir(cpu, suite=suite))])
+        if self.config.hidden_dir is None:
+            cmd.extend(["--generated-tests-dir", str(self._cpu_generated_tests_dir(cpu, suite=suite))])
         if self.config.op_filter:
             cmd.extend(["--op", self.config.op_filter])
         if self.config.dtype_filter:
@@ -138,7 +145,7 @@ class GenerateStep(StepBase):
                 status=StepStatus.SUCCESS,
                 message="TFLite models generated successfully",
                 outputs={
-                    "generated_tests_root": str(self.config.generated_tests_root)
+                    "generated_tests_root": str(self._output_root())
                 },
                 details={
                     "commands": commands,
@@ -162,7 +169,7 @@ class GenerateStep(StepBase):
                 message=error_msg,
                 error=gen_error,
                 outputs={
-                    "generated_tests_root": str(self.config.generated_tests_root)
+                    "generated_tests_root": str(self._output_root())
                 },
                 details={"cpus": self.config.cpus},
             )
@@ -191,7 +198,7 @@ class GenerateStep(StepBase):
             status=StepStatus.SKIPPED,
             message=f"DRY RUN: Would run {len(cmd_preview)} generation command(s) in {self.config.generation_dir}",
             outputs={
-                "generated_tests_root": str(self.config.generated_tests_root)
+                "generated_tests_root": str(self._output_root())
             },
             details={"commands": cmd_preview},
         )
@@ -211,6 +218,6 @@ class GenerateStep(StepBase):
             will_run=True,
             reason="ready",
             commands=cmd_preview,
-            outputs={"generated_tests_root": str(self.config.generated_tests_root)},
+            outputs={"generated_tests_root": str(self._output_root())},
             details={"cwd": str(self.config.generation_dir)}
         )

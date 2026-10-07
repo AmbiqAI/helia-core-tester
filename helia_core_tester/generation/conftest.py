@@ -58,7 +58,7 @@ def _keeps_unselected(config) -> bool:
 def _generated_override(config):
     """Explicit output dir, else the hidden tree."""
     hidden = config.getoption("--hidden-dir")
-    if config.getoption("--generated-tests-dir") or not hidden:
+    if not hidden:
         return config.getoption("--generated-tests-dir")
     cpu = normalize_cpu(config.getoption("--cpu") or "cortex-m55")
     return str(generated_tests_dir(Path(hidden), cpu, suite=config.getoption("--suite") or "int"))
@@ -79,10 +79,13 @@ def _guard_hidden(config) -> None:
     if (config.getoption("--random-shapes") or 0) < 1:
         raise pytest.UsageError("--hidden-dir needs --random-shapes N >= 1")
 
+    # Hidden outputs all derive from DIR.
+    if config.getoption("--generated-tests-dir"):
+        raise pytest.UsageError("--hidden-dir takes no --generated-tests-dir")
     try:
         check_hidden_paths(
             Path(hidden), find_repo_root(), config.getoption("--cpu") or "cortex-m55",
-            config.getoption("--suite") or "int", Path(_generated_override(config)),
+            config.getoption("--suite") or "int",
         )
     except ValueError as exc:
         raise pytest.UsageError(str(exc)) from exc
