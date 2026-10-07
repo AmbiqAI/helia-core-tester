@@ -209,8 +209,16 @@ def resolve_options(
     placement: Optional[str] = None,
     follow_pin: bool = True,
 ) -> AppOptions:
-    """Given flags win, then saved, then defaults."""
+    """Flags win; kernel source then saved, switches then defaults.
+
+    follow_pin=False resolves the flashed build: saved ref and switches.
+    """
     saved = saved_options(app_dir)
+    if saved and follow_pin:
+        # Unpassed switches reset each build.
+        saved = AppOptions(**{
+            f.name: getattr(saved, f.name) for f in dataclasses.fields(saved) if f.name.startswith("cmsis_nn_")
+        })
     base = saved or AppOptions(cmsis_nn_root=nested_kernel_root(repo_root))
     if cmsis_nn_ref or cmsis_nn_root:
         base = dataclasses.replace(
