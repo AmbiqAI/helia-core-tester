@@ -136,3 +136,17 @@ def test_case_summary_flags_hidden(tmp_path: Path) -> None:
     assert rows == {"abs_public": "false", "abs_hidden": "true"}
     cases = json.loads((root / "cases.json").read_text())
     assert [c["hidden"] for c in cases] == [False, True]
+
+
+def test_cli_refuses_bad_set_with_exit_3(tmp_path: Path) -> None:
+    from typer.testing import CliRunner
+
+    from helia_core_tester.cli import app
+
+    root = _hidden(tmp_path / "h", cpu="cortex-m4")
+    result = CliRunner().invoke(app, [
+        "hardware", "run", "--board", "apollo510_evb", "--serial-no", "1", "--skip-generate", "--skip-flash",
+        "--build-dir", str(tmp_path / "bd"), "--hidden-set", str(root),
+    ])
+    assert result.exit_code == 3, result.output
+    assert "No cortex-m55 hidden set" in result.output

@@ -283,7 +283,7 @@ def resolved_selection(repo_root: Path, board: BoardSpec, options: "StreamOption
     return selection
 
 
-class HiddenSetError(RuntimeError):
+class HiddenSetError(RunRefused):
     """The hidden set cannot serve this run."""
 
 
