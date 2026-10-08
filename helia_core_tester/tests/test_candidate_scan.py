@@ -553,3 +553,17 @@ def test_marker_naming_fifo_does_not_hang(tmp_path: Path) -> None:
     gcc = _fake_gcc(tmp_path, f'echo \'# 1 "Source/u.c"\'; echo \'# 1 "{tmp_path}/pipe" 1\'')
     found, deps = candidate_scan._unit_counts(gcc, tmp_path, "Source/u.c", (), time.monotonic() + 30, "", rule_counts)
     assert "Source/u.c" in found and deps is None
+
+
+def test_cwd_marker_keeps_unit_cacheable(tmp_path: Path) -> None:
+    """gcc -g names the cwd; skip it."""
+    (tmp_path / "Source").mkdir()
+    (tmp_path / "Source/u.c").write_text("int u;\n")
+    gcc = _fake_gcc(tmp_path, f'echo \'# 0 "{tmp_path}//"\'; echo \'# 1 "Source/u.c"\'; echo "int u;"')
+    found, deps = candidate_scan._unit_counts(gcc, tmp_path, "Source/u.c", (), time.monotonic() + 30, "", rule_counts)
+    assert "Source/u.c" in found and deps is not None and list(deps) == ["Source/u.c"]
+
+
+def test_directory_dep_reads_as_none(tmp_path: Path) -> None:
+    """A directory dep has no digest."""
+    assert candidate_scan._file_digest(tmp_path, "", {}) is None
