@@ -271,7 +271,10 @@ boards; `hct-mram-<board>-...`) and a kernel leg built from ns-cmsis-nn `main`,
 resolved to one SHA at plan time (`hct-main-<board>-...`, session
 `nightly-main-<run>-<board>`). `-f cmsis_nn_ref=<branch, tag or full SHA>` swaps the
 ref; any ref but `main` uploads as `hct-ref-<board>-...`. The kernel leg does not
-gate the run: its failures show only in the summary table.
+gate the run: its failures show only in the summary table. A last leg builds
+the TCM suite with `--toolchain atfe` (pinned kernels, `$ATFE_ROOT` from the
+runner) and uploads `hct-atfe-<board>-...` in the `hct-hardware-*` layout; it
+does not gate the run either.
 `gh workflow run hardware-nightly.yml -f boards=apollo510_evb -f limit=2` runs
 it by hand.
 
