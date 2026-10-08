@@ -138,7 +138,8 @@ def make_hidden(ws: Workspace, campaign: Campaign, facts: dict) -> None:
     shutil.rmtree(hidden, ignore_errors=True)
     cpu = resolve_board(campaign.board).cpu
     _run([*ws.tester_cmd(), "generate", "--cpu", cpu, "--random-shapes", str(campaign.hidden_shapes),
-          "--hidden-dir", str(hidden), "--hidden-seed-file", str(seed)], ws.logs / "hidden.log")
+          "--hidden-dir", str(hidden), "--hidden-seed-file", str(seed), "--op", campaign.op,
+          "--dtype", campaign.dtype], ws.logs / "hidden.log")
     hidden.chmod(0o700)
     (hidden / "done").write_text("", encoding="utf-8")
 

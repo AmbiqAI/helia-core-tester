@@ -17,7 +17,7 @@ evals: 12
 # Claude --max-budget-usd.
 cost_usd: 25
 model: claude-opus-5-5
-# Random s8 shapes per op, 0 for none.
+# Random target-op shapes, 0 for none.
 hidden_shapes: 12
 repeats: 3
 # Outside the workspace; init makes it 0700.

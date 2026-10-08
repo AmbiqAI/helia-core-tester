@@ -50,7 +50,8 @@ def test_config_defaults_and_paths() -> None:
     ({"evals": 0}, "evals"),
     ({"evals": True}, "wrong type"),
     ({"cost_usd": -1}, "cost_usd"),
-    ({"op": "FullyConnected"}, "hidden_shapes"),
+    ({"op": "FullyConnected"}, "hidden_shapes: No random shapes"),
+    ({"dtype": "S16"}, "or set 0"),
     ({"op": "Conv 2d"}, "one word"),
     ({"case_ids": ["ok", "a b"]}, "case_ids"),
 ])
@@ -575,6 +576,26 @@ def test_selftest_probes_are_unique(ws: Workspace) -> None:
     writes = [p["arg"] for p in first if p["tool"] == "Write"]
     assert all("aaaa" in w for w in writes)
     assert not set(writes) & {p["arg"] for p in second}
+
+
+def test_hidden_set_targets_campaign_op(tmp_path: Path, monkeypatch) -> None:
+    from helia_core_tester.agent_loop import setup
+
+    camp = _campaign(op="DepthwiseConv", secrets_dir=str(tmp_path / "s"))
+    ws = Workspace(tmp_path / "ws")
+    ws.root.mkdir()
+    ws.save(camp, {})
+    calls = []
+    monkeypatch.setattr(setup, "resolve_board", lambda _: type("B", (), {"cpu": "cortex-m55"}))
+
+    def fake_run(cmd, log, **_):
+        calls.append(cmd)
+        ws.hidden_dir(camp).mkdir(parents=True)
+
+    monkeypatch.setattr(setup, "_run", fake_run)
+    setup.make_hidden(ws, camp, {})
+    cmd = calls[0]
+    assert cmd[cmd.index("--op") + 1] == "DepthwiseConv" and cmd[cmd.index("--dtype") + 1] == "S8"
 
 
 def test_secrets_dir_needs_ownership(tmp_path: Path) -> None:

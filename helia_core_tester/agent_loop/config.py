@@ -16,9 +16,6 @@ from helia_core_tester.hardware.nsx_app import PLACEMENTS
 NAME_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,47}")
 WORD_RE = re.compile(r"[A-Za-z0-9_]+")
 CASE_RE = re.compile(r"[A-Za-z0-9_.-]+")
-# Hidden shapes exist only for these.
-HIDDEN_OPS = ("Convolve", "DepthwiseConv")
-HIDDEN_DTYPES = ("S8",)
 
 
 # Agent Bash cap 600 s, less margin.
@@ -141,8 +138,13 @@ def parse_campaign(data: Any, base: Path) -> Campaign:
     if not math.isfinite(cost) or cost <= 0:
         raise ConfigError("cost_usd: must be positive")
     hidden = top.get("hidden_shapes", DEFAULTS["hidden_shapes"].default)
-    if hidden and (target["op"] not in HIDDEN_OPS or target["dtype"] not in HIDDEN_DTYPES):
-        raise ConfigError(f"hidden_shapes: only {'/'.join(HIDDEN_OPS)} S8; set 0")
+    if hidden:
+        from helia_core_tester.generation.random_shapes import select_ops
+
+        try:
+            select_ops(target["op"], target["dtype"])
+        except ValueError as exc:
+            raise ConfigError(f"hidden_shapes: {exc}; or set 0") from exc
     min_score = top.get("min_score")
     if min_score is not None and not math.isfinite(float(min_score)):
         raise ConfigError("min_score: must be finite")

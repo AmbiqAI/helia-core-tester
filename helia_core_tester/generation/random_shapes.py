@@ -25,16 +25,10 @@ from helia_core_tester.hardware.generated_test_bridge import (
 from helia_core_tester.hardware.wrapper_route import conv_route, dw_route
 from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
-OPS = ("Convolve", "DepthwiseConv")
 # Per-case cap; keeps a 50-case stream short.
 MAX_MACS = 1_500_000
 MAX_TRIES = 500
 PRIMES = (2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61)
-DESCRIPTOR_FILES = {
-    "Convolve": "ConvolutionFunctions/convolve.yaml",
-    "DepthwiseConv": "ConvolutionFunctions/depthwise_conv.yaml",
-}
-TAGS = {"Convolve": "conv", "DepthwiseConv": "dw"}
 MVE_CONV_ROUTES = ("arm_convolve_1x1_out_s8", "arm_convolve_s8_small_cin", "arm_convolve_s8_3x3_c16_s1")
 CONV_ROUTES = (
     "arm_convolve_1x1_s8_fast",
@@ -49,6 +43,18 @@ SECRET_ENV = "HCT_HIDDEN_SEED"
 # Short secrets fall to brute force.
 MIN_SECRET = 16
 HIDDEN_ID_HEX = 12
+
+
+@dataclass(frozen=True)
+class Generator:
+    """Random-shape source for one op and dtype."""
+
+    tag: str
+    descriptor_file: str
+    # RNG stream id; never reuse one.
+    stream: int
+    routes: Callable[[bool], list[str]]
+    draw: Callable
 
 
 @dataclass
@@ -183,6 +189,41 @@ def _dw_layer(rng: np.random.Generator, route: str) -> Layer:
     return _maybe_dilate(rng, layer)
 
 
+def _conv_routes(mve: bool) -> list[str]:
+    return [r for r in CONV_ROUTES if mve or r not in MVE_CONV_ROUTES]
+
+
+def _dw_routes(mve: bool) -> list[str]:
+    first = DW_AS_CONV if mve else "arm_depthwise_conv_3x3_s8"
+    return [first, "arm_depthwise_conv_s8_opt", "arm_depthwise_conv_s8"]
+
+
+# Register new random-shape ops here.
+GENERATORS: dict[tuple[str, str], Generator] = {
+    ("Convolve", "S8"): Generator("conv", "ConvolutionFunctions/convolve.yaml", 0, _conv_routes, _conv_layer),
+    ("DepthwiseConv", "S8"): Generator("dw", "ConvolutionFunctions/depthwise_conv.yaml", 1, _dw_routes, _dw_layer),
+}
+OPS = tuple(op for op, _ in GENERATORS)
+
+
+def select_ops(op_filter: str | None = None, dtype_filter: str | None = None) -> tuple[str, ...]:
+    """Registered ops matching generate filters."""
+    from helia_core_tester.generation.io.descriptors import descriptor_matches_op
+    from helia_core_tester.generation.io.dtypes import normalize_dtype
+
+    ops = [part.strip() for part in str(op_filter or "").split(",") if part.strip()]
+    dtypes = [normalize_dtype(part.strip()) for part in str(dtype_filter or "").split(",") if part.strip()]
+    picked = tuple(
+        op for (op, dtype), gen in GENERATORS.items()
+        if (not ops or any(descriptor_matches_op({"name": f"rs_{gen.tag}", "operator": op}, f) for f in ops))
+        and (not dtypes or dtype in dtypes)
+    )
+    if not picked:
+        have = ", ".join(f"{op} {dtype}" for op, dtype in GENERATORS)
+        raise ValueError(f"No random shapes for that op/dtype; have {have}")
+    return picked
+
+
 def layer_route(op: str, layer: Layer, mve: bool) -> str:
     """The wrapper's direct callee."""
     oh, ow = layer.out_hw()
@@ -291,15 +332,10 @@ def _descriptor(op: str, name: str, layer: Layer, knobs: dict, seed: int, route:
 def sample_op(op: str, n: int, seed: int, cpu: str, workspace: int) -> list[dict[str, Any]]:
     """N descriptors for one op, cycling routes."""
     mve = get_cpu_profile(cpu).has_mve
-    if op == "Convolve":
-        targets = [r for r in CONV_ROUTES if mve or r not in MVE_CONV_ROUTES]
-        draw: Callable = _conv_layer
-    else:
-        targets = [DW_AS_CONV] if mve else ["arm_depthwise_conv_3x3_s8"]
-        targets += ["arm_depthwise_conv_s8_opt", "arm_depthwise_conv_s8"]
-        draw = _dw_layer
+    gen = GENERATORS[(op, "S8")]
+    targets, draw = gen.routes(mve), gen.draw
     # One stream per op keeps ops independent.
-    rng = np.random.default_rng([seed, OPS.index(op)])
+    rng = np.random.default_rng([seed, gen.stream])
     cases = []
     for index in range(n):
         target = targets[index % len(targets)]
@@ -314,7 +350,7 @@ def sample_op(op: str, n: int, seed: int, cpu: str, workspace: int) -> list[dict
                 break
         else:
             raise RuntimeError(f"No {op} shape for route {target}")
-        name = f"rs{seed}_{TAGS[op]}_{index:03d}"
+        name = f"rs{seed}_{gen.tag}_{index:03d}"
         cases.append(_descriptor(op, name, layer, _quant(rng, op, layer), seed, route))
     return cases
 
@@ -343,27 +379,33 @@ def route_counts(cases: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
     return {op: dict(sorted(c.items())) for op, c in sorted(counts.items())}
 
 
+def _key(case: dict[str, Any]) -> tuple[str, str]:
+    return case["operator"], case["activation_dtype"]
+
+
 def write_cases(root: Path, cases: list[dict[str, Any]], header: dict[str, Any], cpu: str) -> Path:
     """Write descriptors and summary; return descriptors dir."""
     shutil.rmtree(root, ignore_errors=True)
     descriptors = root / "descriptors"
     by_file: dict[str, list] = {}
     for case in cases:
-        by_file.setdefault(DESCRIPTOR_FILES[case["operator"]], []).append(case)
+        by_file.setdefault(GENERATORS[_key(case)].descriptor_file, []).append(case)
     for relpath, docs in by_file.items():
         path = descriptors / relpath
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(yaml.safe_dump_all(docs, sort_keys=False))
-    summary = {**header, "cpu": normalize_cpu(cpu), "cases": len(cases), "routes": route_counts(cases)}
+    ops = sorted({_key(case) for case in cases})
+    summary = {**header, "cpu": normalize_cpu(cpu), "cases": len(cases), "ops": [list(key) for key in ops],
+               "routes": route_counts(cases)}
     (root / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     print(f"Random shapes ({json.dumps(header)}): {json.dumps(summary['routes'])}")
     return descriptors
 
 
-def prepare_shapes(repo_root: Path, n: int, seed: int, cpu: str) -> Path:
+def prepare_shapes(repo_root: Path, n: int, seed: int, cpu: str, ops: tuple[str, ...] = OPS) -> Path:
     """Sample and write cases; return descriptors dir."""
     root = artifacts_root(repo_root) / "random_shapes" / f"s{seed}" / normalize_cpu(cpu)
-    return write_cases(root, sample_cases(n, seed, cpu), {"shape_seed": seed}, cpu)
+    return write_cases(root, sample_cases(n, seed, cpu, ops), {"shape_seed": seed}, cpu)
 
 
 def hidden_secret(raw: str | None = None) -> bytes:
@@ -379,10 +421,10 @@ def seed_commitment(secret: bytes) -> str:
     return hashlib.sha256(b"hct-hidden-commit\0" + secret).hexdigest()
 
 
-def hidden_cases(n: int, secret: bytes, cpu: str) -> list[dict[str, Any]]:
+def hidden_cases(n: int, secret: bytes, cpu: str, ops: tuple[str, ...] = OPS) -> list[dict[str, Any]]:
     """Secret-seeded cases with opaque ids."""
     seed = int.from_bytes(hashlib.sha256(b"hct-hidden-seed\0" + secret).digest(), "big")
-    cases = sample_cases(n, seed, cpu)
+    cases = sample_cases(n, seed, cpu, ops)
     for case in cases:
         # Keyed hash hides seed and index.
         case["name"] = "h" + hmac.new(secret, case["name"].encode(), "sha256").hexdigest()[:HIDDEN_ID_HEX]
@@ -431,8 +473,8 @@ def hidden_root(hidden_dir: Path, cpu: str) -> Path:
     return artifacts_root(hidden_dir) / "random_shapes" / normalize_cpu(cpu)
 
 
-def prepare_hidden(hidden_dir: Path, n: int, cpu: str) -> Path:
+def prepare_hidden(hidden_dir: Path, n: int, cpu: str, ops: tuple[str, ...] = OPS) -> Path:
     """Write hidden cases; return descriptors dir."""
     secret = hidden_secret()
     root = hidden_root(hidden_dir, cpu)
-    return write_cases(root, hidden_cases(n, secret, cpu), {"seed_commitment": seed_commitment(secret)}, cpu)
+    return write_cases(root, hidden_cases(n, secret, cpu, ops), {"seed_commitment": seed_commitment(secret)}, cpu)
