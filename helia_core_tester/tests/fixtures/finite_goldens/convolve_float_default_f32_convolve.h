@@ -1,5 +1,5 @@
-#ifndef CONVOLVE_FLOAT_DEFAULT_F32_CONV2D_H
-#define CONVOLVE_FLOAT_DEFAULT_F32_CONV2D_H
+#ifndef CONVOLVE_FLOAT_DEFAULT_F32_HARNESS_H
+#define CONVOLVE_FLOAT_DEFAULT_F32_HARNESS_H
 
 #include <stdint.h>
 // Input arrays may carry NAN/INFINITY tokens, and this header is included ahead of
@@ -10,20 +10,26 @@
 
 // Input dimensions
 static const cmsis_nn_dims convolve_float_default_f32_input_dims = {
-    .n = 1, .h = 6,
-    .w = 6, .c = 3
+    .n = 1,
+    .h = 6,
+    .w = 6,
+    .c = 3
 };
 
-// Filter dimensions  
+// Filter dimensions
 static const cmsis_nn_dims convolve_float_default_f32_filter_dims = {
-    .n = 5, .h = 3,
-    .w = 3, .c = 3
+    .n = 5,
+    .h = 3,
+    .w = 3,
+    .c = 3
 };
 
 // Output dimensions
 static const cmsis_nn_dims convolve_float_default_f32_output_dims = {
-    .n = 1, .h = 6,
-    .w = 6, .c = 5
+    .n = 1,
+    .h = 6,
+    .w = 6,
+    .c = 5
 };
 
 // Convolution parameters
@@ -34,7 +40,6 @@ static const cmsis_nn_conv_params_f32 convolve_float_default_f32_conv_params = {
     .activation = {.min = -1.0e+30f, .max = 1.0e+30f},
     .weight_format = ARM_NN_WEIGHT_FORMAT_STANDARD
 };
-
 
 // Weights
 static const float convolve_float_default_f32_weights[] = {

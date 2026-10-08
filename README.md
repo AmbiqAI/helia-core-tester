@@ -19,6 +19,7 @@ uv run helia_core_tester --help
 - `uv run helia_core_tester clean-all`
 - `uv run helia_core_tester doctor`
 - `uv run helia_core_tester coverage-merge`
+- `uv run helia_core_tester contract inventory` (see [Kernel contracts](#kernel-contracts-iteration-1))
 - `uv run helia_core_tester boards` / `probes list` / `probes match`
 - `uv run helia_core_tester hardware run|build|flash|stream|memory-report`
 - `uv run helia_core_tester explain <bundle> [--case ID] [--op OP] [--json]`
@@ -966,7 +967,7 @@ contradicts the tree is an error, and a tree that records no CPU requires `--cpu
 Defaults chosen so a repeat run is cheap and a hung kernel cannot wedge a leg.
 
 Generation reuse:
-- each generated case carries a `.stamp` over its descriptor document, the case name, target CPU, suite, seed, the identity of the ns-cmsis-nn checkout (commit when the checkout is a clean git tree, a content digest of its `Include/` and UnitTest TestData otherwise), and a generator-version hash (the generation sources, `core/cpu_targets.py`, `core/path_layout.py`, the templates under `assets/templates`, a SHA-256 of `uv.lock` for the resolved dependency set, and the Python version and machine architecture). Float precision is not a stamp input: it selects which descriptors a run generates, not what any one of them emits.
+- each generated case carries a `.stamp` over its descriptor document, the case name, target CPU, suite, seed, the identity of the ns-cmsis-nn checkout (commit when the checkout is a clean git tree, a content digest of its `Include/`, UnitTest TestData and `Tests/KernelContracts` export otherwise), and a generator-version hash (the generation sources, `core/cpu_targets.py`, `core/path_layout.py`, the templates under `assets/templates`, a SHA-256 of `uv.lock` for the resolved dependency set, and the Python version and machine architecture). Float precision is not a stamp input: it selects which descriptors a run generates, not what any one of them emits.
 - a case whose stamp still matches is reused: no TFLite conversion, no inference, no file emission. Its manifest entry is rebuilt from the on-disk sidecar, so build and run see the same tree either way.
 - a case whose stamp does not match has its directory removed before regeneration, so output a previous descriptor emitted under a different file name cannot survive into the new build.
 - capability and kernel-symbol skips are re-evaluated every run, because a different ns-cmsis-nn checkout can add or remove a symbol.
@@ -1005,6 +1006,26 @@ Behavior:
 - for `--suite both`, merge requires both int and float inputs for every requested CPU; missing pairs are named in the failure output and reports.
 - `--include-mve-float` adds optional cortex-m55 float-MVE coverage; it cannot replace a missing required int/float input. Reports are still written when required inputs are missing.
 - `--include-mve-int` adds optional cortex-m55 integer-MVE coverage from a `--coverage --coverage-mve-int` run (`artifacts/reports/coverage/int-mve`), under the same rules. The default coverage build defines `ARM_MATH_AUTOVECTORIZE`, which compiles out integer MVE paths guarded by `!ARM_MATH_AUTOVECTORIZE`; `--coverage-mve-int` builds integer sources without it, except `arm_nn_mat_mul_core_4x_s8.c`. Float sources get the same define unless the run adds `--coverage-mve-float`; such a build sets `HELIA_CMSIS_NN_FLOAT_AUTOVECTORIZE` for the harness, and a float case marked `autovectorize_declines` then expects `ARM_CMSIS_NN_NO_IMPL_ERROR`, as it does on a core without MVE float.
+
+## Kernel contracts (iteration 1)
+
+ns-cmsis-nn exports every public function signature (name, header, `#if` guards, return type, parameters with type, direction and array extent) to `Tests/KernelContracts/kernel_contracts.json`, schema `ns-cmsis-nn/kernel-contracts/1`, rendered by `scripts/check_kernel_contract.py export` from the Doxygen `@param` blocks and freshness-gated in that repo's CI. The tester reads that file and nothing else: it never runs Doxygen or parses the headers.
+
+What consumes it:
+
+- `helia_core_tester/contract/ir.py` loads it into a `ContractSet` (`present` or `absent`), rejects an unsupported schema string naming the tester version, an unreadable or truncated file, a duplicate symbol, and a symbol the checkout's `Include/` does not declare (a stale export is an error, never a skip).
+- `uv run helia_core_tester contract inventory [--cmsis-nn-root R] [--generated-tests-dir D] [--fail-on-uncovered] [--allow-unknown]` reports which public kernels, sizers and support functions the generated cases call, writes `artifacts/reports/contracts/inventory.json` (schema `hct.contract_inventory/1`), and exits 2 when there is no contract or no cases: an empty inventory is never reported as coverage. `--fail-on-unknown` is on by default; the nhwc pooling aliases (helia-core-tester#205) are the known unknowns today.
+- `doctor` prints the contract status and function count.
+- `test_contract_symbol_audit.py` checks every `arm_*` string literal in the generation sources and descriptors against the export; `KNOWN_UNDECLARED` in that test (the nhwc aliases, helia-core-tester#205) may only shrink, and a stale entry fails the test.
+- Templates render kernel calls with the Jinja globals `contract_call(symbol, {param: expression})` and `contract_parity_assert(symbol)`: the argument order comes from the export, a missing or extra name is a render error, and the emitted `_Static_assert` makes a header that drifts from the export a compile error on the FVP and on hardware. The Convolve family is migrated; other families still hand-write their calls.
+- Hardware: `assets/kernel_registry.yaml` carries the `c_define` of every `HCT_KERNEL_ID_*`, `scripts/generate_kernel_catalog.py` renders the define block of `cmake/hardware/benchmark_server_adapters.h` from it and, when a contract is reachable, requires every `cmsis_function` to be declared in the export. A templated `FirmwareAdapterSpec` renders its calls through `contract_call` (`scripts/generate_hardware_adapters.py --cmsis-nn-root R`); the elementwise add/sub/mul adapter is the pilot, and `unmarshalled` waivers must explain any declared session scalar a body never reads or any argument bound to a constant.
+- Reuse stamps hash `Tests/KernelContracts`, so an export change regenerates the affected cases.
+
+Absent semantics: a checkout without the file (ns-cmsis-nn before the export landed) loads as `absent`. Everything that does not need the contract keeps working; `contract inventory` exits 2, the real-tree contract tests skip with a reason (`HELIA_CORE_TESTER_REQUIRE_CONTRACT=1` turns that skip into a failure, which is what CI's present leg sets), `doctor` says `kernel contract: absent`, and a migrated template refuses to render, naming the minimum ns-cmsis-nn (AmbiqAI/ns-cmsis-nn#549 or later) instead of falling back to a hand-written call. `self-validate.yml` runs a `present` leg against the ns-cmsis-nn ref under test and an `absent` leg against `v7.35.1`; `scripts/assert_contract_summary.py` asserts each leg observed exactly that.
+
+Bumping the minimum ns-cmsis-nn: when the export schema changes, add the new string to `SUPPORTED_CONTRACT_SCHEMAS` in `contract/ir.py`, refresh `tests/fixtures/contract/` (the loader fixture and the twelve-function hardware pilot, which a real-tree test keeps equal to the export), and update the `#549` reference in `contract/render.py` if a newer export is required. Bumping the absent-leg pin means changing `v7.35.1` in `self-validate.yml` to the newest tag that still has no export.
+
+Deferred to later iterations: C references and `@hct` size, sizer and tolerance tags that would remove descriptors, op classes and tflite builders for new kernels; the host oracle and generic harness; on-target sizer validation for streamed cases; and the argument-pack streaming path (per-prototype trampolines replacing hand-written adapter bodies), which follows the NSX build conversion.
 
 ## Clean Contract
 

@@ -200,13 +200,25 @@
       "enum": ["strict", "mask"]
     },
     "fault": {
-      "description": "Argument fault to inject before the kernel call, selecting the operator's <op>_fault.c.j2 template. Each operator validates the kind against its FAULT_KINDS; shared kinds are null_ctx_buf, null_input, null_output, zero_dim and negative_dim. A fault case asserts the returned status against expected_status and never validates outputs.",
+      "description": "Argument fault to inject before the kernel call: an operator on the generic harness applies it as a FaultEdit on its argument pool, any other selects the operator's <op>_fault.c.j2 template. Each operator validates the kind against its FAULT_KINDS; shared kinds are null_ctx_buf, null_input, null_output, zero_dim and negative_dim. A fault case asserts the returned status against expected_status and never validates outputs.",
       "type": "string",
       "pattern": "^[a-z0-9]+(?:_[a-z0-9]+)*$"
     },
     "entry": {
-      "description": "Public ns-cmsis-nn entry the generated case calls instead of the wrapper its dispatch selects (the entries in kernel_dispatch.DIRECT_ENTRIES). The case is skipped when the ns-cmsis-nn checkout does not declare the entry.",
+      "description": "Public ns-cmsis-nn entry the generated case calls instead of the wrapper its dispatch selects: for an operator whose pool binds its call from the kernel contract, any public kernel of matching precision; whether it takes weight sums, a struct-typed bias or a layout follows from its prototype. The case is skipped when the ns-cmsis-nn checkout does not declare the entry.",
       "type": "string"
+    },
+    "entry_sizer": {
+      "description": "Public ns-cmsis-nn scratch-size query for an entry that has no <entry>_get_buffer_size of its own (a variant sized by its family's query). Mutually exclusive with entry_scratch; the case is skipped when the checkout does not declare it.",
+      "type": "string",
+      "pattern": "^arm_[a-z0-9_]+$"
+    },
+    "entry_scratch": {
+      "description": "Scratch for an entry that takes no sizer: 'none', or a fixed byte count. Mutually exclusive with entry_sizer.",
+      "oneOf": [
+        {"type": "string", "enum": ["none"]},
+        {"type": "integer", "minimum": 0}
+      ]
     },
     "autovectorize_declines": {
       "description": "The entry declines (ARM_CMSIS_NN_NO_IMPL_ERROR, output untouched) on a build without the MVE paths it lives on: for an integer entry, a build whose ns-cmsis-nn integer sources have ARM_MATH_AUTOVECTORIZE (the default coverage build); for a float entry, a build without MVE float or whose float sources have ARM_MATH_AUTOVECTORIZE. The case expects that there and the full result elsewhere.",

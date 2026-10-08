@@ -1172,7 +1172,7 @@ static arm_cmsis_nn_status run_activation_once(hct_server_session_t *session)
  * activations above), out_mult/out_shift (the "identity" branch), and out_mult_alpha/
  * out_shift_alpha (reused from LeakyRelu's alpha branch -- identical semantics). alpha_offset
  * is the one new quantized scalar. PReLUScalar's `scalar_is_input` argument is always `true`
- * in every real generated test (see prelu_scalar.c.j2's hardcoded call), so it's hardcoded
+ * in every real generated test (see prelu_scalar_argument_pool in generation/ops/ActivationFunctions/prelu_scalar.py), so it's hardcoded
  * here rather than added as a session field. */
 static arm_cmsis_nn_status run_prelu_once(hct_server_session_t *session)
 {
@@ -2053,7 +2053,7 @@ static arm_cmsis_nn_status run_transpose_conv_once(hct_server_session_t *session
 
 /* Fixed CMSIS-NN reference lookup tables required by arm_softmax_s16() -- identical bit
  * patterns are used by every generated S16 softmax test case (see
- * Tests/helia-core-tester/assets/templates/SoftmaxFunctions/softmax/softmax.h.j2), so they
+ * Tests/helia-core-tester/helia_core_tester/generation/ops/SoftmaxFunctions/softmax_luts.py), so they
  * are embedded once as firmware constants rather than transmitted per case. */
 static const int16_t hct_softmax_exp_lut[513] = {
 
@@ -3114,33 +3114,69 @@ static arm_cmsis_nn_status run_elementwise_binary_once(hct_server_session_t *ses
             int8_t *output_data = (int8_t *)hct_output_ptr(session);
             if (session->expected_kernel_id == HCT_KERNEL_ID_ADD_S8)
             {
-                return arm_add_s8(input1_data, &input1_dims, input2_data, &input2_dims,
-                                  session->input1_offset, session->input1_mult, session->input1_shift,
-                                  session->input2_offset, session->input2_mult, session->input2_shift,
-                                  session->left_shift,
-                                  output_data, &output_dims,
-                                  session->output_offset, session->out_mult, session->out_shift,
-                                  session->activation_min, session->activation_max);
+                return arm_add_s8(
+                    input1_data, /* input1_data */
+                    &input1_dims, /* input1_dims */
+                    input2_data, /* input2_data */
+                    &input2_dims, /* input2_dims */
+                    session->input1_offset, /* input1_offset */
+                    session->input1_mult, /* input1_mult */
+                    session->input1_shift, /* input1_shift */
+                    session->input2_offset, /* input2_offset */
+                    session->input2_mult, /* input2_mult */
+                    session->input2_shift, /* input2_shift */
+                    session->left_shift, /* left_shift */
+                    output_data, /* output_data */
+                    &output_dims, /* output_dims */
+                    session->output_offset, /* out_offset */
+                    session->out_mult, /* out_mult */
+                    session->out_shift, /* out_shift */
+                    session->activation_min, /* out_activation_min */
+                    session->activation_max /* out_activation_max */
+                );
             }
             if (session->expected_kernel_id == HCT_KERNEL_ID_SUB_S8)
             {
-                return arm_sub_s8(input1_data, &input1_dims, input2_data, &input2_dims,
-                                  session->input1_offset, session->input1_mult, session->input1_shift,
-                                  session->input2_offset, session->input2_mult, session->input2_shift,
-                                  session->left_shift,
-                                  output_data, &output_dims,
-                                  session->output_offset, session->out_mult, session->out_shift,
-                                  session->activation_min, session->activation_max);
+                return arm_sub_s8(
+                    input1_data, /* input1_data */
+                    &input1_dims, /* input1_dims */
+                    input2_data, /* input2_data */
+                    &input2_dims, /* input2_dims */
+                    session->input1_offset, /* input1_offset */
+                    session->input1_mult, /* input1_mult */
+                    session->input1_shift, /* input1_shift */
+                    session->input2_offset, /* input2_offset */
+                    session->input2_mult, /* input2_mult */
+                    session->input2_shift, /* input2_shift */
+                    session->left_shift, /* left_shift */
+                    output_data, /* output_data */
+                    &output_dims, /* output_dims */
+                    session->output_offset, /* out_offset */
+                    session->out_mult, /* out_mult */
+                    session->out_shift, /* out_shift */
+                    session->activation_min, /* out_activation_min */
+                    session->activation_max /* out_activation_max */
+                );
             }
             if (session->expected_kernel_id == HCT_KERNEL_ID_MUL_S8)
             {
                 /* arm_mul_s8 has no per-input mult/shift or left_shift -- it reuses only the
                  * input1_offset/input2_offset scalar fields (shared with Add/Sub above). */
-                return arm_mul_s8(input1_data, &input1_dims, input2_data, &input2_dims,
-                                  session->input1_offset, session->input2_offset,
-                                  output_data, &output_dims,
-                                  session->output_offset, session->out_mult, session->out_shift,
-                                  session->activation_min, session->activation_max);
+                return arm_mul_s8(
+                    input1_data, /* input1_data */
+                    &input1_dims, /* input1_dims */
+                    input2_data, /* input2_data */
+                    &input2_dims, /* input2_dims */
+                    session->input1_offset, /* input1_offset */
+                    session->input2_offset, /* input2_offset */
+                    output_data, /* output_data */
+                    &output_dims, /* output_dims */
+                    session->output_offset, /* out_offset */
+                    session->out_mult, /* out_mult */
+                    session->out_shift, /* out_shift */
+                    session->activation_min, /* out_activation_min */
+                    session->activation_max /* out_activation_max */
+                );
             }
             if (session->expected_kernel_id == HCT_KERNEL_ID_SQUARED_DIFFERENCE_S8)
             {
@@ -3190,32 +3226,68 @@ static arm_cmsis_nn_status run_elementwise_binary_once(hct_server_session_t *ses
             int16_t *output_data = (int16_t *)hct_output_ptr(session);
             if (session->expected_kernel_id == HCT_KERNEL_ID_ADD_S16)
             {
-                return arm_add_s16(input1_data, &input1_dims, input2_data, &input2_dims,
-                                   session->input1_offset, session->input1_mult, session->input1_shift,
-                                   session->input2_offset, session->input2_mult, session->input2_shift,
-                                   session->left_shift,
-                                   output_data, &output_dims,
-                                   session->output_offset, session->out_mult, session->out_shift,
-                                   session->activation_min, session->activation_max);
+                return arm_add_s16(
+                    input1_data, /* input1_data */
+                    &input1_dims, /* input1_dims */
+                    input2_data, /* input2_data */
+                    &input2_dims, /* input2_dims */
+                    session->input1_offset, /* input1_offset */
+                    session->input1_mult, /* input1_mult */
+                    session->input1_shift, /* input1_shift */
+                    session->input2_offset, /* input2_offset */
+                    session->input2_mult, /* input2_mult */
+                    session->input2_shift, /* input2_shift */
+                    session->left_shift, /* left_shift */
+                    output_data, /* output_data */
+                    &output_dims, /* output_dims */
+                    session->output_offset, /* out_offset */
+                    session->out_mult, /* out_mult */
+                    session->out_shift, /* out_shift */
+                    session->activation_min, /* out_activation_min */
+                    session->activation_max /* out_activation_max */
+                );
             }
             if (session->expected_kernel_id == HCT_KERNEL_ID_SUB_S16)
             {
-                return arm_sub_s16(input1_data, &input1_dims, input2_data, &input2_dims,
-                                   session->input1_offset, session->input1_mult, session->input1_shift,
-                                   session->input2_offset, session->input2_mult, session->input2_shift,
-                                   session->left_shift,
-                                   output_data, &output_dims,
-                                   session->output_offset, session->out_mult, session->out_shift,
-                                   session->activation_min, session->activation_max);
+                return arm_sub_s16(
+                    input1_data, /* input1_data */
+                    &input1_dims, /* input1_dims */
+                    input2_data, /* input2_data */
+                    &input2_dims, /* input2_dims */
+                    session->input1_offset, /* input1_offset */
+                    session->input1_mult, /* input1_mult */
+                    session->input1_shift, /* input1_shift */
+                    session->input2_offset, /* input2_offset */
+                    session->input2_mult, /* input2_mult */
+                    session->input2_shift, /* input2_shift */
+                    session->left_shift, /* left_shift */
+                    output_data, /* output_data */
+                    &output_dims, /* output_dims */
+                    session->output_offset, /* out_offset */
+                    session->out_mult, /* out_mult */
+                    session->out_shift, /* out_shift */
+                    session->activation_min, /* out_activation_min */
+                    session->activation_max /* out_activation_max */
+                );
             }
             if (session->expected_kernel_id == HCT_KERNEL_ID_MUL_S16)
             {
                 /* arm_mul_s16 mirrors arm_mul_s8's (shorter) signature: no per-input mult/shift. */
-                return arm_mul_s16(input1_data, &input1_dims, input2_data, &input2_dims,
-                                   session->input1_offset, session->input2_offset,
-                                   output_data, &output_dims,
-                                   session->output_offset, session->out_mult, session->out_shift,
-                                   session->activation_min, session->activation_max);
+                return arm_mul_s16(
+                    input1_data, /* input1_data */
+                    &input1_dims, /* input1_dims */
+                    input2_data, /* input2_data */
+                    &input2_dims, /* input2_dims */
+                    session->input1_offset, /* input1_offset */
+                    session->input2_offset, /* input2_offset */
+                    output_data, /* output_data */
+                    &output_dims, /* output_dims */
+                    session->output_offset, /* out_offset */
+                    session->out_mult, /* out_mult */
+                    session->out_shift, /* out_shift */
+                    session->activation_min, /* out_activation_min */
+                    session->activation_max /* out_activation_max */
+                );
             }
             if (session->expected_kernel_id == HCT_KERNEL_ID_SQUARED_DIFFERENCE_S16)
             {
@@ -3277,18 +3349,36 @@ static arm_cmsis_nn_status run_elementwise_binary_once(hct_server_session_t *ses
             const float activation_max = quant_scale_from_bits(session->float_activation_max_bits);
             if (session->expected_kernel_id == HCT_KERNEL_ID_ADD_F32)
             {
-                return arm_elementwise_add_f32(input1_data, input2_data, output_data,
-                                               activation_min, activation_max, session->block_size);
+                return arm_elementwise_add_f32(
+                    input1_data, /* input_1_vect */
+                    input2_data, /* input_2_vect */
+                    output_data, /* output */
+                    activation_min, /* out_activation_min */
+                    activation_max, /* out_activation_max */
+                    session->block_size /* block_size */
+                );
             }
             if (session->expected_kernel_id == HCT_KERNEL_ID_SUB_F32)
             {
-                return arm_elementwise_sub_f32(input1_data, input2_data, output_data,
-                                               activation_min, activation_max, session->block_size);
+                return arm_elementwise_sub_f32(
+                    input1_data, /* input_1_vect */
+                    input2_data, /* input_2_vect */
+                    output_data, /* output */
+                    activation_min, /* out_activation_min */
+                    activation_max, /* out_activation_max */
+                    session->block_size /* block_size */
+                );
             }
             if (session->expected_kernel_id == HCT_KERNEL_ID_MUL_F32)
             {
-                return arm_elementwise_mul_f32(input1_data, input2_data, output_data,
-                                               activation_min, activation_max, session->block_size);
+                return arm_elementwise_mul_f32(
+                    input1_data, /* input_1_vect */
+                    input2_data, /* input_2_vect */
+                    output_data, /* output */
+                    activation_min, /* out_activation_min */
+                    activation_max, /* out_activation_max */
+                    session->block_size /* block_size */
+                );
             }
             cmsis_nn_context ctxf32 = {NULL, 0};
             if (session->expected_kernel_id == HCT_KERNEL_ID_MAXIMUM_F32)
@@ -3335,18 +3425,36 @@ static arm_cmsis_nn_status run_elementwise_binary_once(hct_server_session_t *ses
             const float activation_max = quant_scale_from_bits(session->float_activation_max_bits);
             if (session->expected_kernel_id == HCT_KERNEL_ID_ADD_F16)
             {
-                return arm_elementwise_add_f16(input1_data, input2_data, output_data,
-                                               activation_min, activation_max, session->block_size);
+                return arm_elementwise_add_f16(
+                    input1_data, /* input_1_vect */
+                    input2_data, /* input_2_vect */
+                    output_data, /* output */
+                    activation_min, /* out_activation_min */
+                    activation_max, /* out_activation_max */
+                    session->block_size /* block_size */
+                );
             }
             if (session->expected_kernel_id == HCT_KERNEL_ID_SUB_F16)
             {
-                return arm_elementwise_sub_f16(input1_data, input2_data, output_data,
-                                               activation_min, activation_max, session->block_size);
+                return arm_elementwise_sub_f16(
+                    input1_data, /* input_1_vect */
+                    input2_data, /* input_2_vect */
+                    output_data, /* output */
+                    activation_min, /* out_activation_min */
+                    activation_max, /* out_activation_max */
+                    session->block_size /* block_size */
+                );
             }
             if (session->expected_kernel_id == HCT_KERNEL_ID_MUL_F16)
             {
-                return arm_elementwise_mul_f16(input1_data, input2_data, output_data,
-                                               activation_min, activation_max, session->block_size);
+                return arm_elementwise_mul_f16(
+                    input1_data, /* input_1_vect */
+                    input2_data, /* input_2_vect */
+                    output_data, /* output */
+                    activation_min, /* out_activation_min */
+                    activation_max, /* out_activation_max */
+                    session->block_size /* block_size */
+                );
             }
             cmsis_nn_context ctxf16 = {NULL, 0};
             if (session->expected_kernel_id == HCT_KERNEL_ID_MAXIMUM_F16)

@@ -5,8 +5,9 @@ Dequantize operation implementation.
 import numpy as np
 import tensorflow as tf
 from pathlib import Path
-from helia_core_tester.generation.kernel_dispatch import check_entry_fault, resolve_direct_entry
+from helia_core_tester.generation.entry import check_entry_fault, resolve_entry
 from helia_core_tester.generation.ops._shared.quantization_base import QuantizationFamilyBase
+from helia_core_tester.generation.ops.QuantizationFunctions.pools import dequantize_argument_pool, dequantize_f16_bits_pool
 
 # Binary16 patterns a bit-pattern case starts with, as many as fit before its NaN tail, so that even
 # a short case meets the NaN rule: a signalling NaN, a negative quiet NaN, a payload NaN, +Inf, the
@@ -104,7 +105,9 @@ class OpDequantize(QuantizationFamilyBase):
         if entry:
             # The entry reads binary16 storage: an FP16 tag runs it on the f16 legs, U16 on the f32 legs.
             storage = "U16" if input_dtype in ("FP16", "U16") else input_dtype
-            resolved = resolve_direct_entry("Dequantize", str(entry), storage, storage)
+            # The entry widens to float32; _generate_f16_bits refuses any other output tag by name.
+            resolved = resolve_entry("Dequantize", str(entry), activation_dtype=storage, weight_dtype=storage,
+                                     cpu=self.target_cpu, desc=self.desc, extra_roles={"output": "FP32"})
             check_entry_fault(self.desc, resolved)
             return {
                 'kernel_fn': resolved["kernel_fn"],
@@ -305,12 +308,10 @@ class OpDequantize(QuantizationFamilyBase):
             'validation_helpers': ['float'],
         }
         
-        cmake_context = {
-            'name': name,
-            'operator': self.desc.get('operator', 'Dequantize'),
-            'operator_name': 'dequantize'
-        }
-        self._write_op_outputs(output_dir, "dequantize", "QuantizationFunctions/dequantize/dequantize.h.j2", "QuantizationFunctions/dequantize/dequantize.c.j2", context, cmake_context)
+        self.render_harness_case(
+            output_dir, stem="dequantize", context=context, pool=dequantize_argument_pool(context),
+            validation_key="QuantizationFunctions/dequantize/dequantize.c.j2", label="Dequantize", operator="Dequantize", sidecar=True,
+        )
         
 
     def _generate_f16_bits(self, output_dir: Path, kernel_info: dict) -> None:
@@ -367,17 +368,16 @@ class OpDequantize(QuantizationFamilyBase):
             'expected_vector_bits_array': hex_rows(vector, 8),
             'expected_scalar_bits_array': hex_rows(scalar, 8),
             'nan_count': int(is_nan.sum()),
+            'has_activation': False,
+            'activation_type': 'NONE',
+            'zero_point': 0,
+            'scale': 0.0,
+            'comparison_atol': 0.0,
+            'comparison_rtol': 0.0,
+            'validation_helpers': ['float'],
         }
-        cmake_context = {
-            'name': name,
-            'operator': self.desc.get('operator', 'Dequantize'),
-            'operator_name': 'dequantize',
-        }
-        self._write_op_outputs(
-            output_dir,
-            "dequantize",
-            "QuantizationFunctions/dequantize/dequantize.h.j2",
-            "QuantizationFunctions/dequantize/dequantize_f16_bits.c.j2",
-            context,
-            cmake_context,
+        self.render_harness_case(
+            output_dir, stem="dequantize", context=context, pool=dequantize_f16_bits_pool(context),
+            validation_key="QuantizationFunctions/dequantize/dequantize.c.j2", label="Dequantize", operator="Dequantize",
+            sidecar=True,
         )

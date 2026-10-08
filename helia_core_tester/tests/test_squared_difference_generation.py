@@ -181,12 +181,12 @@ def test_squared_difference_s8_generates_expected_c_params(tmp_path: Path, monke
     assert "arm_squared_difference_s8" in content
     # input*_offset is -zero_point; only the non-negative output keeps the
     # -128 zero point (hct#81).
-    assert "40,       // input1_offset" in content
-    assert "40,       // input2_offset" in content
-    assert "-128,          // out_offset" in content
-    assert "0,        // input1_shift" in content
-    assert "-1,        // input2_shift" in content
-    assert "7,          // left_shift" in content
+    assert "40, /* input1_offset */" in content
+    assert "40, /* input2_offset */" in content
+    assert "-128, /* out_offset */" in content
+    assert "0, /* input1_shift */" in content
+    assert "-1, /* input2_shift */" in content
+    assert "7, /* left_shift */" in content
 
 
 @pytest.mark.parametrize(
@@ -290,13 +290,13 @@ def test_squared_difference_s16_elementwise_generates_expected_c_params(
     content = c_path.read_text()
 
     assert "arm_elementwise_squared_difference_s16" in content
-    assert "0,       // input1_offset" in content
-    assert "0,       // input2_offset" in content
-    assert "0,          // out_offset" in content
-    assert "0,        // input1_shift" in content
-    assert "-1,        // input2_shift" in content
-    assert "0,          // left_shift" in content
-    assert "-12,           // out_shift" in content
+    assert "0, /* input_1_offset */" in content
+    assert "0, /* input_2_offset */" in content
+    assert "0, /* out_offset */" in content
+    assert "0, /* input_1_shift */" in content
+    assert "-1, /* input_2_shift */" in content
+    assert "0, /* left_shift */" in content
+    assert "-12, /* out_shift */" in content
 
 
 def test_relu_range_preset_is_kept_on_exactly_two_s8_cases() -> None:

@@ -1,5 +1,5 @@
-#ifndef DEPTHWISE_CONV_FLOAT_DEFAULT_F32_DEPTHWISE_CONV2D_H
-#define DEPTHWISE_CONV_FLOAT_DEFAULT_F32_DEPTHWISE_CONV2D_H
+#ifndef DEPTHWISE_CONV_FLOAT_DEFAULT_F32_HARNESS_H
+#define DEPTHWISE_CONV_FLOAT_DEFAULT_F32_HARNESS_H
 
 #include <stdint.h>
 // Input arrays may carry NAN/INFINITY tokens, and this header is included ahead of
@@ -10,20 +10,26 @@
 
 // Input dimensions
 static const cmsis_nn_dims depthwise_conv_float_default_f32_input_dims = {
-    .n = 1, .h = 6,
-    .w = 6, .c = 3
+    .n = 1,
+    .h = 6,
+    .w = 6,
+    .c = 3
 };
 
-// Filter dimensions  
+// Filter dimensions
 static const cmsis_nn_dims depthwise_conv_float_default_f32_filter_dims = {
-    .n = 1, .h = 3,
-    .w = 3, .c = 3
+    .n = 1,
+    .h = 3,
+    .w = 3,
+    .c = 3
 };
 
 // Output dimensions
 static const cmsis_nn_dims depthwise_conv_float_default_f32_output_dims = {
-    .n = 1, .h = 6,
-    .w = 6, .c = 3
+    .n = 1,
+    .h = 6,
+    .w = 6,
+    .c = 3
 };
 
 // Depthwise convolution parameters
@@ -35,7 +41,6 @@ static const cmsis_nn_dw_conv_params_f32 depthwise_conv_float_default_f32_dw_con
     .activation = {.min = -1.0e+30f, .max = 1.0e+30f}
 };
 
-
 // Weights
 static const float depthwise_conv_float_default_f32_weights[] = {
     0.197323918f, 0.385194957f, -0.242286369f, 0.233498693f, -0.06543988f, -0.23530072f, -0.02568382f, 0.398364425f, 0.390746415f, -0.230971888f, -0.018229872f, 0.057808101f, -0.161490217f, 0.253396451f, -0.067657053f, -0.18745707f,
@@ -46,8 +51,6 @@ static const float depthwise_conv_float_default_f32_weights[] = {
 static const float depthwise_conv_float_default_f32_biases[] = {
     -0.842802763f, -0.380414248f, 0.951953173f
 };
-
-// Weight sum (precomputed for S8 depthwise convolutions)
 
 // Input data (for testing)
 static const float depthwise_conv_float_default_f32_input[] = {

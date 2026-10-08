@@ -100,23 +100,30 @@ def test_u16_is_storage_for_the_dequantize_entry_only() -> None:
 
 
 @pytest.mark.parametrize(
-    ("name", "line"),
+    ("name", "param", "depth"),
     [
-        ("convolve_fault_zero_filter_depth_s16", "filter_dims.c = 0;"),
-        ("convolve_fault_filter_deeper_than_input_s16", "filter_dims.c = 2 * input_dims.c;"),
-        ("convolve_fault_partial_filter_group_s16", "input_dims.c = filter_dims.c + 1;"),
-        ("convolve_fault_negative_output_depth_1x1_s16", "output_dims.c = -output_dims.c;"),
-        ("convolve_fault_output_not_whole_groups_s16", "output_dims.c = output_dims.c + 1;"),
-        ("convolve_fault_negative_input_depth_s16", "input_dims.c = -input_dims.c;"),
-        ("convolve_fault_negative_filter_depth_s16", "filter_dims.c = -filter_dims.c;"),
+        ("convolve_fault_zero_filter_depth_s16", "filter_dims", lambda i, f, o: 0),
+        ("convolve_fault_filter_deeper_than_input_s16", "filter_dims", lambda i, f, o: 2 * i),
+        ("convolve_fault_partial_filter_group_s16", "input_dims", lambda i, f, o: f + 1),
+        ("convolve_fault_negative_output_depth_1x1_s16", "output_dims", lambda i, f, o: -o),
+        ("convolve_fault_output_not_whole_groups_s16", "output_dims", lambda i, f, o: o + 1),
+        ("convolve_fault_negative_input_depth_s16", "input_dims", lambda i, f, o: -i),
+        ("convolve_fault_negative_filter_depth_s16", "filter_dims", lambda i, f, o: -f),
     ],
 )
-def test_group_fault_reaches_the_wrapper_with_the_broken_dims(name: str, line: str, tmp_path: Path) -> None:
+def test_group_fault_reaches_the_wrapper_with_the_broken_dims(name: str, param: str, depth, tmp_path: Path) -> None:
+    desc = _descriptor(name)
+    input_c, filter_c, output_c = desc["input_shape"][3], desc["filter_shape"][2], desc["filter_shape"][3]
     _, source = _sources(name, tmp_path)
-    call = re.search(r"arm_convolve_wrapper_s16\([^;]*&input_dims,[^;]*&filter_dims,[^;]*&output_dims,", source, re.S)
+    # The kernel gets a copy of the dims struct with its channel count changed, just before the call.
+    code = re.sub(r"/\*.*?\*/|//[^\n]*", " ", source, flags=re.S)
+    edit = code.find(f"{name}_fault_{param}.c = {depth(input_c, filter_c, output_c)};")
+    call = re.search(rf"arm_convolve_wrapper_s16\([^;]*&{name}_fault_{param},[^;]*\)", code, re.S)
 
     assert call
-    assert -1 < source.find(line) < call.start()
+    assert -1 < edit < call.start()
+    # The copy is initialised from the case's own dims, so only the channel count differs.
+    assert f"{name}_fault_{param} = {name}_{param};" in code[:edit]
 
 
 @pytest.mark.parametrize("kernel_case", ["convolve_float_default_f32", "convolve_default_s8"])

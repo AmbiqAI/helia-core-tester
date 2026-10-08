@@ -274,3 +274,18 @@ class OpMinMax(BinaryBasicMathBase):
         }
         self._write_op_outputs(output_dir, "minmax", "BasicMathFunctions/minmax/minmax.h.j2", "BasicMathFunctions/minmax/minmax.c.j2", context, cmake_context)
         
+
+
+from dataclasses import replace as _replace  # noqa: E402
+
+from helia_core_tester.generation.harness.model import Declaration as _Declaration  # noqa: E402
+from helia_core_tester.generation.harness.registry import harness_pool  # noqa: E402
+from helia_core_tester.generation.harness.simple import binary_case_pool  # noqa: E402
+
+
+@harness_pool("BasicMathFunctions/minmax/minmax.c.j2", label="Minmax")
+def minmax_argument_pool(context):
+    n = context["name"]
+    pool = binary_case_pool(context)
+    ctx = _Declaration(f"{n}_ctx", "cmsis_nn_context", {"buf": "NULL", "size": "0"}, storage="static")
+    return _replace(pool, values={**pool.values, "ctx": f"&{n}_ctx"}, source=(ctx,), owns_ctx=True)

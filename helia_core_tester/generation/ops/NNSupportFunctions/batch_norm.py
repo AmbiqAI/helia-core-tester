@@ -4,7 +4,17 @@ from pathlib import Path
 
 import numpy as np
 
+from helia_core_tester.generation.harness import ArgumentPool, ArrayLiteral, Declaration
+from helia_core_tester.generation.harness.simple import dims_count, tensor_case_pool
 from helia_core_tester.generation.ops._shared.base import OperationBase
+
+
+def batch_norm_argument_pool(context: dict) -> ArgumentPool:
+    n, ctype = context["name"], context["input_dtype"]
+    arrays = tuple(Declaration(f"{n}_{key}", ctype, ArrayLiteral(context[f"{key}_array"]), array=True)
+                   for key in ("scale", "bias"))
+    return tensor_case_pool(context, {"scale": f"{n}_scale", "bias": f"{n}_bias", "layout": context["layout"]},
+                            dims=("input_dims",), extra_header=arrays, output_count=dims_count(context["input_dims"]))
 
 
 class OpBatchNorm(OperationBase):
@@ -71,16 +81,8 @@ class OpBatchNorm(OperationBase):
         }
         context.update(nonfinite_context)
 
-        cmake_context = {
-            "name": name,
-            "operator": self.desc.get("operator", "BatchNorm"),
-            "operator_name": "batch_norm",
-        }
-        self._write_op_outputs(
-            output_dir,
-            "batch_norm",
-            "NNSupportFunctions/batch_norm/batch_norm.h.j2",
-            "NNSupportFunctions/batch_norm/batch_norm.c.j2",
-            context,
-            cmake_context,
+        self.render_harness_case(
+            output_dir, stem="batch_norm", context=context, pool=batch_norm_argument_pool(context),
+            validation_key="NNSupportFunctions/batch_norm/batch_norm.c.j2", label="BatchNorm", operator="BatchNorm",
+            sidecar=True,
         )

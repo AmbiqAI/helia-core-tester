@@ -333,3 +333,9 @@ class OpSub(BinaryBasicMathBase):
         diff = diff + int(out_offset)
         diff = np.clip(diff, int(out_activation_min), int(out_activation_max))
         return diff.astype(out_dtype)
+
+
+from helia_core_tester.generation.harness.registry import harness_pool  # noqa: E402
+from helia_core_tester.generation.harness.simple import binary_case_pool  # noqa: E402
+
+harness_pool("BasicMathFunctions/sub/sub.c.j2", label="Sub")(binary_case_pool)

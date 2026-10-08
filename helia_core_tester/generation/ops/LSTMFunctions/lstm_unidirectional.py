@@ -5,6 +5,9 @@ from typing import Dict, Any
 import numpy as np
 import tensorflow as tf
 from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.ops._shared.recurrent_pool import recurrent_argument_pool
+
+LSTM_FRAGMENTS = "LSTMFunctions/lstm_unidirectional"
 from helia_core_tester.generation.ops.catalog import get_operator_spec
 from helia_core_tester.generation.utils.temp_sizer_probe import resolve_cmsis_nn_root
 
@@ -359,10 +362,9 @@ class OpLSTMUnidirectional(OperationBase):
             # state too when hidden_state != NULL (not just hidden_state, as
             # for GRU), so the stream template seeds and preserves both.
             stream = bool(self.desc.get("hint", {}).get("stream", False))
-            h_tpl = "LSTMFunctions/lstm_unidirectional/lstm_unidirectional_f32.h.j2"
             if fault:
                 context.update(self.fault_context())
-                c_tpl = "LSTMFunctions/lstm_unidirectional/lstm_unidirectional_fault.c.j2"
+                variant = "lstm_unidirectional_fault"
             elif stream:
                 if batch_size != 1:
                     raise ValueError("LSTMUnidirectional streaming descriptors require batch_size == 1.")
@@ -380,21 +382,17 @@ class OpLSTMUnidirectional(OperationBase):
                 context["chunk_lengths"] = chunk_lengths
                 context["chunk_input_offsets"] = [c * input_size for c in chunk_offsets]
                 context["chunk_output_offsets"] = [c * hidden_size for c in chunk_offsets]
-                c_tpl = "LSTMFunctions/lstm_unidirectional/lstm_unidirectional_stream.c.j2"
+                variant = "lstm_unidirectional_stream"
             else:
-                c_tpl = "LSTMFunctions/lstm_unidirectional/lstm_unidirectional_f32.c.j2"
+                variant = "lstm_unidirectional_f32"
 
-            self._write_op_outputs(
-                Path(output_dir),
-                "lstm_unidirectional",
-                h_tpl,
-                c_tpl,
-                context,
-                {
-                    "name": name,
-                    "operator": self.desc.get("operator", "LSTMUnidirectional"),
-                    "operator_name": "lstm_unidirectional",
-                },
+            self.render_harness_case(
+                Path(output_dir), stem="lstm_unidirectional", context=context,
+                pool=recurrent_argument_pool(
+                    context, body=f"{LSTM_FRAGMENTS}/{variant}.fragment.j2",
+                    header=f"{LSTM_FRAGMENTS}/lstm_unidirectional_f32.fragment.j2", ctype=context["data_dtype"]),
+                validation_key=f"{LSTM_FRAGMENTS}/{variant}.c.j2", label="LSTM", operator="LSTMUnidirectional",
+                sidecar=True,
             )
             return
 
@@ -518,19 +516,11 @@ class OpLSTMUnidirectional(OperationBase):
             time_major=not time_major, batch_size=batch_size, hidden_size=hidden_size
         )
 
-        output_dir = Path(output_dir)
-        includes_api_dir = output_dir / "includes"
-        includes_api_dir.mkdir(parents=True, exist_ok=True)
-
-        h_content = self.render_template("LSTMFunctions/lstm_unidirectional/lstm_unidirectional.h.j2", context)
-        (includes_api_dir / f"{name}_lstm_unidirectional.h").write_text(h_content)
-        c_content = self.render_template("LSTMFunctions/lstm_unidirectional/lstm_unidirectional.c.j2", context)
-        (output_dir / f"{name}_lstm_unidirectional.c").write_text(c_content)
-
-        cmake_context = {
-            "name": name,
-            "operator": self.desc.get("operator", "LSTMUnidirectional"),
-            "operator_name": "lstm_unidirectional",
-        }
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
-        (output_dir / "CMakeLists.txt").write_text(cmake_content)
+        context.setdefault("kernel_fn", "arm_lstm_unidirectional_s16" if activation_dtype == "S16" else "arm_lstm_unidirectional_s8")
+        self.render_harness_case(
+            Path(output_dir), stem="lstm_unidirectional", context=context,
+            pool=recurrent_argument_pool(
+                context, body=f"{LSTM_FRAGMENTS}/lstm_unidirectional.fragment.j2",
+                header=f"{LSTM_FRAGMENTS}/lstm_unidirectional.fragment.j2", ctype=context["output_dtype"]),
+            validation_key=f"{LSTM_FRAGMENTS}/lstm_unidirectional.c.j2", label="LSTM", operator="LSTMUnidirectional",
+        )

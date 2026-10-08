@@ -42,13 +42,13 @@ COPY_CLASS_SYMBOLS = {
 
 # One representative per kernel, with the C the template must emit for it, and
 # whether the op writes the structured generation sidecar. Pack, unpack, fill and
-# dequantize go through OperationBase._write_op_outputs, which emits it; split and
-# concatenation still write their .h/.c/CMakeLists by hand and predate that
-# helper, so they emit no sidecar. That is pre-existing and unchanged here -- the
-# flag records which is which instead of asserting a file that never existed.
+# dequantize go through OperationBase._write_op_outputs, which emits it; split renders
+# through the generic harness without sidecar=True and concatenation still writes its
+# .h/.c/CMakeLists by hand, so they emit no sidecar. That is pre-existing and unchanged
+# here -- the flag records which is which instead of asserting a file that never existed.
 REPRESENTATIVE_CASES = [
-    ("pack_float_rank0_n8_f16", "pack", ["arm_pack_f16(", "NULL,", "0,   // input_dims"], True),
-    ("unpack_float_rank5_axis4_f32", "unpack", ["arm_unpack_f32(", "5,   // input_dims", "_out_1_output,"], True),
+    ("pack_float_rank0_n8_f16", "pack", ["arm_pack_f16(", "NULL,", "0, /* input_dims */"], True),
+    ("unpack_float_rank5_axis4_f32", "unpack", ["arm_unpack_f32(", "5, /* input_dims */", "_out_1_output,"], True),
     (
         "split_float_zero_slice_v_f32",
         "split",
@@ -60,9 +60,9 @@ REPRESENTATIVE_CASES = [
         ],
         False,
     ),
-    ("concatenation_any_rank_rank1_f16", "concatenation", ["arm_concatenation_f16(", "1,                    // output_dims"], False),
+    ("concatenation_any_rank_rank1_f16", "concatenation", ["arm_concatenation_f16(", "1, /* output_dims */"], False),
     ("fill_float_nan_block17_f16", "fill", ["arm_nn_fill_f16(", "_fill_value[0],"], True),
-    ("dequantize_float_f16_widen_nonfinite_f32", "dequantize", ["arm_dequantize_f16_f32(", "40         // block_size"], True),
+    ("dequantize_float_f16_widen_nonfinite_f32", "dequantize", ["arm_dequantize_f16_f32(", "40 /* block_size */"], True),
 ]
 
 

@@ -170,26 +170,21 @@ class OpPad(OperationBase):
         }
         
         # Render templates
-        includes_api_dir = output_dir / "includes"
-        includes_api_dir.mkdir(parents=True, exist_ok=True)
+        self.render_harness_case(
+            Path(output_dir), stem="pad", context=context, pool=pad_argument_pool(context),
+            validation_key="PadFunctions/pad/pad.c.j2", label="Pad", operator="Pad",
+        )
         
-        h_content = self.render_template("PadFunctions/pad/pad.h.j2", context)
-        h_path = includes_api_dir / f"{name}_pad.h"
-        with open(h_path, 'w') as f:
-            f.write(h_content)
-        
-        c_content = self.render_template("PadFunctions/pad/pad.c.j2", context)
-        c_path = output_dir / f"{name}_pad.c"
-        with open(c_path, 'w') as f:
-            f.write(c_content)
-        
-        cmake_context = {
-            'name': name,
-            'operator': self.desc.get('operator', 'Pad'),
-            'operator_name': 'pad'
-        }
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
-        cmake_path = output_dir / "CMakeLists.txt"
-        with open(cmake_path, 'w') as f:
-            f.write(cmake_content)
-        
+
+
+from helia_core_tester.generation.harness import ArrayLiteral, Declaration  # noqa: E402
+from helia_core_tester.generation.harness.simple import dims_count, dims_declaration, tensor_case_pool  # noqa: E402
+
+
+def pad_argument_pool(context):
+    n = context["name"]
+    extra = (dims_declaration(f"{n}_pre_pad", context["pre_pad_dims"]), dims_declaration(f"{n}_post_pad", context["post_pad_dims"]))
+    value = f"{context['pad_value']}f" if context.get("float_kernel") else str(context["pad_value"])
+    return tensor_case_pool(context, {"pad_value": value, "input_size": f"&{n}_input_dims", "pre_pad": f"&{n}_pre_pad",
+                                      "post_pad": f"&{n}_post_pad"},
+                            extra_header=extra, output_count=dims_count(context["output_dims"]))

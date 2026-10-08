@@ -1,0 +1,458 @@
+{#
+  LSTM body fragment for the generic harness: `header`, `file_scope` and `test_body` are imported
+  by the recurrent pool; the kernel is called through <name>_run, which the harness binds from
+  the kernel contract.
+#}
+{% from "common/standalone/runtime_common.j2" import helia_guard_declare %}
+{% from "common/standalone/validation.j2" import validation_outputs with context %}
+{% macro header() %}
+#define {{ macro_prefix }}TIME_MAJOR {{ time_major_literal }}
+#define {{ macro_prefix }}BATCH_SIZE {{ batch_size }}
+#define {{ macro_prefix }}TIME_STEPS {{ time_steps }}
+#define {{ macro_prefix }}INPUT_SIZE {{ input_size }}
+#define {{ macro_prefix }}HIDDEN_SIZE {{ hidden_size }}
+#define {{ macro_prefix }}CELL_SCALE_POWER {{ cell_scale_power }}
+#define {{ macro_prefix }}INPUT_ZERO_POINT {{ input_zero_point }}
+#define {{ macro_prefix }}OUTPUT_ZERO_POINT {{ output_zero_point }}
+#define {{ macro_prefix }}CELL_CLIP {{ cell_clip }}
+
+#define {{ macro_prefix }}FORGET_TO_CELL_MULTIPLIER {{ mult_shift.forget_to_cell_multiplier }}
+#define {{ macro_prefix }}FORGET_TO_CELL_SHIFT {{ mult_shift.forget_to_cell_shift }}
+#define {{ macro_prefix }}INPUT_TO_CELL_MULTIPLIER {{ mult_shift.input_to_cell_multiplier }}
+#define {{ macro_prefix }}INPUT_TO_CELL_SHIFT {{ mult_shift.input_to_cell_shift }}
+#define {{ macro_prefix }}OUTPUT_MULTIPLIER {{ mult_shift.output_multiplier }}
+#define {{ macro_prefix }}OUTPUT_SHIFT {{ mult_shift.output_shift }}
+#define {{ macro_prefix }}OUTPUT_GATE_HIDDEN_MULTIPLIER {{ mult_shift.output_gate_hidden_multiplier }}
+#define {{ macro_prefix }}OUTPUT_GATE_HIDDEN_SHIFT {{ mult_shift.output_gate_hidden_shift }}
+#define {{ macro_prefix }}CELL_GATE_HIDDEN_MULTIPLIER {{ mult_shift.cell_gate_hidden_multiplier }}
+#define {{ macro_prefix }}CELL_GATE_HIDDEN_SHIFT {{ mult_shift.cell_gate_hidden_shift }}
+#define {{ macro_prefix }}FORGET_GATE_HIDDEN_MULTIPLIER {{ mult_shift.forget_gate_hidden_multiplier }}
+#define {{ macro_prefix }}FORGET_GATE_HIDDEN_SHIFT {{ mult_shift.forget_gate_hidden_shift }}
+#define {{ macro_prefix }}INPUT_GATE_HIDDEN_MULTIPLIER {{ mult_shift.input_gate_hidden_multiplier }}
+#define {{ macro_prefix }}INPUT_GATE_HIDDEN_SHIFT {{ mult_shift.input_gate_hidden_shift }}
+#define {{ macro_prefix }}OUTPUT_GATE_INPUT_MULTIPLIER {{ mult_shift.output_gate_input_multiplier }}
+#define {{ macro_prefix }}OUTPUT_GATE_INPUT_SHIFT {{ mult_shift.output_gate_input_shift }}
+#define {{ macro_prefix }}CELL_GATE_INPUT_MULTIPLIER {{ mult_shift.cell_gate_input_multiplier }}
+#define {{ macro_prefix }}CELL_GATE_INPUT_SHIFT {{ mult_shift.cell_gate_input_shift }}
+#define {{ macro_prefix }}FORGET_GATE_INPUT_MULTIPLIER {{ mult_shift.forget_gate_input_multiplier }}
+#define {{ macro_prefix }}FORGET_GATE_INPUT_SHIFT {{ mult_shift.forget_gate_input_shift }}
+#define {{ macro_prefix }}INPUT_GATE_INPUT_MULTIPLIER {{ mult_shift.input_gate_input_multiplier }}
+#define {{ macro_prefix }}INPUT_GATE_INPUT_SHIFT {{ mult_shift.input_gate_input_shift }}
+
+static const {{ input_dtype }} {{ data_prefix }}input_tensor[] = {
+{{ input_tensor_array }}
+};
+
+static const {{ weight_dtype }} {{ data_prefix }}input_gate_input_weights[] = {
+{{ input_gate_input_weights_array }}
+};
+static const {{ weight_dtype }} {{ data_prefix }}forget_gate_input_weights[] = {
+{{ forget_gate_input_weights_array }}
+};
+static const {{ weight_dtype }} {{ data_prefix }}cell_gate_input_weights[] = {
+{{ cell_gate_input_weights_array }}
+};
+static const {{ weight_dtype }} {{ data_prefix }}output_gate_input_weights[] = {
+{{ output_gate_input_weights_array }}
+};
+
+static const {{ weight_dtype }} {{ data_prefix }}input_gate_hidden_weights[] = {
+{{ input_gate_hidden_weights_array }}
+};
+static const {{ weight_dtype }} {{ data_prefix }}forget_gate_hidden_weights[] = {
+{{ forget_gate_hidden_weights_array }}
+};
+static const {{ weight_dtype }} {{ data_prefix }}cell_gate_hidden_weights[] = {
+{{ cell_gate_hidden_weights_array }}
+};
+static const {{ weight_dtype }} {{ data_prefix }}output_gate_hidden_weights[] = {
+{{ output_gate_hidden_weights_array }}
+};
+
+static const {{ bias_dtype }} {{ data_prefix }}input_gate_bias[] = {
+{{ input_gate_bias_array }}
+};
+static const {{ bias_dtype }} {{ data_prefix }}forget_gate_bias[] = {
+{{ forget_gate_bias_array }}
+};
+static const {{ bias_dtype }} {{ data_prefix }}cell_gate_bias[] = {
+{{ cell_gate_bias_array }}
+};
+static const {{ bias_dtype }} {{ data_prefix }}output_gate_bias[] = {
+{{ output_gate_bias_array }}
+};
+
+static const {{ output_dtype }} {{ data_prefix }}output[] = {
+{{ output_array }}
+};
+{% endmacro %}
+{% macro file_scope() %}
+{% if temp_sizers_available %}
+/*
+ * ns-cmsis-nn temp-buffer sizer detection: DETECTED at generation time --
+ * arm_lstm_unidirectional_{{ dtype }}_temp{1,2}_get_buffer_size() were found in the
+ * configured ns-cmsis-nn checkout's public Include/ headers, so this test
+ * sizes temp1/temp2 from the sizer contract instead of the legacy
+ * LSTM_BUFFER_SIZE heuristic and validates the sizers on-target before the
+ * kernel runs. Refs AmbiqAI/ns-cmsis-nn#377.
+ */
+{% endif %}
+#define LSTM_BUFFER_SIZE ({{ macro_prefix }}HIDDEN_SIZE * {{ macro_prefix }}BATCH_SIZE * {{ macro_prefix }}TIME_STEPS)
+#define LSTM_OUTPUT_SIZE ({{ macro_prefix }}BATCH_SIZE * {{ macro_prefix }}TIME_STEPS * {{ macro_prefix }}HIDDEN_SIZE)
+
+{% if temp_sizers_available %}
+/* Expected sizer results, derived at generation time from this case's shape:
+ * (time_major != 0 ? batch_size : 1) * hidden_size * sizeof(int16_t) -- both
+ * integer LSTM datatypes stage int16_t gate vectors. The buffers are static
+ * worst-case allocations of exactly that figure (bare-metal: no heap), and
+ * {{ name }}_check_temp_sizers() asserts the on-target sizer results match
+ * both the constants and the capacities before run_lstm() uses the buffers. */
+#define LSTM_TEMP_EXPECTED_BYTES {{ lstm_temp_expected_bytes }}
+#define LSTM_TEMP_FLIPPED_EXPECTED_BYTES {{ lstm_temp_expected_bytes_flipped }}
+
+{{ helia_guard_declare("int16_t", "buffer1", "LSTM_TEMP_EXPECTED_BYTES / 2") }}
+{{ helia_guard_declare("int16_t", "buffer2", "LSTM_TEMP_EXPECTED_BYTES / 2") }}
+{% else %}
+{{ helia_guard_declare(output_dtype, "buffer1", "LSTM_BUFFER_SIZE") }}
+{{ helia_guard_declare(output_dtype, "buffer2", "LSTM_BUFFER_SIZE") }}
+{% endif %}
+{# buffer3 is the LSTM cell_state: a static array starts zero-initialized,
+   which *is* the recurrent initial cell state this kernel expects, so it
+   must not be poisoned like buffer1/buffer2 (pure temp scratch). #}
+{{ helia_guard_declare(output_dtype, "buffer3", "LSTM_BUFFER_SIZE") }}
+{{ helia_guard_declare(output_dtype, name ~ "_output", "LSTM_OUTPUT_SIZE") }}
+{# Per-gate kernel sums are written by arm_vector_sum_s8*() ahead of the
+   kernel call (the ns-cmsis-nn#325 bug class), so they are guarded write
+   targets like the temps. #}
+{% set kernel_sum_dtype = "int32_t" if dtype == "s8" else "int64_t" %}
+{% for gate in ["input", "forget", "cell", "output"] %}
+{{ helia_guard_declare(kernel_sum_dtype, gate ~ "_data_kernel_sum", macro_prefix ~ "HIDDEN_SIZE") }}
+{{ helia_guard_declare(kernel_sum_dtype, gate ~ "_hidden_kernel_sum", macro_prefix ~ "HIDDEN_SIZE") }}
+{% endfor %}
+{% if dtype != "s8" %}
+{{ helia_guard_declare("int64_t", "coverage_probe_sum_no_bias", macro_prefix ~ "HIDDEN_SIZE") }}
+{{ helia_guard_declare("int64_t", "coverage_probe_sum_bias", macro_prefix ~ "HIDDEN_SIZE") }}
+{% endif %}
+{% if temp_sizers_available %}
+
+static int {{ name }}_check_temp_sizers(void)
+{
+    static cmsis_nn_lstm_params sizer_params;
+    sizer_params.time_major = {{ macro_prefix }}TIME_MAJOR;
+    sizer_params.batch_size = {{ macro_prefix }}BATCH_SIZE;
+    sizer_params.time_steps = {{ macro_prefix }}TIME_STEPS;
+    sizer_params.input_size = {{ macro_prefix }}INPUT_SIZE;
+    sizer_params.hidden_size = {{ macro_prefix }}HIDDEN_SIZE;
+
+    HELIA_VALIDATE_SCALAR_EQ_INT("LSTM_TEMP_SIZERS",
+                                 "temp1_bytes",
+                                 LSTM_TEMP_EXPECTED_BYTES,
+                                 arm_lstm_unidirectional_{{ dtype }}_temp1_get_buffer_size(&sizer_params));
+    HELIA_VALIDATE_SCALAR_EQ_INT("LSTM_TEMP_SIZERS",
+                                 "temp2_bytes",
+                                 LSTM_TEMP_EXPECTED_BYTES,
+                                 arm_lstm_unidirectional_{{ dtype }}_temp2_get_buffer_size(&sizer_params));
+    HELIA_VALIDATE_SCALAR_EQ_INT("LSTM_TEMP_SIZERS",
+                                 "temp1_capacity_bytes",
+                                 (int)sizeof(buffer1),
+                                 arm_lstm_unidirectional_{{ dtype }}_temp1_get_buffer_size(&sizer_params));
+    HELIA_VALIDATE_SCALAR_EQ_INT("LSTM_TEMP_SIZERS",
+                                 "temp2_capacity_bytes",
+                                 (int)sizeof(buffer2),
+                                 arm_lstm_unidirectional_{{ dtype }}_temp2_get_buffer_size(&sizer_params));
+
+    /* Flipping time_major exercises the other gate_batch branch of the sizer
+     * ((time_major ? batch_size : 1) * hidden_size * sizeof(int16_t)). */
+    sizer_params.time_major = !{{ macro_prefix }}TIME_MAJOR;
+    HELIA_VALIDATE_SCALAR_EQ_INT("LSTM_TEMP_SIZERS",
+                                 "temp1_bytes_flipped_time_major",
+                                 LSTM_TEMP_FLIPPED_EXPECTED_BYTES,
+                                 arm_lstm_unidirectional_{{ dtype }}_temp1_get_buffer_size(&sizer_params));
+    sizer_params.time_major = {{ macro_prefix }}TIME_MAJOR;
+
+    /* Contract edges: NULL params and a negative dimension report -1. */
+    HELIA_VALIDATE_SCALAR_EQ_INT("LSTM_TEMP_SIZERS",
+                                 "temp1_null_params",
+                                 -1,
+                                 arm_lstm_unidirectional_{{ dtype }}_temp1_get_buffer_size(NULL));
+    HELIA_VALIDATE_SCALAR_EQ_INT("LSTM_TEMP_SIZERS",
+                                 "temp2_null_params",
+                                 -1,
+                                 arm_lstm_unidirectional_{{ dtype }}_temp2_get_buffer_size(NULL));
+    sizer_params.hidden_size = -1;
+    HELIA_VALIDATE_SCALAR_EQ_INT("LSTM_TEMP_SIZERS",
+                                 "temp1_negative_hidden",
+                                 -1,
+                                 arm_lstm_unidirectional_{{ dtype }}_temp1_get_buffer_size(&sizer_params));
+    sizer_params.hidden_size = {{ macro_prefix }}HIDDEN_SIZE;
+
+    return 0;
+}
+{% endif %}
+
+static int32_t run_lstm(void)
+{
+{% if dtype == "s8" %}
+    HELIA_GUARD_ARM(input_data_kernel_sum, true /* pure write target: poison */);
+    HELIA_GUARD_ARM(forget_data_kernel_sum, true /* pure write target: poison */);
+    HELIA_GUARD_ARM(cell_data_kernel_sum, true /* pure write target: poison */);
+    HELIA_GUARD_ARM(output_data_kernel_sum, true /* pure write target: poison */);
+    HELIA_GUARD_ARM(input_hidden_kernel_sum, true /* pure write target: poison */);
+    HELIA_GUARD_ARM(forget_hidden_kernel_sum, true /* pure write target: poison */);
+    HELIA_GUARD_ARM(cell_hidden_kernel_sum, true /* pure write target: poison */);
+    HELIA_GUARD_ARM(output_hidden_kernel_sum, true /* pure write target: poison */);
+
+    arm_vector_sum_s8(&input_data_kernel_sum[0],
+                      {{ macro_prefix }}INPUT_SIZE,
+                      {{ macro_prefix }}HIDDEN_SIZE,
+                      &{{ data_prefix }}input_gate_input_weights[0],
+                      {{ macro_prefix }}INPUT_ZERO_POINT,
+                      0,
+                      &{{ data_prefix }}input_gate_bias[0]);
+    arm_vector_sum_s8(&forget_data_kernel_sum[0],
+                      {{ macro_prefix }}INPUT_SIZE,
+                      {{ macro_prefix }}HIDDEN_SIZE,
+                      &{{ data_prefix }}forget_gate_input_weights[0],
+                      {{ macro_prefix }}INPUT_ZERO_POINT,
+                      0,
+                      &{{ data_prefix }}forget_gate_bias[0]);
+    arm_vector_sum_s8(&cell_data_kernel_sum[0],
+                      {{ macro_prefix }}INPUT_SIZE,
+                      {{ macro_prefix }}HIDDEN_SIZE,
+                      &{{ data_prefix }}cell_gate_input_weights[0],
+                      {{ macro_prefix }}INPUT_ZERO_POINT,
+                      0,
+                      &{{ data_prefix }}cell_gate_bias[0]);
+    arm_vector_sum_s8(&output_data_kernel_sum[0],
+                      {{ macro_prefix }}INPUT_SIZE,
+                      {{ macro_prefix }}HIDDEN_SIZE,
+                      &{{ data_prefix }}output_gate_input_weights[0],
+                      {{ macro_prefix }}INPUT_ZERO_POINT,
+                      0,
+                      &{{ data_prefix }}output_gate_bias[0]);
+
+    arm_vector_sum_s8(&input_hidden_kernel_sum[0],
+                      {{ macro_prefix }}HIDDEN_SIZE,
+                      {{ macro_prefix }}HIDDEN_SIZE,
+                      &{{ data_prefix }}input_gate_hidden_weights[0],
+                      -{{ macro_prefix }}OUTPUT_ZERO_POINT,
+                      0,
+                      NULL);
+    arm_vector_sum_s8(&forget_hidden_kernel_sum[0],
+                      {{ macro_prefix }}HIDDEN_SIZE,
+                      {{ macro_prefix }}HIDDEN_SIZE,
+                      &{{ data_prefix }}forget_gate_hidden_weights[0],
+                      -{{ macro_prefix }}OUTPUT_ZERO_POINT,
+                      0,
+                      NULL);
+    arm_vector_sum_s8(&cell_hidden_kernel_sum[0],
+                      {{ macro_prefix }}HIDDEN_SIZE,
+                      {{ macro_prefix }}HIDDEN_SIZE,
+                      &{{ data_prefix }}cell_gate_hidden_weights[0],
+                      -{{ macro_prefix }}OUTPUT_ZERO_POINT,
+                      0,
+                      NULL);
+    arm_vector_sum_s8(&output_hidden_kernel_sum[0],
+                      {{ macro_prefix }}HIDDEN_SIZE,
+                      {{ macro_prefix }}HIDDEN_SIZE,
+                      &{{ data_prefix }}output_gate_hidden_weights[0],
+                      -{{ macro_prefix }}OUTPUT_ZERO_POINT,
+                      0,
+                      NULL);
+{% else %}
+    HELIA_GUARD_ARM(input_data_kernel_sum, true /* pure write target: poison */);
+    HELIA_GUARD_ARM(forget_data_kernel_sum, true /* pure write target: poison */);
+    HELIA_GUARD_ARM(cell_data_kernel_sum, true /* pure write target: poison */);
+    HELIA_GUARD_ARM(output_data_kernel_sum, true /* pure write target: poison */);
+    HELIA_GUARD_ARM(input_hidden_kernel_sum, true /* pure write target: poison */);
+    HELIA_GUARD_ARM(forget_hidden_kernel_sum, true /* pure write target: poison */);
+    HELIA_GUARD_ARM(cell_hidden_kernel_sum, true /* pure write target: poison */);
+    HELIA_GUARD_ARM(output_hidden_kernel_sum, true /* pure write target: poison */);
+
+    arm_vector_sum_s8_s64(&input_data_kernel_sum[0],
+                          {{ macro_prefix }}INPUT_SIZE,
+                          {{ macro_prefix }}HIDDEN_SIZE,
+                          &{{ data_prefix }}input_gate_input_weights[0],
+                          {{ macro_prefix }}INPUT_ZERO_POINT,
+                          &{{ data_prefix }}input_gate_bias[0]);
+    arm_vector_sum_s8_s64(&forget_data_kernel_sum[0],
+                          {{ macro_prefix }}INPUT_SIZE,
+                          {{ macro_prefix }}HIDDEN_SIZE,
+                          &{{ data_prefix }}forget_gate_input_weights[0],
+                          {{ macro_prefix }}INPUT_ZERO_POINT,
+                          &{{ data_prefix }}forget_gate_bias[0]);
+    arm_vector_sum_s8_s64(&cell_data_kernel_sum[0],
+                          {{ macro_prefix }}INPUT_SIZE,
+                          {{ macro_prefix }}HIDDEN_SIZE,
+                          &{{ data_prefix }}cell_gate_input_weights[0],
+                          {{ macro_prefix }}INPUT_ZERO_POINT,
+                          &{{ data_prefix }}cell_gate_bias[0]);
+    arm_vector_sum_s8_s64(&output_data_kernel_sum[0],
+                          {{ macro_prefix }}INPUT_SIZE,
+                          {{ macro_prefix }}HIDDEN_SIZE,
+                          &{{ data_prefix }}output_gate_input_weights[0],
+                          {{ macro_prefix }}INPUT_ZERO_POINT,
+                          &{{ data_prefix }}output_gate_bias[0]);
+
+    arm_vector_sum_s8_s64(&input_hidden_kernel_sum[0],
+                          {{ macro_prefix }}HIDDEN_SIZE,
+                          {{ macro_prefix }}HIDDEN_SIZE,
+                          &{{ data_prefix }}input_gate_hidden_weights[0],
+                          -{{ macro_prefix }}OUTPUT_ZERO_POINT,
+                          NULL);
+    arm_vector_sum_s8_s64(&forget_hidden_kernel_sum[0],
+                          {{ macro_prefix }}HIDDEN_SIZE,
+                          {{ macro_prefix }}HIDDEN_SIZE,
+                          &{{ data_prefix }}forget_gate_hidden_weights[0],
+                          -{{ macro_prefix }}OUTPUT_ZERO_POINT,
+                          NULL);
+    arm_vector_sum_s8_s64(&cell_hidden_kernel_sum[0],
+                          {{ macro_prefix }}HIDDEN_SIZE,
+                          {{ macro_prefix }}HIDDEN_SIZE,
+                          &{{ data_prefix }}cell_gate_hidden_weights[0],
+                          -{{ macro_prefix }}OUTPUT_ZERO_POINT,
+                          NULL);
+    arm_vector_sum_s8_s64(&output_hidden_kernel_sum[0],
+                          {{ macro_prefix }}HIDDEN_SIZE,
+                          {{ macro_prefix }}HIDDEN_SIZE,
+                          &{{ data_prefix }}output_gate_hidden_weights[0],
+                          -{{ macro_prefix }}OUTPUT_ZERO_POINT,
+                          NULL);
+
+    // Branch-coverage probes for arm_vector_sum_s8_s64 (do not affect LSTM outputs).
+    HELIA_GUARD_ARM(coverage_probe_sum_no_bias, true /* pure write target: poison */);
+    HELIA_GUARD_ARM(coverage_probe_sum_bias, true /* pure write target: poison */);
+    const int32_t coverage_probe_lhs_offset =
+        ({{ macro_prefix }}INPUT_ZERO_POINT == 0) ? 1 : {{ macro_prefix }}INPUT_ZERO_POINT;
+
+    arm_vector_sum_s8_s64(&coverage_probe_sum_no_bias[0],
+                          {{ macro_prefix }}INPUT_SIZE,
+                          {{ macro_prefix }}HIDDEN_SIZE,
+                          &{{ data_prefix }}input_gate_input_weights[0],
+                          0,
+                          NULL);
+    arm_vector_sum_s8_s64(&coverage_probe_sum_bias[0],
+                          {{ macro_prefix }}INPUT_SIZE,
+                          {{ macro_prefix }}HIDDEN_SIZE,
+                          &{{ data_prefix }}input_gate_input_weights[0],
+                          coverage_probe_lhs_offset,
+                          &{{ data_prefix }}input_gate_bias[0]);
+{% endif %}
+
+    const cmsis_nn_lstm_gate gate_input = { {{ macro_prefix }}INPUT_GATE_INPUT_MULTIPLIER,
+                                            {{ macro_prefix }}INPUT_GATE_INPUT_SHIFT,
+                                            &{{ data_prefix }}input_gate_input_weights[0],
+                                            &input_data_kernel_sum[0],
+                                            {{ macro_prefix }}INPUT_GATE_HIDDEN_MULTIPLIER,
+                                            {{ macro_prefix }}INPUT_GATE_HIDDEN_SHIFT,
+                                            &{{ data_prefix }}input_gate_hidden_weights[0],
+                                            &input_hidden_kernel_sum[0],
+                                            &{{ data_prefix }}input_gate_bias[0],
+                                            ARM_SIGMOID };
+
+    const cmsis_nn_lstm_gate gate_forget = { {{ macro_prefix }}FORGET_GATE_INPUT_MULTIPLIER,
+                                             {{ macro_prefix }}FORGET_GATE_INPUT_SHIFT,
+                                             &{{ data_prefix }}forget_gate_input_weights[0],
+                                             &forget_data_kernel_sum[0],
+                                             {{ macro_prefix }}FORGET_GATE_HIDDEN_MULTIPLIER,
+                                             {{ macro_prefix }}FORGET_GATE_HIDDEN_SHIFT,
+                                             &{{ data_prefix }}forget_gate_hidden_weights[0],
+                                             &forget_hidden_kernel_sum[0],
+                                             &{{ data_prefix }}forget_gate_bias[0],
+                                             ARM_SIGMOID };
+
+    const cmsis_nn_lstm_gate gate_cell = { {{ macro_prefix }}CELL_GATE_INPUT_MULTIPLIER,
+                                           {{ macro_prefix }}CELL_GATE_INPUT_SHIFT,
+                                           &{{ data_prefix }}cell_gate_input_weights[0],
+                                           &cell_data_kernel_sum[0],
+                                           {{ macro_prefix }}CELL_GATE_HIDDEN_MULTIPLIER,
+                                           {{ macro_prefix }}CELL_GATE_HIDDEN_SHIFT,
+                                           &{{ data_prefix }}cell_gate_hidden_weights[0],
+                                           &cell_hidden_kernel_sum[0],
+                                           &{{ data_prefix }}cell_gate_bias[0],
+                                           ARM_TANH };
+
+    const cmsis_nn_lstm_gate gate_output = { {{ macro_prefix }}OUTPUT_GATE_INPUT_MULTIPLIER,
+                                             {{ macro_prefix }}OUTPUT_GATE_INPUT_SHIFT,
+                                             &{{ data_prefix }}output_gate_input_weights[0],
+                                             &output_data_kernel_sum[0],
+                                             {{ macro_prefix }}OUTPUT_GATE_HIDDEN_MULTIPLIER,
+                                             {{ macro_prefix }}OUTPUT_GATE_HIDDEN_SHIFT,
+                                             &{{ data_prefix }}output_gate_hidden_weights[0],
+                                             &output_hidden_kernel_sum[0],
+                                             &{{ data_prefix }}output_gate_bias[0],
+                                             ARM_SIGMOID };
+
+    const cmsis_nn_lstm_params params = { {{ macro_prefix }}TIME_MAJOR,
+                                          {{ macro_prefix }}BATCH_SIZE,
+                                          {{ macro_prefix }}TIME_STEPS,
+                                          {{ macro_prefix }}INPUT_SIZE,
+                                          {{ macro_prefix }}HIDDEN_SIZE,
+                                          {{ macro_prefix }}INPUT_ZERO_POINT,
+                                          {{ macro_prefix }}FORGET_TO_CELL_MULTIPLIER,
+                                          {{ macro_prefix }}FORGET_TO_CELL_SHIFT,
+                                          {{ macro_prefix }}INPUT_TO_CELL_MULTIPLIER,
+                                          {{ macro_prefix }}INPUT_TO_CELL_SHIFT,
+                                          {{ macro_prefix }}CELL_CLIP,
+                                          {{ macro_prefix }}CELL_SCALE_POWER,
+                                          {{ macro_prefix }}OUTPUT_MULTIPLIER,
+                                          {{ macro_prefix }}OUTPUT_SHIFT,
+                                          {{ macro_prefix }}OUTPUT_ZERO_POINT,
+                                          gate_forget,
+                                          gate_input,
+                                          gate_cell,
+                                          gate_output };
+
+    HELIA_GUARD_ARM(buffer1, true /* pure scratch: poison to catch read-before-write */);
+    HELIA_GUARD_ARM(buffer2, true /* pure scratch: poison to catch read-before-write */);
+    HELIA_GUARD_ARM(buffer3, false /* cell_state: zero-init is the real recurrent initial state */);
+    HELIA_GUARD_ARM({{ name }}_output, false /* real output, not scratch: don't poison */);
+
+    cmsis_nn_lstm_context buffers = {0};
+    buffers.temp1 = buffer1;
+    buffers.temp2 = buffer2;
+    buffers.cell_state = buffer3;
+    buffers.hidden_state = NULL;
+
+    arm_cmsis_nn_status result = {{ name }}_run({{ data_prefix }}input_tensor, {{ name }}_output, &params, &buffers);
+
+    return result;
+}
+{% endmacro %}
+{% macro test_body() %}
+{% if temp_sizers_available %}
+    int sizer_failures = {{ name }}_check_temp_sizers();
+    if (sizer_failures != 0)
+    {
+        return sizer_failures;
+    }
+
+{% endif %}
+    int32_t status = run_lstm();
+    int failures = 0;
+    HELIA_GUARD_CHECK(buffer1, "{{ validation_label | default("LSTM") }} temp1", failures);
+    HELIA_GUARD_CHECK(buffer2, "{{ validation_label | default("LSTM") }} temp2", failures);
+    HELIA_GUARD_CHECK(buffer3, "{{ validation_label | default("LSTM") }} cell_state", failures);
+    HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("LSTM") }} output", failures);
+{% for gate in ["input", "forget", "cell", "output"] %}
+    HELIA_GUARD_CHECK({{ gate }}_data_kernel_sum, "{{ validation_label | default("LSTM") }} {{ gate }}_data_kernel_sum", failures);
+    HELIA_GUARD_CHECK({{ gate }}_hidden_kernel_sum, "{{ validation_label | default("LSTM") }} {{ gate }}_hidden_kernel_sum", failures);
+{% endfor %}
+{% if dtype != "s8" %}
+    HELIA_GUARD_CHECK(coverage_probe_sum_no_bias, "{{ validation_label | default("LSTM") }} coverage_probe_sum_no_bias", failures);
+    HELIA_GUARD_CHECK(coverage_probe_sum_bias, "{{ validation_label | default("LSTM") }} coverage_probe_sum_bias", failures);
+{% endif %}
+    HELIA_VALIDATE_STATUS("{{ validation_label | default("LSTM") }}", status);
+
+    HELIA_VALIDATE_OUTPUTS(
+        {{ validation_mode_token | default("EXACT_INT") }},
+        {{ name }}_output,
+        &{{ data_prefix }}output[0],
+        LSTM_OUTPUT_SIZE,
+        {{ validation_tolerance | default(1) }},
+        {{ validation_atol }}f,
+        {{ validation_rtol }}f,
+        {{ validation_report_limit | default(8) }},
+        failures
+    );
+{% endmacro %}

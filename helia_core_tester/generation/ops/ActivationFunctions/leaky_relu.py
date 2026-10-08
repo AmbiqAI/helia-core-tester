@@ -7,6 +7,15 @@ import numpy as np
 import tensorflow as tf
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.harness.simple import tensor_case_pool
+
+
+def leaky_relu_values(context: Dict[str, Any]) -> Dict[str, Any]:
+    """The kernel's scalars by parameter name: the alpha and identity requantisation pairs."""
+    return {"input_offset": context["input_offset"], "output_offset": context["output_offset"],
+            "output_multiplier_alpha": context["output_mult_alpha"], "output_shift_alpha": context["output_shift_alpha"],
+            "output_multiplier_identity": context["output_mult_identity"],
+            "output_shift_identity": context["output_shift_identity"], "output_size": context["output_size"]}
 
 
 class OpLeakyRelu(OperationBase):
@@ -178,28 +187,10 @@ class OpLeakyRelu(OperationBase):
             'kernel_fn': kernel_info["kernel_fn"],
         }
         
-        # Render templates
-        includes_api_dir = output_dir / "includes"
-        includes_api_dir.mkdir(parents=True, exist_ok=True)
-        
-        h_content = self.render_template("ActivationFunctions/leaky_relu/leaky_relu.h.j2", context)
-        h_path = includes_api_dir / f"{name}_leaky_relu.h"
-        with open(h_path, 'w') as f:
-            f.write(h_content)
-        
-        c_content = self.render_template("ActivationFunctions/leaky_relu/leaky_relu.c.j2", context)
-        c_path = output_dir / f"{name}_leaky_relu.c"
-        with open(c_path, 'w') as f:
-            f.write(c_content)
-        
-        cmake_context = {
-            'name': name,
-            'operator': self.desc.get('operator', 'LeakyRelu'),
-            'operator_name': 'leaky_relu'
-        }
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
-        cmake_path = output_dir / "CMakeLists.txt"
-        with open(cmake_path, 'w') as f:
-            f.write(cmake_content)
+        self.render_harness_case(
+            output_dir, stem="leaky_relu", context=context,
+            pool=tensor_case_pool(context, leaky_relu_values(context)),
+            validation_key="ActivationFunctions/leaky_relu/leaky_relu.c.j2", label="LeakyReLU", operator="LeakyRelu",
+        )
         
         print(f"Generated C/H files and CMakeLists.txt for {name}")

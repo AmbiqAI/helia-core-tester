@@ -5,14 +5,14 @@
 #include "test_runtime/helia_test_runtime.h"
 
 
+
+// The kernel this harness links must have the prototype the ns-cmsis-nn export records.
+_Static_assert(__builtin_types_compatible_p(__typeof__(arm_max_pool_f32), arm_cmsis_nn_status (const cmsis_nn_context *, const cmsis_nn_pool_params_f32 *, const cmsis_nn_dims *, const float32_t *, const cmsis_nn_dims *, const cmsis_nn_dims *, float32_t *)),
+               "arm_max_pool_f32: prototype differs from the kernel contract export; rerun `python3 scripts/check_kernel_contract.py export` in ns-cmsis-nn and regenerate");
+
 // Context for buffer allocation
 static cmsis_nn_context max_pool_float_default_f32_ctx;
 
-// Runtime scratch buffer (max upper bound; actual size queried at runtime)
-// Buffer size: 0 for max pooling, input_channels * 4 for average pooling (DSP)
-#define MAX_POOL_FLOAT_DEFAULT_F32_BUFFER_SIZE_MAX 0
-// No buffer needed for max pooling
-static uint8_t* max_pool_float_default_f32_buffer = NULL;
 
 #define MAX_POOL_FLOAT_DEFAULT_F32_OUTPUT_SIZE (1 * 3 * 3 * 3)
 static struct {
@@ -22,27 +22,35 @@ static struct {
 } max_pool_float_default_f32_output_guard;
 #define max_pool_float_default_f32_output (max_pool_float_default_f32_output_guard.body)
 
+
 int32_t max_pool_float_default_f32_run(
     const float* __restrict input,
     float* __restrict output
 ) {
-    // Max pooling doesn't need a buffer
+        // Armed before the capacity check below: an early return there would otherwise leave
+    // these canaries unstamped, and the unconditional check in _test_case_run would
+    // report a fabricated breach instead of the real sizer error (#68).
+
+    // The sizer's answer is checked before it becomes a context size (#133): a negative
+    // answer is the documented out-of-range sentinel, and one above this case's static bound
+    // means the generation-time bound and the shipped kernel disagree.
+
+    // Initialize context buffer
+    // The kernel gets no scratch buffer.
     max_pool_float_default_f32_ctx.buf = NULL;
     max_pool_float_default_f32_ctx.size = 0;
 
-    // Call pooling kernel
-    arm_cmsis_nn_status kernel_status = arm_max_pool_f32(
-        &max_pool_float_default_f32_ctx,
-        &max_pool_float_default_f32_pool_params,
-        &max_pool_float_default_f32_input_dims,
-        input,
-        &max_pool_float_default_f32_filter_dims,
-        &max_pool_float_default_f32_output_dims,
-        output
+    return arm_max_pool_f32(
+        &max_pool_float_default_f32_ctx, /* ctx */
+        &max_pool_float_default_f32_pool_params, /* pool_params */
+        &max_pool_float_default_f32_input_dims, /* input_dims */
+        input, /* src */
+        &max_pool_float_default_f32_filter_dims, /* filter_dims */
+        &max_pool_float_default_f32_output_dims, /* output_dims */
+        output /* dst */
     );
-    
-    return kernel_status;
 }
+
 
 int32_t max_pool_float_default_f32_test_case_run(void)
 {

@@ -419,6 +419,7 @@ expected_status: ARM_CMSIS_NN_ARG_ERROR
 operator: FullyConnected
 name: fully_connected_float_entry_acc16_k24_n17_f16
 entry: arm_fully_connected_f16_acc16
+entry_sizer: arm_fully_connected_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -431,6 +432,7 @@ comparison: {atol: 0.002, rtol: 0.002}
 operator: FullyConnected
 name: fully_connected_float_entry_nhwc_k24_n17_f16
 entry: arm_fully_connected_nhwc_f16
+entry_sizer: arm_fully_connected_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -443,6 +445,7 @@ comparison: {atol: 0.002, rtol: 0.002}
 operator: FullyConnected
 name: fully_connected_float_entry_nhwc_acc16_k24_n17_f16
 entry: arm_fully_connected_nhwc_f16_acc16
+entry_sizer: arm_fully_connected_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -455,6 +458,7 @@ comparison: {atol: 0.002, rtol: 0.002}
 operator: FullyConnected
 name: fully_connected_fault_entry_acc16_invalid_layout_f16
 entry: arm_fully_connected_f16_acc16
+entry_sizer: arm_fully_connected_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16

@@ -1,29 +1,32 @@
-#ifndef REDUCE_SUM_FLOAT_AXIS_C_F32_REDUCESUM_H
-#define REDUCE_SUM_FLOAT_AXIS_C_F32_REDUCESUM_H
+#ifndef REDUCE_SUM_FLOAT_AXIS_C_F32_HARNESS_H
+#define REDUCE_SUM_FLOAT_AXIS_C_F32_HARNESS_H
 
 #include <stdint.h>
-// Golden arrays may carry NAN/INFINITY, and this header is included ahead of any
-// other translation-unit include that would define them.
+// Input arrays may carry NAN/INFINITY tokens, and this header is included ahead of
+// any other translation-unit include that would define them.
 #include <math.h>
 #include "arm_nnfunctions.h"
 #include "arm_nn_types.h"
 
-// Input dimensions
 static const cmsis_nn_dims reduce_sum_float_axis_c_f32_input_dims = {
-    .n = 1, .h = 3,
-    .w = 4, .c = 5
+    .n = 1,
+    .h = 3,
+    .w = 4,
+    .c = 5
 };
 
-// Output dimensions
 static const cmsis_nn_dims reduce_sum_float_axis_c_f32_output_dims = {
-    .n = 1, .h = 3,
-    .w = 4, .c = 1
+    .n = 1,
+    .h = 3,
+    .w = 4,
+    .c = 1
 };
 
-// Axis dimensions
 static const cmsis_nn_dims reduce_sum_float_axis_c_f32_axis_dims = {
-    .n = 0, .h = 0,
-    .w = 0, .c = 1
+    .n = 0,
+    .h = 0,
+    .w = 0,
+    .c = 1
 };
 
 // Input data (for testing)

@@ -8,6 +8,7 @@ import numpy as np
 import tensorflow as tf
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.quantization_base import QuantizationFamilyBase
+from helia_core_tester.generation.ops.QuantizationFunctions.pools import quantize_argument_pool
 
 
 class OpQuantize(QuantizationFamilyBase):
@@ -243,10 +244,8 @@ class OpQuantize(QuantizationFamilyBase):
             'validation_helpers': ['tolerant_int'],
         }
         
-        cmake_context = {
-            'name': name,
-            'operator': self.desc.get('operator', 'Quantize'),
-            'operator_name': 'quantize'
-        }
-        self._write_op_outputs(output_dir, "quantize", "QuantizationFunctions/quantize/quantize.h.j2", "QuantizationFunctions/quantize/quantize.c.j2", context, cmake_context)
+        self.render_harness_case(
+            output_dir, stem="quantize", context=context, pool=quantize_argument_pool(context),
+            validation_key="QuantizationFunctions/quantize/quantize.c.j2", label="Quantize", operator="Quantize", sidecar=True,
+        )
         

@@ -1,5 +1,5 @@
-#ifndef TRANSPOSE_CONV_FLOAT_DEFAULT_F32_TRANSPOSE_CONV_H
-#define TRANSPOSE_CONV_FLOAT_DEFAULT_F32_TRANSPOSE_CONV_H
+#ifndef TRANSPOSE_CONV_FLOAT_DEFAULT_F32_HARNESS_H
+#define TRANSPOSE_CONV_FLOAT_DEFAULT_F32_HARNESS_H
 
 #include <stdint.h>
 // Input arrays may carry NAN/INFINITY tokens, and this header is included ahead of
@@ -10,26 +10,34 @@
 
 // Input dimensions
 static const cmsis_nn_dims transpose_conv_float_default_f32_input_dims = {
-    .n = 1, .h = 4,
-    .w = 4, .c = 2
+    .n = 1,
+    .h = 4,
+    .w = 4,
+    .c = 2
 };
 
 // Filter dimensions (C_OUT, HK, WK, C_IN)
 static const cmsis_nn_dims transpose_conv_float_default_f32_filter_dims = {
-    .n = 3, .h = 3,
-    .w = 3, .c = 2
+    .n = 3,
+    .h = 3,
+    .w = 3,
+    .c = 2
 };
 
 // Output dimensions
 static const cmsis_nn_dims transpose_conv_float_default_f32_output_dims = {
-    .n = 1, .h = 8,
-    .w = 8, .c = 3
+    .n = 1,
+    .h = 8,
+    .w = 8,
+    .c = 3
 };
 
 // Bias dimensions
 static const cmsis_nn_dims transpose_conv_float_default_f32_bias_dims = {
-    .n = 1, .h = 1,
-    .w = 1, .c = 3
+    .n = 1,
+    .h = 1,
+    .w = 1,
+    .c = 3
 };
 
 // Transpose convolution parameters
@@ -40,7 +48,6 @@ static const cmsis_nn_transpose_conv_params_f32 transpose_conv_float_default_f32
     .padding_offsets = {.w = 1, .h = 1},
     .activation = {.min = -1.0e+30f, .max = 1.0e+30f}
 };
-
 
 // Weights
 static const float transpose_conv_float_default_f32_weights[] = {

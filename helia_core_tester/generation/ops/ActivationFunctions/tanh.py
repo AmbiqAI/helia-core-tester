@@ -7,6 +7,7 @@ import numpy as np
 import tensorflow as tf
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.harness.simple import dims_count, tensor_case_pool
 
 
 class OpTanh(OperationBase):
@@ -241,28 +242,10 @@ class OpTanh(OperationBase):
             'kernel_fn': kernel_info["kernel_fn"],
         }
         
-        # Render templates
-        includes_api_dir = output_dir / "includes"
-        includes_api_dir.mkdir(parents=True, exist_ok=True)
-        
-        h_content = self.render_template("ActivationFunctions/tanh/tanh.h.j2", context)
-        h_path = includes_api_dir / f"{name}_tanh.h"
-        with open(h_path, 'w') as f:
-            f.write(h_content)
-        
-        c_content = self.render_template("ActivationFunctions/tanh/tanh.c.j2", context)
-        c_path = output_dir / f"{name}_tanh.c"
-        with open(c_path, 'w') as f:
-            f.write(c_content)
-        
-        cmake_context = {
-            'name': name,
-            'operator': self.desc.get('operator', 'Tanh'),
-            'operator_name': 'tanh'
-        }
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
-        cmake_path = output_dir / "CMakeLists.txt"
-        with open(cmake_path, 'w') as f:
-            f.write(cmake_content)
+        self.render_harness_case(
+            output_dir, stem="tanh", context=context,
+            pool=tensor_case_pool(context, {"input_size": context["output_size"], "input_multiplier": context["input_multiplier"], "input_left_shift": context["input_left_shift"]}, output_count=dims_count(context["output_dims"])),
+            validation_key="ActivationFunctions/tanh/tanh.c.j2", label="Tanh", operator="Tanh",
+        )
         
 

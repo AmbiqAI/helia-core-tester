@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional
 
 import numpy as np
 
-from helia_core_tester.generation.kernel_dispatch import check_entry_fault, resolve_direct_entry
+from helia_core_tester.generation.entry import check_entry_fault, resolve_entry
 from helia_core_tester.generation.ops._shared.base import OperationBase
 
 
@@ -50,22 +50,28 @@ class BinaryBasicMathBase(OperationBase):
         return tuple(shape_1) != tuple(shape_2)
 
     def _direct_entry_kernel(self) -> Optional[Dict[str, Any]]:
-        """Kernel info for an `entry:` case, which calls an s8 entry with its router's arguments."""
+        """Kernel info for an `entry:` case: a public kernel of this operator, bound from the kernel
+        contract with the router's values (the s8 row-broadcast entries take the router's arguments)."""
         entry = self.desc.get("entry")
         if not entry:
             return None
-        resolved = resolve_direct_entry(
+        dtype = self.tensor_dtype("input")
+        resolved = resolve_entry(
             str(self.desc.get("operator")),
             str(entry),
-            self.tensor_dtype("input"),
-            self.desc.get("weight_dtype", "S8"),
+            activation_dtype=dtype,
+            weight_dtype=dtype,
+            cpu=self.target_cpu,
+            desc=self.desc,
+            extra_roles={"input_1": dtype, "input_2": dtype},
         )
         check_entry_fault(self.desc, resolved)
+        c_type = self.tensor_c_type("input")
         return {
             "kernel_fn": resolved["kernel_fn"],
-            "input_c_type": "int8_t",
-            "output_c_type": "int8_t",
-            "float_kernel": False,
+            "input_c_type": c_type,
+            "output_c_type": c_type,
+            "float_kernel": dtype in ("FP32", "FP16"),
         }
 
     @staticmethod

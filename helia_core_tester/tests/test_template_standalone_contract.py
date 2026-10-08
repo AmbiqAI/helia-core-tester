@@ -2,11 +2,24 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import jinja2
 
+from helia_core_tester.generation.ops._shared.base import template_environment
 from helia_core_tester.generation.ops.BroadcastFunctions.broadcast_to import OpBroadcastTo
 from helia_core_tester.generation.ops.DynamicUpdateSliceFunctions.dynamic_update_slice import OpDynamicUpdateSlice
 from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
+from helia_core_tester.tests.harness_render import (
+    convolve_context,
+    depthwise_context,
+    render_batch_matmul,
+    render_convolve,
+    render_depthwise,
+    render_fully_connected,
+    render_pooling,
+    render_pool,
+    render_transpose_conv,
+)
+from helia_core_tester.generation.harness.simple import tensor_case_pool
+from helia_core_tester.generation.ops.BroadcastFunctions.broadcast_to import broadcast_to_argument_pool
 
 
 def _repo_root() -> Path:
@@ -18,11 +31,7 @@ def _templates_root() -> Path:
 
 
 def _render(template_name: str, context: dict[str, object]) -> str:
-    env = jinja2.Environment(
-        loader=jinja2.FileSystemLoader(str(_templates_root())),
-        trim_blocks=True,
-        lstrip_blocks=True,
-    )
+    env = template_environment(str(_templates_root()))
     render_context = TemplateContextBuilder.build_validation_context(template_name, context)
     return env.get_template(template_name).render(**render_context)
 
@@ -81,23 +90,48 @@ def test_all_c_templates_keep_inline_validation_out_of_templates() -> None:
         assert "if (status !=" not in test_case_run, path
 
 
+def _render_registered(template: str, context: dict) -> str:
+    """Render `context` through the harness pool registered for its former template."""
+    from helia_core_tester.generation.harness import registry
+    import helia_core_tester.generation.ops.BasicMathFunctions.add  # noqa: F401
+    import helia_core_tester.generation.ops.BasicMathFunctions.argmax  # noqa: F401
+    import helia_core_tester.generation.ops.BasicMathFunctions.mul  # noqa: F401
+    import helia_core_tester.generation.ops.ComparisonFunctions.comparison  # noqa: F401
+
+    context = {"expected_output_array": "    0", "input_data_array": "    0", "use_batch_harness": False, **context}
+    builder, label = registry.lookup(template)
+    stem = template.rsplit("/", 1)[1].removesuffix(".c.j2")
+    return render_pool(context, builder(context), stem=stem, validation_key=template, label=label)[1]
+
+
+def _render_transpose(context: dict) -> tuple[str, str]:
+    from helia_core_tester.generation.ops.TransposeFunctions.transpose import transpose_argument_pool
+
+    context = {"input_data_array": "    0", "expected_output_array": "    0", "use_batch_harness": False, **context}
+    return render_pool(context, transpose_argument_pool(context), stem="transpose",
+                       validation_key="TransposeFunctions/transpose/transpose.c.j2", label="Transpose")
+
+
+def _render_simple(context: dict, values: dict, *, stem: str, validation_key: str, label: str) -> str:
+    context = {"input_data_array": "    0", "expected_output_array": "    0", "use_batch_harness": False, **context}
+    return render_pool(context, tensor_case_pool(context, values, dims=()), stem=stem, validation_key=validation_key,
+                       label=label)[1]
+
+
 def test_rendered_templates_use_shared_validation_helpers() -> None:
     rendered = {
-        "relu": _render(
-            "ActivationFunctions/relu/relu.c.j2",
+        "relu": _render_simple(
             {
                 "name": "relu_smoke",
                 "input_dtype": "int8_t",
                 "output_dtype": "int8_t",
                 "output_size": 4,
-                "input_offset": 0,
-                "output_offset": 0,
-                "output_mult": 1,
-                "output_shift": 0,
                 "kernel_fn": "arm_relu_s8",
             },
+            {"input_offset": 0, "output_offset": 0, "output_multiplier": 1, "output_shift": 0, "output_size": 4},
+            stem="relu", validation_key="ActivationFunctions/relu/relu.c.j2", label="ReLU",
         ),
-        "comparison": _render(
+        "comparison": _render_registered(
             "ComparisonFunctions/comparison/comparison.c.j2",
             {
                 "name": "comparison_smoke",
@@ -111,9 +145,11 @@ def test_rendered_templates_use_shared_validation_helpers() -> None:
                 "input_2_mult": 1,
                 "input_2_shift": 0,
                 "left_shift": 0,
+                "input_1_dims": {"n": 1, "h": 1, "w": 1, "c": 4}, "input_2_dims": {"n": 1, "h": 1, "w": 1, "c": 4}, "output_dims": {"n": 1, "h": 1, "w": 1, "c": 4},
+                "input_1_data_array": "    0", "input_2_data_array": "    0",
             },
         ),
-        "argmax": _render(
+        "argmax": _render_registered(
             "BasicMathFunctions/argmax/argmax.c.j2",
             {
                 "name": "argmax_smoke",
@@ -121,38 +157,8 @@ def test_rendered_templates_use_shared_validation_helpers() -> None:
                 "output_dtype": "int32_t",
                 "output_size": 4,
                 "kernel_fn": "arm_argmax_s8",
-            },
-        ),
-        "dequantize": _render(
-            "QuantizationFunctions/dequantize/dequantize.c.j2",
-            {
-                "name": "dequantize_smoke",
-                "input_size": 4,
-                "zero_point": 0,
-                "scale": 0.125,
-                "input_data_array": "    0",
-                "expected_output_array": "    0.000000f",
-                "input_dtype": "int8_t",
-                "output_dtype": "float",
-                "kernel_fn": "arm_dequantize_s8_f32",
-                "has_activation": False,
-                "activation_type": "NONE",
-            },
-        ),
-        "split": _render(
-            "ConcatenationFunctions/split/split.c.j2",
-            {
-                "name": "split_smoke",
-                "input_dtype": "int8_t",
-                "output_dtype": "int8_t",
-                "kernel_fn": "arm_split_s8",
-                "input_dims_count": 4,
                 "axis": 3,
-                "num_splits": 2,
-                "outputs": [
-                    {"name": "split_smoke_out0", "size": 4},
-                    {"name": "split_smoke_out1", "size": 4},
-                ],
+                "input_dims": {"n": 1, "h": 1, "w": 1, "c": 4},
             },
         ),
     }
@@ -173,13 +179,10 @@ def test_rendered_templates_use_shared_validation_helpers() -> None:
     assert "TOLERANT_INT" in rendered["relu"]
     assert "BOOL" in rendered["comparison"]
     assert "EXACT_INT" in rendered["argmax"]
-    assert "FLOAT" in rendered["dequantize"]
-    assert "split_smoke_out0_output" in rendered["split"]
-    assert "split_smoke_out1_output" in rendered["split"]
 
 
 def test_basic_math_float_templates_render_preformatted_activation_literals() -> None:
-    add_text = _render(
+    add_text = _render_registered(
         "BasicMathFunctions/add/add.c.j2",
         {
             "name": "add_float_default_f32",
@@ -191,9 +194,13 @@ def test_basic_math_float_templates_render_preformatted_activation_literals() ->
             "out_activation_min_literal": "-1.0e+30f",
             "out_activation_max_literal": "1.0e+30f",
             "output_dims": {"n": 1, "h": 4, "w": 4, "c": 8},
+            "input1_dims": {"n": 1, "h": 4, "w": 4, "c": 8},
+            "input2_dims": {"n": 1, "h": 4, "w": 4, "c": 8},
+            "input1_data_array": "    0.0f",
+            "input2_data_array": "    0.0f",
         },
     )
-    mul_text = _render(
+    mul_text = _render_registered(
         "BasicMathFunctions/mul/mul.c.j2",
         {
             "name": "mul_float_default_f32",
@@ -205,19 +212,23 @@ def test_basic_math_float_templates_render_preformatted_activation_literals() ->
             "out_activation_min_literal": "-1.0e+30f",
             "out_activation_max_literal": "1.0e+30f",
             "output_dims": {"n": 1, "h": 4, "w": 4, "c": 8},
+            "input1_dims": {"n": 1, "h": 4, "w": 4, "c": 8},
+            "input2_dims": {"n": 1, "h": 4, "w": 4, "c": 8},
+            "input1_data_array": "    0.0f",
+            "input2_data_array": "    0.0f",
         },
     )
-    activation_text = _render(
-        "ActivationFunctions/nn_activation_float/nn_activation_float.c.j2",
+    activation_text = _render_simple(
         {
             "name": "nn_activation_float_leaky_relu_f32",
             "input_dtype": "float",
             "output_dtype": "float",
             "kernel_fn": "arm_nn_activation_f32",
-            "size": 4,
-            "activation_symbol": "ARM_NN_FLT_ACT_LEAKY_RELU",
-            "act_param_literal": "0.125f",
+            "output_size": 4,
         },
+        {"size": 4, "type": "ARM_NN_FLT_ACT_LEAKY_RELU", "act_param": "0.125f"},
+        stem="nn_activation_float", validation_key="ActivationFunctions/nn_activation_float/nn_activation_float.c.j2",
+        label="NNActivationFloat",
     )
 
     for text in (add_text, mul_text):
@@ -230,9 +241,7 @@ def test_basic_math_float_templates_render_preformatted_activation_literals() ->
 
 
 def test_pooling_float_header_templates_render_public_float_params() -> None:
-    avg_text = _render(
-        "PoolingFunctions/avg_pool/avg_pool.h.j2",
-        {
+    avg_text, _ = render_pooling({
             "name": "avg_pool_float_default_f32",
             "input_dtype": "float",
             "output_dtype": "float",
@@ -253,11 +262,12 @@ def test_pooling_float_header_templates_render_public_float_params() -> None:
             "output_dims": {"n": 1, "h": 3, "w": 3, "c": 3},
             "input_data_array": "    0.0f",
             "expected_output_array": "    0.0f",
-        },
-    )
-    max_text = _render(
-        "PoolingFunctions/max_pool/max_pool.h.j2",
-        {
+            "kernel_fn": "arm_avg_pool_f32",
+            "kernel_get_buffer_size_fn": None,
+            "buffer_size_max": 0,
+            "use_batch_harness": False,
+        }, suffix="avg_pool")
+    max_text, _ = render_pooling({
             "name": "max_pool_float_default_f32",
             "input_dtype": "float",
             "output_dtype": "float",
@@ -278,8 +288,11 @@ def test_pooling_float_header_templates_render_public_float_params() -> None:
             "output_dims": {"n": 1, "h": 3, "w": 3, "c": 3},
             "input_data_array": "    0.0f",
             "expected_output_array": "    0.0f",
-        },
-    )
+            "kernel_fn": "arm_max_pool_f32",
+            "kernel_get_buffer_size_fn": None,
+            "buffer_size_max": 0,
+            "use_batch_harness": False,
+        }, suffix="max_pool")
 
     assert "cmsis_nn_pool_params_f32" in avg_text
     assert "cmsis_nn_pool_params_f32" in max_text
@@ -291,32 +304,11 @@ def test_pooling_float_header_templates_render_public_float_params() -> None:
 
 
 def test_complex_float_templates_render_public_f32_signatures() -> None:
-    conv_h = _render(
-        "ConvolutionFunctions/convolve/convolve.h.j2",
-        {
-            "name": "convolve_float_default_f32",
-            "input_dims": {"n": 1, "h": 6, "w": 6, "c": 3},
-            "filter_dims": {"n": 5, "h": 3, "w": 3, "c": 3},
-            "output_dims": {"n": 1, "h": 6, "w": 6, "c": 5},
-            "conv_params": {"stride_w": 1, "stride_h": 1, "dilation_w": 1, "dilation_h": 1, "pad_w": 1, "pad_h": 1},
-            "weights_array": "    0.0f",
-            "biases_array": "    0.0f",
-            "has_biases": True,
-            "input_data_array": "    0.0f",
-            "expected_output_array": "    0.0f",
-            "input_dtype": "float",
-            "output_dtype": "float",
-            "weight_dtype": "float",
-            "bias_dtype": "float",
-            "float_kernel": True,
-            "conv_params_type": "cmsis_nn_conv_params_f32",
-            "conv_activation_min_literal": "-1.0e+30f",
-            "conv_activation_max_literal": "1.0e+30f",
-        },
-    )
-    fc_h = _render(
-        "FullyConnectedFunctions/fully_connected/fully_connected.h.j2",
-        {
+    conv_h, _ = render_convolve(convolve_context(
+        "arm_convolve_wrapper_f32", float_kernel=True, name="convolve_float_default_f32",
+        weights_array="    0.0f", biases_array="    0.0f", input_data_array="    0.0f", expected_output_array="    0.0f",
+    ))
+    fc_h, fc_c = render_fully_connected({
             "name": "fully_connected_float_default_f32",
             "input_dims": {"n": 1, "h": 1, "w": 1, "c": 12},
             "filter_dims": {"n": 12, "h": 1, "w": 1, "c": 5},
@@ -340,39 +332,8 @@ def test_complex_float_templates_render_public_f32_signatures() -> None:
             "fc_params_type": "cmsis_nn_fc_params_f32",
             "fc_activation_min_literal": "-1.0e+30f",
             "fc_activation_max_literal": "1.0e+30f",
-        },
-    )
-    fc_c = _render(
-        "FullyConnectedFunctions/fully_connected/fully_connected.c.j2",
-        {
-            "name": "fully_connected_float_default_f32",
-            "input_dims": {"n": 1, "h": 1, "w": 1, "c": 12},
-            "filter_dims": {"n": 12, "h": 1, "w": 1, "c": 5},
-            "output_dims": {"n": 1, "h": 1, "w": 1, "c": 5},
-            "fc_params": {},
-            "weights_array": "    0.0f",
-            "biases_array": "    0.0f",
-            "has_biases": True,
-            "input_data_array": "    0.0f",
-            "expected_output_array": "    0.0f",
-            "input_dtype": "float",
-            "output_dtype": "float",
-            "weight_dtype": "float",
-            "bias_dtype": "float",
-            "kernel_fn": "arm_fully_connected_f32",
-            "kernel_get_buffer_size_fn": "arm_fully_connected_f32_get_buffer_size",
-            "buffer_size_max": 1024,
-            "has_weight_sum": False,
-            "weight_sum_array": "",
-            "float_kernel": True,
-            "fc_params_type": "cmsis_nn_fc_params_f32",
-            "fc_activation_min_literal": "-1.0e+30f",
-            "fc_activation_max_literal": "1.0e+30f",
-        },
-    )
-    bmm_c = _render(
-        "FullyConnectedFunctions/batch_matmul/batch_matmul.c.j2",
-        {
+        },)
+    _, bmm_c = render_batch_matmul({
             "name": "batch_matmul_float_default_f32",
             "input_lhs_dims": {"n": 1, "h": 1, "w": 4, "c": 3},
             "input_rhs_dims": {"n": 1, "h": 1, "w": 3, "c": 2},
@@ -391,11 +352,8 @@ def test_complex_float_templates_render_public_f32_signatures() -> None:
             "bmm_params_type": "cmsis_nn_bmm_params_f32",
             "bmm_activation_min_literal": "-1.0e+30f",
             "bmm_activation_max_literal": "1.0e+30f",
-        },
-    )
-    tconv_c = _render(
-        "ConvolutionFunctions/transpose_conv/transpose_conv.c.j2",
-        {
+        },)
+    _, tconv_c = render_transpose_conv({
             "name": "transpose_conv_float_default_f32",
             "input_dims": {"n": 1, "h": 4, "w": 4, "c": 2},
             "filter_dims": {"n": 3, "h": 3, "w": 3, "c": 2},
@@ -416,13 +374,13 @@ def test_complex_float_templates_render_public_f32_signatures() -> None:
             "kernel_get_buffer_size_fn": "arm_transpose_conv_f32_get_buffer_size",
             "buffer_size_max": 1024,
             "reverse_conv_ctx_size": 1024,
+            "kernel_get_reverse_buffer_size_fn": "arm_transpose_conv_f32_get_reverse_conv_buffer_size",
             "float_kernel": True,
             "kernel_layout": "ARM_NN_LAYOUT_NHWC",
             "transpose_conv_params_type": "cmsis_nn_transpose_conv_params_f32",
             "transpose_activation_min_literal": "-1.0e+30f",
             "transpose_activation_max_literal": "1.0e+30f",
-        },
-    )
+        },)
 
     assert "cmsis_nn_conv_params_f32" in conv_h
     assert "ARM_NN_WEIGHT_FORMAT_STANDARD" in conv_h
@@ -435,102 +393,18 @@ def test_complex_float_templates_render_public_f32_signatures() -> None:
 
 
 def test_s16_conv_templates_render_int8_weights_for_public_wrapper_signatures() -> None:
-    conv_h = _render(
-        "ConvolutionFunctions/convolve/convolve.h.j2",
-        {
-            "name": "convolve_int16xint8xint32_case_04_s16",
-            "input_dims": {"n": 1, "h": 32, "w": 32, "c": 2},
-            "filter_dims": {"n": 2, "h": 2, "w": 2, "c": 2},
-            "output_dims": {"n": 1, "h": 30, "w": 30, "c": 2},
-            "conv_params": {"input_offset": 0, "output_offset": 0, "stride_w": 1, "stride_h": 1, "dilation_w": 2, "dilation_h": 2, "pad_w": 0, "pad_h": 0, "activation_min": -32768, "activation_max": 32767},
-            "quant_params": {"per_channel": False, "multiplier": 1, "shift": 0},
-            "weights_array": "    1",
-            "biases_array": "    0",
-            "has_biases": True,
-            "input_data_array": "    0",
-            "expected_output_array": "    0",
-            "input_dtype": "int16_t",
-            "output_dtype": "int16_t",
-            "weight_dtype": "int8_t",
-            "bias_dtype": "int64_t",
-            "kernel_fn": "arm_convolve_wrapper_s16",
-            "kernel_get_buffer_size_fn": "arm_convolve_wrapper_s16_get_buffer_size",
-            "buffer_size_max": 1024,
-        },
-    )
-    conv_c = _render(
-        "ConvolutionFunctions/convolve/convolve.c.j2",
-        {
-            "name": "convolve_int16xint8xint32_case_04_s16",
-            "input_dims": {"n": 1, "h": 32, "w": 32, "c": 2},
-            "filter_dims": {"n": 2, "h": 2, "w": 2, "c": 2},
-            "output_dims": {"n": 1, "h": 30, "w": 30, "c": 2},
-            "conv_params": {"input_offset": 0, "output_offset": 0, "stride_w": 1, "stride_h": 1, "dilation_w": 2, "dilation_h": 2, "pad_w": 0, "pad_h": 0, "activation_min": -32768, "activation_max": 32767},
-            "quant_params": {"per_channel": False, "multiplier": 1, "shift": 0},
-            "weights_array": "    1",
-            "biases_array": "    0",
-            "has_biases": True,
-            "input_data_array": "    0",
-            "expected_output_array": "    0",
-            "input_dtype": "int16_t",
-            "output_dtype": "int16_t",
-            "weight_dtype": "int8_t",
-            "bias_dtype": "int64_t",
-            "kernel_fn": "arm_convolve_wrapper_s16",
-            "kernel_get_buffer_size_fn": "arm_convolve_wrapper_s16_get_buffer_size",
-            "buffer_size_max": 1024,
-        },
-    )
-    dw_h = _render(
-        "ConvolutionFunctions/depthwise_conv/depthwise_conv.h.j2",
-        {
-            "name": "depthwise_conv_s16",
-            "input_dims": {"n": 1, "h": 8, "w": 8, "c": 4},
-            "filter_dims": {"n": 1, "h": 3, "w": 3, "c": 4},
-            "output_dims": {"n": 1, "h": 6, "w": 6, "c": 4},
-            "dw_conv_params": {"input_offset": 0, "output_offset": 0, "ch_mult": 1, "stride_w": 1, "stride_h": 1, "dilation_w": 1, "dilation_h": 1, "pad_w": 0, "pad_h": 0, "activation_min": -32768, "activation_max": 32767},
-            "quant_params": {"per_channel": False, "multiplier": 1, "shift": 0},
-            "weights_array": "    1",
-            "biases_array": "    0",
-            "has_biases": True,
-            "weight_sum_array": "",
-            "has_weight_sum": False,
-            "input_data_array": "    0",
-            "expected_output_array": "    0",
-            "input_dtype": "int16_t",
-            "output_dtype": "int16_t",
-            "weight_dtype": "int8_t",
-            "bias_dtype": "int64_t",
-            "kernel_fn": "arm_depthwise_conv_wrapper_s16",
-            "kernel_get_buffer_size_fn": "arm_depthwise_conv_wrapper_s16_get_buffer_size",
-            "buffer_size_max": 1024,
-        },
-    )
-    dw_c = _render(
-        "ConvolutionFunctions/depthwise_conv/depthwise_conv.c.j2",
-        {
-            "name": "depthwise_conv_s16",
-            "input_dims": {"n": 1, "h": 8, "w": 8, "c": 4},
-            "filter_dims": {"n": 1, "h": 3, "w": 3, "c": 4},
-            "output_dims": {"n": 1, "h": 6, "w": 6, "c": 4},
-            "dw_conv_params": {"input_offset": 0, "output_offset": 0, "ch_mult": 1, "stride_w": 1, "stride_h": 1, "dilation_w": 1, "dilation_h": 1, "pad_w": 0, "pad_h": 0, "activation_min": -32768, "activation_max": 32767},
-            "quant_params": {"per_channel": False, "multiplier": 1, "shift": 0},
-            "weights_array": "    1",
-            "biases_array": "    0",
-            "has_biases": True,
-            "weight_sum_array": "",
-            "has_weight_sum": False,
-            "input_data_array": "    0",
-            "expected_output_array": "    0",
-            "input_dtype": "int16_t",
-            "output_dtype": "int16_t",
-            "weight_dtype": "int8_t",
-            "bias_dtype": "int64_t",
-            "kernel_fn": "arm_depthwise_conv_wrapper_s16",
-            "kernel_get_buffer_size_fn": "arm_depthwise_conv_wrapper_s16_get_buffer_size",
-            "buffer_size_max": 1024,
-        },
-    )
+    conv_h, conv_c = render_convolve(convolve_context(
+        "arm_convolve_wrapper_s16", name="convolve_int16xint8xint32_case_04_s16",
+        input_dims={"n": 1, "h": 32, "w": 32, "c": 2}, filter_dims={"n": 2, "h": 2, "w": 2, "c": 2},
+        output_dims={"n": 1, "h": 30, "w": 30, "c": 2}, input_dtype="int16_t", output_dtype="int16_t",
+        weight_dtype="int8_t", bias_dtype="int64_t", weights_array="    1", biases_array="    0",
+    ), bias_is_struct=True)
+    dw_h, dw_c = render_depthwise(depthwise_context(
+        "arm_depthwise_conv_wrapper_s16", "arm_depthwise_conv_wrapper_s16_get_buffer_size", name="depthwise_conv_s16",
+        input_dims={"n": 1, "h": 8, "w": 8, "c": 4}, filter_dims={"n": 1, "h": 3, "w": 3, "c": 4},
+        output_dims={"n": 1, "h": 6, "w": 6, "c": 4}, input_dtype="int16_t", output_dtype="int16_t",
+        weight_dtype="int8_t", bias_dtype="int64_t",
+    ))
 
     assert "static const int8_t convolve_int16xint8xint32_case_04_s16_weights[]" in conv_h
     assert "static const int64_t convolve_int16xint8xint32_case_04_s16_biases[]" in conv_h
@@ -544,20 +418,18 @@ def test_s16_conv_templates_render_int8_weights_for_public_wrapper_signatures() 
 
 
 def test_gather_nd_invalid_status_render_uses_expected_status_helper() -> None:
-    text = _render(
-        "GatherFunctions/gather_nd/gather_nd.c.j2",
-        {
-            "name": "gather_nd_invalid_smoke",
-            "input_dtype": "int8_t",
-            "output_dtype": "int8_t",
-            "kernel_fn": "arm_gather_nd_s8",
-            "params_rank_test": 3,
-            "indices_rank_test": 2,
-            "batch_dims_test": 0,
-            "output_size": 4,
-            "expected_status": "ARM_CMSIS_NN_ARG_ERROR",
-        },
-    )
+    from helia_core_tester.generation.ops.GatherFunctions.gather_nd import gather_nd_argument_pool
+
+    context = {
+        "name": "gather_nd_invalid_smoke", "input_dtype": "int8_t", "output_dtype": "int8_t",
+        "kernel_fn": "arm_gather_nd_s8", "params_rank_test": 3, "indices_rank_test": 2, "batch_dims_test": 0,
+        "output_size": 4, "expected_status": "ARM_CMSIS_NN_ARG_ERROR", "params_dims": {"n": 1, "h": 1, "w": 1, "c": 4}, "indices_dims": {"n": 1, "h": 1, "w": 1, "c": 4},
+        "output_dims": {"n": 1, "h": 1, "w": 1, "c": 4}, "params_shape_array": "    4", "indices_shape_array": "    4", "output_shape_array": "    4",
+        "params_data_array": "    0", "indices_data_array": "    0", "expected_output_array": "    0",
+        "use_batch_harness": False,
+    }
+    text = render_pool(context, gather_nd_argument_pool(context), stem="gather_nd",
+                       validation_key="GatherFunctions/gather_nd/gather_nd.c.j2", label="GatherND")[1]
 
     assert "HELIA_VALIDATE_EXPECTED_STATUS(" in text
     assert "ARM_CMSIS_NN_ARG_ERROR" in text
@@ -565,20 +437,18 @@ def test_gather_nd_invalid_status_render_uses_expected_status_helper() -> None:
 
 
 def test_transpose_invalid_status_render_uses_expected_status_helper() -> None:
-    text = _render(
-        "TransposeFunctions/transpose/transpose.c.j2",
-        {
-            "name": "transpose_invalid_smoke",
-            "input_dtype": "int8_t",
-            "output_dtype": "int8_t",
-            "kernel_fn": "arm_transpose_s8",
-            "expected_status": "ARM_CMSIS_NN_ARG_ERROR",
-            "input_dims": {"n": 2, "h": 4, "w": 3, "c": 1},
-            "output_dims": {"n": 2, "h": 4, "w": 3, "c": 1},
-            "num_dims": 3,
-            "permutation_array": "    0, 1, 3",
-        },
-    )
+    text = _render_transpose({
+        "name": "transpose_invalid_smoke",
+        "input_dtype": "int8_t",
+        "output_dtype": "int8_t",
+        "kernel_fn": "arm_transpose_s8",
+        "expected_status": "ARM_CMSIS_NN_ARG_ERROR",
+        "input_dims": {"n": 2, "h": 4, "w": 3, "c": 1},
+        "output_dims": {"n": 2, "h": 4, "w": 3, "c": 1},
+        "num_dims": 3,
+        "permutation_array": "    0, 1, 3",
+        "transpose_params_type": "cmsis_nn_transpose_params",
+    })[1]
 
     assert "HELIA_VALIDATE_EXPECTED_STATUS(" in text
     assert "ARM_CMSIS_NN_ARG_ERROR" in text
@@ -586,9 +456,7 @@ def test_transpose_invalid_status_render_uses_expected_status_helper() -> None:
 
 
 def test_transpose_header_float_uses_inline_perm_array() -> None:
-    text = _render(
-        "TransposeFunctions/transpose/transpose.h.j2",
-        {
+    text = _render_transpose({
             "name": "transpose_float_smoke",
             "input_dims": {"n": 1, "h": 2, "w": 3, "c": 4},
             "output_dims": {"n": 1, "h": 3, "w": 2, "c": 4},
@@ -600,8 +468,8 @@ def test_transpose_header_float_uses_inline_perm_array() -> None:
             "output_dtype": "float",
             "transpose_params_type": "cmsis_nn_transpose_params_f32",
             "float_kernel": True,
-        },
-    )
+            "kernel_fn": "arm_transpose_f32",
+        })[0]
 
     assert "static const int32_t transpose_float_smoke_perm[]" in text
     assert ".perm = {" in text
@@ -609,9 +477,7 @@ def test_transpose_header_float_uses_inline_perm_array() -> None:
 
 
 def test_transpose_header_int_uses_permutations_pointer() -> None:
-    text = _render(
-        "TransposeFunctions/transpose/transpose.h.j2",
-        {
+    text = _render_transpose({
             "name": "transpose_int_smoke",
             "input_dims": {"n": 1, "h": 2, "w": 3, "c": 4},
             "output_dims": {"n": 1, "h": 3, "w": 2, "c": 4},
@@ -623,8 +489,8 @@ def test_transpose_header_int_uses_permutations_pointer() -> None:
             "output_dtype": "int8_t",
             "transpose_params_type": "cmsis_nn_transpose_params",
             "float_kernel": False,
-        },
-    )
+            "kernel_fn": "arm_transpose_s8",
+        })[0]
 
     assert "static const uint32_t transpose_int_smoke_permutations[]" in text
     assert ".permutations = transpose_int_smoke_permutations" in text
@@ -632,46 +498,39 @@ def test_transpose_header_int_uses_permutations_pointer() -> None:
 
 
 def test_rsqrt_invalid_status_render_uses_expected_status_helper() -> None:
-    text = _render(
-        "BasicMathFunctions/rsqrt/rsqrt.c.j2",
-        {
-            "name": "rsqrt_invalid_smoke",
-            "call_style": "per_op",
-            "input_dtype": "int16_t",
-            "output_dtype": "int16_t",
-            "kernel_fn": "arm_rsqrt_s16_per_op",
-            "expected_status": "ARM_CMSIS_NN_ARG_ERROR",
-            "input_dims": {"n": 1, "h": 1, "w": 4, "c": 1},
-            "output_dims": {"n": 1, "h": 1, "w": 4, "c": 1},
-            "input_offset": 0,
-            "output_offset": 0,
-            "out_activation_min": -32768,
-            "out_activation_max": 32767,
-            "block_size": 4,
-            "rsqrt_lut_array": "    32767",
-            "lut_dtype": "int16_t",
-        },
-    )
+    from helia_core_tester.generation.ops.BasicMathFunctions.rsqrt import rsqrt_argument_pool
+
+    context = {
+        "name": "rsqrt_invalid_smoke", "call_style": "per_op", "input_dtype": "int16_t", "output_dtype": "int16_t",
+        "kernel_fn": "arm_rsqrt_s16_per_op", "expected_status": "ARM_CMSIS_NN_ARG_ERROR",
+        "input_dims": {"n": 1, "h": 1, "w": 4, "c": 1}, "output_dims": {"n": 1, "h": 1, "w": 4, "c": 1},
+        "input_offset": 0, "output_offset": 0, "out_activation_min": -32768, "out_activation_max": 32767,
+        "block_size": 4, "rsqrt_lut_array": "    32767", "lut_dtype": "int16_t", "input_data_array": "    0",
+        "expected_output_array": "    0", "use_batch_harness": False,
+    }
+    text = render_pool(context, rsqrt_argument_pool(context), stem="rsqrt",
+                       validation_key="BasicMathFunctions/rsqrt/rsqrt.c.j2", label="Rsqrt")[1]
 
     assert "HELIA_VALIDATE_EXPECTED_STATUS(" in text
     assert "ARM_CMSIS_NN_ARG_ERROR" in text
-    assert "{{ name }}_expected_output" not in text
+    assert "HELIA_VALIDATE_OUTPUTS(" not in text
 
 
 def test_broadcast_to_invalid_status_render_uses_expected_status_helper() -> None:
-    text = _render(
-        "BroadcastFunctions/broadcast_to/broadcast_to.c.j2",
-        {
-            "name": "broadcast_invalid_smoke",
-            "c_type": "int8_t",
-            "kernel_fn": "arm_broadcast_to_s8",
-            "output_size": 4,
-            "expected_status": "ARM_CMSIS_NN_ARG_ERROR",
-            "input_arg": "NULL",
-            "params_arg": "&broadcast_invalid_smoke_params",
-            "output_arg": "broadcast_invalid_smoke_output",
-        },
-    )
+    context = {
+        "name": "broadcast_invalid_smoke",
+        "c_type": "int8_t",
+        "kernel_fn": "arm_broadcast_to_s8",
+        "output_size": 4,
+        "expected_status": "ARM_CMSIS_NN_ARG_ERROR",
+        "input_arg": "NULL",
+        "params_arg": "&broadcast_invalid_smoke_params",
+        "output_arg": "broadcast_invalid_smoke_output",
+        "rank": 1, "input_shape": [1], "output_shape": [4],
+        "input_data_array": "    0", "expected_output_array": "    0", "use_batch_harness": False,
+    }
+    text = render_pool(context, broadcast_to_argument_pool(context), stem="broadcast_to",
+                       validation_key="BroadcastFunctions/broadcast_to/broadcast_to.c.j2", label="BroadcastTo")[1]
 
     assert "HELIA_VALIDATE_EXPECTED_STATUS(" in text
     assert "ARM_CMSIS_NN_ARG_ERROR" in text
@@ -680,21 +539,23 @@ def test_broadcast_to_invalid_status_render_uses_expected_status_helper() -> Non
 
 
 def test_dynamic_update_slice_invalid_status_render_uses_expected_status_helper() -> None:
-    text = _render(
-        "DynamicUpdateSliceFunctions/dynamic_update_slice/dynamic_update_slice.c.j2",
-        {
-            "name": "dynamic_update_slice_invalid_smoke",
-            "c_type": "int8_t",
-            "kernel_fn": "arm_dynamic_update_slice_s8",
-            "operand_size": 20,
-            "expected_status": "ARM_CMSIS_NN_ARG_ERROR",
-            "operand_arg": "dynamic_update_slice_invalid_smoke_operand",
-            "update_arg": "dynamic_update_slice_invalid_smoke_update",
-            "start_indices_arg": "NULL",
-            "params_arg": "&dynamic_update_slice_invalid_smoke_params",
-            "output_arg": "dynamic_update_slice_invalid_smoke_output",
-        },
+    from helia_core_tester.generation.ops.DynamicUpdateSliceFunctions.dynamic_update_slice import (
+        dynamic_update_slice_argument_pool,
     )
+
+    context = {
+        "name": "dynamic_update_slice_invalid_smoke", "c_type": "int8_t", "kernel_fn": "arm_dynamic_update_slice_s8",
+        "operand_size": 20, "update_size": 4, "rank": 1, "operand_shape": [20], "update_shape": [4],
+        "operand_strides": [1], "expected_status": "ARM_CMSIS_NN_ARG_ERROR",
+        "operand_arg": "dynamic_update_slice_invalid_smoke_operand", "update_arg": "dynamic_update_slice_invalid_smoke_update",
+        "start_indices_arg": "NULL", "params_arg": "&dynamic_update_slice_invalid_smoke_params",
+        "output_arg": "dynamic_update_slice_invalid_smoke_output", "operand_data_array": "    0",
+        "update_data_array": "    0", "start_indices_array": "    0", "expected_output_array": "    0",
+        "use_batch_harness": False,
+    }
+    text = render_pool(context, dynamic_update_slice_argument_pool(context), stem="dynamic_update_slice",
+                       validation_key="DynamicUpdateSliceFunctions/dynamic_update_slice/dynamic_update_slice.c.j2",
+                       label="DynamicUpdateSlice")[1]
 
     assert "HELIA_VALIDATE_EXPECTED_STATUS(" in text
     assert "ARM_CMSIS_NN_ARG_ERROR" in text
@@ -770,9 +631,9 @@ def test_lstm_and_svdf_keep_specialized_shared_validation_contracts() -> None:
         _templates_root()
         / "LSTMFunctions"
         / "lstm_unidirectional"
-        / "lstm_unidirectional.c.j2"
+        / "lstm_unidirectional.fragment.j2"
     ).read_text()
-    svdf = (_templates_root() / "SVDFunctions" / "svdf" / "svdf.c.j2").read_text()
+    svdf = (_templates_root() / "SVDFunctions" / "svdf" / "svdf.fragment.j2").read_text()
 
     assert '{{ validation_report_limit | default(8) }}' in lstm
     assert "HELIA_VALIDATE_OUTPUTS(" in lstm
@@ -793,13 +654,13 @@ def test_single_shot_recurrent_float_templates_validate_the_whole_output() -> No
         _templates_root()
         / "LSTMFunctions"
         / "lstm_unidirectional"
-        / "lstm_unidirectional_f32.c.j2"
+        / "lstm_unidirectional_f32.fragment.j2"
     ).read_text()
     gru = (
         _templates_root()
         / "LSTMFunctions"
         / "gru_unidirectional"
-        / "gru_unidirectional.c.j2"
+        / "gru_unidirectional.fragment.j2"
     ).read_text()
 
     call_site = (
@@ -814,49 +675,34 @@ def test_single_shot_recurrent_float_templates_validate_the_whole_output() -> No
 
 
 def test_quantize_and_dequantize_render_only_requested_validation_helpers() -> None:
-    quantize = _render(
-        "QuantizationFunctions/quantize/quantize.c.j2",
-        {
-            "name": "quantize_smoke",
-            "input_size": 4,
-            "zero_point": 0,
-            "scale": 0.125,
-            "input_data_array": "    0.000000f",
-            "expected_output_array": "    0",
-            "input_dtype": "float",
-            "output_dtype": "int8_t",
-            "kernel_fn": "arm_quantize_f32_s8",
-            "has_activation": False,
-            "activation_kernel_fn": None,
-            "activation_type": "NONE",
-            "comparison_tolerance": 1,
-            "validation_helpers": ["tolerant_int"],
-        },
+    from helia_core_tester.generation.ops.QuantizationFunctions.pools import (
+        dequantize_argument_pool,
+        quantize_argument_pool,
     )
-    dequantize = _render(
-        "QuantizationFunctions/dequantize/dequantize.c.j2",
-        {
-            "name": "dequantize_smoke",
-            "input_size": 4,
-            "zero_point": 0,
-            "scale": 0.125,
-            "input_data_array": "    0",
-            "expected_output_array": "    0.000000f",
-            "input_dtype": "int8_t",
-            "output_dtype": "float",
-            "kernel_fn": "arm_dequantize_s8_f32",
-            "has_activation": False,
-            "activation_type": "NONE",
-            "comparison_atol": 1.0e-5,
-            "comparison_rtol": 1.0e-5,
-            "validation_helpers": ["float"],
-        },
-    )
+    from helia_core_tester.tests.harness_render import render_pool
+
+    quantize_context = {
+        "name": "quantize_smoke", "input_size": 4, "zero_point": 0, "scale": 0.125,
+        "input_data_array": "    0.000000f", "expected_output_array": "    0", "input_dtype": "float",
+        "output_dtype": "int8_t", "kernel_fn": "arm_quantize_f32_s8", "has_activation": False,
+        "activation_kernel_fn": None, "activation_type": "NONE", "comparison_tolerance": 1,
+        "validation_helpers": ["tolerant_int"], "use_batch_harness": False,
+    }
+    _, quantize = render_pool(quantize_context, quantize_argument_pool(quantize_context), stem="quantize",
+                              validation_key="QuantizationFunctions/quantize/quantize.c.j2", label="Quantize")
+    dequantize_context = {
+        "name": "dequantize_smoke", "input_size": 4, "zero_point": 0, "scale": 0.125, "input_data_array": "    0",
+        "expected_output_array": "    0.000000f", "input_dtype": "int8_t", "output_dtype": "float",
+        "kernel_fn": "arm_dequantize_s8_f32", "has_activation": False, "activation_type": "NONE",
+        "comparison_atol": 1.0e-5, "comparison_rtol": 1.0e-5, "validation_helpers": ["float"],
+        "use_batch_harness": False,
+    }
+    _, dequantize = render_pool(dequantize_context, dequantize_argument_pool(dequantize_context), stem="dequantize",
+                                validation_key="QuantizationFunctions/dequantize/dequantize.c.j2", label="Dequantize")
 
     # The HELIA_VALIDATE_* macro definitions themselves live once in the shared
     # helia_test_runtime header (see test_shared_runtime_header_defines_all_validators
-    # below), not in per-template rendered text. Templates only need to select the
-    # correct dispatch mode for their requested validation_helpers.
+    # below); the harness only selects the dispatch mode the validation context resolved.
     assert "TOLERANT_INT" in quantize
     assert "EXACT_INT" not in quantize
 

@@ -1,4 +1,5 @@
 """ReverseSequence operation implementation."""
+from pathlib import Path
 
 from typing import Dict
 import numpy as np
@@ -117,16 +118,20 @@ class OpReverseSequence(OperationBase):
             "kernel_fn": ki["kernel_fn"],
         }
 
-        includes_dir = output_dir / "includes"
-        includes_dir.mkdir(parents=True, exist_ok=True)
+        self.render_harness_case(
+            Path(output_dir), stem="reverse_sequence", context=context, pool=reverse_sequence_argument_pool(context),
+            validation_key="ReverseSequenceFunctions/reverse_sequence/reverse_sequence.c.j2", label="ReverseSequence", operator="ReverseSequence",
+        )
 
-        h_content = self.render_template("ReverseSequenceFunctions/reverse_sequence/reverse_sequence.h.j2", context)
-        (includes_dir / f"{name}_reverse_sequence.h").write_text(h_content)
 
-        c_content = self.render_template("ReverseSequenceFunctions/reverse_sequence/reverse_sequence.c.j2", context)
-        (output_dir / f"{name}_reverse_sequence.c").write_text(c_content)
+from helia_core_tester.generation.harness.simple import shaped_case_pool  # noqa: E402
 
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", {
-            "name": name, "operator": "ReverseSequence", "operator_name": "reverse_sequence"
-        })
-        (output_dir / "CMakeLists.txt").write_text(cmake_content)
+
+def reverse_sequence_argument_pool(context):
+    n = context["name"]
+    return shaped_case_pool(
+        context, shapes=(("shape", "input_shape"),), params_type="cmsis_nn_reverse_sequence_params",
+        params={"rank": context["rank"], "shape": f"{n}_shape", "seq_dim": context["seq_dim"],
+                "batch_dim": context["batch_dim"]},
+        inputs=(("input", "input", "input_data_array"), ("seq_lengths", "seq_lengths", "seq_lengths_array")),
+        seq_lengths_ctype="int32_t", output_count=str(context["output_size"]))

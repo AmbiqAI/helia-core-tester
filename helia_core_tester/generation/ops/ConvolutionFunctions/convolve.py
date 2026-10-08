@@ -14,12 +14,148 @@ from helia_core_tester.generation.ops._shared.bias_init import (
     bias_is_hoisted_by_lowering,
     inject_hoisted_dilation_bias,
 )
-from helia_core_tester.generation.kernel_dispatch import (
-    autovectorize_declines_if,
-    check_entry_fault,
-    resolve_convolve_kernel,
-    resolve_direct_entry,
-)
+from helia_core_tester.generation.harness import ArgumentPool, ArrayLiteral, Declaration, GuardedBuffer, Provider
+from helia_core_tester.generation.harness.faults import common_fault, null_context_buffer, struct_copy, with_fault
+from helia_core_tester.generation.entry import check_entry_fault, resolve_entry
+from helia_core_tester.generation.kernel_dispatch import autovectorize_declines_if, resolve_convolve_kernel
+
+
+
+def convolve_argument_pool(context: Dict[str, Any], *, has_biases: bool, bias_is_struct: bool) -> ArgumentPool:
+    """Every value a Convolve case can pass to a public Convolve kernel or its sizer."""
+    n = context["name"]
+    upper = n.upper()
+    float_kernel = bool(context["float_kernel"])
+    conv = context["conv_params"]
+
+    def dims(d: Dict[str, Any]) -> Dict[str, Any]:
+        return {"n": d["n"], "h": d["h"], "w": d["w"], "c": d["c"]}
+
+    geometry = {
+        "stride": {"w": conv["stride_w"], "h": conv["stride_h"]},
+        "dilation": {"w": conv["dilation_w"], "h": conv["dilation_h"]},
+        "padding": {"w": conv["pad_w"], "h": conv["pad_h"]},
+    }
+    if float_kernel:
+        params_init = {**geometry,
+                       "activation": {"min": context["conv_activation_min_literal"],
+                                      "max": context["conv_activation_max_literal"]},
+                       "weight_format": context.get("weight_format_macro") or "ARM_NN_WEIGHT_FORMAT_STANDARD"}
+    else:
+        params_init = {"input_offset": conv["input_offset"], "output_offset": conv["output_offset"], **geometry,
+                       "activation": {"min": conv["activation_min"], "max": conv["activation_max"]}}
+    header = [
+        Declaration(f"{n}_input_dims", "cmsis_nn_dims", dims(context["input_dims"]), comment="Input dimensions"),
+        Declaration(f"{n}_filter_dims", "cmsis_nn_dims", dims(context["filter_dims"]), comment="Filter dimensions"),
+        Declaration(f"{n}_output_dims", "cmsis_nn_dims", dims(context["output_dims"]), comment="Output dimensions"),
+        Declaration(f"{n}_conv_params", context.get("conv_params_type") or "cmsis_nn_conv_params", params_init,
+                    comment="Convolution parameters"),
+    ]
+    values = {
+        "ctx": f"&{n}_ctx", "conv_params": f"&{n}_conv_params", "input_dims": f"&{n}_input_dims",
+        "filter_dims": f"&{n}_filter_dims", "output_dims": f"&{n}_output_dims", "filter_data": f"{n}_weights",
+        "bias_dims": f"&{n}_bias_dims" if has_biases else "NULL",
+        "bias_data": (f"&{n}_bias_data" if bias_is_struct else f"{n}_biases") if has_biases else "NULL",
+        "upscale_dims": "NULL", "layout": context["kernel_layout"],
+    }
+    if not float_kernel:
+        quant = context["quant_params"]
+        if quant.get("per_channel"):
+            multiplier, shift = ArrayLiteral(quant["multiplier_array"]), ArrayLiteral(quant["shift_array"])
+        else:
+            multiplier, shift = f"{{ {quant['multiplier']} }}", f"{{ {quant['shift']} }}"
+        header += [
+            Declaration(f"{n}_multiplier", "int32_t", multiplier, storage="static", array=True,
+                        comment="Quantization parameters (per-channel)"),
+            Declaration(f"{n}_shift", "int32_t", shift, storage="static", array=True),
+            Declaration(f"{n}_quant_params", "cmsis_nn_per_channel_quant_params",
+                        {"multiplier": f"{n}_multiplier", "shift": f"{n}_shift"}),
+        ]
+        values["quant_params"] = f"&{n}_quant_params"
+    bias_ctype = context["bias_dtype"]
+    header += [
+        Declaration(f"{n}_weights", context.get("weight_dtype") or "int8_t", ArrayLiteral(context["weights_array"]),
+                    array=True, comment="Weights"),
+        Declaration(f"{n}_biases", bias_ctype, ArrayLiteral(context["biases_array"]), array=True, comment="Biases")
+        if has_biases else Declaration(f"{n}_biases", f"{bias_ctype}*", "NULL", comment="No biases"),
+        Declaration(f"{n}_input", context["input_dtype"], ArrayLiteral(context["input_data_array"]), array=True,
+                    comment="Input data (for testing)"),
+        Declaration(f"{n}_expected_output", context["output_dtype"], ArrayLiteral(context["expected_output_array"]),
+                    array=True, comment="Expected output (golden)"),
+    ]
+    source = []
+    if has_biases:
+        source.append(Declaration(f"{n}_bias_dims", "cmsis_nn_dims",
+                                  {"n": 0, "h": 0, "w": 0, "c": context["filter_dims"]["n"]}, comment="Bias dimensions"))
+        if not float_kernel and bias_is_struct:
+            source.append(Declaration(f"{n}_bias_data", "cmsis_nn_bias_data",
+                                      {"data": f"{n}_biases", "is_int32_bias": bias_ctype == "int32_t"},
+                                      comment="s16 requires cmsis_nn_bias_data struct wrapper"))
+    weight_sum = Provider(
+        param="weight_sum_ctx",
+        expr=f"&{n}_weight_sum_ctx",
+        declarations=(Declaration(f"{n}_weight_sum_ctx", "cmsis_nn_context", storage="static",
+                                  comment="Weight sum context (precomputed input-offset/bias fold)"),),
+        buffers=(GuardedBuffer(f"{n}_weight_sum_buffer", "uint8_t", f"{upper}_WEIGHT_SUM_BUFFER_SIZE",
+                               count_value=f"({context['output_dims']['c']} * sizeof(int32_t))", label="weight_sum"),),
+        setup=(f"    // Initialize weight sum context and buffer\n"
+               f"    {n}_weight_sum_ctx.buf = {n}_weight_sum_buffer;\n"
+               f"    {n}_weight_sum_ctx.size = {upper}_WEIGHT_SUM_BUFFER_SIZE;\n\n"
+               f"    // Calculate weight sum: pre-computes weight * input_offset + bias\n"
+               f"    int32_t lhs_offset = (int32_t){n}_conv_params.input_offset;\n"
+               f"    arm_convolve_weight_sum((int32_t*){n}_weight_sum_ctx.buf,\n"
+               f"                            {n}_weights,\n"
+               f"                            &{n}_input_dims,\n"
+               f"                            &{n}_filter_dims,\n"
+               f"                            &{n}_output_dims,\n"
+               f"                            lhs_offset,\n"
+               f"                            {n + '_biases' if has_biases else 'NULL'});"),
+    )
+    output = context["output_dims"]
+    return ArgumentPool(
+        name=n, values=values, header=header, source=source, providers=(weight_sum,),
+        output_count=f"({output['n']} * {output['h']} * {output['w']} * {output['c']})",
+    )
+
+
+def _depth(context: Dict[str, Any], dims: str) -> int:
+    return int(context[dims]["c"])
+
+
+# Shapes that break the whole-group rule (ns-cmsis-nn#725): the dims struct the kernel gets
+# and the channel count it carries.
+_DEPTH_FAULTS = {
+    "zero_filter_depth": lambda c: ("filter_dims", 0),
+    "filter_deeper_than_input": lambda c: ("filter_dims", 2 * _depth(c, "input_dims")),
+    # One filter depth plus one channel: input_ch / filter_ch = 1 group that leaves a channel over.
+    "partial_filter_group": lambda c: ("input_dims", _depth(c, "filter_dims") + 1),
+    "negative_output_depth": lambda c: ("output_dims", -_depth(c, "output_dims")),
+    # One output channel past a whole number of groups.
+    "output_not_whole_groups": lambda c: ("output_dims", _depth(c, "output_dims") + 1),
+    "negative_input_depth": lambda c: ("input_dims", -_depth(c, "input_dims")),
+    "negative_filter_depth": lambda c: ("filter_dims", -_depth(c, "filter_dims")),
+}
+
+
+def convolve_fault(pool: ArgumentPool, kind: str, context: Dict[str, Any]) -> ArgumentPool:
+    """The pool of a Convolve fault case: the passing pool with the faulted argument edited."""
+    n = context["name"]
+    edit = common_fault(pool, kind, layout=context.get("kernel_layout"))
+    if edit is None and kind == "zero_stride":
+        edit = struct_copy(pool, kind, "conv_params", context.get("conv_params_type") or "cmsis_nn_conv_params",
+                           f"{n}_conv_params", {"stride.w": 0})
+    elif edit is None and kind == "channel_group_mismatch":
+        # groups = input_ch / filter_ch = 2 does not divide the odd input_ch.
+        edit = struct_copy(pool, kind, "input_dims", "cmsis_nn_dims", f"{n}_input_dims",
+                           {"c": 2 * int(context["filter_dims"]["c"]) + 1})
+    elif edit is None and kind == "null_weight_sum_ctx":
+        edit = null_context_buffer(pool, kind, "weight_sum_ctx", f"{n}_weight_sum_ctx")
+    elif edit is None and kind in _DEPTH_FAULTS:
+        param, value = _DEPTH_FAULTS[kind](context)
+        edit = struct_copy(pool, kind, param, "cmsis_nn_dims", f"{n}_{param}", {"c": value})
+    if edit is None:
+        raise ValueError(f"{n}: no Convolve fault edit for {kind!r}")
+    return with_fault(pool, edit)
 
 
 class OpConvolve(OperationBase):
@@ -352,11 +488,13 @@ class OpConvolve(OperationBase):
                     f"{self.desc.get('name')}: entry {entry!r} is not supported with a kernel_variant hint"
                 )
             info.update(
-                resolve_direct_entry(
+                resolve_entry(
                     "Convolve",
                     str(entry),
-                    self.desc.get("activation_dtype", "S8"),
-                    self.desc.get("weight_dtype", "S8"),
+                    activation_dtype=self.desc.get("activation_dtype", "S8"),
+                    weight_dtype=self.desc.get("weight_dtype", "S8"),
+                    cpu=self.target_cpu,
+                    desc=self.desc,
                 )
             )
             check_entry_fault(self.desc, info)
@@ -792,6 +930,22 @@ class OpConvolve(OperationBase):
                 input_dims, filter_dims, output_dims, 
                 output_dtype=activation_dtype
             )
+        entry_scratch_bytes = kernel_info.get("entry_scratch_bytes")
+        if entry_scratch_bytes is not None:
+            buffer_size_max = max(buffer_size_max, int(entry_scratch_bytes))
+
+        # An entry gets the weight-sum pre-pass and the struct-typed bias exactly when its
+        # prototype takes them; the wrappers keep the rules they always had.
+        contract_decl = None
+        if kernel_info.get("entry_family") == "contract":
+            from helia_core_tester.contract import render as contract_render
+            from helia_core_tester.contract.bind import takes
+
+            contract_decl = contract_render.load_current_contracts().require(kernel_info["kernel_fn"])
+        bias_is_struct = kernel_info["kernel_fn"] == "arm_convolve_wrapper_s16" or (
+            contract_decl is not None and takes(contract_decl, "bias_data")
+            and "cmsis_nn_bias_data" in next(p.c_type for p in contract_decl.params if p.name in ("bias_data", "bias"))
+        )
 
         # Build template context
         context = {
@@ -828,11 +982,12 @@ class OpConvolve(OperationBase):
             # silicon). No CLI flag exists yet for this -- set via env var so
             # benchmarking scripts can select it without deeper Config/CLI plumbing.
             'benchmark_target': os.environ.get("HELIA_BENCH_TARGET", "fvp"),
-            # s8 direct entries (entry:) take weight sums like arm_convolve_wrapper_s8; the
-            # family picks the call and scratch-size arguments (kernel_dispatch.DIRECT_ENTRIES).
             'entry_family': kernel_info.get("entry_family"),
             'conv_s8_weight_sum': kernel_info["kernel_fn"] == "arm_convolve_wrapper_s8"
-            or kernel_info.get("entry_family") in ("convolve_s8", "convolve_1x1_s8"),
+            or (contract_decl is not None and takes(contract_decl, "weight_sum_ctx")),
+            'bias_is_struct': bias_is_struct,
+            'entry_scratch_bytes': entry_scratch_bytes,
+            'entry_extra_sizers': kernel_info.get("entry_extra_sizers"),
             'expected_status': self.expected_status(),
             # The entry lives only on ns-cmsis-nn's MVE paths, so it declines on a build without them.
             'autovectorize_declines': bool(self.desc.get("autovectorize_declines", False)),
@@ -845,26 +1000,21 @@ class OpConvolve(OperationBase):
             context['quant_params'] = quant_params_dict
         context.update(nonfinite_context)
 
+        pool = convolve_argument_pool(context, has_biases=has_biases, bias_is_struct=bias_is_struct)
         fault = self.fault_kind()
-        c_template = "ConvolutionFunctions/convolve/convolve.c.j2"
         if fault:
             self._check_fault_reachable(fault, context)
             context.update(self.fault_context())
-            c_template = "ConvolutionFunctions/convolve/convolve_fault.c.j2"
+            pool = convolve_fault(pool, fault, context)
 
-        # Render templates
-        includes_api_dir = output_dir / "includes"
-        includes_api_dir.mkdir(parents=True, exist_ok=True)
-
-        h_content = self.render_template("ConvolutionFunctions/convolve/convolve.h.j2", context)
-        h_path = includes_api_dir / f"{name}_convolve.h"
-        with open(h_path, 'w') as f:
-            f.write(h_content)
-
-        c_content = self.render_template(c_template, context)
-        c_path = output_dir / f"{name}_convolve.c"
-        with open(c_path, 'w') as f:
-            f.write(c_content)
+        self.render_harness_files(
+            output_dir,
+            stem="convolve",
+            context=context,
+            pool=pool,
+            validation_key="ConvolutionFunctions/convolve/convolve.c.j2",
+            label="Convolution",
+        )
 
         cmake_context = {
             'name': name,

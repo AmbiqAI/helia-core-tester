@@ -2,7 +2,7 @@
 StridedSlice operation implementation.
 """
 
-from typing import Dict, Any
+from typing import Dict
 import numpy as np
 import tensorflow as tf
 from pathlib import Path
@@ -418,27 +418,17 @@ class OpStridedSlice(OperationBase):
             context["validation_mode"] = "float"
         
         # Render templates
-        includes_api_dir = output_dir / "includes"
-        includes_api_dir.mkdir(parents=True, exist_ok=True)
-        
-        h_content = self.render_template("StridedSliceFunctions/strided_slice/strided_slice.h.j2", context)
-        h_path = includes_api_dir / f"{name}_strided_slice.h"
-        with open(h_path, 'w') as f:
-            f.write(h_content)
-        
-        c_content = self.render_template("StridedSliceFunctions/strided_slice/strided_slice.c.j2", context)
-        c_path = output_dir / f"{name}_strided_slice.c"
-        with open(c_path, 'w') as f:
-            f.write(c_content)
-        
-        cmake_context = {
-            'name': name,
-            'operator': self.desc.get('operator', 'StridedSlice'),
-            'operator_name': 'strided_slice'
-        }
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
-        cmake_path = output_dir / "CMakeLists.txt"
-        with open(cmake_path, 'w') as f:
-            f.write(cmake_content)
+        self.render_harness_case(
+            Path(output_dir), stem="strided_slice", context=context, pool=strided_slice_argument_pool(context),
+            validation_key="StridedSliceFunctions/strided_slice/strided_slice.c.j2", label="StridedSlice", operator="StridedSlice",
+        )
         
         print(f"Generated C/H files and CMakeLists.txt for {name}")
+
+
+from helia_core_tester.generation.harness.simple import dims_count, tensor_case_pool  # noqa: E402
+
+
+def strided_slice_argument_pool(context):
+    return tensor_case_pool(context, {}, dims=("input_dims", "output_dims", "begin_dims", "stride_dims"),
+                            output_count=dims_count(context["output_dims"]))

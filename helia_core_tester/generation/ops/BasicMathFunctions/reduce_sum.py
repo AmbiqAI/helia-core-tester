@@ -143,3 +143,13 @@ class OpReduceSum(OperationBase):
             context,
             cmake_context,
         )
+
+
+from helia_core_tester.generation.harness.registry import harness_pool  # noqa: E402
+from helia_core_tester.generation.harness.simple import dims_count, tensor_case_pool  # noqa: E402
+
+
+@harness_pool("BasicMathFunctions/reduce_sum/reduce_sum.c.j2", label="ReduceSum")
+def reduce_sum_argument_pool(context):
+    return tensor_case_pool(context, {}, dims=("input_dims", "output_dims", "axis_dims"),
+                            output_count=dims_count(context["output_dims"]))

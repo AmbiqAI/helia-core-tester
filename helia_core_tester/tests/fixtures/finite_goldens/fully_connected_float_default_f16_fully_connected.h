@@ -1,5 +1,5 @@
-#ifndef FULLY_CONNECTED_FLOAT_DEFAULT_F16_FULLY_CONNECTED_H
-#define FULLY_CONNECTED_FLOAT_DEFAULT_F16_FULLY_CONNECTED_H
+#ifndef FULLY_CONNECTED_FLOAT_DEFAULT_F16_HARNESS_H
+#define FULLY_CONNECTED_FLOAT_DEFAULT_F16_HARNESS_H
 
 #include <stdint.h>
 // Input arrays may carry NAN/INFINITY tokens, and this header is included ahead of
@@ -8,29 +8,36 @@
 #include "arm_nnfunctions.h"
 #include "arm_nn_types.h"
 
-// Input dimensions: input shape is [N, features] or [N, H, W, C] (flattened to [N, features])
+// Input dimensions
 static const cmsis_nn_dims fully_connected_float_default_f16_input_dims = {
-    .n = 1, .h = 1,
-    .w = 1, .c = 12
+    .n = 1,
+    .h = 1,
+    .w = 1,
+    .c = 12
 };
 
-// Filter dimensions: weights shape is [output_units, input_features]
-// CMSIS format: n=input_features (col_dim), c=output_units (row_dim), h=1, w=1
+// Filter dimensions
 static const cmsis_nn_dims fully_connected_float_default_f16_filter_dims = {
-    .n = 12, .h = 1,
-    .w = 1, .c = 5
+    .n = 12,
+    .h = 1,
+    .w = 1,
+    .c = 5
 };
 
-// Bias dimensions: bias shape is [output_units]
+// Bias dimensions
 static const cmsis_nn_dims fully_connected_float_default_f16_bias_dims = {
-    .n = 1, .h = 1,
-    .w = 1, .c = 5
+    .n = 1,
+    .h = 1,
+    .w = 1,
+    .c = 5
 };
 
-// Output dimensions: output shape is [N, output_units]
+// Output dimensions
 static const cmsis_nn_dims fully_connected_float_default_f16_output_dims = {
-    .n = 1, .h = 1,
-    .w = 1, .c = 5
+    .n = 1,
+    .h = 1,
+    .w = 1,
+    .c = 5
 };
 
 // Fully connected parameters
@@ -38,7 +45,6 @@ static const cmsis_nn_fc_params_f16 fully_connected_float_default_f16_fc_params 
     .activation = {.min = -1.0e+30f, .max = 1.0e+30f},
     .weight_format = ARM_NN_WEIGHT_FORMAT_STANDARD
 };
-
 
 // Weights
 static const float16_t fully_connected_float_default_f16_weights[] = {
@@ -48,13 +54,10 @@ static const float16_t fully_connected_float_default_f16_weights[] = {
     (float16_t)-0.095214844f, (float16_t)-0.336181641f, (float16_t)-0.098449707f, (float16_t)0.30859375f, (float16_t)0.517578125f, (float16_t)-0.035003662f, (float16_t)0.044342041f, (float16_t)-0.016281128f, (float16_t)0.040222168f, (float16_t)0.092712402f, (float16_t)-0.248901367f, (float16_t)-0.2578125f
 };
 
-// Biases. Emitted whenever bias data exists, including when the kernel is
-// called with a NULL bias because the bias is folded into the weight sum:
-// consumers read the bias out of this decl.
+// Biases
 static const float16_t fully_connected_float_default_f16_biases[] = {
     (float16_t)0.080871582f, (float16_t)-0.224975586f, (float16_t)0.219482422f, (float16_t)0.21472168f, (float16_t)0.221557617f
 };
-
 
 // Input data (for testing)
 static const float16_t fully_connected_float_default_f16_input[] = {

@@ -2,11 +2,12 @@
 Squeeze operation implementation.
 """
 
-from typing import Dict, Any
+from typing import Dict
 import numpy as np
 import tensorflow as tf
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.ops._shared.copy_pool import copy_argument_pool
 
 
 class OpSqueeze(OperationBase):
@@ -90,7 +91,6 @@ class OpSqueeze(OperationBase):
         and the data layout doesn't change, we can use arm_reshape_s8 (which is
         essentially a memcpy) similar to how Reshape works.
         """
-        from pathlib import Path
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
         
         name = self.desc['name']
@@ -229,26 +229,8 @@ class OpSqueeze(OperationBase):
         }
         
         # Render templates
-        includes_api_dir = output_dir / "includes"
-        includes_api_dir.mkdir(parents=True, exist_ok=True)
-        
-        h_content = self.render_template("TesterExtensions/squeeze/squeeze.h.j2", context)
-        h_path = includes_api_dir / f"{name}_squeeze.h"
-        with open(h_path, 'w') as f:
-            f.write(h_content)
-        
-        c_content = self.render_template("TesterExtensions/squeeze/squeeze.c.j2", context)
-        c_path = output_dir / f"{name}_squeeze.c"
-        with open(c_path, 'w') as f:
-            f.write(c_content)
-        
-        cmake_context = {
-            'name': name,
-            'operator': self.desc.get('operator', 'Squeeze'),
-            'operator_name': 'squeeze'
-        }
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
-        cmake_path = output_dir / "CMakeLists.txt"
-        with open(cmake_path, 'w') as f:
-            f.write(cmake_content)
+        self.render_harness_case(
+            output_dir, stem="squeeze", context=context, pool=copy_argument_pool(context),
+            validation_key="TesterExtensions/squeeze/squeeze.c.j2", label="Squeeze", operator="Squeeze",
+        )
         

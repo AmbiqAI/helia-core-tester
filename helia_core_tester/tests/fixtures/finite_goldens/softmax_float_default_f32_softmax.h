@@ -1,23 +1,25 @@
-#ifndef SOFTMAX_FLOAT_DEFAULT_F32_SOFTMAX_H
-#define SOFTMAX_FLOAT_DEFAULT_F32_SOFTMAX_H
+#ifndef SOFTMAX_FLOAT_DEFAULT_F32_HARNESS_H
+#define SOFTMAX_FLOAT_DEFAULT_F32_HARNESS_H
 
 #include <stdint.h>
-// Golden arrays may carry NAN/INFINITY, and this header is included ahead of any
-// other translation-unit include that would define them.
+// Input arrays may carry NAN/INFINITY tokens, and this header is included ahead of
+// any other translation-unit include that would define them.
 #include <math.h>
 #include "arm_nnfunctions.h"
 #include "arm_nn_types.h"
 
-// Input dimensions
 static const cmsis_nn_dims softmax_float_default_f32_input_dims = {
-    .n = 1, .h = 4,
-    .w = 4, .c = 3
+    .n = 1,
+    .h = 4,
+    .w = 4,
+    .c = 3
 };
 
-// Output dimensions
 static const cmsis_nn_dims softmax_float_default_f32_output_dims = {
-    .n = 1, .h = 4,
-    .w = 4, .c = 3
+    .n = 1,
+    .h = 4,
+    .w = 4,
+    .c = 3
 };
 
 // Input data (for testing)
@@ -33,6 +35,5 @@ static const float softmax_float_default_f32_expected_output[] = {
     0.192216009f, 0.593282044f, 0.400169104f, 0.455729693f, 0.144101158f, 0.251910508f, 0.126259953f, 0.621829569f, 0.44589901f, 0.223517388f, 0.330583543f, 0.395225912f, 0.436983079f, 0.167791039f, 0.299116403f, 0.187812984f,
     0.513070643f, 0.454329729f, 0.129906058f, 0.415764183f, 0.306265295f, 0.525199473f, 0.168535307f, 0.157338634f, 0.439906448f, 0.402754933f, 0.495790988f, 0.278331935f, 0.225877076f, 0.35579592f, 0.45342645f, 0.190777645f,
 };
-
 
 #endif

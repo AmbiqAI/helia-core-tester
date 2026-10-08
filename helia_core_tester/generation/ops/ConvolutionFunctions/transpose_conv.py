@@ -6,7 +6,147 @@ from typing import Dict, Any
 import numpy as np
 import tensorflow as tf
 from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.entry import resolve_entry
+from helia_core_tester.generation.harness import (
+    ArgumentPool,
+    ArrayLiteral,
+    Declaration,
+    GuardedBuffer,
+    Provider,
+    SizeQuery,
+)
+from helia_core_tester.generation.harness.faults import common_fault, null_context_buffer, struct_copy, with_fault
 from pathlib import Path
+
+TRANSPOSE_CONV_VALIDATION_KEY = "ConvolutionFunctions/transpose_conv/transpose_conv.c.j2"
+
+
+def transpose_conv_argument_pool(context: Dict[str, Any]) -> ArgumentPool:
+    """Every value a TransposeConv case can pass to a public transpose-conv kernel or its scratch queries."""
+    n = context["name"]
+    upper = n.upper()
+    float_kernel = bool(context.get("float_kernel"))
+    tc = context["transpose_conv_params"]
+
+    def dims(d: Dict[str, Any]) -> Dict[str, Any]:
+        return {"n": d["n"], "h": d["h"], "w": d["w"], "c": d["c"]}
+
+    geometry = {
+        "stride": {"w": tc["stride_w"], "h": tc["stride_h"]},
+        "dilation": {"w": tc["dilation_w"], "h": tc["dilation_h"]},
+        "padding": {"w": tc["pad_w"], "h": tc["pad_h"]},
+        "padding_offsets": {"w": tc["pad_offset_w"], "h": tc["pad_offset_h"]},
+    }
+    if float_kernel:
+        params_init = {**geometry, "activation": {"min": context["transpose_activation_min_literal"],
+                                                  "max": context["transpose_activation_max_literal"]}}
+    else:
+        params_init = {"input_offset": tc["input_offset"], "output_offset": tc["output_offset"], **geometry,
+                       "activation": {"min": tc["activation_min"], "max": tc["activation_max"]}}
+    out_c = context["output_dims"]["c"]
+    header = [
+        Declaration(f"{n}_input_dims", "cmsis_nn_dims", dims(context["input_dims"]), comment="Input dimensions"),
+        Declaration(f"{n}_filter_dims", "cmsis_nn_dims", dims(context["filter_dims"]),
+                    comment="Filter dimensions (C_OUT, HK, WK, C_IN)"),
+        Declaration(f"{n}_output_dims", "cmsis_nn_dims", dims(context["output_dims"]), comment="Output dimensions"),
+        Declaration(f"{n}_bias_dims", "cmsis_nn_dims", {"n": 1, "h": 1, "w": 1, "c": out_c}, comment="Bias dimensions"),
+        Declaration(f"{n}_transpose_conv_params",
+                    context.get("transpose_conv_params_type") or "cmsis_nn_transpose_conv_params", params_init,
+                    comment="Transpose convolution parameters"),
+    ]
+    has_biases = bool(context["has_biases"])
+    params_expr = f"&{n}_transpose_conv_params"
+    values = {
+        "ctx": f"&{n}_ctx", "transpose_conv_params": params_expr, "transposed_conv_params": params_expr,
+        "input_dims": f"&{n}_input_dims", "filter_dims": f"&{n}_filter_dims", "filter_data": f"{n}_weights",
+        "bias_dims": f"&{n}_bias_dims", "bias_data": f"{n}_biases" if has_biases else "NULL",
+        "output_dims": f"&{n}_output_dims", "out_dims": f"&{n}_output_dims",
+        "layout": context.get("kernel_layout") or "ARM_NN_LAYOUT_NHWC",
+    }
+    if not float_kernel:
+        quant = context["quant_params"]
+        if quant.get("per_channel"):
+            multiplier, shift = ArrayLiteral(quant["multiplier_array"]), ArrayLiteral(quant["shift_array"])
+        else:
+            multiplier, shift = f"{{ {quant['multiplier']} }}", f"{{ {quant['shift']} }}"
+        header += [
+            Declaration(f"{n}_multiplier", "int32_t", multiplier, storage="static", array=True,
+                        comment="Quantization parameters (per-channel)"),
+            Declaration(f"{n}_shift", "int32_t", shift, storage="static", array=True),
+            Declaration(f"{n}_quant_params", "cmsis_nn_per_channel_quant_params",
+                        {"multiplier": f"{n}_multiplier", "shift": f"{n}_shift"}),
+        ]
+        values["quant_params"] = f"&{n}_quant_params"
+    bias_ctype = context["bias_dtype"]
+    header += [
+        Declaration(f"{n}_weights", context.get("weight_dtype") or "int8_t", ArrayLiteral(context["weights_array"]),
+                    array=True, comment="Weights"),
+        Declaration(f"{n}_biases", bias_ctype, ArrayLiteral(context["biases_array"]), array=True, comment="Biases")
+        if has_biases else Declaration(f"{n}_biases", f"{bias_ctype}*", "NULL", comment="No biases"),
+        Declaration(f"{n}_input", context["input_dtype"], ArrayLiteral(context["input_data_array"]), array=True,
+                    comment="Input data (for testing)"),
+        Declaration(f"{n}_expected_output", context["output_dtype"], ArrayLiteral(context["expected_output_array"]),
+                    array=True, comment="Expected output (golden)"),
+    ]
+    reverse = Provider(
+        param="reverse_conv_ctx", aliases=("output_ctx",), expr=f"&{n}_reverse_conv_ctx",
+        declarations=(Declaration(f"{n}_reverse_conv_ctx", "cmsis_nn_context", storage="static",
+                                  comment="Reverse convolution context (output_ctx of the kernels)"),),
+        buffers=(GuardedBuffer(f"{n}_reverse_conv_ctx_buffer", "uint8_t", f"{upper}_REVERSE_CONV_CTX_SIZE",
+                               count_value=str(context["reverse_conv_ctx_size"]), label="reverse_conv_ctx"),),
+        setup=(f"    // Initialize reverse convolution context buffer (output_ctx parameter)\n"
+               f"    {n}_reverse_conv_ctx.buf = {n}_reverse_conv_ctx_buffer;\n"
+               f"    {n}_reverse_conv_ctx.size = {upper}_REVERSE_CONV_CTX_SIZE;"),
+        size_query=SizeQuery(context["kernel_get_reverse_buffer_size_fn"], "reverse_required_buffer_size",
+                             f"{upper}_REVERSE_CONV_CTX_SIZE"),
+    )
+    providers = [reverse]
+    if context.get("has_weight_sum"):
+        providers.append(Provider(
+            param="weight_sum_ctx", expr=f"&{n}_weight_sum_ctx",
+            declarations=(Declaration(f"{n}_weight_sum_ctx", "cmsis_nn_context", storage="static",
+                                      comment="Weight sum context for s8 transpose convolutions"),),
+            buffers=(GuardedBuffer(f"{n}_weight_sum_buffer", "uint8_t", f"{upper}_WEIGHT_SUM_BUFFER_SIZE",
+                                   count_value=f"({out_c} * sizeof(int32_t))", label="weight_sum"),),
+            setup=(f"    // Initialize weight sum context and compute weight_sum\n"
+                   f"    {n}_weight_sum_ctx.buf = {n}_weight_sum_buffer;\n"
+                   f"    {n}_weight_sum_ctx.size = {upper}_WEIGHT_SUM_BUFFER_SIZE;\n\n"
+                   f"    int32_t lhs_offset = {n}_transpose_conv_params.input_offset;\n"
+                   f"    arm_convolve_weight_sum(\n"
+                   f"        (int32_t *){n}_weight_sum_ctx.buf,\n"
+                   f"        {n}_weights,\n"
+                   f"        &{n}_input_dims,\n"
+                   f"        &{n}_filter_dims,\n"
+                   f"        &{n}_output_dims,\n"
+                   f"        lhs_offset,\n"
+                   f"        {n + '_biases' if has_biases else 'NULL'}\n"
+                   f"    );"),
+        ))
+    else:
+        values["weight_sum_ctx"] = "NULL"
+    output = context["output_dims"]
+    return ArgumentPool(
+        name=n, values=values, header=header, providers=tuple(providers),
+        output_count=f"({output['n']} * {output['h']} * {output['w']} * {output['c']})", benchmark=False,
+    )
+
+
+def transpose_conv_fault(pool: ArgumentPool, kind: str, context: Dict[str, Any]) -> ArgumentPool:
+    """The pool of a TransposeConv fault case: the passing pool with the faulted argument edited."""
+    n = context["name"]
+    edit = common_fault(pool, kind, layout=context.get("kernel_layout"))
+    if edit is None and kind == "nonunit_dilation":
+        edit = struct_copy(pool, kind, "transpose_conv_params",
+                           context.get("transpose_conv_params_type") or "cmsis_nn_transpose_conv_params",
+                           f"{n}_transpose_conv_params", {"dilation.w": 2})
+    elif edit is None and kind == "null_weight_sum_ctx":
+        edit = null_context_buffer(pool, kind, "weight_sum_ctx", f"{n}_weight_sum_ctx")
+    elif edit is None and kind == "null_reverse_conv_ctx_buf":
+        edit = null_context_buffer(pool, kind, "reverse_conv_ctx", f"{n}_reverse_conv_ctx")
+    if edit is None:
+        raise ValueError(f"{n}: no TransposeConv fault edit for {kind!r}")
+    return with_fault(pool, edit)
+
 
 class OpTransposeConv(OperationBase):
     """
@@ -131,6 +271,30 @@ class OpTransposeConv(OperationBase):
             f.write(tflite_model)
     
     def _select_cmsis_transpose_conv_kernel(self) -> Dict[str, str]:
+        info = self._table_transpose_conv_kernel()
+        entry = self.desc.get("entry")
+        if entry:
+            if self.desc.get("fault"):
+                raise ValueError(f"{self.desc.get('name')}: entry {entry!r} is not supported with fault")
+            info.update(resolve_entry(
+                "TransposeConv", str(entry),
+                activation_dtype=self.desc.get("activation_dtype", "S8"),
+                weight_dtype=self.desc.get("weight_dtype", "S8"),
+                cpu=self.target_cpu, desc=self.desc,
+            ))
+        return info
+
+    def _render_transpose_conv(self, output_dir: Path, context: Dict[str, Any]) -> None:
+        pool = transpose_conv_argument_pool(context)
+        fault = self.fault_kind()
+        if fault:
+            self._check_fault_reachable(fault, context)
+            context.update(self.fault_context())
+            pool = transpose_conv_fault(pool, fault, context)
+        self.render_harness_files(output_dir, stem="transpose_conv", context=context, pool=pool,
+                                  validation_key=TRANSPOSE_CONV_VALIDATION_KEY, label="Transpose convolution")
+
+    def _table_transpose_conv_kernel(self) -> Dict[str, str]:
         """
         Select appropriate CMSIS-NN transpose convolution kernel function.
         
@@ -472,25 +636,8 @@ class OpTransposeConv(OperationBase):
                 'transpose_activation_max_literal': builder.format_float_literal(transpose_conv_params['activation_max']),
             }
             context.update(nonfinite_context)
-            fault = self.fault_kind()
-            c_template = "ConvolutionFunctions/transpose_conv/transpose_conv.c.j2"
-            if fault:
-                self._check_fault_reachable(fault, context)
-                context.update(self.fault_context())
-                c_template = "ConvolutionFunctions/transpose_conv/transpose_conv_fault.c.j2"
-            includes_api_dir = output_dir / "includes"
-            includes_api_dir.mkdir(parents=True, exist_ok=True)
-            
-            h_content = self.render_template("ConvolutionFunctions/transpose_conv/transpose_conv.h.j2", context)
-            h_path = includes_api_dir / f"{name}_transpose_conv.h"
-            with open(h_path, 'w') as f:
-                f.write(h_content)
-            
-            c_content = self.render_template(c_template, context)
-            c_path = output_dir / f"{name}_transpose_conv.c"
-            with open(c_path, 'w') as f:
-                f.write(c_content)
-            
+            self._render_transpose_conv(output_dir, context)
+
             cmake_context = {
                 'name': name,
                 'operator': self.desc.get('operator', 'TransposeConv'),
@@ -665,30 +812,8 @@ class OpTransposeConv(OperationBase):
             'buffer_size_max': buffer_size_max,
             'reverse_conv_ctx_size': reverse_conv_ctx_size,
         }
-        fault = self.fault_kind()
-        c_template = "ConvolutionFunctions/transpose_conv/transpose_conv.c.j2"
-        if fault:
-            self._check_fault_reachable(fault, context)
-            context.update(self.fault_context())
-            c_template = "ConvolutionFunctions/transpose_conv/transpose_conv_fault.c.j2"
+        self._render_transpose_conv(output_dir, context)
 
-        # Render templates
-        includes_api_dir = output_dir / "includes"
-        includes_api_dir.mkdir(parents=True, exist_ok=True)
-        
-        h_content = self.render_template("ConvolutionFunctions/transpose_conv/transpose_conv.h.j2", context)
-        h_path = includes_api_dir / f"{name}_transpose_conv.h"
-        with open(h_path, 'w') as f:
-            f.write(h_content)
-        
-        c_content = self.render_template(c_template, context)
-        c_path = output_dir / f"{name}_transpose_conv.c"
-        with open(c_path, 'w') as f:
-            f.write(c_content)
-        
-        # Also create a symlink or copy with the old naming convention for compatibility
-        # (if needed by CMakeLists.txt pattern matching)
-        
         cmake_context = {
             'name': name,
             'operator': self.desc.get('operator', 'TransposeConv'),

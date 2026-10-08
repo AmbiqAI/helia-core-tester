@@ -205,3 +205,18 @@ class OpAbs(OperationBase):
             "operator_name": "abs",
         }
         self._write_op_outputs(output_dir, "abs", "BasicMathFunctions/abs/abs.h.j2", "BasicMathFunctions/abs/abs.c.j2", context, cmake_context)
+
+
+from helia_core_tester.generation.harness.registry import harness_pool  # noqa: E402
+from helia_core_tester.generation.harness.simple import dims_count, tensor_case_pool  # noqa: E402
+
+
+@harness_pool("BasicMathFunctions/abs/abs.c.j2", label="Abs")
+def abs_argument_pool(context):
+    values = {"block_size": context["block_size"]}
+    if not context.get("float_kernel"):
+        values.update(input_offset=context["input_offset"], out_offset=context["output_offset"],
+                      out_mult=context["out_mult"], out_shift=context["out_shift"],
+                      needs_rescale=context["needs_rescale"], out_activation_min=context["out_activation_min"],
+                      out_activation_max=context["out_activation_max"])
+    return tensor_case_pool(context, values, output_count=dims_count(context["output_dims"]))

@@ -115,6 +115,12 @@ class TemplateContextBuilder:
     _VALIDATION_LABEL_OVERRIDES = {
         "ActivationFunctions/nn_activation/nn_activation.c.j2": "NN activation",
         "ActivationFunctions/prelu/prelu.c.j2": "PReLU",
+        "BroadcastFunctions/broadcast_to/broadcast_to.c.j2": "BroadcastTo",
+        "DynamicUpdateSliceFunctions/dynamic_update_slice/dynamic_update_slice.c.j2": "DynamicUpdateSlice",
+        "PadFunctions/mirror_pad/mirror_pad.c.j2": "MirrorPad",
+        "ReverseSequenceFunctions/reverse_sequence/reverse_sequence.c.j2": "ReverseSequence",
+        "ScatterFunctions/scatter_nd/scatter_nd.c.j2": "ScatterNd",
+        "SelectFunctions/select_v2/select_v2.c.j2": "SelectV2",
         "ConvolutionFunctions/transpose_conv/transpose_conv.c.j2": "TransposeConv",
         "ReshapeFunctions/depth_to_space/depth_to_space.c.j2": "DepthToSpace",
         "ReshapeFunctions/resize_nearest_neighbor/resize_nearest_neighbor.c.j2": "ResizeNearestNeighbor",

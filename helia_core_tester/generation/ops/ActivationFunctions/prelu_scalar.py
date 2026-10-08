@@ -9,7 +9,36 @@ import tensorflow as tf
 from pathlib import Path
 
 from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.harness import ArgumentPool, ArrayLiteral, Declaration, HarnessInput
 from helia_core_tester.generation.utils.tflite_utils import calculate_multiplier_shift, requantize_np
+
+
+def prelu_scalar_argument_pool(context: dict) -> ArgumentPool:
+    """One kernel call per pixel: pixel p takes scalar p, alpha block p and writes output block p."""
+    n, ctype, block = context["name"], context["input_dtype"], int(context["block_size"])
+    pixels = int(context.get("num_pixels", 1))
+    if pixels < 1 or block < 1:
+        raise ValueError(f"{n}: PReLUScalar needs at least one pixel and a positive block size")
+    header = [
+        Declaration(f"{n}_scalar_input", ctype, ArrayLiteral(context["scalar_array"]), array=True),
+        Declaration(f"{n}_alpha", ctype, ArrayLiteral(context["alpha_array"]), array=True),
+        Declaration(f"{n}_expected_output", context["output_dtype"], ArrayLiteral(context["expected_output_array"]),
+                    array=True),
+    ]
+    values = {"scalar_is_input": "true", "block_size": str(block)}
+    for key, param in (("input_offset", "input_offset"), ("alpha_offset", "alpha_offset"),
+                       ("output_offset", "output_offset"), ("output_mult_identity", "output_multiplier_identity"),
+                       ("output_shift_identity", "output_shift_identity"), ("output_mult_alpha", "output_multiplier_alpha"),
+                       ("output_shift_alpha", "output_shift_alpha")):
+        values[param] = str(context[key])
+    calls = [{"scalar_vect": f"scalar_input + {p}", "non_scalar_vect": f"alpha + {p * block}",
+              "output": f"output + {p * block}"} for p in range(pixels)]
+    return ArgumentPool(
+        name=n, values=values, header=header, output_param="output", output_count=f"({pixels} * {block})",
+        benchmark=False, scratch_buffer=False, calls=calls,
+        inputs=(HarnessInput("scalar_vect", "scalar_input", f"{n}_scalar_input"),
+                HarnessInput("non_scalar_vect", "alpha", f"{n}_alpha")),
+    )
 
 # Per-dtype quantization parameters: C type name, numpy dtype, and clamp range.
 _DTYPE_INFO = {
@@ -212,16 +241,8 @@ class OpPReLUScalar(OperationBase):
             "reference_delta": int(reference_delta),
         }
 
-        cmake_context = {
-            "name": name,
-            "operator": self.desc.get("operator", "PReLUScalar"),
-            "operator_name": "prelu_scalar",
-        }
-        self._write_op_outputs(
-            output_dir,
-            "prelu_scalar",
-            "ActivationFunctions/prelu_scalar/prelu_scalar.h.j2",
-            "ActivationFunctions/prelu_scalar/prelu_scalar.c.j2",
-            context,
-            cmake_context,
+        self.render_harness_case(
+            output_dir, stem="prelu_scalar", context=context, pool=prelu_scalar_argument_pool(context),
+            validation_key="ActivationFunctions/prelu_scalar/prelu_scalar.c.j2", label="PReLUScalar",
+            operator="PReLUScalar", sidecar=True,
         )

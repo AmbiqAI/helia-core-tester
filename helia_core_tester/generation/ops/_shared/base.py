@@ -22,6 +22,23 @@ from helia_core_tester.generation.utils.template_context import TemplateContextB
 
 _JINJA2_ENV_CACHE: Dict[str, jinja2.Environment] = {}
 
+
+def template_environment(template_dir: str) -> jinja2.Environment:
+    """The one Jinja environment for a template directory (cached), with the
+    contract-rendering globals installed so every template, and every test that
+    renders one, sees the same `contract_call` / `contract_parity_assert`."""
+    if template_dir not in _JINJA2_ENV_CACHE:
+        from helia_core_tester.contract.render import contract_globals
+
+        env = jinja2.Environment(
+            loader=jinja2.FileSystemLoader(template_dir),
+            trim_blocks=True,
+            lstrip_blocks=True,
+        )
+        env.globals.update(contract_globals())
+        _JINJA2_ENV_CACHE[template_dir] = env
+    return _JINJA2_ENV_CACHE[template_dir]
+
 try:
     import tensorflow as tf
 except Exception:
@@ -60,6 +77,22 @@ def _is_json_serializable(value: Any) -> bool:
         return True
     except (TypeError, ValueError):
         return False
+
+
+def _render_pool_snippets(env, pool, render_context):
+    """A pool's C snippets (test prologue, extra checks, validation, pre- and post-passes, a
+    property case's test body and file-scope helpers) may use the validation context
+    (validation_report_limit, ...): a snippet containing `{{` is rendered against it before the
+    harness does; any other snippet is printed verbatim."""
+    from dataclasses import replace
+
+    fields = {}
+    for field in ("test_prologue", "extra_checks", "validation", "pre_call", "post_call", "test_body", "file_scope",
+                  "header_text"):
+        text = getattr(pool, field)
+        if text and "{{" in text:
+            fields[field] = env.from_string(text).render(**render_context)
+    return replace(pool, **fields) if fields else pool
 
 
 class OperationBase(ABC):
@@ -1029,6 +1062,15 @@ class OperationBase(ABC):
         call args, and tensor roles/tolerance structurally rather than
         re-parsing generated C source.
         """
+        from helia_core_tester.generation.harness import registry
+
+        routed = registry.lookup(c_tpl)
+        if routed is not None:
+            builder, label = routed
+            self.render_harness_case(output_dir, stem=op_suffix, context=context, pool=builder(context),
+                                     validation_key=c_tpl, label=label, operator=cmake_context["operator"],
+                                     sidecar=True)
+            return
         includes_api_dir = output_dir / "includes"
         includes_api_dir.mkdir(parents=True, exist_ok=True)
         name = context["name"]
@@ -1093,6 +1135,97 @@ class OperationBase(ABC):
             return self._seeded_rng().uniform(lo, hi, size=input_shape).astype(np.float32)
         return self._seeded_rng().integers(-32, 32, size=input_shape).astype(np.float32)
     
+    HARNESS_HEADER = "common/harness/harness.h.j2"
+    HARNESS_SOURCE = "common/harness/harness.c.j2"
+
+    def render_harness_files(
+        self,
+        output_dir: Path,
+        *,
+        stem: str,
+        context: Dict[str, Any],
+        pool: Any,
+        validation_key: str,
+        label: str,
+        sizer_fn: Any = "context",
+        sidecar: bool = False,
+    ) -> None:
+        """Write `includes/<name>_<stem>.h` and `<name>_<stem>.c` through the generic harness.
+
+        The header carries the pool's data; the source binds `context['kernel_fn']` and its
+        scratch query from the pool against the kernel contract. `validation_key` is the
+        operator's former template path, still the key of TemplateContextBuilder's validation
+        rules. A fault case is the same render from a pool carrying a FaultEdit. `sizer_fn`
+        overrides `context['kernel_get_buffer_size_fn']` (None: the case calls no sizer).
+        """
+        from helia_core_tester.contract import render as contract_render
+        from helia_core_tester.generation.harness import HarnessError
+        from helia_core_tester.generation.harness import plan_harness, render_declaration
+        from helia_core_tester.generation.kernel_dispatch import autovectorize_declines_if
+
+        name = context["name"]
+        env = template_environment(str(find_tester_templates_dir()))
+        # Every refusal runs before anything is written, so a refused case leaves no partial output.
+        sizer = context.get("kernel_get_buffer_size_fn") if sizer_fn == "context" else sizer_fn
+        plan = plan_harness(
+            pool,
+            kernel_fn=context["kernel_fn"],
+            sizer_fn=sizer,
+            scratch_bytes=None if sizer else int(context.get("entry_scratch_bytes") or 0),
+            contracts=contract_render.load_current_contracts(),
+            extra_sizer_fns=tuple(context.get("entry_extra_sizers") or ()),
+        )
+        expected = str(context.get("expected_status", "ARM_CMSIS_NN_SUCCESS"))
+        if plan.void_return and expected != "ARM_CMSIS_NN_SUCCESS":
+            raise HarnessError(f"{context['name']}: {context['kernel_fn']} returns void, so expected_status "
+                               f"{expected} can never be observed")
+        if plan.outputs:
+            for key, why in (("autovectorize_declines", "an autovectorize decline"),
+                             ("nonfinite_mask_array_str", "a nonfinite mask")):
+                if context.get(key):
+                    raise HarnessError(f"{context['name']}: output slots do not support {why}")
+            if expected != "ARM_CMSIS_NN_SUCCESS":
+                raise HarnessError(f"{context['name']}: output slots validate every slice, so expected_status "
+                                   f"{expected} is not supported")
+        render_context = TemplateContextBuilder.build_validation_context(validation_key, dict(context), self.desc)
+        # The build condition under which an `autovectorize_declines` entry declines (by precision).
+        render_context.setdefault("autovectorize_declines_if",
+                                  autovectorize_declines_if(str(context.get("input_dtype", ""))))
+        rendered_pool = _render_pool_snippets(env, pool, render_context)
+        includes_dir = output_dir / "includes"
+        includes_dir.mkdir(parents=True, exist_ok=True)
+        header = env.get_template(self.HARNESS_HEADER).render(
+            name=name, header_declarations=[render_declaration(d) for d in pool.header],
+            header_text=rendered_pool.header_text)
+        (includes_dir / f"{name}_{stem}.h").write_text(header)
+        if sidecar:
+            payload = self._build_generation_sidecar(stem, render_context)
+            (output_dir / f"{name}_{stem}.sidecar.json").write_text(
+                json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n")
+        render_context.update(harness=plan, pool=rendered_pool, header_name=f"{name}_{stem}.h", harness_label=label,
+                              harness_output_count=pool.output_count, harness_benchmark=pool.benchmark)
+        source = env.get_template(self.HARNESS_SOURCE).render(**render_context)
+        (output_dir / f"{name}_{stem}.c").write_text(source)
+
+    def render_harness_case(
+        self,
+        output_dir: Path,
+        *,
+        stem: str,
+        context: Dict[str, Any],
+        pool: Any,
+        validation_key: str,
+        label: str,
+        operator: str,
+        sidecar: bool = False,
+    ) -> None:
+        """render_harness_files plus the case's CMakeLists.txt, for the operators that used to
+        write their own template pair (and, with `sidecar`, the JSON sidecar)."""
+        self.render_harness_files(output_dir, stem=stem, context=context, pool=pool, validation_key=validation_key,
+                                  label=label, sidecar=sidecar)
+        cmake_context = {"name": context["name"], "operator": self.desc.get("operator", operator), "operator_name": stem}
+        (output_dir / "CMakeLists.txt").write_text(self.render_template("common/CMakeLists.txt.j2", cmake_context))
+
     def render_template(
         self, template_path: str, context: Dict[str, Any], return_context: bool = False
     ):
@@ -1105,14 +1238,7 @@ class OperationBase(ABC):
         what the generation sidecar is built from, so the sidecar is guaranteed
         to reflect what was actually rendered rather than a re-derived copy.
         """
-        template_dir = str(find_tester_templates_dir())
-        if template_dir not in _JINJA2_ENV_CACHE:
-            _JINJA2_ENV_CACHE[template_dir] = jinja2.Environment(
-                loader=jinja2.FileSystemLoader(template_dir),
-                trim_blocks=True,
-                lstrip_blocks=True,
-            )
-        env = _JINJA2_ENV_CACHE[template_dir]
+        env = template_environment(str(find_tester_templates_dir()))
         operator = str(self.desc.get("operator", ""))
         render_context = dict(context)
         if template_path.endswith(".c.j2"):

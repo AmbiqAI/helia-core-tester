@@ -274,26 +274,32 @@ class OpTranspose(OperationBase):
         }
         
         # Render templates
-        includes_api_dir = output_dir / "includes"
-        includes_api_dir.mkdir(parents=True, exist_ok=True)
+        self.render_harness_case(
+            Path(output_dir), stem="transpose", context=context, pool=transpose_argument_pool(context),
+            validation_key="TransposeFunctions/transpose/transpose.c.j2", label="Transpose", operator="Transpose",
+        )
         
-        h_content = self.render_template("TransposeFunctions/transpose/transpose.h.j2", context)
-        h_path = includes_api_dir / f"{name}_transpose.h"
-        with open(h_path, 'w') as f:
-            f.write(h_content)
-        
-        c_content = self.render_template("TransposeFunctions/transpose/transpose.c.j2", context)
-        c_path = output_dir / f"{name}_transpose.c"
-        with open(c_path, 'w') as f:
-            f.write(c_content)
-        
-        cmake_context = {
-            'name': name,
-            'operator': self.desc.get('operator', 'Transpose'),
-            'operator_name': 'transpose'
-        }
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
-        cmake_path = output_dir / "CMakeLists.txt"
-        with open(cmake_path, 'w') as f:
-            f.write(cmake_content)
-        
+
+
+from helia_core_tester.generation.harness import ArrayLiteral, Declaration  # noqa: E402
+from helia_core_tester.generation.harness.simple import dims_count, tensor_case_pool  # noqa: E402
+
+
+def transpose_argument_pool(context):
+    n, num = context["name"], int(context["num_dims"])
+    ptype = context["transpose_params_type"]
+    if context.get("float_kernel"):
+        perm = Declaration(f"{n}_perm", "int32_t", ArrayLiteral(context["permutation_array"]), array=True)
+        entries = ", ".join(f"(int32_t){n}_perm[{i}]" for i in range(num))
+        params = Declaration(f"{n}_transpose_params", ptype, {"num_dims": str(num), "perm": "{ " + entries + " }"})
+        source = (Declaration(f"{n}_ctx", "cmsis_nn_context", {"buf": "NULL", "size": "0"}, storage="static"),)
+        extra, values, owns = (perm, params), {"ctx": f"&{n}_ctx", "params": f"&{n}_transpose_params"}, True
+    else:
+        perm = Declaration(f"{n}_permutations", "uint32_t", ArrayLiteral(context["permutation_array"]), array=True)
+        params = Declaration(f"{n}_transpose_params", ptype, {"num_dims": str(num), "permutations": f"{n}_permutations"})
+        extra, values, owns, source = (perm, params), {"transpose_params": f"&{n}_transpose_params"}, False, ()
+    pool = tensor_case_pool(context, values, extra_header=extra, output_count=dims_count(context["output_dims"]),
+                            owns_ctx=owns)
+    from dataclasses import replace
+
+    return replace(pool, source=source)

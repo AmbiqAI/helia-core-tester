@@ -12,14 +12,144 @@ from helia_core_tester.generation.ops._shared.bias_init import (
     bias_is_hoisted_by_lowering,
     inject_hoisted_dilation_bias,
 )
+from helia_core_tester.generation.entry import check_entry_fault, resolve_entry
+from helia_core_tester.generation.harness import (
+    ArgumentPool,
+    ArrayLiteral,
+    Declaration,
+    GuardedBuffer,
+    Provider,
+    RuleCheck,
+)
+from helia_core_tester.generation.harness.faults import common_fault, null_context_buffer, struct_copy, with_fault
 from helia_core_tester.generation.kernel_dispatch import (
     DEPTHWISE_CONV_S8_PLANAR_RULE,
     autovectorize_declines_if,
-    check_entry_fault,
-    entry_scratch_bytes,
+    depthwise_3x3_scratch_bytes,
     resolve_depthwise_conv_kernel,
-    resolve_direct_entry,
 )
+
+
+def depthwise_argument_pool(context: Dict[str, Any]) -> ArgumentPool:
+    """Every value a DepthwiseConv case can pass to a public depthwise kernel, its sizer or
+    the planar rule."""
+    n = context["name"]
+    float_kernel = bool(context.get("float_kernel"))
+    has_biases = bool(context["has_biases"])
+    dw = context["dw_conv_params"]
+
+    def dims(d: Dict[str, Any]) -> Dict[str, Any]:
+        return {"n": d["n"], "h": d["h"], "w": d["w"], "c": d["c"]}
+
+    geometry = {
+        "ch_mult": dw["ch_mult"],
+        "stride": {"w": dw["stride_w"], "h": dw["stride_h"]},
+        "dilation": {"w": dw["dilation_w"], "h": dw["dilation_h"]},
+        "padding": {"w": dw["pad_w"], "h": dw["pad_h"]},
+    }
+    if float_kernel:
+        params_init = {**geometry, "activation": {"min": context["dw_activation_min_literal"],
+                                                  "max": context["dw_activation_max_literal"]}}
+    else:
+        params_init = {"input_offset": dw["input_offset"], "output_offset": dw["output_offset"], **geometry,
+                       "activation": {"min": dw["activation_min"], "max": dw["activation_max"]}}
+    header = [
+        Declaration(f"{n}_input_dims", "cmsis_nn_dims", dims(context["input_dims"]), comment="Input dimensions"),
+        Declaration(f"{n}_filter_dims", "cmsis_nn_dims", dims(context["filter_dims"]), comment="Filter dimensions"),
+        Declaration(f"{n}_output_dims", "cmsis_nn_dims", dims(context["output_dims"]), comment="Output dimensions"),
+        Declaration(f"{n}_dw_conv_params", context.get("dw_conv_params_type") or "cmsis_nn_dw_conv_params",
+                    params_init, comment="Depthwise convolution parameters"),
+    ]
+    bias_ctype = context["bias_dtype"]
+    bias_expr = "NULL"
+    if has_biases:
+        bias_expr = ("(const int64_t*)" if bias_ctype == "int64_t" else "") + f"{n}_biases"
+    values = {
+        "ctx": f"&{n}_ctx", "dw_conv_params": f"&{n}_dw_conv_params", "input_dims": f"&{n}_input_dims",
+        "filter_dims": f"&{n}_filter_dims", "filter_data": f"{n}_weights", "bias_dims": f"&{n}_bias_dims",
+        "bias_data": bias_expr, "output_dims": f"&{n}_output_dims",
+        "layout": context.get("kernel_layout") or "ARM_NN_LAYOUT_NHWC",
+    }
+    if not float_kernel:
+        quant = context["quant_params"]
+        if quant.get("per_channel"):
+            multiplier, shift = ArrayLiteral(quant["multiplier_array"]), ArrayLiteral(quant["shift_array"])
+        else:
+            multiplier, shift = f"{{ {quant['multiplier']} }}", f"{{ {quant['shift']} }}"
+        header += [
+            Declaration(f"{n}_multiplier", "int32_t", multiplier, storage="static", array=True,
+                        comment="Quantization parameters (per-channel)"),
+            Declaration(f"{n}_shift", "int32_t", shift, storage="static", array=True),
+            Declaration(f"{n}_quant_params", "cmsis_nn_per_channel_quant_params",
+                        {"multiplier": f"{n}_multiplier", "shift": f"{n}_shift"}),
+        ]
+        values["quant_params"] = f"&{n}_quant_params"
+    header += [
+        Declaration(f"{n}_weights", context.get("weight_dtype") or "int8_t", ArrayLiteral(context["weights_array"]),
+                    array=True, comment="Weights"),
+        Declaration(f"{n}_biases", bias_ctype, ArrayLiteral(context["biases_array"]), array=True, comment="Biases")
+        if has_biases else Declaration(f"{n}_biases", f"{bias_ctype}*", "NULL", comment="No biases"),
+    ]
+    output_c = context["output_dims"]["c"]
+    providers = []
+    if context.get("has_weight_sum"):
+        header.append(Declaration(f"{n}_weight_sum", "int32_t", ArrayLiteral(context["weight_sum_array"]), array=True,
+                                  comment="Weight sum (precomputed for S8 depthwise convolutions)"))
+        providers.append(Provider(
+            param="weight_sum_ctx",
+            expr=f"&{n}_weight_sum_ctx",
+            declarations=(Declaration(f"{n}_weight_sum_ctx", "cmsis_nn_context", storage="static",
+                                      comment="Weight sum context for s8 depthwise wrappers"),),
+            buffers=(GuardedBuffer(f"{n}_weight_sum_runtime", "int32_t", str(output_c), label="weight_sum"),),
+            setup=(f"    // Compute weight sums at runtime when supported; fallback to precomputed values.\n"
+                   f"    arm_cmsis_nn_status weight_sum_status = arm_depthwise_convolve_weight_sum(\n"
+                   f"        {n}_weight_sum_runtime,\n"
+                   f"        NULL,\n"
+                   f"        {n}_weights,\n"
+                   f"        &{n}_dw_conv_params,\n"
+                   f"        &{n}_input_dims,\n"
+                   f"        &{n}_filter_dims,\n"
+                   f"        &{n}_output_dims,\n"
+                   f"        {n}_dw_conv_params.input_offset,\n"
+                   f"        {n + '_biases' if has_biases else 'NULL'}\n"
+                   f"    );\n"
+                   f"    if (weight_sum_status == ARM_CMSIS_NN_SUCCESS) {{\n"
+                   f"        {n}_weight_sum_ctx.buf = (uint8_t *){n}_weight_sum_runtime;\n"
+                   f"    }} else {{\n"
+                   f"        {n}_weight_sum_ctx.buf = (uint8_t *){n}_weight_sum;\n"
+                   f"    }}\n"
+                   f"    {n}_weight_sum_ctx.size = {output_c} * sizeof(int32_t);"),
+        ))
+    header += [
+        Declaration(f"{n}_input", context["input_dtype"], ArrayLiteral(context["input_data_array"]), array=True,
+                    comment="Input data (for testing)"),
+        Declaration(f"{n}_expected_output", context["output_dtype"], ArrayLiteral(context["expected_output_array"]),
+                    array=True, comment="Expected output (golden)"),
+    ]
+    source = [Declaration(f"{n}_bias_dims", "cmsis_nn_dims", {"n": 1, "h": 1, "w": 1, "c": output_c},
+                          comment="Bias dimensions: bias shape is [1, 1, 1, C_OUT]")]
+    checks = ()
+    if context.get("planar_supported") is not None:
+        checks = (RuleCheck(context["planar_rule_fn"], 1 if context["planar_supported"] else 0, "planar_supported"),)
+    output = context["output_dims"]
+    return ArgumentPool(
+        name=n, values=values, header=header, source=source, providers=tuple(providers), checks=checks,
+        output_count=f"({output['n']} * {output['h']} * {output['w']} * {output['c']})", benchmark=False,
+    )
+
+
+def depthwise_fault(pool: ArgumentPool, kind: str, context: Dict[str, Any]) -> ArgumentPool:
+    """The pool of a DepthwiseConv fault case: the passing pool with the faulted argument edited."""
+    n = context["name"]
+    edit = common_fault(pool, kind, layout=context.get("kernel_layout"))
+    if edit is None and kind == "channel_mismatch":
+        edit = struct_copy(pool, kind, "output_dims", "cmsis_nn_dims", f"{n}_output_dims",
+                           {"c": int(context["input_dims"]["c"]) + 1})
+    elif edit is None and kind == "null_weight_sum_ctx":
+        edit = null_context_buffer(pool, kind, "weight_sum_ctx", f"{n}_weight_sum_ctx")
+    if edit is None:
+        raise ValueError(f"{n}: no DepthwiseConv fault edit for {kind!r}")
+    return with_fault(pool, edit)
 
 
 def _opt_dilation_supported(
@@ -148,6 +278,22 @@ class OpDepthwiseConv(OperationBase):
                     f"{kernel_fn} only checks ctx->buf when the scratch sizer is non-zero, "
                     "which needs required_capabilities: [dsp] or [mve]",
                 )
+
+    def _render_depthwise(self, output_dir: Path, context: Dict[str, Any]) -> None:
+        pool = depthwise_argument_pool(context)
+        fault = self.fault_kind()
+        if fault:
+            self._check_fault_reachable(fault, context)
+            context.update(self.fault_context())
+            pool = depthwise_fault(pool, fault, context)
+        self.render_harness_files(
+            output_dir,
+            stem="depthwise_conv",
+            context=context,
+            pool=pool,
+            validation_key="ConvolutionFunctions/depthwise_conv/depthwise_conv.c.j2",
+            label="Depthwise convolution",
+        )
 
     def needs_keras_model(self) -> bool:
         return str(self.desc.get("weight_dtype", "S8")).upper() != "S4"
@@ -356,17 +502,16 @@ class OpDepthwiseConv(OperationBase):
         entry = self.desc.get("entry")
         if entry:
             info.update(
-                resolve_direct_entry(
+                resolve_entry(
                     "DepthwiseConv",
                     str(entry),
-                    self.desc.get("activation_dtype", "S8"),
-                    self.desc.get("weight_dtype", "S8"),
+                    activation_dtype=self.desc.get("activation_dtype", "S8"),
+                    weight_dtype=self.desc.get("weight_dtype", "S8"),
+                    cpu=self.target_cpu,
+                    desc=self.desc,
                 )
             )
             check_entry_fault(self.desc, info)
-            # The s8 entries take weight sums and size scratch from the dims alone; float
-            # entries keep their default entry's call with the registry's layout flags.
-            info["direct_entry"] = info["entry_family"] == "depthwise_s8"
 
         variant = str(self._hint().get("kernel_variant", "")).lower()
         if not variant:
@@ -748,6 +893,8 @@ class OpDepthwiseConv(OperationBase):
                      + output_dims['n'] * output_dims['h'] * output_dims['w'] * output_dims['c']) * element_size
                 ),
             )
+            if kernel_info.get("entry_scratch_bytes") is not None:
+                buffer_size_max = max(buffer_size_max, int(kernel_info["entry_scratch_bytes"]))
 
             context = {
                 'name': name,
@@ -774,6 +921,8 @@ class OpDepthwiseConv(OperationBase):
                 'call_style': kernel_info.get("call_style", "baseline"),
                 'buffer_size_max': buffer_size_max,
                 'force_no_scratch': bool(self._hint().get("force_no_scratch", False)),
+                'entry_scratch_bytes': kernel_info.get("entry_scratch_bytes"),
+                'entry_extra_sizers': kernel_info.get("entry_extra_sizers"),
                 'float_kernel': True,
                 'expected_status': self.expected_status(),
                 'autovectorize_declines': bool(self.desc.get("autovectorize_declines", False)),
@@ -787,24 +936,7 @@ class OpDepthwiseConv(OperationBase):
                 'dw_activation_max_literal': builder.format_float_literal(dw_conv_params['activation_max']),
             }
             context.update(nonfinite_context)
-            fault = self.fault_kind()
-            c_template = "ConvolutionFunctions/depthwise_conv/depthwise_conv.c.j2"
-            if fault:
-                self._check_fault_reachable(fault, context)
-                context.update(self.fault_context())
-                c_template = "ConvolutionFunctions/depthwise_conv/depthwise_conv_fault.c.j2"
-            includes_api_dir = output_dir / "includes"
-            includes_api_dir.mkdir(parents=True, exist_ok=True)
-
-            h_content = self.render_template("ConvolutionFunctions/depthwise_conv/depthwise_conv.h.j2", context)
-            h_path = includes_api_dir / f"{name}_depthwise_conv.h"
-            with open(h_path, 'w') as f:
-                f.write(h_content)
-
-            c_content = self.render_template(c_template, context)
-            c_path = output_dir / f"{name}_depthwise_conv.c"
-            with open(c_path, 'w') as f:
-                f.write(c_content)
+            self._render_depthwise(output_dir, context)
 
             cmake_context = {
                 'name': name,
@@ -1000,7 +1132,20 @@ class OpDepthwiseConv(OperationBase):
             input_dims, filter_dims, output_dims,
             output_dtype=activation_dtype
         )
-        buffer_size_max = max(buffer_size_max, entry_scratch_bytes(self.desc.get("entry"), input_dims))
+        if kernel_info.get("entry_scratch_bytes") is not None:
+            buffer_size_max = max(buffer_size_max, int(kernel_info["entry_scratch_bytes"]))
+        # The 3x3 entries size their own path from the input dims; scratch takes the larger answer.
+        buffer_size_max = max(buffer_size_max,
+                              depthwise_3x3_scratch_bytes(kernel_info.get("entry_extra_sizers"), input_dims))
+        # An entry gets the weight-sum context exactly when its prototype takes one; the wrapper
+        # keeps the rule it always had.
+        takes_weight_sum_ctx = kernel_info["kernel_fn"] == "arm_depthwise_conv_wrapper_s8"
+        if kernel_info.get("entry_family") == "contract":
+            from helia_core_tester.contract import render as contract_render
+            from helia_core_tester.contract.bind import takes
+
+            takes_weight_sum_ctx = takes(
+                contract_render.load_current_contracts().require(kernel_info["kernel_fn"]), "weight_sum_ctx")
         
         
         # Build template context
@@ -1027,36 +1172,15 @@ class OpDepthwiseConv(OperationBase):
             'kernel_get_buffer_size_fn': kernel_info["kernel_get_buffer_size_fn"],
             'call_style': kernel_info.get("call_style", "baseline"),
             'buffer_size_max': buffer_size_max,
-            # Entries share the s8 wrapper's argument list but size scratch from the dims alone.
-            'takes_weight_sum_ctx': kernel_info["kernel_fn"] == "arm_depthwise_conv_wrapper_s8"
-            or bool(kernel_info.get("direct_entry")),
-            'direct_entry': bool(kernel_info.get("direct_entry")),
-            'entry_buffer_size_fn': kernel_info.get("entry_buffer_size_fn"),
+            'takes_weight_sum_ctx': takes_weight_sum_ctx,
+            'entry_scratch_bytes': kernel_info.get("entry_scratch_bytes"),
+            'entry_extra_sizers': kernel_info.get("entry_extra_sizers"),
             'expected_status': self.expected_status(),
             'planar_supported': self.desc.get("planar_supported"),
             'planar_rule_fn': DEPTHWISE_CONV_S8_PLANAR_RULE,
         }
-        fault = self.fault_kind()
-        c_template = "ConvolutionFunctions/depthwise_conv/depthwise_conv.c.j2"
-        if fault:
-            self._check_fault_reachable(fault, context)
-            context.update(self.fault_context())
-            c_template = "ConvolutionFunctions/depthwise_conv/depthwise_conv_fault.c.j2"
+        self._render_depthwise(output_dir, context)
 
-        # Render templates
-        includes_api_dir = output_dir / "includes"
-        includes_api_dir.mkdir(parents=True, exist_ok=True)
-
-        h_content = self.render_template("ConvolutionFunctions/depthwise_conv/depthwise_conv.h.j2", context)
-        h_path = includes_api_dir / f"{name}_depthwise_conv.h"
-        with open(h_path, 'w') as f:
-            f.write(h_content)
-
-        c_content = self.render_template(c_template, context)
-        c_path = output_dir / f"{name}_depthwise_conv.c"
-        with open(c_path, 'w') as f:
-            f.write(c_content)
-        
         cmake_context = {
             'name': name,
             'operator': self.desc.get('operator', 'DepthwiseConv'),

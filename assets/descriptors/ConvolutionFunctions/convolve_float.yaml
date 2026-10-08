@@ -1820,6 +1820,7 @@ expected_status: ARM_CMSIS_NN_ARG_ERROR
 operator: Convolve
 name: convolve_float_entry_acc16_8x8_k3x3_f16
 entry: arm_convolve_f16_acc16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -1833,6 +1834,7 @@ use_bias: true
 operator: Convolve
 name: convolve_float_entry_nhwc_8x8_k3x3_f16
 entry: arm_convolve_nhwc_f16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -1846,6 +1848,7 @@ use_bias: true
 operator: Convolve
 name: convolve_float_entry_nhwc_acc16_8x8_k3x3_f16
 entry: arm_convolve_nhwc_f16_acc16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -1859,6 +1862,7 @@ use_bias: true
 operator: Convolve
 name: convolve_float_entry_wrapper_acc16_6x6_k3x3_f16
 entry: arm_convolve_wrapper_f16_acc16
+entry_sizer: arm_convolve_wrapper_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -1872,6 +1876,7 @@ use_bias: true
 operator: Convolve
 name: convolve_float_entry_1x1_acc16_8x8_c16_f16
 entry: arm_convolve_1x1_f16_acc16
+entry_sizer: arm_convolve_1x1_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -1886,6 +1891,7 @@ comparison: {atol: 0.002, rtol: 0.002}
 operator: Convolve
 name: convolve_float_entry_1x1_nhwc_8x8_c16_f16
 entry: arm_convolve_1x1_nhwc_f16
+entry_sizer: arm_convolve_1x1_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -1900,6 +1906,7 @@ comparison: {atol: 0.002, rtol: 0.002}
 operator: Convolve
 name: convolve_float_entry_1x1_nhwc_acc16_8x8_c16_f16
 entry: arm_convolve_1x1_nhwc_f16_acc16
+entry_sizer: arm_convolve_1x1_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -1914,6 +1921,7 @@ comparison: {atol: 0.002, rtol: 0.002}
 operator: Convolve
 name: convolve_float_entry_1xn_acc16_k5_oc4_f16
 entry: arm_convolve_1_x_n_f16_acc16
+entry_sizer: arm_convolve_1_x_n_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -1928,6 +1936,7 @@ comparison: {atol: 0.002, rtol: 0.002}
 operator: Convolve
 name: convolve_float_entry_1xn_nhwc_k5_oc4_f16
 entry: arm_convolve_1_x_n_nhwc_f16
+entry_sizer: arm_convolve_1_x_n_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -1942,6 +1951,7 @@ comparison: {atol: 0.002, rtol: 0.002}
 operator: Convolve
 name: convolve_float_entry_1xn_nhwc_acc16_k5_oc4_f16
 entry: arm_convolve_1_x_n_nhwc_f16_acc16
+entry_sizer: arm_convolve_1_x_n_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -2082,6 +2092,7 @@ comparison: {atol: 0.002, rtol: 0.002}
 operator: Convolve
 name: convolve_float_entry_1xn_acc16_k4_c4_oc13_packed_f16
 entry: arm_convolve_1_x_n_f16_acc16
+entry_sizer: arm_convolve_1_x_n_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -2097,6 +2108,7 @@ hint:
 operator: Convolve
 name: convolve_float_entry_acc16_1d_k3_c6_oc5_f16
 entry: arm_convolve_f16_acc16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -2110,6 +2122,7 @@ use_bias: true
 operator: Convolve
 name: convolve_float_entry_acc16_1d_k3_c6_oc13_packed_f16
 entry: arm_convolve_f16_acc16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -2125,6 +2138,7 @@ hint:
 operator: Convolve
 name: convolve_float_entry_acc16_1d_k5_c16_oc16_f16
 entry: arm_convolve_f16_acc16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -2139,6 +2153,7 @@ comparison: {atol: 0.002, rtol: 0.002}
 operator: Convolve
 name: convolve_float_entry_acc16_1d_k5_c4_oc13_packed_f16
 entry: arm_convolve_f16_acc16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -2168,6 +2183,7 @@ comparison: {atol: 0.003, rtol: 0.003}
 operator: Convolve
 name: convolve_fault_entry_acc16_invalid_layout_f16
 entry: arm_convolve_f16_acc16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -2183,6 +2199,7 @@ expected_status: ARM_CMSIS_NN_ARG_ERROR
 operator: Convolve
 name: convolve_fault_entry_1x1_acc16_invalid_layout_f16
 entry: arm_convolve_1x1_f16_acc16
+entry_sizer: arm_convolve_1x1_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -2198,6 +2215,7 @@ expected_status: ARM_CMSIS_NN_ARG_ERROR
 operator: Convolve
 name: convolve_fault_entry_1xn_acc16_invalid_layout_f16
 entry: arm_convolve_1_x_n_f16_acc16
+entry_sizer: arm_convolve_1_x_n_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -2251,6 +2269,7 @@ comparison: {atol: 0.002, rtol: 0.002}
 operator: Convolve
 name: convolve_float_entry_1xn_acc16_strided_c14_k7_oc16_same_f16
 entry: arm_convolve_1_x_n_f16_acc16
+entry_sizer: arm_convolve_1_x_n_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -2265,6 +2284,7 @@ comparison: {atol: 0.004, rtol: 0.004}
 operator: Convolve
 name: convolve_float_entry_1xn_acc16_strided_c14_k7_oc16_valid_f16
 entry: arm_convolve_1_x_n_f16_acc16
+entry_sizer: arm_convolve_1_x_n_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -2309,6 +2329,7 @@ comparison: {atol: 0.002, rtol: 0.002}
 operator: Convolve
 name: convolve_float_entry_1xn_acc16_strided_c24_k9_oc24_same_f16
 entry: arm_convolve_1_x_n_f16_acc16
+entry_sizer: arm_convolve_1_x_n_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -2323,6 +2344,7 @@ comparison: {atol: 0.01, rtol: 0.01}
 operator: Convolve
 name: convolve_float_entry_1xn_acc16_strided_c24_k9_oc24_valid_f16
 entry: arm_convolve_1_x_n_f16_acc16
+entry_sizer: arm_convolve_1_x_n_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -2367,6 +2389,7 @@ comparison: {atol: 0.003, rtol: 0.003}
 operator: Convolve
 name: convolve_float_entry_1xn_acc16_strided_c16_k7_oc8_same_f16
 entry: arm_convolve_1_x_n_f16_acc16
+entry_sizer: arm_convolve_1_x_n_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -2381,6 +2404,7 @@ comparison: {atol: 0.004, rtol: 0.004}
 operator: Convolve
 name: convolve_float_entry_1xn_acc16_strided_c16_k7_oc8_valid_f16
 entry: arm_convolve_1_x_n_f16_acc16
+entry_sizer: arm_convolve_1_x_n_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -2425,6 +2449,7 @@ comparison: {atol: 0.003, rtol: 0.003}
 operator: Convolve
 name: convolve_float_entry_1xn_acc16_strided_c8_k9_oc12_same_f16
 entry: arm_convolve_1_x_n_f16_acc16
+entry_sizer: arm_convolve_1_x_n_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -2439,6 +2464,7 @@ comparison: {atol: 0.003, rtol: 0.003}
 operator: Convolve
 name: convolve_float_entry_1xn_acc16_strided_c8_k9_oc12_valid_f16
 entry: arm_convolve_1_x_n_f16_acc16
+entry_sizer: arm_convolve_1_x_n_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -2483,6 +2509,7 @@ comparison: {atol: 0.003, rtol: 0.003}
 operator: Convolve
 name: convolve_float_entry_1xn_acc16_strided_c8_k7_oc5_same_f16
 entry: arm_convolve_1_x_n_f16_acc16
+entry_sizer: arm_convolve_1_x_n_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -2497,6 +2524,7 @@ comparison: {atol: 0.003, rtol: 0.003}
 operator: Convolve
 name: convolve_float_entry_1xn_acc16_strided_c8_k7_oc5_valid_f16
 entry: arm_convolve_1_x_n_f16_acc16
+entry_sizer: arm_convolve_1_x_n_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -2541,6 +2569,7 @@ comparison: {atol: 0.002, rtol: 0.002}
 operator: Convolve
 name: convolve_float_entry_1xn_acc16_strided_c8_k7_oc7_same_f16
 entry: arm_convolve_1_x_n_f16_acc16
+entry_sizer: arm_convolve_1_x_n_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -2555,6 +2584,7 @@ comparison: {atol: 0.003, rtol: 0.003}
 operator: Convolve
 name: convolve_float_entry_1xn_acc16_strided_c8_k7_oc7_valid_f16
 entry: arm_convolve_1_x_n_f16_acc16
+entry_sizer: arm_convolve_1_x_n_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -2599,6 +2629,7 @@ comparison: {atol: 0.003, rtol: 0.003}
 operator: Convolve
 name: convolve_float_entry_1xn_acc16_strided_c10_k7_oc21_same_f16
 entry: arm_convolve_1_x_n_f16_acc16
+entry_sizer: arm_convolve_1_x_n_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -2613,6 +2644,7 @@ comparison: {atol: 0.004, rtol: 0.004}
 operator: Convolve
 name: convolve_float_entry_1xn_acc16_strided_c10_k7_oc21_valid_f16
 entry: arm_convolve_1_x_n_f16_acc16
+entry_sizer: arm_convolve_1_x_n_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -2657,6 +2689,7 @@ comparison: {atol: 0.003, rtol: 0.003}
 operator: Convolve
 name: convolve_float_entry_1xn_acc16_strided_c32_k7_oc3_same_f16
 entry: arm_convolve_1_x_n_f16_acc16
+entry_sizer: arm_convolve_1_x_n_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -2671,6 +2704,7 @@ comparison: {atol: 0.002, rtol: 0.002}
 operator: Convolve
 name: convolve_float_entry_1xn_acc16_strided_c32_k7_oc3_valid_f16
 entry: arm_convolve_1_x_n_f16_acc16
+entry_sizer: arm_convolve_1_x_n_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -2715,6 +2749,7 @@ comparison: {atol: 0.002, rtol: 0.002}
 operator: Convolve
 name: convolve_float_entry_1xn_acc16_strided_c32_k7_oc1_same_f16
 entry: arm_convolve_1_x_n_f16_acc16
+entry_sizer: arm_convolve_1_x_n_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -2729,6 +2764,7 @@ comparison: {atol: 0.002, rtol: 0.002}
 operator: Convolve
 name: convolve_float_entry_1xn_acc16_strided_c32_k7_oc1_valid_f16
 entry: arm_convolve_1_x_n_f16_acc16
+entry_sizer: arm_convolve_1_x_n_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -2773,6 +2809,7 @@ comparison: {atol: 0.002, rtol: 0.002}
 operator: Convolve
 name: convolve_float_entry_1xn_acc16_strided_c4_k7_oc16_same_f16
 entry: arm_convolve_1_x_n_f16_acc16
+entry_sizer: arm_convolve_1_x_n_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -2787,6 +2824,7 @@ comparison: {atol: 0.002, rtol: 0.002}
 operator: Convolve
 name: convolve_float_entry_1xn_acc16_strided_c4_k7_oc16_valid_f16
 entry: arm_convolve_1_x_n_f16_acc16
+entry_sizer: arm_convolve_1_x_n_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -2831,6 +2869,7 @@ comparison: {atol: 0.003, rtol: 0.003}
 operator: Convolve
 name: convolve_float_entry_1xn_acc16_strided_c40_k7_oc3_same_f16
 entry: arm_convolve_1_x_n_f16_acc16
+entry_sizer: arm_convolve_1_x_n_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -2845,6 +2884,7 @@ comparison: {atol: 0.003, rtol: 0.003}
 operator: Convolve
 name: convolve_float_entry_1xn_acc16_strided_c40_k7_oc3_valid_f16
 entry: arm_convolve_1_x_n_f16_acc16
+entry_sizer: arm_convolve_1_x_n_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -2865,6 +2905,7 @@ comparison: {atol: 0.003, rtol: 0.003}
 operator: Convolve
 name: convolve_float_route_1x1_ohwi_f32
 entry: arm_convolve_1x1_nhwc_ohwi_f32
+entry_sizer: arm_convolve_1x1_f32_get_buffer_size
 suite: float
 activation_dtype: FP32
 weight_dtype: FP32
@@ -2878,6 +2919,7 @@ use_bias: true
 operator: Convolve
 name: convolve_float_route_1x1_packed_f32
 entry: arm_convolve_1x1_nhwc_packed_f32
+entry_sizer: arm_convolve_1x1_f32_get_buffer_size
 suite: float
 activation_dtype: FP32
 weight_dtype: FP32
@@ -2893,6 +2935,7 @@ hint:
 operator: Convolve
 name: convolve_float_route_1_x_n_ohwi_f32
 entry: arm_convolve_1_x_n_nhwc_ohwi_f32
+entry_sizer: arm_convolve_1_x_n_f32_get_buffer_size
 suite: float
 activation_dtype: FP32
 weight_dtype: FP32
@@ -2906,6 +2949,7 @@ use_bias: true
 operator: Convolve
 name: convolve_float_route_1_x_n_packed_f32
 entry: arm_convolve_1_x_n_nhwc_packed_f32
+entry_sizer: arm_convolve_1_x_n_f32_get_buffer_size
 suite: float
 activation_dtype: FP32
 weight_dtype: FP32
@@ -2921,6 +2965,7 @@ hint:
 operator: Convolve
 name: convolve_float_route_1d_k5_ohwi_f32
 entry: arm_convolve_1d_k5_nhwc_ohwi_f32
+entry_sizer: arm_convolve_f32_get_buffer_size
 suite: float
 activation_dtype: FP32
 weight_dtype: FP32
@@ -2934,6 +2979,7 @@ use_bias: true
 operator: Convolve
 name: convolve_float_route_1d_k5_packed_f32
 entry: arm_convolve_1d_k5_nhwc_packed_f32
+entry_sizer: arm_convolve_f32_get_buffer_size
 suite: float
 activation_dtype: FP32
 weight_dtype: FP32
@@ -2949,6 +2995,7 @@ hint:
 operator: Convolve
 name: convolve_float_route_1d_k3_ohwi_f32
 entry: arm_convolve_1d_k3_nhwc_ohwi_f32
+entry_sizer: arm_convolve_f32_get_buffer_size
 suite: float
 activation_dtype: FP32
 weight_dtype: FP32
@@ -2962,6 +3009,7 @@ use_bias: true
 operator: Convolve
 name: convolve_float_route_1d_k3_packed_f32
 entry: arm_convolve_1d_k3_nhwc_packed_f32
+entry_sizer: arm_convolve_f32_get_buffer_size
 suite: float
 activation_dtype: FP32
 weight_dtype: FP32
@@ -2977,6 +3025,7 @@ hint:
 operator: Convolve
 name: convolve_float_route_patch_gemm_ohwi_f32
 entry: arm_convolve_patch_gemm_nhwc_ohwi_f32
+entry_sizer: arm_convolve_patch_gemm_f32_get_buffer_size
 suite: float
 activation_dtype: FP32
 weight_dtype: FP32
@@ -2990,6 +3039,7 @@ use_bias: true
 operator: Convolve
 name: convolve_float_route_patch_gemm_packed_f32
 entry: arm_convolve_patch_gemm_nhwc_packed_f32
+entry_sizer: arm_convolve_patch_gemm_f32_get_buffer_size
 suite: float
 activation_dtype: FP32
 weight_dtype: FP32
@@ -3005,6 +3055,7 @@ hint:
 operator: Convolve
 name: convolve_float_route_direct_ohwi_f32
 entry: arm_convolve_direct_nhwc_ohwi_f32
+entry_sizer: arm_convolve_f32_get_buffer_size
 suite: float
 activation_dtype: FP32
 weight_dtype: FP32
@@ -3018,6 +3069,7 @@ use_bias: true
 operator: Convolve
 name: convolve_float_route_direct_packed_f32
 entry: arm_convolve_direct_nhwc_packed_f32
+entry_sizer: arm_convolve_f32_get_buffer_size
 suite: float
 activation_dtype: FP32
 weight_dtype: FP32
@@ -3033,6 +3085,7 @@ hint:
 operator: Convolve
 name: convolve_float_route_small_c_ohwi_f32
 entry: arm_convolve_small_c_nhwc_f32
+entry_sizer: arm_convolve_f32_get_buffer_size
 suite: float
 activation_dtype: FP32
 weight_dtype: FP32
@@ -3047,6 +3100,7 @@ autovectorize_declines: true
 operator: Convolve
 name: convolve_float_route_small_c_packed_f32
 entry: arm_convolve_small_c_nhwc_f32
+entry_sizer: arm_convolve_f32_get_buffer_size
 suite: float
 activation_dtype: FP32
 weight_dtype: FP32
@@ -3063,6 +3117,7 @@ autovectorize_declines: true
 operator: Convolve
 name: convolve_float_route_1d_k5_declines_k3_f32
 entry: arm_convolve_1d_k5_nhwc_ohwi_f32
+entry_sizer: arm_convolve_f32_get_buffer_size
 suite: float
 activation_dtype: FP32
 weight_dtype: FP32
@@ -3077,6 +3132,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_small_c_declines_c4_f32
 entry: arm_convolve_small_c_nhwc_f32
+entry_sizer: arm_convolve_f32_get_buffer_size
 suite: float
 activation_dtype: FP32
 weight_dtype: FP32
@@ -3091,6 +3147,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_1x1_rejects_3x3_f32
 entry: arm_convolve_1x1_nhwc_ohwi_f32
+entry_sizer: arm_convolve_1x1_f32_get_buffer_size
 suite: float
 activation_dtype: FP32
 weight_dtype: FP32
@@ -3105,6 +3162,7 @@ expected_status: ARM_CMSIS_NN_ARG_ERROR
 operator: Convolve
 name: convolve_float_route_1_x_n_rejects_3x3_f32
 entry: arm_convolve_1_x_n_nhwc_ohwi_f32
+entry_sizer: arm_convolve_1_x_n_f32_get_buffer_size
 suite: float
 activation_dtype: FP32
 weight_dtype: FP32
@@ -3119,6 +3177,7 @@ expected_status: ARM_CMSIS_NN_ARG_ERROR
 operator: Convolve
 name: convolve_float_route_1x1_ohwi_f16
 entry: arm_convolve_1x1_nhwc_ohwi_f16
+entry_sizer: arm_convolve_1x1_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3133,6 +3192,7 @@ comparison: {atol: 0.002, rtol: 0.002}
 operator: Convolve
 name: convolve_float_route_1x1_ohwi_acc16_f16
 entry: arm_convolve_1x1_nhwc_ohwi_f16_acc16
+entry_sizer: arm_convolve_1x1_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3147,6 +3207,7 @@ comparison: {atol: 0.002, rtol: 0.002}
 operator: Convolve
 name: convolve_float_route_1x1_packed_f16
 entry: arm_convolve_1x1_nhwc_packed_f16
+entry_sizer: arm_convolve_1x1_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3163,6 +3224,7 @@ comparison: {atol: 0.002, rtol: 0.002}
 operator: Convolve
 name: convolve_float_route_1x1_packed_acc16_f16
 entry: arm_convolve_1x1_nhwc_packed_f16_acc16
+entry_sizer: arm_convolve_1x1_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3179,6 +3241,7 @@ comparison: {atol: 0.002, rtol: 0.002}
 operator: Convolve
 name: convolve_float_route_1_x_n_ohwi_f16
 entry: arm_convolve_1_x_n_nhwc_ohwi_f16
+entry_sizer: arm_convolve_1_x_n_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3193,6 +3256,7 @@ comparison: {atol: 0.002, rtol: 0.002}
 operator: Convolve
 name: convolve_float_route_1_x_n_ohwi_acc16_f16
 entry: arm_convolve_1_x_n_nhwc_ohwi_f16_acc16
+entry_sizer: arm_convolve_1_x_n_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3207,6 +3271,7 @@ comparison: {atol: 0.002, rtol: 0.002}
 operator: Convolve
 name: convolve_float_route_1_x_n_packed_f16
 entry: arm_convolve_1_x_n_nhwc_packed_f16
+entry_sizer: arm_convolve_1_x_n_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3223,6 +3288,7 @@ comparison: {atol: 0.002, rtol: 0.002}
 operator: Convolve
 name: convolve_float_route_1_x_n_packed_acc16_f16
 entry: arm_convolve_1_x_n_nhwc_packed_f16_acc16
+entry_sizer: arm_convolve_1_x_n_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3239,6 +3305,7 @@ comparison: {atol: 0.002, rtol: 0.002}
 operator: Convolve
 name: convolve_float_route_1d_k5_ohwi_f16
 entry: arm_convolve_1d_k5_nhwc_ohwi_f16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3252,6 +3319,7 @@ use_bias: true
 operator: Convolve
 name: convolve_float_route_1d_k5_ohwi_acc16_f16
 entry: arm_convolve_1d_k5_nhwc_ohwi_f16_acc16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3265,6 +3333,7 @@ use_bias: true
 operator: Convolve
 name: convolve_float_route_1d_k5_packed_f16
 entry: arm_convolve_1d_k5_nhwc_packed_f16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3281,6 +3350,7 @@ comparison: {atol: 0.002, rtol: 0.002}
 operator: Convolve
 name: convolve_float_route_1d_k5_packed_acc16_f16
 entry: arm_convolve_1d_k5_nhwc_packed_f16_acc16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3297,6 +3367,7 @@ comparison: {atol: 0.003, rtol: 0.003}
 operator: Convolve
 name: convolve_float_route_1d_k3_ohwi_f16
 entry: arm_convolve_1d_k3_nhwc_ohwi_f16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3310,6 +3381,7 @@ use_bias: true
 operator: Convolve
 name: convolve_float_route_1d_k3_ohwi_acc16_f16
 entry: arm_convolve_1d_k3_nhwc_ohwi_f16_acc16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3323,6 +3395,7 @@ use_bias: true
 operator: Convolve
 name: convolve_float_route_1d_k3_packed_f16
 entry: arm_convolve_1d_k3_nhwc_packed_f16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3339,6 +3412,7 @@ comparison: {atol: 0.002, rtol: 0.002}
 operator: Convolve
 name: convolve_float_route_1d_k3_packed_acc16_f16
 entry: arm_convolve_1d_k3_nhwc_packed_f16_acc16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3355,6 +3429,7 @@ comparison: {atol: 0.002, rtol: 0.002}
 operator: Convolve
 name: convolve_float_route_patch_gemm_ohwi_f16
 entry: arm_convolve_patch_gemm_nhwc_ohwi_f16
+entry_sizer: arm_convolve_patch_gemm_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3368,6 +3443,7 @@ use_bias: true
 operator: Convolve
 name: convolve_float_route_patch_gemm_ohwi_acc16_f16
 entry: arm_convolve_patch_gemm_nhwc_ohwi_f16_acc16
+entry_sizer: arm_convolve_patch_gemm_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3382,6 +3458,7 @@ comparison: {atol: 0.002, rtol: 0.002}
 operator: Convolve
 name: convolve_float_route_patch_gemm_packed_f16
 entry: arm_convolve_patch_gemm_nhwc_packed_f16
+entry_sizer: arm_convolve_patch_gemm_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3398,6 +3475,7 @@ comparison: {atol: 0.002, rtol: 0.002}
 operator: Convolve
 name: convolve_float_route_patch_gemm_packed_acc16_f16
 entry: arm_convolve_patch_gemm_nhwc_packed_f16_acc16
+entry_sizer: arm_convolve_patch_gemm_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3414,6 +3492,7 @@ comparison: {atol: 0.002, rtol: 0.002}
 operator: Convolve
 name: convolve_float_route_direct_ohwi_f16
 entry: arm_convolve_direct_nhwc_ohwi_f16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3427,6 +3506,7 @@ use_bias: true
 operator: Convolve
 name: convolve_float_route_direct_ohwi_acc16_f16
 entry: arm_convolve_direct_nhwc_ohwi_f16_acc16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3440,6 +3520,7 @@ use_bias: true
 operator: Convolve
 name: convolve_float_route_direct_packed_f16
 entry: arm_convolve_direct_nhwc_packed_f16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3456,6 +3537,7 @@ comparison: {atol: 0.003, rtol: 0.003}
 operator: Convolve
 name: convolve_float_route_direct_packed_acc16_f16
 entry: arm_convolve_direct_nhwc_packed_f16_acc16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3472,6 +3554,7 @@ comparison: {atol: 0.003, rtol: 0.003}
 operator: Convolve
 name: convolve_float_route_small_c_ohwi_f16
 entry: arm_convolve_small_c_nhwc_f16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3486,6 +3569,7 @@ autovectorize_declines: true
 operator: Convolve
 name: convolve_float_route_small_c_packed_f16
 entry: arm_convolve_small_c_nhwc_f16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3502,6 +3586,7 @@ autovectorize_declines: true
 operator: Convolve
 name: convolve_float_route_1d_k5_declines_k3_f16
 entry: arm_convolve_1d_k5_nhwc_ohwi_f16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3516,6 +3601,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_small_c_declines_c8_f16
 entry: arm_convolve_small_c_nhwc_f16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3530,6 +3616,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_1x1_rejects_3x3_f16
 entry: arm_convolve_1x1_nhwc_ohwi_f16
+entry_sizer: arm_convolve_1x1_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3544,6 +3631,7 @@ expected_status: ARM_CMSIS_NN_ARG_ERROR
 operator: Convolve
 name: convolve_float_route_1_x_n_rejects_3x3_f16
 entry: arm_convolve_1_x_n_nhwc_ohwi_f16
+entry_sizer: arm_convolve_1_x_n_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3560,6 +3648,7 @@ expected_status: ARM_CMSIS_NN_ARG_ERROR
 operator: Convolve
 name: convolve_float_route_1x1_ohwi_stride2_f16
 entry: arm_convolve_1x1_nhwc_ohwi_f16
+entry_sizer: arm_convolve_1x1_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3574,6 +3663,7 @@ comparison: {atol: 0.002, rtol: 0.002}
 operator: Convolve
 name: convolve_float_route_1x1_ohwi_stride2_f32
 entry: arm_convolve_1x1_nhwc_ohwi_f32
+entry_sizer: arm_convolve_1x1_f32_get_buffer_size
 suite: float
 activation_dtype: FP32
 weight_dtype: FP32
@@ -3587,6 +3677,7 @@ use_bias: true
 operator: Convolve
 name: convolve_float_route_1_x_n_ohwi_k224_f32
 entry: arm_convolve_1_x_n_nhwc_ohwi_f32
+entry_sizer: arm_convolve_1_x_n_f32_get_buffer_size
 suite: float
 activation_dtype: FP32
 weight_dtype: FP32
@@ -3601,6 +3692,7 @@ use_bias: true
 operator: Convolve
 name: convolve_float_route_1x1_ohwi_declines_packed_f32
 entry: arm_convolve_1x1_nhwc_ohwi_f32
+entry_sizer: arm_convolve_1x1_f32_get_buffer_size
 suite: float
 activation_dtype: FP32
 weight_dtype: FP32
@@ -3617,6 +3709,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_1x1_packed_declines_ohwi_f32
 entry: arm_convolve_1x1_nhwc_packed_f32
+entry_sizer: arm_convolve_1x1_f32_get_buffer_size
 suite: float
 activation_dtype: FP32
 weight_dtype: FP32
@@ -3631,6 +3724,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_1_x_n_ohwi_declines_packed_f32
 entry: arm_convolve_1_x_n_nhwc_ohwi_f32
+entry_sizer: arm_convolve_1_x_n_f32_get_buffer_size
 suite: float
 activation_dtype: FP32
 weight_dtype: FP32
@@ -3647,6 +3741,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_1_x_n_packed_declines_ohwi_f32
 entry: arm_convolve_1_x_n_nhwc_packed_f32
+entry_sizer: arm_convolve_1_x_n_f32_get_buffer_size
 suite: float
 activation_dtype: FP32
 weight_dtype: FP32
@@ -3661,6 +3756,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_1d_k5_ohwi_declines_packed_f32
 entry: arm_convolve_1d_k5_nhwc_ohwi_f32
+entry_sizer: arm_convolve_f32_get_buffer_size
 suite: float
 activation_dtype: FP32
 weight_dtype: FP32
@@ -3677,6 +3773,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_1d_k5_packed_declines_ohwi_f32
 entry: arm_convolve_1d_k5_nhwc_packed_f32
+entry_sizer: arm_convolve_f32_get_buffer_size
 suite: float
 activation_dtype: FP32
 weight_dtype: FP32
@@ -3691,6 +3788,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_1d_k3_ohwi_declines_packed_f32
 entry: arm_convolve_1d_k3_nhwc_ohwi_f32
+entry_sizer: arm_convolve_f32_get_buffer_size
 suite: float
 activation_dtype: FP32
 weight_dtype: FP32
@@ -3707,6 +3805,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_1d_k3_packed_declines_ohwi_f32
 entry: arm_convolve_1d_k3_nhwc_packed_f32
+entry_sizer: arm_convolve_f32_get_buffer_size
 suite: float
 activation_dtype: FP32
 weight_dtype: FP32
@@ -3721,6 +3820,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_patch_gemm_ohwi_declines_packed_f32
 entry: arm_convolve_patch_gemm_nhwc_ohwi_f32
+entry_sizer: arm_convolve_patch_gemm_f32_get_buffer_size
 suite: float
 activation_dtype: FP32
 weight_dtype: FP32
@@ -3737,6 +3837,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_patch_gemm_packed_declines_ohwi_f32
 entry: arm_convolve_patch_gemm_nhwc_packed_f32
+entry_sizer: arm_convolve_patch_gemm_f32_get_buffer_size
 suite: float
 activation_dtype: FP32
 weight_dtype: FP32
@@ -3751,6 +3852,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_direct_ohwi_declines_packed_f32
 entry: arm_convolve_direct_nhwc_ohwi_f32
+entry_sizer: arm_convolve_f32_get_buffer_size
 suite: float
 activation_dtype: FP32
 weight_dtype: FP32
@@ -3767,6 +3869,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_direct_packed_declines_ohwi_f32
 entry: arm_convolve_direct_nhwc_packed_f32
+entry_sizer: arm_convolve_f32_get_buffer_size
 suite: float
 activation_dtype: FP32
 weight_dtype: FP32
@@ -3781,6 +3884,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_1x1_ohwi_declines_packed_f16
 entry: arm_convolve_1x1_nhwc_ohwi_f16
+entry_sizer: arm_convolve_1x1_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3797,6 +3901,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_1x1_packed_declines_ohwi_f16
 entry: arm_convolve_1x1_nhwc_packed_f16
+entry_sizer: arm_convolve_1x1_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3811,6 +3916,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_1_x_n_ohwi_declines_packed_f16
 entry: arm_convolve_1_x_n_nhwc_ohwi_f16
+entry_sizer: arm_convolve_1_x_n_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3827,6 +3933,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_1_x_n_packed_declines_ohwi_f16
 entry: arm_convolve_1_x_n_nhwc_packed_f16
+entry_sizer: arm_convolve_1_x_n_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3841,6 +3948,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_1d_k5_ohwi_declines_packed_f16
 entry: arm_convolve_1d_k5_nhwc_ohwi_f16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3857,6 +3965,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_1d_k5_packed_declines_ohwi_f16
 entry: arm_convolve_1d_k5_nhwc_packed_f16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3871,6 +3980,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_1d_k3_ohwi_declines_packed_f16
 entry: arm_convolve_1d_k3_nhwc_ohwi_f16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3887,6 +3997,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_1d_k3_packed_declines_ohwi_f16
 entry: arm_convolve_1d_k3_nhwc_packed_f16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3901,6 +4012,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_patch_gemm_ohwi_declines_packed_f16
 entry: arm_convolve_patch_gemm_nhwc_ohwi_f16
+entry_sizer: arm_convolve_patch_gemm_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3917,6 +4029,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_patch_gemm_packed_declines_ohwi_f16
 entry: arm_convolve_patch_gemm_nhwc_packed_f16
+entry_sizer: arm_convolve_patch_gemm_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3931,6 +4044,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_direct_ohwi_declines_packed_f16
 entry: arm_convolve_direct_nhwc_ohwi_f16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3947,6 +4061,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_direct_packed_declines_ohwi_f16
 entry: arm_convolve_direct_nhwc_packed_f16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3963,6 +4078,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_1x1_ohwi_acc16_declines_packed_f16
 entry: arm_convolve_1x1_nhwc_ohwi_f16_acc16
+entry_sizer: arm_convolve_1x1_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3979,6 +4095,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_1x1_packed_acc16_declines_ohwi_f16
 entry: arm_convolve_1x1_nhwc_packed_f16_acc16
+entry_sizer: arm_convolve_1x1_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -3993,6 +4110,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_1_x_n_ohwi_acc16_declines_packed_f16
 entry: arm_convolve_1_x_n_nhwc_ohwi_f16_acc16
+entry_sizer: arm_convolve_1_x_n_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -4009,6 +4127,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_1_x_n_packed_acc16_declines_ohwi_f16
 entry: arm_convolve_1_x_n_nhwc_packed_f16_acc16
+entry_sizer: arm_convolve_1_x_n_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -4023,6 +4142,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_1d_k5_ohwi_acc16_declines_packed_f16
 entry: arm_convolve_1d_k5_nhwc_ohwi_f16_acc16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -4039,6 +4159,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_1d_k5_packed_acc16_declines_ohwi_f16
 entry: arm_convolve_1d_k5_nhwc_packed_f16_acc16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -4053,6 +4174,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_1d_k3_ohwi_acc16_declines_packed_f16
 entry: arm_convolve_1d_k3_nhwc_ohwi_f16_acc16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -4069,6 +4191,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_1d_k3_packed_acc16_declines_ohwi_f16
 entry: arm_convolve_1d_k3_nhwc_packed_f16_acc16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -4083,6 +4206,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_patch_gemm_ohwi_acc16_declines_packed_f16
 entry: arm_convolve_patch_gemm_nhwc_ohwi_f16_acc16
+entry_sizer: arm_convolve_patch_gemm_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -4099,6 +4223,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_patch_gemm_packed_acc16_declines_ohwi_f16
 entry: arm_convolve_patch_gemm_nhwc_packed_f16_acc16
+entry_sizer: arm_convolve_patch_gemm_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -4113,6 +4238,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_direct_ohwi_acc16_declines_packed_f16
 entry: arm_convolve_direct_nhwc_ohwi_f16_acc16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -4129,6 +4255,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_direct_packed_acc16_declines_ohwi_f16
 entry: arm_convolve_direct_nhwc_packed_f16_acc16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -4143,6 +4270,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_1d_k3_ohwi_declines_k5_f32
 entry: arm_convolve_1d_k3_nhwc_ohwi_f32
+entry_sizer: arm_convolve_f32_get_buffer_size
 suite: float
 activation_dtype: FP32
 weight_dtype: FP32
@@ -4157,6 +4285,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_1d_k3_packed_declines_k5_f32
 entry: arm_convolve_1d_k3_nhwc_packed_f32
+entry_sizer: arm_convolve_f32_get_buffer_size
 suite: float
 activation_dtype: FP32
 weight_dtype: FP32
@@ -4173,6 +4302,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_1d_k5_packed_declines_k3_f32
 entry: arm_convolve_1d_k5_nhwc_packed_f32
+entry_sizer: arm_convolve_f32_get_buffer_size
 suite: float
 activation_dtype: FP32
 weight_dtype: FP32
@@ -4189,6 +4319,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_1d_k3_ohwi_declines_k5_f16
 entry: arm_convolve_1d_k3_nhwc_ohwi_f16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -4203,6 +4334,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_1d_k3_packed_declines_k5_f16
 entry: arm_convolve_1d_k3_nhwc_packed_f16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -4219,6 +4351,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_1d_k5_packed_declines_k3_f16
 entry: arm_convolve_1d_k5_nhwc_packed_f16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -4235,6 +4368,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_1d_k3_ohwi_acc16_declines_k5_f16
 entry: arm_convolve_1d_k3_nhwc_ohwi_f16_acc16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -4249,6 +4383,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_1d_k3_packed_acc16_declines_k5_f16
 entry: arm_convolve_1d_k3_nhwc_packed_f16_acc16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -4265,6 +4400,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_1d_k5_ohwi_acc16_declines_k3_f16
 entry: arm_convolve_1d_k5_nhwc_ohwi_f16_acc16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -4279,6 +4415,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_float_route_1d_k5_packed_acc16_declines_k3_f16
 entry: arm_convolve_1d_k5_nhwc_packed_f16_acc16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16

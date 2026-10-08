@@ -108,7 +108,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: AmbiqAI/ns-cmsis-nn
-          ref: ${{ github.event.inputs.ns_cmsis_nn_ref || 'main' }}
+          ref: ${{ github.event.inputs.ns_cmsis_nn_ref || 'dev/kernel-contracts' }}
           path: ns-cmsis-nn-scratch
 
       - name: Install uv
@@ -127,7 +127,7 @@ jobs:
       - name: Setup build dependencies
         run: ./scripts/setup_ci.sh
 
-      - name: Generate + compile (no FVP run) against ns-cmsis-nn ${{ github.event.inputs.ns_cmsis_nn_ref || 'main' }}
+      - name: Generate + compile (no FVP run) against ns-cmsis-nn ${{ github.event.inputs.ns_cmsis_nn_ref || 'dev/kernel-contracts' }}
         run: |
           uv run helia_core_tester full \
             --cpu cortex-m55 \
@@ -136,3 +136,124 @@ jobs:
             --skip-run \
             --no-report \
             --verbosity 1
+
+  # The kernel contract leg (helia-core-tester dev/kernel-contracts, iteration 1).
+  # `present` runs against the ns-cmsis-nn ref under test: the export must load, the
+  # inventory must cover real cases, and the real-tree contract tests must run to a
+  # pass. `absent` runs against the last ns-cmsis-nn tag without the export and
+  # proves the tester degrades explicitly: inventory refused with exit 2, the
+  # real-tree tests skipped (not silently passed), doctor reporting the absence,
+  # and a migrated template failing closed instead of rendering a hand-written call.
+  # scripts/assert_contract_summary.py turns those observations into the verdict.
+  contract:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - leg: present
+            # ns-cmsis-nn dev/kernel-contracts carries the export until it merges to main.
+            ns_cmsis_nn_ref: ${{ github.event.inputs.ns_cmsis_nn_ref || 'dev/kernel-contracts' }}
+          - leg: absent
+            ns_cmsis_nn_ref: v7.35.1
+
+    env:
+      CMSIS_NN_ROOT: ${{ github.workspace }}/ns-cmsis-nn-scratch
+      CONTRACT_TESTS: >-
+        helia_core_tester/tests/test_contract_symbol_audit.py
+        helia_core_tester/tests/test_contract_render.py
+      CONTRACT_TEST_NAMES: >-
+        --test test_real_tree_symbols_are_declared_or_known_drift
+        --test test_parity_assert_against_the_real_headers
+
+    steps:
+      - name: Checkout helia-core-tester
+        uses: actions/checkout@v4
+
+      - name: Checkout ns-cmsis-nn ${{ matrix.ns_cmsis_nn_ref }}
+        uses: actions/checkout@v4
+        with:
+          repository: AmbiqAI/ns-cmsis-nn
+          ref: ${{ matrix.ns_cmsis_nn_ref }}
+          path: ns-cmsis-nn-scratch
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Cache helia-core-tester downloads
+        uses: actions/cache@v4
+        with:
+          path: artifacts/downloads
+          key: helia-core-tester-downloads-${{ runner.os }}-${{ hashFiles('scripts/setup_ci.sh', 'helia_core_tester/scripts/setup_dependencies.py') }}
+          restore-keys: |
+            helia-core-tester-downloads-${{ runner.os }}-
+
+      - name: Setup build dependencies
+        run: ./scripts/setup_ci.sh
+
+      # doctor's own exit code is not the verdict here (the assert step reads its
+      # kernel-contract section); keep the log even when another check complains.
+      - name: Doctor
+        run: |
+          set +e
+          uv run helia_core_tester doctor 2>&1 | tee contract-doctor.log
+          echo "doctor exit: ${PIPESTATUS[0]}"
+
+      - name: Generate cortex-m55 int + float (present leg)
+        if: matrix.leg == 'present'
+        run: uv run helia_core_tester generate --cpu cortex-m55 --suite both --verbosity 1
+
+      - name: Generate one Convolve case against a checkout without the export (absent leg)
+        if: matrix.leg == 'absent'
+        run: |
+          set +e
+          uv run helia_core_tester generate --op Convolve --limit 1 --cpu cortex-m55 --suite int --verbosity 2 \
+            2>&1 | tee contract-generate.log
+          status=${PIPESTATUS[0]}
+          set -e
+          echo "generate exit: $status"
+          test "$status" -ne 0
+
+      # --allow-unknown: the nhwc pooling aliases the float templates call are not
+      # public declarations (helia-core-tester#205); the report still lists every
+      # unknown symbol, and the gate flips once #205 is resolved.
+      - name: Contract inventory
+        run: |
+          set +e
+          uv run helia_core_tester contract inventory --generated-tests-dir artifacts/generated_tests \
+            --allow-unknown 2>&1 | tee contract-inventory.log
+          echo "${PIPESTATUS[0]}" > contract-inventory.exit
+          set -e
+          echo "inventory exit: $(cat contract-inventory.exit)"
+
+      - name: Real-tree contract tests
+        env:
+          HELIA_CORE_TESTER_REQUIRE_CONTRACT: ${{ matrix.leg == 'present' && '1' || '' }}
+        run: |
+          uv run pytest ${CONTRACT_TESTS} -q -p no:cacheprovider \
+            -k "real_tree or real_headers" --junitxml contract-junit.xml --no-header -rs
+
+      - name: Assert the ${{ matrix.leg }} leg
+        run: |
+          extra=""
+          if [ "${{ matrix.leg }}" = "present" ]; then
+            extra="--report artifacts/reports/contracts/inventory.json"
+          else
+            extra="--generate-log contract-generate.log"
+          fi
+          uv run python scripts/assert_contract_summary.py --expect ${{ matrix.leg }} \
+            --inventory-exit "$(cat contract-inventory.exit)" --junit contract-junit.xml \
+            ${CONTRACT_TEST_NAMES} --doctor-log contract-doctor.log $extra
+
+      - name: Upload contract report and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: contract-${{ matrix.leg }}
+          path: |
+            artifacts/reports/contracts/inventory.json
+            contract-*.log
+            contract-junit.xml
+          if-no-files-found: ignore

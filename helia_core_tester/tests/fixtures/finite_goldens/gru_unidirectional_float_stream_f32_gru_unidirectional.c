@@ -1,7 +1,41 @@
 #include "gru_unidirectional_float_stream_f32_gru_unidirectional.h"
+#include "arm_nnfunctions.h"
 #include <stdio.h>
 #include <stdint.h>
 #include "test_runtime/helia_test_runtime.h"
+
+
+
+// The kernel this harness links must have the prototype the ns-cmsis-nn export records.
+_Static_assert(__builtin_types_compatible_p(__typeof__(arm_gru_unidirectional_f32), arm_cmsis_nn_status (const float32_t *, float32_t *, const cmsis_nn_gru_params_f32 *, cmsis_nn_gru_context_f32 *)),
+               "arm_gru_unidirectional_f32: prototype differs from the kernel contract export; rerun `python3 scripts/check_kernel_contract.py export` in ns-cmsis-nn and regenerate");
+
+
+
+
+
+int32_t gru_unidirectional_float_stream_f32_run(
+    const float32_t* __restrict input,
+    float32_t* __restrict output,
+    const cmsis_nn_gru_params_f32 * params,
+    cmsis_nn_gru_context_f32 * buffers
+) {
+        // Armed before the capacity check below: an early return there would otherwise leave
+    // these canaries unstamped, and the unconditional check in _test_case_run would
+    // report a fabricated breach instead of the real sizer error (#68).
+
+    // The sizer's answer is checked before it becomes a context size (#133): a negative
+    // answer is the documented out-of-range sentinel, and one above this case's static bound
+    // means the generation-time bound and the shipped kernel disagree.
+
+
+    return arm_gru_unidirectional_f32(
+        input, /* input */
+        output, /* output */
+        params, /* params */
+        buffers /* buffers */
+    );
+}
 
 
 static struct {
@@ -64,12 +98,13 @@ static int32_t run_gru_chunk(int32_t chunk_time_steps, int32_t input_offset, int
         .hidden_state = gru_unidirectional_float_stream_f32_hidden_state,
     };
 
-    return arm_gru_unidirectional_f32(
+    return gru_unidirectional_float_stream_f32_run(
         gru_unidirectional_float_stream_f32_input_tensor + input_offset,
         gru_unidirectional_float_stream_f32_output + output_offset,
         &params,
         &buffers);
 }
+
 
 int32_t gru_unidirectional_float_stream_f32_test_case_run(void)
 {
@@ -117,6 +152,7 @@ int32_t gru_unidirectional_float_stream_f32_test_case_run(void)
         20,
         failures
     );
+
     HELIA_VALIDATE_RETURN_FAILURES(failures);
 }
 

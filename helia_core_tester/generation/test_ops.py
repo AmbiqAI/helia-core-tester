@@ -16,7 +16,7 @@ import yaml
 from helia_core_tester.core.discovery import find_descriptors_dir, find_generated_tests_dir, find_repo_root
 from helia_core_tester.core.cpu_targets import missing_required_capabilities, normalize_cpu
 from helia_core_tester.generation.golden_check import DegenerateGoldenError, check_case_golden
-from helia_core_tester.generation.kernel_dispatch import DEPTHWISE_CONV_S8_PLANAR_RULE, DIRECT_ENTRIES
+from helia_core_tester.generation.kernel_dispatch import DEPTHWISE_CONV_S8_PLANAR_RULE
 from helia_core_tester.generation.io.dtypes import descriptor_matches_dtype_filter, resolve_comparison, resolve_tensor_dtypes
 from helia_core_tester.generation.io.descriptors import descriptor_matches_op, load_all_descriptors, unmatched_ops
 from helia_core_tester.core.path_layout import generation_report_dir
@@ -174,10 +174,10 @@ def _required_kernel_symbols(desc: Dict[str, Any]) -> list[str]:
     raw = list(raw)
     if desc.get("entry"):
         raw.append(desc["entry"])
-        # The entry's second scratch query too.
-        direct = DIRECT_ENTRIES.get(desc["entry"])
-        if direct and direct.entry_buffer_size_fn:
-            raw.append(direct.entry_buffer_size_fn)
+    sizers = desc.get("entry_sizer")
+    if sizers:
+        # One query, or the entry's own beside the family's (scratch takes the larger answer).
+        raw.extend([sizers] if isinstance(sizers, str) else list(sizers))
     if desc.get("planar_supported") is not None:
         raw.append(DEPTHWISE_CONV_S8_PLANAR_RULE)
     ordered: list[str] = []

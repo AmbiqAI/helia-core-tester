@@ -175,3 +175,34 @@ class ComparisonFamilyBase(OperationBase):
             context,
             cmake_context,
         )
+
+
+from helia_core_tester.generation.harness import ArgumentPool, ArrayLiteral, HarnessInput  # noqa: E402
+from helia_core_tester.generation.harness.model import Declaration  # noqa: E402
+from helia_core_tester.generation.harness.registry import harness_pool  # noqa: E402
+from helia_core_tester.generation.harness.simple import dims_declaration  # noqa: E402
+
+
+@harness_pool("ComparisonFunctions/comparison/comparison.c.j2", label="Comparison")
+def comparison_argument_pool(context):
+    """Comparison kernels write bools and take a context they never use; the case passes NULL."""
+    n = context["name"]
+    dims = ("input_1_dims", "input_2_dims", "output_dims")
+    header = [dims_declaration(f"{n}_{d}", context[d]) for d in dims]
+    header += [
+        Declaration(f"{n}_input_1", context["input_dtype"], ArrayLiteral(context["input_1_data_array"]), array=True),
+        Declaration(f"{n}_input_2", context["input_dtype"], ArrayLiteral(context["input_2_data_array"]), array=True),
+        Declaration(f"{n}_expected_output", "bool", ArrayLiteral(context["expected_output_array"]), array=True),
+    ]
+    values = {d: f"&{n}_{d}" for d in dims}
+    values["ctx"] = "NULL"
+    for key in ("input_1_offset", "input_1_mult", "input_1_shift", "input_2_offset", "input_2_mult", "input_2_shift",
+                "left_shift", "operation"):
+        if key in context:
+            values[key] = str(context[key])
+    return ArgumentPool(
+        name=n, values=values, header=header, owns_ctx=True, benchmark=False, scratch_buffer=False,
+        output_count=f"({context['output_size']})", output_ctype="bool",
+        inputs=(HarnessInput("input_1_data", "input_1", f"{n}_input_1"),
+                HarnessInput("input_2_data", "input_2", f"{n}_input_2")),
+    )

@@ -7,8 +7,9 @@ from pathlib import Path
 
 import pytest
 
+from helia_core_tester.contract import render
+from helia_core_tester.contract.bind import takes
 from helia_core_tester.generation.io.descriptors import load_all_descriptors
-from helia_core_tester.generation.kernel_dispatch import DIRECT_ENTRIES
 from helia_core_tester.generation.test_ops import generate_test
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -28,7 +29,13 @@ def _source(name: str, tmp_path: Path) -> str:
     return "".join(p.read_text() for p in case_dir.glob("*.c"))
 
 
-_ROUTE_ENTRIES = sorted(name for name, spec in DIRECT_ENTRIES.items() if spec.family == "float" and _ROUTE.search(name))
+_DESCRIPTORS = load_all_descriptors(str(_PROJECT_ROOT / "assets" / "descriptors"))
+# Every route entry a descriptor calls, with the scratch query its descriptors declare.
+_ROUTE_SIZERS: dict[str, set] = {}
+for _d in _DESCRIPTORS:
+    if _d.get("entry") and _ROUTE.search(_d["entry"]):
+        _ROUTE_SIZERS.setdefault(_d["entry"], set()).add(_d.get("entry_sizer"))
+_ROUTE_ENTRIES = sorted(_ROUTE_SIZERS)
 
 
 def _route_query(entry: str) -> tuple[str, bool]:
@@ -48,9 +55,7 @@ def _route_query(entry: str) -> tuple[str, bool]:
 
 def test_every_float_route_entry_has_a_case_that_runs_it() -> None:
     succeeding = {
-        d.get("entry")
-        for d in load_all_descriptors(str(_PROJECT_ROOT / "assets" / "descriptors"))
-        if d.get("expected_status", "ARM_CMSIS_NN_SUCCESS") == "ARM_CMSIS_NN_SUCCESS"
+        d.get("entry") for d in _DESCRIPTORS if d.get("expected_status", "ARM_CMSIS_NN_SUCCESS") == "ARM_CMSIS_NN_SUCCESS"
     }
 
     assert len(_ROUTE_ENTRIES) == 46
@@ -59,10 +64,13 @@ def test_every_float_route_entry_has_a_case_that_runs_it() -> None:
 
 @pytest.mark.parametrize("entry", _ROUTE_ENTRIES)
 def test_route_entry_takes_its_route_scratch_query(entry: str) -> None:
-    spec = DIRECT_ENTRIES[entry]
+    query, takes_layout = _route_query(entry)
+    contracts = render.load_current_contracts()
 
-    assert (spec.buffer_size_fn, spec.buffer_size_needs_layout) == _route_query(entry)
-    assert spec.kernel_needs_layout is False
+    # Every descriptor of the entry declares the route's query; the contract says whether it takes a layout.
+    assert _ROUTE_SIZERS[entry] == {query}
+    assert takes(contracts.require(query), "layout") is takes_layout
+    assert takes(contracts.require(entry), "layout") is False
 
 
 @pytest.mark.parametrize(
@@ -87,9 +95,11 @@ def test_route_case_sizes_scratch_with_its_route_query(name: str, sizer_call: st
     source = _source(name, tmp_path)
     entry = _descriptor(name)["entry"]
 
-    assert re.search(sizer_call, source)
+    # The calls are bound from the kernel contract, which names each argument in a comment.
+    code = re.sub(r"/\*.*?\*/|//[^\n]*", " ", source, flags=re.S)
+    assert re.search(sizer_call, code)
     # The entry itself takes no layout argument.
-    assert re.search(rf"{entry}\((?:[^;]*?,){{9}}[^,;]*?output\s*\)", source)
+    assert re.search(rf"{entry}\((?:[^;]*?,){{9}}[^,;]*?output\s*\)", code)
 
 
 @pytest.mark.parametrize(

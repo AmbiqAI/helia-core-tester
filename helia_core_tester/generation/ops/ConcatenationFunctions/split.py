@@ -6,6 +6,7 @@ from typing import Dict
 import numpy as np
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.ops.ConcatenationFunctions.slices import split_argument_pool
 
 
 class OpSplit(OperationBase):
@@ -198,27 +199,8 @@ class OpSplit(OperationBase):
         if kernel_info["input_c_type"] in {"float16_t", "float"}:
             context["validation_mode"] = "float"
         
-        # Render templates
-        includes_api_dir = output_dir / "includes"
-        includes_api_dir.mkdir(parents=True, exist_ok=True)
-        
-        h_content = self.render_template("ConcatenationFunctions/split/split.h.j2", context)
-        h_path = includes_api_dir / f"{name}_split.h"
-        with open(h_path, 'w') as f:
-            f.write(h_content)
-        
-        c_content = self.render_template("ConcatenationFunctions/split/split.c.j2", context)
-        c_path = output_dir / f"{name}_split.c"
-        with open(c_path, 'w') as f:
-            f.write(c_content)
-        
-        cmake_context = {
-            'name': name,
-            'operator': self.desc.get('operator', 'Split'),
-            'operator_name': 'split'
-        }
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
-        cmake_path = output_dir / "CMakeLists.txt"
-        with open(cmake_path, 'w') as f:
-            f.write(cmake_content)
+        self.render_harness_case(
+            output_dir, stem="split", context=context, pool=split_argument_pool(context),
+            validation_key="ConcatenationFunctions/split/split.c.j2", label="Split", operator="Split",
+        )
         

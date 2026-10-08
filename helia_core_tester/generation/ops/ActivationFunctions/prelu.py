@@ -6,6 +6,22 @@ from typing import Dict, Any, Iterable
 import numpy as np
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.harness import ArrayLiteral, Declaration
+from helia_core_tester.generation.harness.simple import dims_count, tensor_case_pool
+
+
+def prelu_argument_pool(context):
+    """Every value a PReLU case can pass to a public PReLU kernel."""
+    n = context["name"]
+    alpha = Declaration(f"{n}_alpha", context["alpha_dtype"], ArrayLiteral(context["alpha_array"]),
+                        array=True, comment="Alpha")
+    values = {"alpha": f"{n}_alpha", "input_offset": context["input_offset"], "alpha_offset": context["alpha_offset"],
+              "output_offset": context["output_offset"],
+              "output_multiplier_identity": context["output_mult_identity"],
+              "output_shift_identity": context["output_shift_identity"],
+              "output_multiplier_alpha": context["output_mult_alpha"], "output_shift_alpha": context["output_shift_alpha"]}
+    return tensor_case_pool(context, values, dims=("input_dims", "alpha_dims", "output_dims"), extra_header=(alpha,),
+                            output_count=dims_count(context["output_dims"]))
 
 
 class OpPReLU(OperationBase):
@@ -220,25 +236,10 @@ class OpPReLU(OperationBase):
             'expected_status': self._expected_status(),
         }
 
-        includes_api_dir = output_dir / "includes"
-        includes_api_dir.mkdir(parents=True, exist_ok=True)
-
-        h_content = self.render_template("ActivationFunctions/prelu/prelu.h.j2", context)
-        with open(includes_api_dir / f"{name}_prelu.h", 'w') as f:
-            f.write(h_content)
-
-        c_content = self.render_template("ActivationFunctions/prelu/prelu.c.j2", context)
-        with open(output_dir / f"{name}_prelu.c", 'w') as f:
-            f.write(c_content)
-
-        cmake_context = {
-            'name': name,
-            'operator': self.desc.get('operator', 'PReLU'),
-            'operator_name': 'prelu',
-        }
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
-        with open(output_dir / "CMakeLists.txt", 'w') as f:
-            f.write(cmake_content)
+        self.render_harness_case(
+            output_dir, stem="prelu", context=context, pool=prelu_argument_pool(context),
+            validation_key="ActivationFunctions/prelu/prelu.c.j2", label="PReLU", operator="PReLU",
+        )
 
     @staticmethod
     def _reference_prelu_s16(
@@ -361,18 +362,9 @@ class OpPReLU(OperationBase):
             'float_kernel': True,
             'validation_mode': 'float',
         }
-        cmake_context = {
-            'name': name,
-            'operator': self.desc.get('operator', 'PReLU'),
-            'operator_name': 'prelu',
-        }
-        self._write_op_outputs(
-            output_dir,
-            "prelu",
-            "ActivationFunctions/prelu/prelu.h.j2",
-            "ActivationFunctions/prelu/prelu.c.j2",
-            context,
-            cmake_context,
+        self.render_harness_case(
+            output_dir, stem="prelu", context=context, pool=prelu_argument_pool(context),
+            validation_key="ActivationFunctions/prelu/prelu.c.j2", label="PReLU", operator="PReLU", sidecar=True,
         )
 
     def generate_c_files(self, output_dir: Path) -> None:
@@ -634,27 +626,8 @@ class OpPReLU(OperationBase):
             'kernel_fn': kernel_info["kernel_fn"],
         }
         
-        # Render templates
-        includes_api_dir = output_dir / "includes"
-        includes_api_dir.mkdir(parents=True, exist_ok=True)
-        
-        h_content = self.render_template("ActivationFunctions/prelu/prelu.h.j2", context)
-        h_path = includes_api_dir / f"{name}_prelu.h"
-        with open(h_path, 'w') as f:
-            f.write(h_content)
-        
-        c_content = self.render_template("ActivationFunctions/prelu/prelu.c.j2", context)
-        c_path = output_dir / f"{name}_prelu.c"
-        with open(c_path, 'w') as f:
-            f.write(c_content)
-        
-        cmake_context = {
-            'name': name,
-            'operator': self.desc.get('operator', 'PReLU'),
-            'operator_name': 'prelu'
-        }
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
-        cmake_path = output_dir / "CMakeLists.txt"
-        with open(cmake_path, 'w') as f:
-            f.write(cmake_content)
+        self.render_harness_case(
+            output_dir, stem="prelu", context=context, pool=prelu_argument_pool(context),
+            validation_key="ActivationFunctions/prelu/prelu.c.j2", label="PReLU", operator="PReLU",
+        )
         
