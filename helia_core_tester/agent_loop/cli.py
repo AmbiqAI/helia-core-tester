@@ -117,7 +117,9 @@ def status_command(
         typer.echo(f"finished {cost['subtype']}: ${cost['cost_usd']}, {cost['turns']} turns, {cost['denials']} denials")
     for row in info["rows"]:
         charged = "" if row["charged"] else " (free)"
-        typer.echo(f"  {row['eval']} {row['verdict']:<9}{charged} geomean {row['geomean']} size {row['size_delta']}")
+        means = ", ".join(f"{leg} {fam} {g:.3f}" for leg, fams in row["geomean"].items()
+                          for fam, g in fams.items() if g is not None)
+        typer.echo(f"  {row['eval']} {row['verdict']:<14}{charged} size {row['size_delta']} {means}")
     for line in info["recent"]:
         typer.echo(f"  {line}")
 

@@ -493,8 +493,12 @@ uv run helia_core_tester agent-loop init conv-s8.yaml -w ~/campaigns/conv-s8
    Writes `W/agent-settings.json` (absolute paths) and `W/bin/{submit,check,disasm}`.
 
 A step whose output exists is skipped, so after a failure rerun the same
-command. The 330mP DepthwiseConv S8 baselines took about 10 minutes for
-both legs with `repeats: 2`.
+command. On apollo330mP, a DepthwiseConv S8 campaign (50 public and 24
+hidden cases, `repeats: 2`) took about 6 minutes to initialize, and each
+`submit` about 3.5 minutes for both legs (measured).
+
+The baselines are tied to the tester commit through the harness digest:
+moving `W/tester` to another commit makes every eval `not_comparable`.
 
 ### 3. Check the permissions
 
