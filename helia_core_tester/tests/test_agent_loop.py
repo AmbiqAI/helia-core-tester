@@ -3,6 +3,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import shlex
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -865,3 +866,118 @@ def test_prompt_atfe_only(atfe_root: Path) -> None:
     text = render_prompt(_campaign(toolchains=["atfe"], legs=["tcm"]), DW_ROWS, PATHS)
     assert "Every leg builds with atfe" in text and "optimize(...)" in text and "Built with ATfE clang." in text
     assert "llvm-objdump syntax" in text and "--toolchain" not in text and "keyed by compiler" not in text
+
+
+# --- size phase -------------------------------------------------------------------------
+
+FIXTURES = Path(__file__).parent / "fixtures" / "agent_loop"
+# dw-s16 as an older tester saved it.
+DW_S16_SAVED = {
+    "name": "dw-s16", "board": "apollo510_evb", "op": "DepthwiseConv", "dtype": "S16", "kernels_repo": "/nn",
+    "base_ref": "945affd9", "secrets_dir": "/secret/dw-s16", "legs": ["tcm", "mram"], "case_ids": [],
+    "bench_id": "apollo510_evb", "evals": 12, "cost_usd": 25.0, "model": "claude-opus-5-5", "hidden_shapes": 12,
+    "repeats": 3, "start_patch": None, "start_notes": "", "min_score": None, "lock_timeout_s": 600,
+    "eval_timeout_s": 300, "submit_deadline_s": 540, "retries": 1, "max_infra_errors": 5,
+    "toolchains": ["gcc", "atfe"],
+}
+
+
+def _fixture_ws(tmp_path: Path, name: str, campaign: dict) -> Workspace:
+    w = Workspace(tmp_path / name)
+    w.ledger.mkdir(parents=True)
+    shutil.copy(FIXTURES / f"{name}-ledger.jsonl", w.ledger / "ledger.jsonl")
+    w.state.write_text(json.dumps({"schema": "hct.agent_loop", "schema_version": 1, "campaign": campaign,
+                                   "base_commit": "b" * 40, "ready": True}))
+    return w
+
+
+def _status_cli(w: Workspace, *extra: str) -> str:
+    from typer.testing import CliRunner
+
+    from helia_core_tester.cli import app
+
+    result = CliRunner().invoke(app, ["agent-loop", "status", "-w", str(w.root), "--tail", "0", *extra])
+    assert result.exit_code == 0, result.output
+    return result.output
+
+
+def test_prompt_size_phase(atfe_root: Path) -> None:
+    text = render_prompt(_campaign(toolchains=["gcc", "atfe"]), DW_ROWS, PATHS)
+    assert "After your first pass:" in text and "Keep the best pass as your reference" in text
+    assert "`code_size` per compiler\n  (gcc and atfe)" in text and "bytes saved per compiler" in text
+    assert "Do not stop early while evals remain" in text and "Never trade correctness" in text
+    assert "Size never fails an eval" in text and "`next`: on a pass only" in text
+    assert "Stop when further gains look small" not in text
+    plain = render_prompt(_campaign(), DW_ROWS, PATHS)
+    assert "After your first pass:" in plain and "per compiler" not in plain
+
+
+def test_pass_points_at_size_phase(ws: Workspace, capsys) -> None:
+    rc, view = _submit(ws, FakeBoard([_leg("pass"), _leg("pass")]), capsys)
+    assert rc == 0 and view["next"] == "next: shrink code; best pass 001 +64 B gcc at 1.10x"
+    assert json.loads((ws.results / "001.json").read_text())["next"] == view["next"]
+    rc, view = _submit(ws, FakeBoard([_leg("fail"), _leg("pass")]), capsys)
+    assert rc == 1 and "next" not in view
+
+
+def test_free_evals_have_no_note(ws: Workspace, capsys, monkeypatch) -> None:
+    monkeypatch.setattr(judge, "RETRY_PAUSE_S", 0)
+    rejected = lambda *a, **k: (False, {"check": {"ok": False}})  # noqa: E731
+    rc, view = _submit(ws, FakeBoard([]), capsys, checker=rejected)
+    assert view["verdict"] == "rejected" and "next" not in view
+    rc, view = _submit(ws, FakeBoard([None, None]), capsys)
+    assert view["verdict"] == "error" and "next" not in view
+
+
+def test_pass_note_names_fastest_and_smallest(ws: Workspace, atfe_root: Path, capsys) -> None:
+    _two_toolchains(ws)
+    board = FakeBoard([_leg_gain("pass", 2.0)] * 4)
+    _submit(ws, board, capsys, checker=_keyed_check)
+    small = lambda *a, **k: (True, {"check": {"ok": True}, "build": {"gcc": "ok", "atfe": "ok"},  # noqa: E731
+                                    "code_size": {"gcc": {"delta_bytes": -8}, "atfe": {"delta_bytes": 16}}})
+    _, view = _submit(ws, FakeBoard([_leg_gain("pass", 1.5)] * 4), capsys, checker=small)
+    assert view["next"] == ("next: shrink code; fastest pass 001 +64 B gcc / +48 B atfe at 2.00x / 2.00x; "
+                            "smallest pass 002 -8 B gcc / +16 B atfe at 1.50x / 1.50x")
+
+
+def test_status_tradeoff_two_toolchains(tmp_path: Path) -> None:
+    w = _fixture_ws(tmp_path, "dw-s16", DW_S16_SAVED)
+    passes = agent.status(w, tail=0)["passes"]
+    assert [(p["eval"], p["fastest"], p["smallest"], p["pareto"]) for p in passes] == [
+        ("002", False, False, True), ("006", True, True, True)]
+    assert passes[1]["toolchains"] == {"gcc": {"geomean": 2.7768, "size_delta": 3088},
+                                       "atfe": {"geomean": 3.4246, "size_delta": 2154}}
+    assert passes[1]["diff"] == str(w.ledger / "006.diff")
+    assert ledger.size_note(passes) == "next: shrink code; best pass 006 +3,088 B gcc / +2,154 B atfe at 2.78x / 3.42x"
+    text = _status_cli(w)
+    assert "  eval   gcc speed   gcc bytes  atfe speed  atfe bytes  marks" in text
+    assert "  006        2.78x      +3,088       3.42x      +2,154  fastest smallest pareto" in text
+    assert f"diff {w.ledger / '002.diff'}" in text
+    assert json.loads(_status_cli(w, "--json"))["passes"] == passes
+
+
+def test_status_tradeoff_one_toolchain(tmp_path: Path) -> None:
+    saved = {**DW_S16_SAVED, "name": "conv-s8", "op": "Convolve", "dtype": "S8"}
+    del saved["toolchains"]
+    w = _fixture_ws(tmp_path, "conv-s8", saved)
+    assert agent.status(w, tail=0)["passes"] == [] and "passing evals" not in _status_cli(w)
+    rows = [json.loads(line) for line in (w.ledger / "ledger.jsonl").read_text().splitlines()]
+    # Pretend 004 and 007 passed.
+    for row in rows:
+        row["verdict"] = "pass" if row["eval"] in ("004", "007") else row["verdict"]
+    (w.ledger / "ledger.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+    passes = agent.status(w, tail=0)["passes"]
+    assert passes[0]["toolchains"] == {"gcc": {"geomean": 1.0829, "size_delta": 1700}}
+    assert [(p["eval"], p["fastest"], p["smallest"], p["pareto"]) for p in passes] == [
+        ("004", False, True, True), ("007", True, False, True)]
+    text = _status_cli(w)
+    assert "  eval   gcc speed   gcc bytes  marks" in text and "  004        1.08x      +1,700  smallest pareto" in text
+
+
+def test_dominated_pass_is_marked() -> None:
+    runs = _campaign().runs
+    rows = [{"eval": e, "verdict": "pass", "size_delta": size, "legs": {"tcm": {"geomean": {"f": gain}}}}
+            for e, size, gain in (("001", 100, 1.5), ("002", 200, 1.2), ("003", None, 2.0))]
+    picks = ledger.passing_evals(rows, runs)
+    assert [(p["fastest"], p["smallest"], p["pareto"]) for p in picks] == [
+        (True, True, True), (False, False, False), (False, False, False)]

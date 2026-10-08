@@ -134,8 +134,32 @@ def status_command(
         typer.echo(f"  {row['eval']} {row['verdict']:<14}{charged}{size} {means}")
         for name, gain in gains.items():
             typer.echo(f"      {name}: geomean {gain['geomean']}, size {gain['size_delta']}")
+    _print_passes(info["passes"])
     for line in info["recent"]:
         typer.echo(f"  {line}")
+
+
+MARKS = ("fastest", "smallest", "pareto")
+
+
+def _print_passes(passes: list[dict]) -> None:
+    """Speed and size of each pass."""
+    if not passes:
+        return
+    names = list(passes[0]["toolchains"])
+    head = "".join(f"{name + ' speed':>12}{name + ' bytes':>12}" for name in names)
+    typer.echo("passing evals (pick one to PR):")
+    typer.echo(f"  eval{head}  marks")
+    for pick in passes:
+        cols = ""
+        for name in names:
+            gain = pick["toolchains"].get(name) or {}
+            speed, size = gain.get("geomean"), gain.get("size_delta")
+            cols += f"{f'{speed:.2f}x' if speed is not None else '?':>12}"
+            cols += f"{f'{size:+,}' if isinstance(size, int) else '?':>12}"
+        marks = " ".join(m for m in MARKS if pick[m])
+        typer.echo(f"  {pick['eval']:<4}{cols}  {marks}".rstrip())
+        typer.echo(f"      diff {pick['diff']}")
 
 
 @agent_loop_app.command("stop")
