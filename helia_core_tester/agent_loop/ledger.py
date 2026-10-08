@@ -1,0 +1,148 @@
+"""Eval ledger, verdict merge and the agent's view."""
+
+from __future__ import annotations
+
+import fcntl
+import hashlib
+import json
+import time
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Any, Iterator, Optional
+
+# Worst first; unknown counts as error.
+ORDER = ("error", "rejected", "refused", "not_comparable", "fail", "no_gain", "pass")
+EXITS = {"pass": 0, "fail": 1, "rejected": 3, "refused": 3, "not_comparable": 3, "no_gain": 4, "error": 5}
+EXIT_BUDGET = 6
+# Stages the agent cannot cause.
+INFRA_STAGES = ("tester", "baseline")
+CASE_COLUMNS = ["case_id", "baseline_cycles", "candidate_cycles", "speedup", "band_pct", "cycles_per_mac"]
+TOP_HINTS = 10
+
+
+@contextmanager
+def file_lock(path: Path) -> Iterator[None]:
+    """Hold an exclusive flock on path."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+class Ledger:
+    """ledger/: counter, rows and per-eval files."""
+
+    def __init__(self, root: Path):
+        self.root = root
+        self.rows_path = root / "ledger.jsonl"
+        self.counter = root / "next_id"
+
+    def next_id(self) -> str:
+        """Take the next id; call under the lock."""
+        self.root.mkdir(parents=True, exist_ok=True)
+        try:
+            n = int(self.counter.read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            n = 1
+        self.counter.write_text(f"{n + 1}\n", encoding="utf-8")
+        return f"{n:03d}"
+
+    def rows(self) -> list[dict]:
+        try:
+            lines = self.rows_path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return []
+        return [json.loads(line) for line in lines if line.strip()]
+
+    def append(self, row: dict) -> None:
+        with self.rows_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row) + "\n")
+
+    def charged(self) -> int:
+        return sum(1 for row in self.rows() if row.get("charged"))
+
+    def infra_errors(self) -> int:
+        return sum(1 for row in self.rows() if row.get("infra"))
+
+
+def is_infra(verdict: Optional[dict]) -> bool:
+    """No verdict, an error, or a setup refusal."""
+    if not isinstance(verdict, dict) or not verdict.get("verdict"):
+        return True
+    if verdict["verdict"] == "error":
+        return True
+    return verdict["verdict"] == "refused" and verdict.get("stage") in INFRA_STAGES
+
+
+def merge_legs(legs: dict[str, Optional[dict]], wanted: tuple[str, ...]) -> str:
+    """Worst leg wins; pass needs every leg."""
+    verdicts = [(v or {}).get("verdict") or "error" for v in legs.values() if v is not None]
+    if not verdicts:
+        return "error"
+    overall = min(verdicts, key=lambda x: ORDER.index(x) if x in ORDER else 0)
+    if overall == "pass" and any(legs.get(leg) is None for leg in wanted):
+        return "error"
+    return overall
+
+
+def scored(verdict: Optional[dict]) -> bool:
+    """The leg got as far as scoring."""
+    return isinstance(verdict, dict) and verdict.get("stage") == "score"
+
+
+def leg_view(v: dict, hints: bool) -> dict[str, Any]:
+    """One leg, compact: touched rows only."""
+    keep = ("verdict", "stage", "reason", "findings", "failures", "score", "hidden")
+    out = {k: v.get(k) for k in keep if v.get(k) is not None}
+    fam_keys = ("cases", "geomean_speedup", "regression", "untouched_cases", "untouched_geomean")
+    out["families"] = {f: {k: d.get(k) for k in fam_keys} for f, d in (v.get("families") or {}).items()}
+    cases = v.get("cases") or []
+    touched = [c for c in cases if c.get("touched") is not False]
+    out["cases"] = [[c.get("case_id"), c.get("baseline_cycles"), c.get("candidate_cycles"),
+                     round(c["speedup"], 4) if c.get("speedup") else None, c.get("band_pct"),
+                     c.get("cycles_per_mac_candidate")] for c in touched]
+    rest = [c["speedup"] for c in cases if c.get("touched") is False and c.get("speedup")]
+    out["untouched_cases"] = {"count": len(rest), "speedup_min": round(min(rest), 4) if rest else None,
+                              "speedup_max": round(max(rest), 4) if rest else None}
+    if hints:
+        # Ten slowest touched cases.
+        cycles = {c.get("case_id"): c.get("candidate_cycles") or 0 for c in touched}
+        top = sorted((h for h in v.get("hints") or [] if h.get("case_id") in cycles),
+                     key=lambda h: -cycles[h["case_id"]])
+        out["hints"] = top[:TOP_HINTS]
+    return out
+
+
+def family_geomeans(v: Optional[dict]) -> dict[str, Any]:
+    return {f: d.get("geomean_speedup") for f, d in ((v or {}).get("families") or {}).items()}
+
+
+def diff_digest(diff: bytes) -> dict[str, Any]:
+    return {"diff_sha": hashlib.sha256(diff).hexdigest()[:12], "diff_lines": diff.count(b"\n")}
+
+
+def ledger_row(eid: str, overall: str, legs: dict, *, charged: bool, infra: bool, size: dict, diff: bytes,
+               attempts: dict[str, int]) -> dict[str, Any]:
+    """One JSONL row per submit."""
+    return {
+        "eval": eid, "time": time.strftime("%Y-%m-%dT%H:%M:%S"), "verdict": overall, "charged": charged,
+        "infra": infra, "attempts": attempts,
+        "legs": {k: {"verdict": v.get("verdict"), "stage": v.get("stage"), "score": v.get("score"),
+                     "geomean": family_geomeans(v), "hidden": v.get("hidden")} for k, v in legs.items() if v},
+        "size_delta": size.get("delta_bytes"), **diff_digest(diff),
+    }
+
+
+def agent_view(overall: str, legs: dict, *, evals_left: int, size: dict, first_leg: str,
+               note: Optional[str] = None) -> dict[str, Any]:
+    """What submit prints for the agent."""
+    out: dict[str, Any] = {"verdict": overall, "exit_code": EXITS.get(overall, 5), "evals_left": evals_left}
+    if note:
+        out["note"] = note
+    out["code_size"] = size
+    out["cases_columns"] = CASE_COLUMNS
+    out["legs"] = {k: leg_view(v, hints=(k == first_leg)) for k, v in legs.items() if v}
+    return out

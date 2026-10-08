@@ -26,6 +26,7 @@ from helia_core_tester.hardware.candidate_check import candidate_app
 # Registers candidate baseline and eval.
 import helia_core_tester.hardware.candidate_eval  # noqa: F401
 from helia_core_tester.hardware.score import score as score_command
+from helia_core_tester.agent_loop.cli import agent_loop_app
 
 # Once, for every subcommand (including the hardware group's) for the lifetime of
 # this process -- see ensure_arm_toolchain_on_path()'s own docstring for why this
@@ -41,6 +42,7 @@ app = typer.Typer(
 app.add_typer(hardware_app, name="hardware")
 app.add_typer(probes_app, name="probes")
 app.add_typer(candidate_app, name="candidate")
+app.add_typer(agent_loop_app, name="agent-loop")
 app.command(name="boards")(boards_command)
 app.command(name="explain")(explain_command)
 app.command(name="score")(score_command)
