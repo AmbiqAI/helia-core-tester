@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -622,3 +623,192 @@ def test_secrets_dir_needs_ownership(tmp_path: Path) -> None:
     setup.claim_secrets(fresh, camp2, facts2)
     assert facts2["secrets_owner"] == str(fresh.root) and fresh.load()[1]["secrets_owner"] == str(fresh.root)
     assert oct((tmp_path / "s2").stat().st_mode & 0o777) == "0o700"
+
+
+# --- toolchains -------------------------------------------------------------------------
+
+
+@pytest.fixture
+def atfe_root(tmp_path: Path, monkeypatch) -> Path:
+    """A fake ATFE_ROOT with bin/clang."""
+    clang = tmp_path / "atfe" / "bin" / "clang"
+    clang.parent.mkdir(parents=True)
+    clang.write_text("#!/bin/sh\necho 22.1.0\n")
+    clang.chmod(0o755)
+    monkeypatch.setenv("ATFE_ROOT", str(clang.parent.parent))
+    return clang.parent.parent
+
+
+def test_toolchains_default_keeps_gcc_files() -> None:
+    c = _campaign()
+    # Saved as before toolchains existed.
+    assert c.toolchains == ("gcc",) and c.leg_names == ("tcm", "mram") and "toolchains" not in c.to_json()
+    assert from_json(c.to_json()) == c
+
+
+def test_toolchains_expand_legs(atfe_root: Path) -> None:
+    c = _campaign(toolchains=["gcc", "atfe"])
+    assert c.leg_names == ("tcm", "mram", "tcm-atfe", "mram-atfe")
+    assert [(r.placement, r.toolchain) for r in c.runs][2:] == [("tcm", "atfe"), ("mram", "atfe")]
+    assert from_json(json.loads(json.dumps(c.to_json()))) == c
+    assert _campaign(toolchains=["atfe"], legs=["tcm"]).leg_names == ("tcm-atfe",)
+
+
+@pytest.mark.parametrize("value, message", [
+    (["gcc", "gcc"], "toolchains"), (["icc"], "toolchains"), ([{}], "toolchains"), (["atfe"], "ATFE_ROOT"),
+])
+def test_toolchains_rejects(value, message, monkeypatch) -> None:
+    monkeypatch.delenv("ATFE_ROOT", raising=False)
+    with pytest.raises(ConfigError, match=message):
+        _campaign(toolchains=value)
+
+
+def test_size_ref_per_toolchain(ws: Workspace, atfe_root: Path, monkeypatch) -> None:
+    from helia_core_tester.agent_loop import setup
+
+    camp = _campaign(toolchains=["gcc", "atfe"])
+    cmds = []
+    monkeypatch.setattr(setup, "_run", lambda cmd, log, cwd=None: cmds.append((cmd, log)))
+    monkeypatch.setattr(setup, "kernel_lib", lambda build: build)
+    monkeypatch.setattr(setup, "object_sizes", lambda lib: {lib.name: 1})
+    for toolchain in camp.toolchains:
+        setup.make_size_ref(ws, camp, toolchain)
+    assert [c[c.index("--toolchain") + 1] for c, _ in cmds] == ["gcc", "atfe"]
+    assert [Path(c[c.index("--build-dir") + 1]).name for c, _ in cmds] == ["size-ref-build", "size-ref-build-atfe"]
+    assert [log.name for _, log in cmds] == ["size-ref.log", "size-ref-atfe.log"]
+    assert json.loads(ws.size_ref_of("atfe").read_text()) == {"size-ref-build-atfe": 1}
+    assert ws.size_ref_of("gcc") == ws.size_ref
+
+
+def test_disasm_picks_objdump(ws: Workspace, atfe_root: Path, monkeypatch, capsys) -> None:
+    _two_toolchains(ws)
+    seen = []
+
+    def objdump(tool, args):
+        seen.append((tool, Path(args[-1]).parent.name))
+        return "00000000 <arm_fn>:\n   0:\tbx lr\n\n"
+
+    monkeypatch.setattr(judge, "run_binutil", objdump)
+    monkeypatch.setattr(judge, "kernel_lib", lambda build: build / "lib.a")
+    assert judge.disasm(ws, "arm_fn") == 0 and judge.disasm(ws, "arm_fn", "atfe") == 0
+    assert seen == [("arm-none-eabi-objdump", "build"), (str(atfe_root / "bin" / "llvm-objdump"), "build-atfe")]
+    assert "bx lr" in capsys.readouterr().out
+    assert judge.disasm(ws, "arm_fn", "icc") == 2 and "gcc|atfe" in capsys.readouterr().out
+
+
+def test_disasm_wrapper_args(ws: Workspace, tmp_path: Path) -> None:
+    cmd = shlex.join([*ws.tester_cmd(), "agent-loop", "disasm", "--workspace", str(ws.root)])
+    text = agent.wrapper_text(ws, "disasm").replace(cmd, "echo")
+    script = tmp_path / "disasm"
+    script.write_text(text)
+    script.chmod(0o755)
+
+    def run(*args: str) -> tuple[int, str]:
+        proc = subprocess.run([str(script), *args], capture_output=True, text=True)
+        return proc.returncode, proc.stdout.strip()
+
+    assert run("fn") == (0, "--toolchain  -- fn")
+    assert run("fn", "--toolchain", "atfe") == (0, "--toolchain atfe -- fn")
+    assert run("--workspace=/x") == (0, "--toolchain  -- --workspace=/x")
+    assert run("fn", "--workspace", "/x")[0] == 2
+
+
+LEGS4 = ("tcm", "mram", "tcm-atfe", "mram-atfe")
+
+
+def _two_toolchains(ws: Workspace) -> None:
+    campaign, facts = ws.load()
+    ws.save(Campaign(**{**campaign.__dict__, "toolchains": ("gcc", "atfe")}), facts)
+
+
+def _keyed_check(ws, campaign, base, area, deadline=None):
+    return True, {"check": {"ok": True}, "build": {"gcc": "ok", "atfe": "ok"},
+                  "code_size": {"gcc": {"delta_bytes": 64}, "atfe": {"delta_bytes": 48}}}
+
+
+def _leg_gain(verdict: str, gain: float) -> dict:
+    return {**_leg(verdict), "families": {"depthwise": {"geomean_speedup": gain}}}
+
+
+def test_submit_runs_every_toolchain_leg(ws: Workspace, atfe_root: Path, capsys) -> None:
+    _two_toolchains(ws)
+    board = FakeBoard([_leg_gain("pass", 1.2), _leg_gain("pass", 1.1), _leg_gain("pass", 1.05), _leg_gain("pass", 1.0)])
+    rc, view = _submit(ws, board, capsys, checker=_keyed_check)
+    assert rc == 0 and view["verdict"] == "pass"
+    assert tuple(Path(c[c.index("--baseline") + 1]).name for c in board.calls) == LEGS4
+    assert view["toolchains"]["gcc"] == {"geomean": round((1.2 * 1.1) ** 0.5, 4), "size_delta": 64}
+    assert view["toolchains"]["atfe"] == {"geomean": round(1.05 ** 0.5, 4), "size_delta": 48}
+    assert "hints" in view["legs"]["tcm"] and "hints" not in view["legs"]["tcm-atfe"]
+    row = ledger.Ledger(ws.ledger).rows()[0]
+    assert row["size_delta"] == {"gcc": 64, "atfe": 48} and list(row["legs"]) == list(LEGS4)
+    assert row["toolchains"]["atfe"]["size_delta"] == 48
+    info = agent.status(ws, tail=0)
+    assert info["rows"][0]["toolchains"] == row["toolchains"]
+
+
+def test_submit_atfe_failure_fails_eval(ws: Workspace, atfe_root: Path, capsys) -> None:
+    _two_toolchains(ws)
+    board = FakeBoard([_leg("pass"), _leg("pass"), _leg("fail"), _leg("pass")])
+    rc, view = _submit(ws, board, capsys, checker=_keyed_check)
+    assert rc == 1 and view["verdict"] == "fail" and view["legs"]["tcm-atfe"]["verdict"] == "fail"
+
+
+def test_gcc_only_row_stays_flat(ws: Workspace, capsys) -> None:
+    rc, view = _submit(ws, FakeBoard([_leg("pass"), _leg("pass")]), capsys)
+    row = ledger.Ledger(ws.ledger).rows()[0]
+    assert "toolchains" not in view and "toolchains" not in row and row["size_delta"] == 64
+
+
+def test_submit_refuses_toolchain_drift(ws: Workspace, atfe_root: Path, capsys) -> None:
+    _two_toolchains(ws)
+    campaign, facts = ws.load()
+    ws.save(campaign, {**facts, "toolchains": {"gcc": None, "atfe": {"name": "atfe", "version": "21.0.0"}}})
+    board = FakeBoard([])
+    rc, view = _submit(ws, board, capsys, checker=_keyed_check)
+    assert rc == 5 and "Compiler changed" in view["note"] and not board.calls
+    assert ledger.Ledger(ws.ledger).charged() == 0
+
+
+def test_baseline_rerecords_on_new_compiler(ws: Workspace, atfe_root: Path, monkeypatch) -> None:
+    from helia_core_tester.agent_loop import setup
+    from helia_core_tester.agent_loop.config import Leg
+
+    out = ws.baseline("tcm-atfe")
+    bundle = out / "bundles" / "s1"
+    bundle.mkdir(parents=True)
+    manifest = {"build": {"toolchain": {"name": "atfe", "version": "21.0.0"}}}
+    (bundle / "session_manifest.json").write_text(json.dumps(manifest))
+    monkeypatch.setattr(setup, "read_baseline", lambda path: {"sessions": ["s1"]})
+    leg = Leg("tcm-atfe", "tcm", "atfe")
+    assert not setup.baseline_current(out, leg)
+    manifest["build"]["toolchain"]["version"] = "22.1.0"
+    (bundle / "session_manifest.json").write_text(json.dumps(manifest))
+    assert setup.baseline_current(out, leg)
+    cmds, lines = [], []
+    monkeypatch.setattr(setup, "_run", lambda cmd, log, cwd=None: cmds.append(cmd))
+    setup.make_baseline(ws, _campaign(toolchains=["gcc", "atfe"]), leg, lines.append)
+    assert not cmds
+    manifest["build"]["toolchain"]["version"] = "21.0.0"
+    (bundle / "session_manifest.json").write_text(json.dumps(manifest))
+    setup.make_baseline(ws, _campaign(toolchains=["gcc", "atfe"]), leg, lines.append)
+    cmd = cmds[0]
+    assert cmd[cmd.index("--toolchain") + 1] == "atfe" and cmd[cmd.index("--placement") + 1] == "tcm"
+    assert "Re-recording" in lines[0] and not bundle.exists()
+
+
+def test_settings_deny_every_size_ref(ws: Workspace, atfe_root: Path) -> None:
+    camp = _campaign(toolchains=["gcc", "atfe"], secrets_dir="/secret/x")
+    deny = agent.agent_settings(ws, camp)["permissions"]["deny"]
+    for path in (ws.size_ref, ws.size_ref_of("atfe")):
+        assert f"Read(/{path})" in deny
+    assert f"Read(/{ws.size_build_of('atfe')}/**)" in deny
+    probes = [p["arg"] for p in agent.probes(ws, camp, "t")]
+    assert f"{ws.bin / 'disasm'} selftest_probe --toolchain atfe" in probes
+
+
+def test_prompt_names_both_toolchains(atfe_root: Path) -> None:
+    text = render_prompt(_campaign(toolchains=["gcc", "atfe"]), DW_ROWS, PATHS)
+    assert "leg `tcm-atfe`" in text and "Built with ATfE clang." in text and "optimize(...)" in text
+    assert "--toolchain atfe" in text
+    plain = render_prompt(_campaign(), DW_ROWS, PATHS)
+    assert "atfe" not in plain and "Built with" not in plain

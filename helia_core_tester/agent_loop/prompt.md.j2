@@ -44,6 +44,12 @@ leg (a few minutes in total):
 {%- if legs|length > 1 %}
 A later leg runs only when the earlier legs got as far as scoring.
 {%- endif %}
+{%- if toolchains %}
+Each placement runs once per compiler: {{ toolchains|join(" and ") }} (atfe is Arm
+Toolchain for Embedded, clang). Pass needs every leg on every compiler, so
+write C that both compile well. Clang ignores gcc-only attributes such as
+`__attribute__((optimize(...)))`; `#pragma GCC unroll N` works in both.
+{%- endif %}
 Submit judges a copy of the tree taken when it starts; later edits wait
 for the next submit. A tree that fails the check or build is rejected
 before the board and costs no eval. A busy or failing board is reported as
@@ -54,13 +60,18 @@ Before spending an eval, run `{{ check }}` (no arguments,
 foreground, Bash timeout 600000 ms). It costs no eval and no board time
 (about 30 s): it applies the evaluator's source rules, compiles your tree
 for the {{ cpu }} and reports `check.findings`, `build` (compiler errors and
-warnings) and `code_size`.
+warnings) and `code_size`{% if toolchains %}, each keyed by compiler{% endif %}.
 
 To see the machine code your C compiles to, run
 `{{ disasm }} <function_name>` after `check`. It prints that
 function's disassembly from the `check` build ({{ cpu }}, the same flags the
 evaluator uses). Costs no eval. Use it to confirm the compiler emits the
 {% if has_mve %}MVE {% endif %}instructions, unrolling and register use you intended.
+{%- if toolchains %}
+Add `--toolchain {{ toolchains|join("|") }}` to pick the build (default {{ toolchains[0] }}),
+e.g. `{{ disasm }} <function_name> --toolchain atfe`; clang code
+prints in llvm-objdump syntax.
+{%- endif %}
 
 `submit` prints one JSON verdict and saves the same text to
 `{{ results }}/NNN.json` (NNN = eval number), which you
@@ -71,6 +82,10 @@ may Read if the printed output was cut:
 - `note`: present when the eval was not charged, and why.
 - `code_size`: kernel library code bytes vs base, total and per changed
   object file, or an error when nothing was built.
+{%- if toolchains %}
+  Keyed by compiler; `toolchains` gives each compiler's geomean speedup
+  over its legs and its code bytes added.
+{%- endif %}
 - `legs.<leg>`, each with:
   - `verdict`, `stage` (check, run, objects, score) and `score`.
   - `findings`: why the checker rejected the tree.

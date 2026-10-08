@@ -23,6 +23,7 @@ LEG_TEXT = {
     "mram": ("weights in MRAM behind the data cache, cache cold before each call. "
              "This is how models deploy; memory access order and tiling show here."),
 }
+TOOLCHAIN_TEXT = {"gcc": " Built with gcc.", "atfe": " Built with ATfE clang."}
 # Spaced, lowercase op names.
 OP_TEXT = {"DepthwiseConv": "depthwise convolution", "Convolve": "convolution", "FullyConnected": "fully connected"}
 
@@ -91,6 +92,7 @@ def render_prompt(campaign: Campaign, rows: list[dict], paths: dict[str, Path],
     extra = ["Helium/MVE"] if board.has_mve else []
     if board.cpu == "cortex-m55":
         extra.append("dual-beat")
+    many = len(campaign.toolchains) > 1
     start = None
     if start_diff is not None:
         start = {"files": _patch_files(start_diff), "lines": start_diff.count(b"\n"), "notes": campaign.start_notes}
@@ -104,6 +106,8 @@ def render_prompt(campaign: Campaign, rows: list[dict], paths: dict[str, Path],
         median=round(statistics.median(cpms), 2) if cpms else None,
         ceilings=", ".join(ceilings), bases=sorted({r["basis"] for r in routes if r["basis"]}),
         is_depthwise=campaign.op == "DepthwiseConv", has_mve=board.has_mve,
-        legs=[{"name": leg, "text": LEG_TEXT[leg]} for leg in campaign.legs], first_leg=campaign.legs[0],
+        legs=[{"name": leg.name, "text": LEG_TEXT[leg.placement] + (TOOLCHAIN_TEXT[leg.toolchain] if many else "")}
+              for leg in campaign.runs],
+        first_leg=campaign.runs[0].name, toolchains=campaign.toolchains if many else (),
         evals=campaign.evals, start=start, **{k: str(v) for k, v in paths.items()},
     )

@@ -459,6 +459,7 @@ name: conv-s8                  # lowercase, digits, dashes
 board: apollo510_evb           # tester board id
 bench_id: apollo510_evb        # bench-agent board id (default: board)
 legs: [tcm, mram]              # default: both when the board has MRAM
+toolchains: [gcc]              # or [gcc, atfe]; atfe needs ATFE_ROOT
 target:
   op: Convolve                 # `hardware run --op`
   dtype: S8                    # `hardware run --dtype`
@@ -484,6 +485,10 @@ agent's 10 minute Bash limit), `retries` (per leg, default 1) and `max_infra_err
 failing board results in a row, default 5). The hidden set holds only the
 target op and dtype. Hidden shapes exist for `Convolve` and `DepthwiseConv`
 S8 only; set `hidden_shapes: 0` for other targets.
+With `toolchains: [gcc, atfe]` every placement runs once per compiler:
+gcc legs keep their names (`tcm`, `mram`), atfe legs are `tcm-atfe` and
+`mram-atfe`. Each atfe leg has its own baseline, build dir and size
+reference (`W/size-ref-atfe.json`), and `pass` needs every leg.
 `agent-loop validate FILE` checks a file without side effects.
 
 ### 2. Initialize the workspace
@@ -508,8 +513,10 @@ uv run helia_core_tester agent-loop init conv-s8.yaml -w ~/campaigns/conv-s8
    seed 0600). The dir must be new or empty. The workspace records that
    it owns the dir, and only that workspace's rerun reuses its seed.
 4. Records one `candidate baseline` per leg under `bench-agent run`.
-5. Builds the base kernel library once and saves per-object code sizes
-   (`W/size-ref.json`).
+5. Builds the base kernel library once per toolchain and saves per-object
+   code sizes (`W/size-ref.json`, `W/size-ref-atfe.json`). It records each
+   compiler's version; a baseline recorded with another version is
+   re-recorded, and submit refuses, uncharged, once a compiler changes.
 6. Renders `W/prompt.md` from a template filled with the routes seen in
    the first leg's baseline (timed and inner symbols, median and best
    cycles per MAC) and the ceiling from `assets/scoring/ceilings.yaml`.
@@ -565,9 +572,10 @@ uv run helia_core_tester agent-loop stop -w ~/campaigns/conv-s8
 - `W/bin/check`: copies the agent's `Source/`, `Include/`, `cmake/` and
   `nsx/` into a fresh clone of the base, runs `candidate check`, builds
   the kernels with `hardware build` and reports code size against the
-  base. No board, no eval.
-- `W/bin/disasm FN`: one function from the last check build, up to 600
-  lines.
+  base, once per toolchain. No board, no eval.
+- `W/bin/disasm FN [--toolchain gcc|atfe]`: one function from the last
+  check build, up to 600 lines (`llvm-objdump` from `$ATFE_ROOT/bin` for
+  atfe).
 - `W/bin/submit`: stages a copy of the agent's trees in `W/submit/tree`
   and runs check on it. A tree that fails, or a check that runs past the
   deadline, is rejected and costs no eval.

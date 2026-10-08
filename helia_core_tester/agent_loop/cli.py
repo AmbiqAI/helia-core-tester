@@ -82,11 +82,12 @@ def check_command(workspace: Path = WS_OPT) -> None:
 def disasm_command(
     function: str = typer.Argument("", help="Kernel function name."),
     workspace: Path = WS_OPT,
+    toolchain: str = typer.Option("", "--toolchain", help="gcc or atfe build (default: first)."),
 ) -> None:
     """Disassemble one function from the check build (agent wrapper)."""
     from .judge import disasm
 
-    raise typer.Exit(disasm(_ws(workspace), function))
+    raise typer.Exit(disasm(_ws(workspace), function, toolchain))
 
 
 @agent_loop_app.command("launch")
@@ -129,6 +130,8 @@ def status_command(
         means = ", ".join(f"{leg} {fam} {g:.3f}" for leg, fams in row["geomean"].items()
                           for fam, g in fams.items() if g is not None)
         typer.echo(f"  {row['eval']} {row['verdict']:<14}{charged} size {row['size_delta']} {means}")
+        for name, gain in (row.get("toolchains") or {}).items():
+            typer.echo(f"      {name}: geomean {gain['geomean']}, size {gain['size_delta']}")
     for line in info["recent"]:
         typer.echo(f"  {line}")
 

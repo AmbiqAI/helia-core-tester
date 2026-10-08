@@ -88,6 +88,11 @@ class ToolchainSpec:
         version = compiler_version(compiler)
         return {"name": self.name, "version": version} if version else None
 
+    def installed(self) -> Optional[dict[str, str]]:
+        """Provenance of the compiler on hand."""
+        clang = atfe_clang()
+        return self.record(str(clang) if self.key == "atfe" and clang else arm_tool(self.compiler))
+
     def require(self) -> None:
         """Fail fast without ATfE clang."""
         clang = atfe_clang()

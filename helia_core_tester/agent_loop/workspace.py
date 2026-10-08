@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from helia_core_tester.hardware.toolchain import toolchain_spec
+
 from .config import Campaign, from_json
 
 STATE_FILE = "campaign.json"
@@ -66,6 +68,13 @@ class Workspace:
     @property
     def size_build(self) -> Path:
         return self.root / "size-ref-build"
+
+    def size_ref_of(self, toolchain: str) -> Path:
+        """Size reference of one toolchain."""
+        return toolchain_spec(toolchain).build_dir(self.size_ref.with_suffix("")).with_suffix(".json")
+
+    def size_build_of(self, toolchain: str) -> Path:
+        return toolchain_spec(toolchain).build_dir(self.size_build)
 
     @property
     def prompt(self) -> Path:
