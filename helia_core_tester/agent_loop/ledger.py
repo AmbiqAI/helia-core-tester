@@ -231,24 +231,48 @@ def passing_evals(rows: list[dict], runs: tuple[Leg, ...]) -> list[dict[str, Any
 
 
 def pick_text(pick: dict) -> str:
-    """+3,088 B gcc / +2,154 B atfe at 2.78x / 3.42x"""
-    gains = pick["toolchains"]
-    sizes = " / ".join((f"{g['size_delta']:+,}" if isinstance(g.get("size_delta"), int) else "?") + f" B {name}"
-                       for name, g in gains.items())
-    speeds = " / ".join(f"{g['geomean']:.2f}x" for g in gains.values())
-    return f"{sizes} at {speeds}"
+    """2.78x / 3.42x at +3,088 B / +2,154 B"""
+    gains = pick["toolchains"].values()
+    speeds = " / ".join(f"{g['geomean']:.2f}x" for g in gains)
+    sizes = " / ".join((f"{g['size_delta']:+,}" if isinstance(g.get("size_delta"), int) else "?") + " B" for g in gains)
+    return f"{speeds} at {sizes}"
 
 
-def size_note(picks: list[dict]) -> Optional[str]:
-    """Point a pass at the size phase."""
+def _evals(n: int) -> str:
+    return f"{n} eval{'' if n == 1 else 's'}"
+
+
+def size_phase(evals_left: int, size_evals: int) -> bool:
+    """Whether the size phase has begun."""
+    return 0 < size_evals and evals_left <= size_evals
+
+
+def phase_count(evals_left: int, size_evals: int) -> str:
+    """(2 evals until size phase)"""
+    if size_evals and evals_left > size_evals:
+        return f"({_evals(evals_left - size_evals)} until size phase)"
+    return f"({_evals(evals_left)} left)"
+
+
+def phase_text(evals_left: int, size_evals: int) -> str:
+    """size phase (4 evals left)"""
+    name = "size" if size_phase(evals_left, size_evals) else "speed"
+    return f"{name} phase {phase_count(evals_left, size_evals)}"
+
+
+def next_note(picks: list[dict], evals_left: int, size_evals: int, passed: bool) -> Optional[str]:
+    """Name the phase and the reference pass."""
     fastest = next((p for p in picks if p["fastest"]), None)
     smallest = next((p for p in picks if p["smallest"]), None)
-    if fastest is None:
+    shrink = size_phase(evals_left, size_evals)
+    if fastest is None or evals_left <= 0 or not (passed or shrink):
         return None
-    if smallest is None or fastest is smallest:
-        return f"next: shrink code; best pass {fastest['eval']} {pick_text(fastest)}"
-    return (f"next: shrink code; fastest pass {fastest['eval']} {pick_text(fastest)}; "
-            f"smallest pass {smallest['eval']} {pick_text(smallest)}")
+    head = f"next: {'shrink code' if shrink else 'keep chasing speed'} {phase_count(evals_left, size_evals)}"
+    note = f"{head}; fastest pass {fastest['eval']} {pick_text(fastest)}"
+    # Skip a smallest that saves nothing.
+    if shrink and smallest is not None and (not _known(fastest) or _bytes(smallest) < _bytes(fastest)):
+        note += f"; smallest pass {smallest['eval']} {pick_text(smallest)}"
+    return note
 
 
 def agent_view(overall: str, legs: dict, *, evals_left: int, size: dict, runs: tuple[Leg, ...],

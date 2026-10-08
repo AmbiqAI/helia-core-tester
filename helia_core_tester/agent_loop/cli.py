@@ -120,7 +120,8 @@ def status_command(
         typer.echo(json.dumps(info, indent=2))
         return
     state = "running" if info["running"] else "not running"
-    typer.echo(f"{info['campaign']}: {info['evals_used']}/{info['evals']} evals, agent {state} (pid {info['pid']})")
+    typer.echo(f"{info['campaign']}: {info['evals_used']}/{info['evals']} evals, {info['phase']}, "
+               f"agent {state} (pid {info['pid']})")
     cost = info["cost"]
     if cost["finished"]:
         typer.echo(f"finished {cost['subtype']}: ${cost['cost_usd']}, {cost['turns']} turns, {cost['denials']} denials")

@@ -87,9 +87,12 @@ may Read if the printed output was cut:
   rejected, refused, no_gain, error.
 - `evals_left`: you have {{ evals }} evaluations in total. Use them carefully.
 - `note`: present when the eval was not charged, and why.
-- `next`: on a pass only, the size phase target: code bytes added and
-  speedup of the fastest and the smallest passes so far{% if toolchains %}, with bytes
-  and speedup per compiler{% endif %}.
+- `next`: after a pass{% if size_evals %}, and in the size phase after any charged eval once
+  something passed{% endif %}: the phase, its eval count, and the fastest pass so
+  far as speedup at code bytes added{% if toolchains %}, per compiler ({{ toolchains|join(" / ") }}){% endif %}.
+{%- if size_evals %}
+  In the size phase it also names the smallest pass.
+{%- endif %}
 - `code_size`: kernel library code bytes vs base, total and per changed
   object file, or an error when nothing was built.
 {%- if toolchains %}
@@ -124,9 +127,9 @@ may Read if the printed output was cut:
 Besides speed, weigh these, where they apply:
 - Code size. Flash is scarce on these chips. Prefer the smallest change that
   gets the gain: no per-shape copies of a kernel, no unrolling beyond what
-  pays off, share helpers. Report bytes added per % speedup{% if toolchains %} for each
-  compiler{% endif %}. Size never fails an eval; after your first pass it is
-  your main target (see below).
+  pays off, share helpers. Report bytes added per % speedup{% if toolchains %} for each compiler{% endif %}.
+  Size never fails an eval;
+  {%- if size_evals %} in the size phase it is your main target.{% else %} keep each pass lean.{% endif %}
 - Memory and caching. Think about where each operand lives and how often it
   is read: reuse each loaded weight across several output pixels and each
   loaded input across several channels, keep loads contiguous, and avoid
@@ -159,24 +162,35 @@ Work plan:
    useful), reason about correctness (rounding, saturation, tails, odd
    channel counts, padding) before submitting.
 4. If a change fails or gives no gain, undo it or fix it before stacking more.
-5. After your first pass, follow "After your first pass" below. Stop when
-   evals run out or no plausible size cut remains.
+{%- if size_evals %}
+5. Chase speed first, then shrink code; see "Two phases" below. Stop
+   when evals run out, or in the size phase when no plausible cut remains.
 
-After your first pass:
-- Keep the fastest pass as your reference. Note what it changed, so you
-  can restore it when a cut fails.
-- Spend the remaining evals cutting code size while every leg still
+Two phases (of your {{ evals }} evals, the last {{ size_evals }} are for size):
+- Speed phase, while `evals_left` is above {{ size_evals }}: keep chasing speed
+  after a pass. A first pass is rarely the best one; a bolder rewrite
+  later can beat it by a wide margin. Keep the fastest pass as your
+  reference, note what it changed so you can restore it, and build on it
+  or try a new approach. Switch to size early only if you have no
+  plausible speed idea left, and say so.
+- Size phase, once `evals_left` is {{ size_evals }} or less: if something passed,
+  start from the fastest pass and cut code size while every leg still
   passes: share helpers, merge specialized loops, unroll less, drop dead or
   duplicated paths, and delete functions nothing calls any more. A change
-  that is both smaller and faster is welcome.
+  that is both smaller and faster is welcome. If nothing passed yet, keep
+  working toward a pass.
 - Run `check` on each cut and compare `code_size`{% if toolchains %} per compiler
   ({{ toolchains|join(" and ") }}); a cut that shrinks one compiler may grow the other{% endif %}.
-- With each candidate, state the bytes saved{% if toolchains %} per compiler{% endif %} and the
+- With each cut, state the bytes saved{% if toolchains %} per compiler{% endif %} and the
   speed lost per leg, both vs the reference.
 - Never trade correctness for size.
-- Do not stop early while evals remain and a plausible size cut remains.
-  The user picks among your passing evals by speed and size, so each
-  smaller pass is a real option even when it is a bit slower.
+- Do not stop early while evals and a plausible cut remain. The user
+  picks among your passing evals by speed and size, so each smaller pass
+  is a real option even when it is a bit slower.
+{%- else %}
+5. After a pass, keep chasing speed with the fastest pass as your
+   reference. Stop when evals run out or no plausible speed idea remains.
+{%- endif %}
 
 When you stop, leave the passing version you recommend in the tree (or the
 starting tree if nothing passed) and write a short summary: what you
