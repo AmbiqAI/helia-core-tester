@@ -483,7 +483,9 @@ Optional: `min_score` (passed to `candidate eval`), `lock_timeout_s`
 (board lock wait, default 600), `eval_timeout_s` (per leg, default 300),
 `submit_deadline_s` (whole submit, default 540, at most 570, under the
 agent's 10 minute Bash limit), `retries` (per leg, default 1) and `max_infra_errors` (busy or
-failing board results in a row, default 5). The hidden set holds only the
+failing board results in a row, default 5) and `size_evals` (the last evals,
+which go to cutting code size once something passed; default a third of
+`evals`, below `evals`, 0 for none). The hidden set holds only the
 target op and dtype. Hidden shapes exist for `Convolve` S8 and `DepthwiseConv`
 S8 and S16 only; set `hidden_shapes: 0` for other targets.
 With `toolchains: [gcc, atfe]` every placement runs once per compiler:

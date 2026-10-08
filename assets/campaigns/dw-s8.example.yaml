@@ -14,6 +14,8 @@ kernels:
   ref: v7.40.0
 # Charged board evals for the agent.
 evals: 12
+# Last evals for cutting code size; 0 for none.
+# size_evals: 4
 # Claude --max-budget-usd.
 cost_usd: 25
 model: claude-opus-5-5

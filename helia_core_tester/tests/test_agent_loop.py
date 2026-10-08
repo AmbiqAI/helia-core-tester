@@ -6,6 +6,7 @@ import shlex
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Optional
 
 import pytest
 
@@ -58,10 +59,32 @@ def test_config_defaults_and_paths() -> None:
     ({"op": "Convolve", "dtype": "S16"}, "or set 0"),
     ({"op": "Conv 2d"}, "one word"),
     ({"case_ids": ["ok", "a b"]}, "case_ids"),
+    ({"size_evals": -1}, "size_evals: must be >= 0"),
+    ({"size_evals": 12}, "size_evals: must be < evals"),
+    ({"evals": 3, "size_evals": 3}, "size_evals: must be < evals"),
+    ({"size_evals": True}, "wrong type"),
 ])
 def test_config_rejects(over, message) -> None:
     with pytest.raises(ConfigError, match=message):
         _campaign(**over)
+
+
+@pytest.mark.parametrize("over, budget", [
+    ({}, 4), ({"evals": 6}, 2), ({"evals": 2}, 1), ({"evals": 1}, 0), ({"size_evals": 0}, 0),
+    ({"evals": 3, "size_evals": 2}, 2),
+])
+def test_size_evals_budget(over, budget) -> None:
+    c = _campaign(**over)
+    assert c.size_budget == budget
+    assert ("size_evals" in c.to_json()) == ("size_evals" in over)
+    assert from_json(json.loads(json.dumps(c.to_json()))) == c
+
+
+def test_saved_campaign_without_size_evals() -> None:
+    saved = _campaign(evals=9).to_json()
+    assert "size_evals" not in saved
+    c = from_json(saved)
+    assert c.size_evals is None and c.size_budget == 3 and c.to_json() == saved
 
 
 def test_config_missing_key() -> None:
@@ -892,43 +915,99 @@ def _status_cli(w: Workspace, *extra: str) -> str:
     return result.output
 
 
-def test_prompt_size_phase(atfe_root: Path) -> None:
+def test_prompt_two_phases(atfe_root: Path) -> None:
     text = render_prompt(_campaign(toolchains=["gcc", "atfe"]), DW_ROWS, PATHS)
-    assert "After your first pass:" in text and "Keep the fastest pass as your reference" in text
+    assert "Two phases (of your 12 evals, the last 4 are for size):" in text
+    assert "Speed phase, while `evals_left` is above 4: keep chasing speed" in text
+    assert "Size phase, once `evals_left` is 4 or less" in text and "no\n  plausible speed idea left" in text
     assert "`code_size` per compiler\n  (gcc and atfe)" in text and "bytes saved per compiler" in text
-    assert "Do not stop early while evals remain" in text and "Never trade correctness" in text
-    assert "Size never fails an eval" in text and "`next`: on a pass only" in text
-    assert "Stop when further gains look small" not in text
-    plain = render_prompt(_campaign(), DW_ROWS, PATHS)
-    assert "After your first pass:" in plain and "per compiler" not in plain
+    assert "per compiler (gcc / atfe)" in text and "names the smallest pass" in text
+    assert "in the size phase it is your main target" in text and "Never trade correctness" in text
+    assert "After your first pass" not in text and "Spend the remaining evals" not in text
+    plain = render_prompt(_campaign(evals=6), DW_ROWS, PATHS)
+    assert "Two phases (of your 6 evals, the last 2 are for size):" in plain and "per compiler" not in plain
 
 
-def test_pass_points_at_size_phase(ws: Workspace, capsys) -> None:
+def test_prompt_no_size_phase() -> None:
+    text = render_prompt(_campaign(size_evals=0), DW_ROWS, PATHS)
+    assert "Two phases" not in text and "size phase" not in text and "Size phase" not in text
+    assert "5. After a pass, keep chasing speed" in text and "keep each pass lean" in text
+
+
+def test_pass_names_the_phase(ws: Workspace, capsys) -> None:
     rc, view = _submit(ws, FakeBoard([_leg("pass"), _leg("pass")]), capsys)
-    assert rc == 0 and view["next"] == "next: shrink code; best pass 001 +64 B gcc at 1.10x"
+    assert rc == 0 and view["next"] == "next: shrink code (1 eval left); fastest pass 001 1.10x at +64 B"
     assert json.loads((ws.results / "001.json").read_text())["next"] == view["next"]
+    # No evals left, no next.
     rc, view = _submit(ws, FakeBoard([_leg("fail"), _leg("pass")]), capsys)
     assert rc == 1 and "next" not in view
 
 
+def _set_evals(ws: Workspace, evals: int, size_evals: Optional[int] = None) -> None:
+    campaign, facts = ws.load()
+    ws.save(dataclasses.replace(campaign, evals=evals, size_evals=size_evals), facts)
+
+
+def test_speed_phase_then_size_phase(ws: Workspace, capsys) -> None:
+    _set_evals(ws, 5, 2)
+    rc, view = _submit(ws, FakeBoard([_leg("fail"), _leg("pass")]), capsys)
+    assert rc == 1 and "next" not in view
+    rc, view = _submit(ws, FakeBoard([_leg("pass"), _leg("pass")]), capsys)
+    assert view["next"] == "next: keep chasing speed (1 eval until size phase); fastest pass 002 1.10x at +64 B"
+    # Size phase: fails carry next too.
+    rc, view = _submit(ws, FakeBoard([_leg("fail"), _leg("pass")]), capsys)
+    assert rc == 1 and view["next"] == "next: shrink code (2 evals left); fastest pass 002 1.10x at +64 B"
+
+
+def test_speed_fail_has_no_next(ws: Workspace, capsys) -> None:
+    _set_evals(ws, 6, 2)
+    _submit(ws, FakeBoard([_leg("pass"), _leg("pass")]), capsys)
+    rc, view = _submit(ws, FakeBoard([_leg("fail"), _leg("pass")]), capsys)
+    assert rc == 1 and view["evals_left"] == 4 and "next" not in view
+
+
+def test_no_size_phase_note(ws: Workspace, capsys) -> None:
+    _set_evals(ws, 3, 0)
+    _, view = _submit(ws, FakeBoard([_leg("pass"), _leg("pass")]), capsys)
+    assert view["next"] == "next: keep chasing speed (2 evals left); fastest pass 001 1.10x at +64 B"
+    _, view = _submit(ws, FakeBoard([_leg("fail"), _leg("pass")]), capsys)
+    assert "next" not in view
+
+
+@pytest.mark.parametrize("left, size_evals, text", [
+    (5, 4, "speed phase (1 eval until size phase)"),
+    (4, 4, "size phase (4 evals left)"),
+    (1, 4, "size phase (1 eval left)"),
+    (12, 0, "speed phase (12 evals left)"),
+    (0, 0, "speed phase (0 evals left)"),
+])
+def test_phase_text(left, size_evals, text) -> None:
+    assert ledger.phase_text(left, size_evals) == text
+    assert ledger.size_phase(left, size_evals) == text.startswith("size")
+
+
 def test_free_evals_have_no_next(ws: Workspace, capsys, monkeypatch) -> None:
     monkeypatch.setattr(judge, "RETRY_PAUSE_S", 0)
+    # Size phase after the pass.
+    _set_evals(ws, 4, 3)
+    _submit(ws, FakeBoard([_leg("pass"), _leg("pass")]), capsys)
     rejected = lambda *a, **k: (False, {"check": {"ok": False}})  # noqa: E731
     rc, view = _submit(ws, FakeBoard([]), capsys, checker=rejected)
     assert view["verdict"] == "rejected" and "next" not in view
     rc, view = _submit(ws, FakeBoard([None, None]), capsys)
-    assert view["verdict"] == "error" and "next" not in view
+    assert view["verdict"] == "error" and "not charged" in view["note"] and "next" not in view
 
 
 def test_pass_note_names_fastest_and_smallest(ws: Workspace, atfe_root: Path, capsys) -> None:
     _two_toolchains(ws)
+    _set_evals(ws, 3)
     board = FakeBoard([_leg_gain("pass", 2.0)] * 4)
     _submit(ws, board, capsys, checker=_keyed_check)
     small = lambda *a, **k: (True, {"check": {"ok": True}, "build": {"gcc": "ok", "atfe": "ok"},  # noqa: E731
                                     "code_size": {"gcc": {"delta_bytes": -8}, "atfe": {"delta_bytes": 16}}})
     _, view = _submit(ws, FakeBoard([_leg_gain("pass", 1.5)] * 4), capsys, checker=small)
-    assert view["next"] == ("next: shrink code; fastest pass 001 +64 B gcc / +48 B atfe at 2.00x / 2.00x; "
-                            "smallest pass 002 -8 B gcc / +16 B atfe at 1.50x / 1.50x")
+    assert view["next"] == ("next: shrink code (1 eval left); fastest pass 001 2.00x / 2.00x at +64 B / +48 B; "
+                            "smallest pass 002 1.50x / 1.50x at -8 B / +16 B")
 
 
 def test_status_tradeoff_two_toolchains(tmp_path: Path, atfe_root: Path) -> None:
@@ -939,8 +1018,12 @@ def test_status_tradeoff_two_toolchains(tmp_path: Path, atfe_root: Path) -> None
     assert passes[1]["toolchains"] == {"gcc": {"geomean": 2.7768, "size_delta": 3088},
                                        "atfe": {"geomean": 3.4246, "size_delta": 2154}}
     assert passes[1]["diff"] == str(w.ledger / "006.diff")
-    assert ledger.size_note(passes) == "next: shrink code; best pass 006 +3,088 B gcc / +2,154 B atfe at 2.78x / 3.42x"
+    assert ledger.next_note(passes, 6, 4, True) == ("next: keep chasing speed (2 evals until size phase); "
+                                                    "fastest pass 006 2.78x / 3.42x at +3,088 B / +2,154 B")
+    assert ledger.next_note(passes, 4, 4, False) == ("next: shrink code (4 evals left); "
+                                                     "fastest pass 006 2.78x / 3.42x at +3,088 B / +2,154 B")
     text = _status_cli(w)
+    assert "dw-s8: 6/12 evals, speed phase (2 evals until size phase), agent" in text
     assert "  eval   gcc speed   gcc bytes  atfe speed  atfe bytes  marks" in text
     assert "  006        2.78x      +3,088       3.42x      +2,154  fastest smallest pareto" in text
     assert f"diff {w.ledger / '002.diff'}" in text
@@ -960,6 +1043,9 @@ def test_status_tradeoff_one_toolchain(tmp_path: Path) -> None:
     assert [(p["eval"], p["fastest"], p["smallest"], p["pareto"]) for p in passes] == [
         ("004", False, True, True), ("007", True, False, True)]
     text = _status_cli(w)
+    assert "dw-s8: 8/12 evals, size phase (4 evals left), agent" in text
+    info = json.loads(_status_cli(w, "--json"))
+    assert info["phase"] == "size phase (4 evals left)" and info["size_evals"] == 4
     assert "  eval   gcc speed   gcc bytes  marks" in text and "  004        1.08x      +1,700  smallest pareto" in text
 
 
@@ -971,5 +1057,5 @@ def test_dominated_pass_is_marked() -> None:
     # Unknown size still ranks on speed.
     assert [(p["fastest"], p["smallest"], p["pareto"]) for p in picks] == [
         (False, True, True), (False, False, False), (True, False, False)]
-    assert ledger.size_note(picks) == ("next: shrink code; fastest pass 003 ? B gcc at 2.00x; "
-                                       "smallest pass 001 +100 B gcc at 1.50x")
+    assert ledger.next_note(picks, 2, 4, False) == ("next: shrink code (2 evals left); fastest pass 003 2.00x at ? B; "
+                                                    "smallest pass 001 1.50x at +100 B")

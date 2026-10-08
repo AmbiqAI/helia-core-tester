@@ -65,6 +65,13 @@ class Campaign:
     retries: int = 1
     max_infra_errors: int = 5
     toolchains: tuple[str, ...] = (DEFAULT_TOOLCHAIN,)
+    # None means a third of evals.
+    size_evals: Optional[int] = None
+
+    @property
+    def size_budget(self) -> int:
+        """Evals reserved for the size phase."""
+        return round(self.evals / 3) if self.size_evals is None else self.size_evals
 
     @property
     def runs(self) -> tuple[Leg, ...]:
@@ -80,12 +87,14 @@ class Campaign:
         # gcc-only files stay unchanged.
         if self.toolchains == (DEFAULT_TOOLCHAIN,):
             del out["toolchains"]
+        if self.size_evals is None:
+            del out["size_evals"]
         return {k: str(v) if isinstance(v, Path) else list(v) if isinstance(v, tuple) else v for k, v in out.items()}
 
 
 # Copied as is when present.
 _PLAIN = ("evals", "model", "hidden_shapes", "repeats", "lock_timeout_s", "eval_timeout_s", "submit_deadline_s",
-          "retries", "max_infra_errors", "bench_id")
+          "retries", "max_infra_errors", "bench_id", "size_evals")
 DEFAULTS = Campaign.__dataclass_fields__
 # YAML key -> (type, required).
 _TOP = {
@@ -96,7 +105,7 @@ _TOP = {
     "start_notes": (str, False), "secrets_dir": (str, True), "min_score": ((int, float), False),
     "lock_timeout_s": (int, False), "eval_timeout_s": (int, False), "submit_deadline_s": (int, False),
     "retries": (int, False),
-    "max_infra_errors": (int, False),
+    "max_infra_errors": (int, False), "size_evals": (int, False),
 }
 _TARGET = {"op": (str, True), "dtype": (str, True), "case_ids": (list, False)}
 _KERNELS = {"repo": (str, True), "ref": (str, True)}
@@ -165,8 +174,11 @@ def parse_campaign(data: Any, base: Path) -> Campaign:
     if top.get("submit_deadline_s", 0) > MAX_DEADLINE_S:
         raise ConfigError(f"submit_deadline_s: at most {MAX_DEADLINE_S}")
     for key, low in (("evals", 1), ("hidden_shapes", 0), ("repeats", 1), ("lock_timeout_s", 1),
-                     ("eval_timeout_s", 60), ("submit_deadline_s", 120), ("retries", 0), ("max_infra_errors", 1)):
+                     ("eval_timeout_s", 60), ("submit_deadline_s", 120), ("retries", 0), ("max_infra_errors", 1),
+                     ("size_evals", 0)):
         _at_least(top, key, low)
+    if top.get("size_evals", 0) >= top.get("evals", DEFAULTS["evals"].default):
+        raise ConfigError("size_evals: must be < evals")
     cost = float(top.get("cost_usd", DEFAULTS["cost_usd"].default))
     if not math.isfinite(cost) or cost <= 0:
         raise ConfigError("cost_usd: must be positive")
