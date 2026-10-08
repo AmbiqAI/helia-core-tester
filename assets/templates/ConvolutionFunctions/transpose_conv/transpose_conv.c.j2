@@ -12,11 +12,16 @@ static cmsis_nn_context {{ name }}_ctx;
 #define {{ name|upper }}_BUFFER_SIZE_MAX {{ buffer_size_max }}
 {{ helia_guard_declare("uint8_t", name ~ "_buffer", name|upper ~ "_BUFFER_SIZE_MAX") }}
 
+{% if direct_s16 %}
+// The s16 kernel never reads output_ctx.
+static cmsis_nn_context {{ name }}_reverse_conv_ctx;
+{% else %}
 // Reverse convolution context buffer (output_ctx parameter in arm_transpose_conv_wrapper_s8)
 // Size: output width * output height * output channel * 4
 #define {{ name|upper }}_REVERSE_CONV_CTX_SIZE {{ reverse_conv_ctx_size }}
 {{ helia_guard_declare("uint8_t", name ~ "_reverse_conv_ctx_buffer", name|upper ~ "_REVERSE_CONV_CTX_SIZE") }}
 static cmsis_nn_context {{ name }}_reverse_conv_ctx;
+{% endif %}
 
 {% if has_weight_sum %}
 // Weight sum context for s8 transpose convolutions (matches CMSIS-NN test approach)
@@ -54,6 +59,8 @@ int32_t {{ name }}_run(
         &{{ name }}_filter_dims,
         &{{ name }}_output_dims
     );
+    {% endif %}
+    {% if not float_kernel and not direct_s16 %}
     {% set reverse_sizer_fn = 'arm_transpose_conv_s8_get_reverse_conv_buffer_size' %}
     int32_t reverse_required_buffer_size = arm_transpose_conv_s8_get_reverse_conv_buffer_size(
         &{{ name }}_transpose_conv_params,
@@ -65,7 +72,9 @@ int32_t {{ name }}_run(
     // these canaries unstamped, and the unconditional check in _test_case_run would
     // report a fabricated breach instead of the real sizer error (#68).
     HELIA_GUARD_ARM({{ name }}_buffer, true /* pure scratch: poison to catch read-before-write */);
+    {% if not direct_s16 %}
     HELIA_GUARD_ARM({{ name }}_reverse_conv_ctx_buffer, true /* pure scratch: poison to catch read-before-write */);
+    {% endif %}
     {% if has_weight_sum %}
     HELIA_GUARD_ARM({{ name }}_weight_sum_buffer, true /* fully recomputed below: poison-safe */);
     {% endif %}
@@ -81,19 +90,26 @@ int32_t {{ name }}_run(
     // disagree. They are separate failures because they have separate owners.
     HELIA_VALIDATE_SIZER("{{ kernel_get_buffer_size_fn }}", required_buffer_size);
     HELIA_VALIDATE_SIZER_FITS("{{ kernel_get_buffer_size_fn }}", required_buffer_size, {{ name|upper }}_BUFFER_SIZE_MAX);
+    {% if not direct_s16 %}
     // The reverse sizer's answer is discarded in favour of a compile-time size, so a negative
     // return here was previously invisible (#133).
     HELIA_VALIDATE_SIZER("{{ reverse_sizer_fn }}", reverse_required_buffer_size);
     HELIA_VALIDATE_SIZER_FITS("{{ reverse_sizer_fn }}", reverse_required_buffer_size, {{ name|upper }}_REVERSE_CONV_CTX_SIZE);
+    {% endif %}
 
     // Initialize context buffer
     {{ name }}_ctx.buf = {{ name }}_buffer;
     {{ name }}_ctx.size = required_buffer_size;
     HELIA_GUARD_STAMP_SLACK({{ name }}_buffer, {{ name }}_ctx.buf == {{ name }}_buffer ? (size_t){{ name }}_ctx.size : 0u);
 
+    {% if direct_s16 %}
+    {{ name }}_reverse_conv_ctx.buf = NULL;
+    {{ name }}_reverse_conv_ctx.size = 0;
+    {% else %}
     // Initialize reverse convolution context buffer (output_ctx parameter)
     {{ name }}_reverse_conv_ctx.buf = {{ name }}_reverse_conv_ctx_buffer;
     {{ name }}_reverse_conv_ctx.size = {{ name|upper }}_REVERSE_CONV_CTX_SIZE;
+    {% endif %}
 
     {% if has_weight_sum %}
     // Initialize weight sum context and compute weight_sum (matches CMSIS-NN test approach)
@@ -137,6 +153,25 @@ int32_t {{ name }}_run(
         output,
         {{ kernel_layout }}
     );
+    {% elif direct_s16 %}
+    arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(
+        &{{ name }}_ctx,
+        &{{ name }}_reverse_conv_ctx,
+        &{{ name }}_transpose_conv_params,
+        &{{ name }}_quant_params,
+        &{{ name }}_input_dims,
+        input,
+        &{{ name }}_filter_dims,
+        {{ name }}_weights,
+        &{{ name }}_bias_dims,
+        {% if has_biases %}
+        {{ name }}_biases,
+        {% else %}
+        NULL,
+        {% endif %}
+        &{{ name }}_output_dims,
+        output
+    );
     {% else %}
     arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(
         &{{ name }}_ctx,
@@ -173,7 +208,9 @@ int32_t {{ name }}_test_case_run(void)
     int failures = 0;
     HELIA_GUARD_CHECK({{ name }}_buffer, "{{ validation_label | default("Transpose convolution") }} scratch", failures);
     HELIA_GUARD_CHECK_SLACK({{ name }}_buffer, "{{ validation_label | default("Transpose convolution") }} scratch slack", {{ name }}_ctx.buf == {{ name }}_buffer ? (size_t){{ name }}_ctx.size : 0u, failures);
+    {% if not direct_s16 %}
     HELIA_GUARD_CHECK({{ name }}_reverse_conv_ctx_buffer, "{{ validation_label | default("Transpose convolution") }} reverse_conv_ctx", failures);
+    {% endif %}
     {% if has_weight_sum %}
     HELIA_GUARD_CHECK({{ name }}_weight_sum_buffer, "{{ validation_label | default("Transpose convolution") }} weight_sum", failures);
     {% endif %}
