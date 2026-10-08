@@ -400,24 +400,37 @@ def _stamp_path(module_dir: Path) -> Path:
     return module_dir.with_name(module_dir.name + ".fresh")
 
 
-def _fresh_module(module_dir: Path) -> bool:
-    """This code vendored the current module."""
+def _file_hashes(module_dir: Path) -> dict[str, str]:
+    """sha256 per regular file."""
+    return {
+        str(path.relative_to(module_dir)): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in module_dir.rglob("*")
+        if path.is_file() and not path.is_symlink()
+    }
+
+
+def _vendored_hashes(module_dir: Path) -> Optional[dict[str, str]]:
+    """Hashes this code vendored, if current."""
     try:
-        stamp = _stamp_path(module_dir).read_text(encoding="utf-8").strip()
-        return stamp == str(module_dir.stat().st_ino)
-    except OSError:
-        return False
+        stamp = json.loads(_stamp_path(module_dir).read_text(encoding="utf-8"))
+        if stamp.get("ino") != module_dir.stat().st_ino or not isinstance(stamp.get("files"), dict):
+            return None
+        return stamp["files"]
+    except (OSError, ValueError, AttributeError):
+        return None
 
 
 def _keep_mtimes(fresh: Path, old: Path) -> None:
     """Same bytes keep the old mtime.
 
-    Old mtimes are trusted only from a fresh vendor.
+    Old mtimes are trusted only from a fresh vendor,
+    and only for files still holding vendored bytes.
     Added paths keep none: headers may shadow.
     """
-    import filecmp
-
-    if old.is_symlink() or not old.is_dir() or not _fresh_module(old):
+    if old.is_symlink() or not old.is_dir():
+        return
+    vendored = _vendored_hashes(old)
+    if vendored is None:
         return
     paths = sorted(path.relative_to(fresh) for path in fresh.rglob("*"))
     if not set(paths) <= {path.relative_to(old) for path in old.rglob("*")}:
@@ -426,7 +439,9 @@ def _keep_mtimes(fresh: Path, old: Path) -> None:
         path, prior = fresh / rel, old / rel
         if path.is_symlink() or prior.is_symlink() or not (path.is_file() and prior.is_file()):
             continue
-        if filecmp.cmp(prior, path, shallow=False):
+        # In-place edits break the match.
+        digest = hashlib.sha256(prior.read_bytes()).hexdigest()
+        if digest == vendored.get(str(rel)) == hashlib.sha256(path.read_bytes()).hexdigest():
             info = prior.stat()
             os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns))
 
@@ -456,7 +471,8 @@ def _vendor(root: Path, module_dir: Path) -> None:
         _keep_mtimes(fresh, module_dir)
         _stamp_path(module_dir).unlink(missing_ok=True)
         _swap_in(fresh, module_dir)
-        _stamp_path(module_dir).write_text(f"{module_dir.stat().st_ino}\n", encoding="utf-8")
+        stamp = {"ino": module_dir.stat().st_ino, "files": _file_hashes(module_dir)}
+        _stamp_path(module_dir).write_text(json.dumps(stamp) + "\n", encoding="utf-8")
     except BaseException:
         _remove(fresh)
         raise

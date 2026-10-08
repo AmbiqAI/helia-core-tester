@@ -554,3 +554,34 @@ def test_unstamped_module_keeps_no_mtime(tmp_path: Path) -> None:
     module.with_name("module.fresh").unlink()
     nsx_app.write_kernels(checkout, module)
     assert all(p.stat().st_mtime_ns != old for p in module.joinpath("Source").rglob("*") if p.is_file())
+
+
+def test_in_place_edit_drops_old_mtime(tmp_path: Path) -> None:
+    """An overwrite with an old mtime rebuilds."""
+    checkout = make_checkout(tmp_path / "ns-cmsis-nn")
+    module = tmp_path / "module"
+    nsx_app.write_kernels(checkout, module)
+    old = 1_000_000_000
+    # Edited bytes copied in with an old mtime.
+    edited = tmp_path / "edited.c"
+    edited.write_text("int edited;\n", encoding="utf-8")
+    os.utime(edited, ns=(old, old))
+    shutil.copy2(edited, module / "Source" / "arm_add.c")
+    shutil.copy2(edited, checkout / "Source" / "arm_add.c")
+    before = time.time_ns() - 1_000_000_000
+    nsx_app.write_kernels(checkout, module)
+    assert (module / "Source" / "arm_add.c").stat().st_mtime_ns > before
+
+
+def test_old_inode_stamp_keeps_no_mtime(tmp_path: Path) -> None:
+    """A pre-hash stamp is not trusted."""
+    checkout = make_checkout(tmp_path / "ns-cmsis-nn")
+    module = tmp_path / "module"
+    nsx_app.write_kernels(checkout, module)
+    old = 1_000_000_000
+    for path in module.rglob("*"):
+        if path.is_file():
+            os.utime(path, ns=(old, old))
+    module.with_name("module.fresh").write_text(f"{module.stat().st_ino}\n", encoding="utf-8")
+    nsx_app.write_kernels(checkout, module)
+    assert all(p.stat().st_mtime_ns != old for p in module.joinpath("Source").rglob("*") if p.is_file())
