@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import re
 import sys
@@ -219,6 +220,15 @@ def github_record() -> Optional[dict[str, Any]]:
     }
 
 
+def bundle_toolchain(bundle: Path) -> Optional[dict]:
+    """The bundle's build toolchain, or None."""
+    try:
+        manifest = json.loads((bundle / "session_manifest.json").read_text(encoding="utf-8"))
+        return (manifest.get("build") or {}).get("toolchain")
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
 def build_json_summary(
     result, skipped: list[tuple], *, session_id: str, board_id: str, bundle: Path,
     selection: dict[str, Any], timing: Optional[dict] = None, coverage: Optional[dict] = None,
@@ -261,6 +271,8 @@ def build_json_summary(
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "session_id": session_id,
         "board": board_id,
+        # Firmware compiler: {name, version}.
+        "toolchain": bundle_toolchain(bundle),
         "boot": boot_record(result.target_info),
         "bundle": str(bundle),
         "totals": {"ran": ran, "passed": passed, "failed": ran - passed, "skipped": len(skipped)},

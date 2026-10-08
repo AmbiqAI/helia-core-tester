@@ -150,7 +150,14 @@ differs from the saved build rebuilds and prints one line naming the change.
 `--skip-flash` keeps the flashed build's options and refuses a different flag. A
 saved ref you did not pass with `--cmsis-nn-ref` follows the pinned release, so
 a pin bump rebuilds those build dirs the same way. Every build, flash, run and
-stream prints the kernel source, inline asm setting and placement.
+stream prints the kernel source, inline asm setting, placement and toolchain.
+
+`--toolchain atfe` builds with Arm Toolchain for Embedded clang (from
+`$ATFE_ROOT/bin`) instead of `gcc`, the default. Like placement it is a switch.
+Each toolchain has its own default build dir (`build/hardware/<board>-atfe` for
+atfe), and a build dir whose CMake cache holds the other compiler drops that
+cache and reconfigures. The bundle records the compiler in
+`session_manifest.json` `build.toolchain`.
 
 `--placement` picks where operands live. `tcm` (the default) keeps every operand
 in one workspace: DTCM on Apollo510 and Apollo330P, and SRAM (`RWMEM`) on
