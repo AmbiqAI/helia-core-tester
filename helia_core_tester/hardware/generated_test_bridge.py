@@ -1766,12 +1766,7 @@ def _build_transpose_conv_case(
     has_bias = not _extract_null_pointer_decl(header_text, f"{prefix}_biases")
     # S16 takes int64 bias.
     bias_wire_dtype = {"S8": "S32", "S16": "S64"}.get(activation_dtype, activation_dtype)
-    if has_bias:
-        bias_dtype = {"S8": np.int32, "S16": np.int64}.get(activation_dtype, numpy_dtype)
-        bias_values = _extract_array(header_text, f"{prefix}_biases") if quantized else _extract_float_array(header_text, f"{prefix}_biases")
-        biases = np.array(bias_values, dtype=bias_dtype)
-    else:
-        biases = None
+    biases = _extract_typed_array(header_text, f"{prefix}_biases", bias_wire_dtype) if has_bias else None
     if has_bias and biases.size != output_channels:
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: bias array size ({biases.size}) does not match output channels ({output_channels})."

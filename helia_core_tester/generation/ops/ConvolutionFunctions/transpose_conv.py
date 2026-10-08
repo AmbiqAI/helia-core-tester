@@ -664,10 +664,7 @@ class OpTransposeConv(OperationBase):
         reverse_conv_possible = (stride_w <= 2) and (stride_h <= 2)
         reverse_conv_efficient = (input_c > 16)  # REVERSE_TCOL_EFFICIENT_THRESHOLD = 16
         
-        if is_s16:
-            # One ctx; output_ctx unused.
-            reverse_conv_ctx_size = 0
-        elif reverse_conv_possible and reverse_conv_efficient:
+        if reverse_conv_possible and reverse_conv_efficient:
             reverse_conv_ctx_size = input_c * filter_w * filter_h * filter_n
         else:
             # If reverse_conv is not     used, we still need a buffer for output_ctx
