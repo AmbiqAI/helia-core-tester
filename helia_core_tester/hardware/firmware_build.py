@@ -215,6 +215,8 @@ def decide_flash(build_dir: Path, serial_no: int, *, force: bool = False) -> Fla
     if not stamp.exists():
         return FlashDecision(True, digest, f"no flash stamp for serial {serial_no} yet", build_id)
     previous = stamp.read_text(encoding="utf-8").strip()
+    if previous == digest and flashed_other(build_dir, serial_no, digest):
+        return FlashDecision(True, digest, f"serial {serial_no} last flashed another ELF", build_id)
     if previous == digest:
         return FlashDecision(
             False, digest, f"ELF sha256 unchanged since last flash to serial {serial_no} (stamp {stamp})", build_id
@@ -287,7 +289,7 @@ def confirm_board_build_id(
 
 
 def probe_stamp_path(build_dir: Path, serial_no: int) -> Path:
-    """Last ELF flashed to the probe, from any sibling build dir."""
+    """Probe-wide stamp shared by sibling dirs."""
     return build_dir.parent / f".probe-{serial_no}.sha256"
 
 
@@ -532,9 +534,6 @@ def flash_firmware(
     mark("build_done")
     signal_built()
     decision = decide_flash(build_dir, serial_no, force=force)
-    # The board can only answer "flash".
-    if not decision.needed and flashed_other(build_dir, serial_no, decision.digest):
-        decision = replace(decision, needed=True, reason=f"serial {serial_no} last flashed another ELF")
     if not decision.needed:
         typer.echo(f"[hardware] Stamp says {decision.reason}; asking the board which build it runs...")
         decision = confirm_board_build_id(board, serial_no, build_dir, decision, reader=board_build_id_reader)

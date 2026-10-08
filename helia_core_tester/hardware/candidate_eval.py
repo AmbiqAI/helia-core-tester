@@ -519,13 +519,14 @@ def evaluate(kernels: Path, baseline: Path, meta: dict, min_score: float, run=No
     if not check["ok"]:
         return {**head, "verdict": "rejected", "stage": "check", "findings": check["findings"]}
     spec = RunSpec.from_json(meta["run"], snap)
+    build_dir = build_dir_for(spec)
     bundles = [baseline / "bundles" / name for name in meta["sessions"]]
     objects: dict = {}
 
     def on_built() -> None:
         # Overlaps the flash and stream.
         try:
-            objects["report"] = object_check(snap, meta["base_commit"], build_dir_for(spec))
+            objects["report"] = object_check(snap, meta["base_commit"], build_dir)
         except Exception as exc:  # noqa: BLE001 -- raised after the run
             objects["error"] = exc
         mark("objects_done")
@@ -539,13 +540,13 @@ def evaluate(kernels: Path, baseline: Path, meta: dict, min_score: float, run=No
         return {**head, "verdict": verdict, "stage": "run", "reason": f"hardware run exited {rc}"}
     if "error" in objects:
         raise objects["error"]
-    built = objects["report"] if "report" in objects else object_check(snap, meta["base_commit"], build_dir_for(spec))
+    built = objects["report"] if "report" in objects else object_check(snap, meta["base_commit"], build_dir)
     mark("objects_checked")
     if built is not None and not built["ok"]:
         return {**head, "verdict": "rejected", "stage": "objects", "findings": built["findings"]}
     baselines, candidate = [load_bundle(path) for path in bundles], load_bundle(Path(summary["bundle"]))
     scoring = load_scoring(head["board"]) | {"min_score": min_score}
-    touched, reason = case_gate(baseline, build_dir_for(spec), baselines, candidate)
+    touched, reason = case_gate(baseline, build_dir, baselines, candidate)
     report = score_bundles(baselines, [candidate], scoring, check=check, touched=touched)
     verdict = {**head, **verdict_from(report, _hidden_ids(baselines + [candidate]), candidate.path, reason)}
     mark("verdict_done")
