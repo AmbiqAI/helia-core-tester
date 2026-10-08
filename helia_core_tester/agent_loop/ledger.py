@@ -58,6 +58,7 @@ class Ledger:
         return [json.loads(line) for line in lines if line.strip()]
 
     def append(self, row: dict) -> None:
+        self.root.mkdir(parents=True, exist_ok=True)
         with self.rows_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(row) + "\n")
 
@@ -79,10 +80,10 @@ def is_infra(verdict: Optional[dict]) -> bool:
 
 def merge_legs(legs: dict[str, Optional[dict]], wanted: tuple[str, ...]) -> str:
     """Worst leg wins; pass needs every leg."""
-    verdicts = [(v or {}).get("verdict") or "error" for v in legs.values() if v is not None]
+    verdicts = [v.get("verdict") if v.get("verdict") in ORDER else "error" for v in legs.values() if v is not None]
     if not verdicts:
         return "error"
-    overall = min(verdicts, key=lambda x: ORDER.index(x) if x in ORDER else 0)
+    overall = min(verdicts, key=ORDER.index)
     if overall == "pass" and any(legs.get(leg) is None for leg in wanted):
         return "error"
     return overall

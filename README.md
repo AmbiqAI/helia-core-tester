@@ -24,6 +24,7 @@ uv run helia_core_tester --help
 - `uv run helia_core_tester explain <bundle> [--case ID] [--op OP] [--json]`
 - `uv run helia_core_tester score <baseline...> --candidate <bundle> --check <check.json>` (`--no-check` instead, for humans scoring harness changes; `candidate eval` runs this for you)
 - `uv run helia_core_tester candidate check <tree> --base <sha>`, `candidate baseline`, `candidate eval` (see [Agent loop](#agent-loop))
+- `uv run helia_core_tester agent-loop init|selftest|launch|status|stop` (see [Running an agent campaign](#running-an-agent-campaign))
 
 Removed interfaces:
 - `gap-check` subcommand
@@ -418,6 +419,161 @@ The verdict (schema `hct.candidate_eval` v3) has these fields:
 - Do not regenerate between the baseline and its evals, for example with a
   plain `hardware run` on the same tester. A baseline case that disappears
   makes eval refuse (`missing_case`, exit 3); rerun `candidate baseline`.
+
+## Running an agent campaign
+
+`agent-loop` wraps the [agent loop](#agent-loop) into one campaign: a
+headless Claude agent edits one kernel family in its own ns-cmsis-nn tree,
+and three wrapper scripts are its only way to build, disassemble and run
+on a board. Every eval runs `candidate eval` once per leg (`tcm`, `mram`)
+and appends a row to the campaign ledger.
+
+Needs, on the bench host: `uv`, `git`, `patch`, `bench-agent`, the
+`claude` CLI (logged in), the Arm toolchain (`arm-none-eabi-size`,
+`arm-none-eabi-objdump`), and a committed tester checkout.
+
+### 1. Write a campaign file
+
+Start from `assets/campaigns/conv-s8.example.yaml` or `dw-s8.example.yaml`:
+
+```yaml
+name: conv-s8                  # lowercase, digits, dashes
+board: apollo510_evb           # tester board id
+bench_id: apollo510_evb        # bench-agent board id (default: board)
+legs: [tcm, mram]              # default: both when the board has MRAM
+target:
+  op: Convolve                 # `hardware run --op`
+  dtype: S8                    # `hardware run --dtype`
+  case_ids: []                 # optional `--case-id` filters
+kernels:
+  repo: ~/ns-cmsis-nn          # any checkout that has the ref
+  ref: v7.40.0                 # tag, branch or SHA
+evals: 12                      # charged board evals
+cost_usd: 25                   # claude --max-budget-usd
+model: claude-opus-5-5
+hidden_shapes: 12              # random s8 shapes per op; 0 for none
+repeats: 3                     # baseline runs per leg
+secrets_dir: ~/hct-secrets/conv-s8   # outside the workspace
+# start_patch: ~/campaigns/conv-s8-1/ledger/007.diff
+# start_notes: |
+#   - 1x1 path vectorized; generic path untouched.
+```
+
+Optional: `min_score` (passed to `candidate eval`), `lock_timeout_s`
+(board lock wait, default 3600), `eval_timeout_s` (per leg, default 1800),
+`retries` (per leg after an infrastructure error, default 1) and
+`max_infra_errors` (default 5). Hidden shapes exist for `Convolve` and
+`DepthwiseConv` S8 only; set `hidden_shapes: 0` for other targets.
+`agent-loop validate FILE` checks a file without side effects.
+
+### 2. Initialize the workspace
+
+```bash
+uv run helia_core_tester agent-loop init conv-s8.yaml -w ~/campaigns/conv-s8
+```
+
+`init` refuses a dirty tester. It then:
+
+1. Adds a detached worktree of this tester's HEAD at `W/tester`, and links
+   `artifacts/downloads` to save a toolchain download. Every later command
+   runs from that worktree, so the campaign stays on one tester commit
+   while you keep working here.
+2. Clones `W/base` (clean) and `W/agent` (tagged `base`) as standalone
+   one-commit repos with no remote, so git commands in the agent's tree
+   cannot reach other repos. `start_patch` (a ledger diff, or any diff of
+   `Source/`/`Include/`) is applied to `W/agent`.
+3. Writes a fresh secret seed and hidden set in `secrets_dir` (mode 0700,
+   seed 0600). The dir must be new or empty.
+4. Records one `candidate baseline` per leg under `bench-agent run`.
+5. Builds the base kernel library once and saves per-object code sizes
+   (`W/size-ref.json`).
+6. Renders `W/prompt.md` from a template filled with the routes seen in
+   the first leg's baseline (timed and inner symbols, median and best
+   cycles per MAC) and the ceiling from `assets/scoring/ceilings.yaml`.
+   Writes `W/agent-settings.json` (absolute paths) and `W/bin/{submit,check,disasm}`.
+
+A step whose output exists is skipped, so after a failure rerun the same
+command. The 330mP DepthwiseConv S8 baselines took about 10 minutes for
+both legs with `repeats: 2`.
+
+### 3. Check the permissions
+
+```bash
+uv run helia_core_tester agent-loop selftest -w ~/campaigns/conv-s8
+```
+
+A cheap model (`--model haiku`, no saved session, $1 cap) tries a fixed
+list of tool calls. It should be allowed to read the agent tree, write
+`Source/`, and run `bin/disasm`. It should be denied ledger, campaign,
+baseline, tester and secrets reads, writes outside `Source/`/`Include/`,
+and `cat`, `touch` and `curl` in the shell. Exit 0 when every call matches.
+
+### 4. Launch, watch, stop
+
+```bash
+uv run helia_core_tester agent-loop launch -w ~/campaigns/conv-s8
+uv run helia_core_tester agent-loop status -w ~/campaigns/conv-s8 [--tail 20] [--json]
+uv run helia_core_tester agent-loop stop -w ~/campaigns/conv-s8
+```
+
+- `launch` starts `claude -p` in `W/agent` in its own process session with
+  `--permission-mode dontAsk`, only the Read, Edit, Write, Glob, Grep and
+  Bash tools, `--setting-sources project`, `--strict-mcp-config`,
+  `--max-budget-usd cost_usd` and a fixed `--session-id`. It writes the
+  stream to `W/logs/agent-run.jsonl` and the real claude pid, session id
+  and a resume command to `W/agent-run.json`.
+- `status` prints the ledger, whether the pid is alive, recent tool calls,
+  and the cost and turns once the stream has its `result` event.
+- `stop` sends SIGTERM to the agent's process group.
+
+### What the agent sees
+
+- `W/bin/check`: copies the agent's `Source/`, `Include/`, `cmake/` and
+  `nsx/` into a fresh clone of the base, runs `candidate check`, builds
+  the kernels with `hardware build` and reports code size against the
+  base. No board, no eval.
+- `W/bin/disasm FN`: one function from the last check build, up to 600
+  lines.
+- `W/bin/submit`: runs check first. A tree that fails is rejected and costs
+  no eval. Then it runs each leg under `bench-agent run --timeout
+  lock_timeout_s` and `timeout eval_timeout_s`. A later leg runs only when
+  the earlier legs reached stage `score`. The overall verdict is the worst
+  leg, and `pass` needs every leg.
+  - Infrastructure errors (no verdict, board busy past the timeout,
+    transport or tester errors, verdict `error`) are retried, then recorded
+    with `infra: true` and do not count against `evals`. After
+    `max_infra_errors` of them, submit tells the agent to stop.
+  - The printed view keeps touched case rows only, a count and speedup
+    range for untouched cases, and hints for the ten slowest touched cases
+    (first leg only). The same text goes to `W/agent-results/NNN.json`,
+    since Claude Code truncates long Bash output.
+  - Exit codes follow `candidate eval`; 6 means the budget is spent.
+
+### After the run
+
+`W/ledger/` holds, per eval `NNN`: the diff (`NNN.diff`, base -> agent),
+each leg's full verdict (`NNN.<leg>.json`, may name hidden cases' kernels
+but never their shapes) and stderr. `ledger.jsonl` has one row per submit
+with verdict, charged and infra flags, per-family geomeans and code size
+delta. Ids come from a counter under the submit lock. To continue from the
+best eval, start a new campaign with `start_patch: W/ledger/NNN.diff` and
+a few lines of `start_notes`.
+
+### Containment limits
+
+- The permission rules are not an OS sandbox. The agent runs as you, and
+  `dontAsk` denies only what Claude Code recognizes. Read-only shell
+  commands inside the agent tree (cwd) are auto-allowed, and so is git in
+  that tree; the standalone clone keeps them from reaching other repos.
+- Deny rules cover the workspace's trusted entries, `secrets_dir`, the
+  source ns-cmsis-nn and tester checkouts, and `~/.claude`. Paths outside
+  these are not listed. Do not run a campaign on a host with secrets you
+  would not show the agent.
+- The trusted side runs as you too. `candidate eval` copies the agent's
+  trees into a fresh checkout and never runs git in them, but a compiled
+  kernel still runs on the board.
+- `bench-agent` serializes board use by flock; it does not reserve a board
+  for the whole campaign.
 
 ## Suite-Based Runs
 
