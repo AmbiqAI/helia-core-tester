@@ -45,13 +45,15 @@ def test_ops_draw_independently() -> None:
     ("Convolve", None, ("Convolve",)),
     ("DepthwiseConv", "s8", ("DepthwiseConv",)),
     ("Convolve,Softmax", "S8", ("Convolve",)),
+    ("depthwise_conv", None, ("DepthwiseConv",)),
+    ("rs7_conv", None, ("Convolve",)),
     (None, "S8", ("Convolve", "DepthwiseConv")),
 ])
 def test_select_ops_matches_filters(op, dtype, picked) -> None:
     assert rs.select_ops(op, dtype) == picked
 
 
-@pytest.mark.parametrize(("op", "dtype"), [("FullyConnected", None), ("Convolve", "S16"), (None, "S4")])
+@pytest.mark.parametrize(("op", "dtype"), [("FullyConnected", None), ("Convolve", "S16"), (None, "S4"), ("rs", None)])
 def test_select_ops_refuses_unknown(op, dtype) -> None:
     with pytest.raises(ValueError, match="have Convolve S8, DepthwiseConv S8"):
         rs.select_ops(op, dtype)
@@ -68,7 +70,7 @@ def test_summary_records_ops(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setenv(rs.SECRET_ENV, SECRET)
     descriptors = rs.prepare_hidden(tmp_path, 3, "cortex-m55", ("DepthwiseConv",))
     summary = json.loads((descriptors.parent / "summary.json").read_text())
-    assert summary["ops"] == [["DepthwiseConv", "S8"]] and list(summary["routes"]) == ["DepthwiseConv"]
+    assert summary["ops"] == {"DepthwiseConv": "S8"} and list(summary["routes"]) == ["DepthwiseConv"]
     assert [p.name for p in descriptors.rglob("*.yaml")] == ["depthwise_conv.yaml"]
 
 

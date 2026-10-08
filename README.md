@@ -74,8 +74,8 @@ the fixed ones. Run them with
 `hardware run --skip-generate --test-name rs<S>_`. A draw with a flat golden is
 dropped and counted as `skipped_degenerate`. To add an op, register its route
 list and layer sampler in `GENERATORS` (`generation/random_shapes.py`) with a
-new stream id, and teach `layer_route`, `footprint` and `_descriptor` its
-layout.
+new stream id, and teach the op-specific helpers (`layer_route`, `footprint`,
+`layer_macs`, `_relu6_gain`, `_descriptor`) its layout.
 
 Hidden shapes: `generate --random-shapes N --hidden-dir DIR` draws the same
 kind of cases from a secret seed instead (env `HCT_HIDDEN_SEED`, or

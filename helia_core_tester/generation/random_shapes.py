@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import shutil
 from collections import Counter
 from dataclasses import dataclass
@@ -47,8 +48,9 @@ HIDDEN_ID_HEX = 12
 
 @dataclass(frozen=True)
 class Generator:
-    """Random-shape source for one op and dtype."""
+    """Random-shape source for one op."""
 
+    dtype: str
     tag: str
     descriptor_file: str
     # RNG stream id; never reuse one.
@@ -199,27 +201,38 @@ def _dw_routes(mve: bool) -> list[str]:
 
 
 # Register new random-shape ops here.
-GENERATORS: dict[tuple[str, str], Generator] = {
-    ("Convolve", "S8"): Generator("conv", "ConvolutionFunctions/convolve.yaml", 0, _conv_routes, _conv_layer),
-    ("DepthwiseConv", "S8"): Generator("dw", "ConvolutionFunctions/depthwise_conv.yaml", 1, _dw_routes, _dw_layer),
+GENERATORS: dict[str, Generator] = {
+    "Convolve": Generator("S8", "conv", "ConvolutionFunctions/convolve.yaml", 0, _conv_routes, _conv_layer),
+    "DepthwiseConv": Generator("S8", "dw", "ConvolutionFunctions/depthwise_conv.yaml", 1, _dw_routes, _dw_layer),
 }
-OPS = tuple(op for op, _ in GENERATORS)
+OPS = tuple(GENERATORS)
+
+
+def _parts(value: str | None) -> list[str]:
+    return [part.strip() for part in str(value or "").split(",") if part.strip()]
+
+
+def _matches(op: str, gen: Generator, wanted: str) -> bool:
+    """Match --op as loaded descriptors do."""
+    from helia_core_tester.generation.io.descriptors import descriptor_matches_op
+
+    path = Path(gen.descriptor_file)
+    probe = {"name": "", "operator": op, "_source_stem": path.stem, "_source_relpath": str(path)}
+    # Case-name prefixes, e.g. rs7_conv.
+    return descriptor_matches_op(probe, wanted) or re.fullmatch(rf"rs\d+_{gen.tag}(_\d+)?", wanted) is not None
 
 
 def select_ops(op_filter: str | None = None, dtype_filter: str | None = None) -> tuple[str, ...]:
     """Registered ops matching generate filters."""
-    from helia_core_tester.generation.io.descriptors import descriptor_matches_op
     from helia_core_tester.generation.io.dtypes import normalize_dtype
 
-    ops = [part.strip() for part in str(op_filter or "").split(",") if part.strip()]
-    dtypes = [normalize_dtype(part.strip()) for part in str(dtype_filter or "").split(",") if part.strip()]
+    ops, dtypes = _parts(op_filter), [normalize_dtype(d) for d in _parts(dtype_filter)]
     picked = tuple(
-        op for (op, dtype), gen in GENERATORS.items()
-        if (not ops or any(descriptor_matches_op({"name": f"rs_{gen.tag}", "operator": op}, f) for f in ops))
-        and (not dtypes or dtype in dtypes)
+        op for op, gen in GENERATORS.items()
+        if (not ops or any(_matches(op, gen, wanted) for wanted in ops)) and (not dtypes or gen.dtype in dtypes)
     )
     if not picked:
-        have = ", ".join(f"{op} {dtype}" for op, dtype in GENERATORS)
+        have = ", ".join(f"{op} {gen.dtype}" for op, gen in GENERATORS.items())
         raise ValueError(f"No random shapes for that op/dtype; have {have}")
     return picked
 
@@ -332,7 +345,7 @@ def _descriptor(op: str, name: str, layer: Layer, knobs: dict, seed: int, route:
 def sample_op(op: str, n: int, seed: int, cpu: str, workspace: int) -> list[dict[str, Any]]:
     """N descriptors for one op, cycling routes."""
     mve = get_cpu_profile(cpu).has_mve
-    gen = GENERATORS[(op, "S8")]
+    gen = GENERATORS[op]
     targets, draw = gen.routes(mve), gen.draw
     # One stream per op keeps ops independent.
     rng = np.random.default_rng([seed, gen.stream])
@@ -379,23 +392,19 @@ def route_counts(cases: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
     return {op: dict(sorted(c.items())) for op, c in sorted(counts.items())}
 
 
-def _key(case: dict[str, Any]) -> tuple[str, str]:
-    return case["operator"], case["activation_dtype"]
-
-
 def write_cases(root: Path, cases: list[dict[str, Any]], header: dict[str, Any], cpu: str) -> Path:
     """Write descriptors and summary; return descriptors dir."""
     shutil.rmtree(root, ignore_errors=True)
     descriptors = root / "descriptors"
     by_file: dict[str, list] = {}
     for case in cases:
-        by_file.setdefault(GENERATORS[_key(case)].descriptor_file, []).append(case)
+        by_file.setdefault(GENERATORS[case["operator"]].descriptor_file, []).append(case)
     for relpath, docs in by_file.items():
         path = descriptors / relpath
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(yaml.safe_dump_all(docs, sort_keys=False))
-    ops = sorted({_key(case) for case in cases})
-    summary = {**header, "cpu": normalize_cpu(cpu), "cases": len(cases), "ops": [list(key) for key in ops],
+    ops = {case["operator"]: case["activation_dtype"] for case in cases}
+    summary = {**header, "cpu": normalize_cpu(cpu), "cases": len(cases), "ops": dict(sorted(ops.items())),
                "routes": route_counts(cases)}
     (root / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     print(f"Random shapes ({json.dumps(header)}): {json.dumps(summary['routes'])}")
