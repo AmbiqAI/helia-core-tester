@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import csv
 import re
 import statistics
 from collections import defaultdict
@@ -12,7 +11,9 @@ from typing import Any, Optional
 import jinja2
 
 from helia_core_tester.hardware.boards import resolve_board
+from helia_core_tester.hardware.candidate_eval import read_baseline
 from helia_core_tester.hardware.pmu_explain import classify_route, load_ceilings
+from helia_core_tester.hardware.score import load_bundle
 
 from .config import Campaign
 
@@ -68,10 +69,9 @@ def route_facts(rows: list[dict], cpu: str) -> list[dict[str, Any]]:
 
 
 def baseline_rows(baseline: Path) -> list[dict]:
-    """The first baseline bundle's case rows."""
-    bundles = sorted((baseline / "bundles").iterdir())
-    with (bundles[0] / "case_summary.csv").open(encoding="utf-8", newline="") as handle:
-        return list(csv.DictReader(handle))
+    """The first baseline run's case rows."""
+    first = read_baseline(baseline)["sessions"][0]
+    return list(load_bundle(baseline / "bundles" / first).rows.values())
 
 
 def _patch_files(diff: bytes) -> list[str]:

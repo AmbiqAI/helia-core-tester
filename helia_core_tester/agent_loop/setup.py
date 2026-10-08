@@ -12,9 +12,11 @@ from pathlib import Path
 from typing import Callable
 
 from helia_core_tester.hardware.boards import repo_root, resolve_board
+from helia_core_tester.hardware.candidate_check import CheckError
+from helia_core_tester.hardware.candidate_check import _git as check_git
 from helia_core_tester.hardware.harness_lock import tester_state
 
-from .agent import agent_settings, write_wrappers
+from .agent import WRAPPERS, agent_settings, write_wrappers
 from .config import Campaign, ConfigError
 from .judge import apply_patch, object_sizes
 from .prompt import baseline_rows, render_prompt
@@ -37,11 +39,11 @@ def _run(cmd: list[str], log: Path, cwd: Path | None = None) -> None:
         raise InitError(f"{cmd[0]} {' '.join(cmd[1:4])} ... exited {rc}; see {log}")
 
 
-def _git(*args: str, cwd: Path | None = None) -> str:
-    proc = subprocess.run(["git", "-c", "core.hooksPath=/dev/null", *args], cwd=cwd, capture_output=True, text=True)
-    if proc.returncode != 0:
-        raise InitError(f"git {' '.join(args[:3])}: {proc.stderr.strip()[-300:]}")
-    return proc.stdout.strip()
+def _git(*args: str, cwd: Path) -> str:
+    try:
+        return check_git(cwd, *args).decode().strip()
+    except CheckError as exc:
+        raise InitError(f"git {' '.join(args[:3])}: {str(exc)[-300:]}") from exc
 
 
 def _inside(child: Path, parent: Path) -> bool:
@@ -70,6 +72,8 @@ def pin_tester(ws: Workspace, sha: str | None) -> str:
     if state["dirty"] is not False or not state["commit"]:
         raise InitError(f"Tester {source} is dirty or unknown; commit it.")
     sha = sha or state["commit"]
+    # A deleted W/tester blocks re-adding.
+    _git("worktree", "prune", cwd=source)
     _git("worktree", "add", "-q", "--detach", str(ws.tester), sha, cwd=source)
     downloads = source / "artifacts" / "downloads"
     if downloads.is_dir():
@@ -84,7 +88,8 @@ def shallow_tree(repo: Path, sha: str, dest: Path, tag: bool = False) -> None:
     """Standalone one-commit clone, no remote."""
     if dest.exists():
         return
-    _git("init", "-q", str(dest))
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    _git("init", "-q", str(dest), cwd=dest.parent)
     _git("fetch", "-q", "--depth", "1", f"file://{repo}", sha, cwd=dest)
     _git("checkout", "-q", "--detach", "FETCH_HEAD", cwd=dest)
     if tag:
@@ -97,13 +102,16 @@ def make_hidden(ws: Workspace, campaign: Campaign) -> None:
     if (hidden / "done").is_file():
         return
     root = campaign.secrets_dir
-    if root.exists() and any(root.iterdir()):
-        raise InitError(f"{root} is not empty; use a fresh secrets_dir")
-    root.mkdir(mode=0o700, parents=True, exist_ok=True)
-    root.chmod(0o700)
-    fd = os.open(seed, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, "w") as handle:
-        handle.write(secrets.token_hex(SECRET_BYTES))
+    # Resume reuses this campaign's seed.
+    if not seed.is_file():
+        if root.exists() and any(root.iterdir()):
+            raise InitError(f"{root} is not empty; use a fresh secrets_dir")
+        root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        root.chmod(0o700)
+        fd = os.open(seed, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as handle:
+            handle.write(secrets.token_hex(SECRET_BYTES))
+    shutil.rmtree(hidden, ignore_errors=True)
     cpu = resolve_board(campaign.board).cpu
     _run([*ws.tester_cmd(), "generate", "--cpu", cpu, "--random-shapes", str(campaign.hidden_shapes),
           "--hidden-dir", str(hidden), "--hidden-seed-file", str(seed)], ws.logs / "hidden.log")
@@ -142,7 +150,7 @@ def make_size_ref(ws: Workspace, campaign: Campaign) -> None:
 def write_agent_files(ws: Workspace, campaign: Campaign, start_diff: bytes | None) -> None:
     """Prompt, settings and wrappers."""
     rows = baseline_rows(ws.baseline(campaign.legs[0]))
-    paths = {name: ws.bin / name for name in ("submit", "check", "disasm")} | {"results": ws.results}
+    paths = {name: ws.bin / name for name in WRAPPERS} | {"results": ws.results}
     ws.prompt.write_text(render_prompt(campaign, rows, paths, start_diff), encoding="utf-8")
     settings = agent_settings(ws, campaign, extra_denies=[repo_root()])
     ws.settings.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
@@ -165,19 +173,25 @@ def init_workspace(ws: Workspace, campaign: Campaign, echo: Echo = print) -> dic
     ws.root.mkdir(parents=True, exist_ok=True)
     ws.logs.mkdir(exist_ok=True)
     facts.setdefault("created_at", datetime.now(timezone.utc).isoformat(timespec="seconds"))
+    facts["source_tester"] = str(repo_root())
+    # Saved first, so any failure resumes.
+    ws.save(campaign, facts)
     facts["tester_commit"] = pin_tester(ws, facts.get("tester_commit"))
     echo(f"Tester pinned at {facts['tester_commit'][:12]} in {ws.tester}")
     base = facts.get("base_commit") or _git("rev-parse", "--verify", f"{campaign.base_ref}^{{commit}}",
                                             cwd=campaign.kernels_repo)
     facts["base_commit"] = base
-    facts["source_tester"] = str(repo_root())
     ws.save(campaign, facts)
     shallow_tree(campaign.kernels_repo, base, ws.base)
     start_diff = campaign.start_patch.read_bytes() if campaign.start_patch else None
     if not ws.agent.exists():
-        shallow_tree(campaign.kernels_repo, base, ws.agent, tag=True)
+        # Patched aside, then moved in.
+        staging = ws.root / "agent.tmp"
+        shutil.rmtree(staging, ignore_errors=True)
+        shallow_tree(campaign.kernels_repo, base, staging, tag=True)
         if start_diff is not None:
-            apply_patch(ws.agent, start_diff)
+            apply_patch(staging, start_diff)
+        staging.rename(ws.agent)
     echo(f"Base and agent trees at {base[:12]}")
     if campaign.hidden_shapes:
         echo("Generating the hidden set...")

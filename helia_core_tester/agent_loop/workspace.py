@@ -56,12 +56,8 @@ class Workspace:
         return self.root / "check"
 
     @property
-    def check_tree(self) -> Path:
-        return self.check_dir / "tree"
-
-    @property
-    def check_build(self) -> Path:
-        return self.check_dir / "build"
+    def submit_dir(self) -> Path:
+        return self.root / "submit"
 
     @property
     def size_ref(self) -> Path:
@@ -106,7 +102,8 @@ class Workspace:
             data = json.loads(self.state.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
             raise FileNotFoundError(f"{self.root}: no campaign; run agent-loop init") from exc
-        return from_json(data["campaign"]), data
+        facts = {k: v for k, v in data.items() if k not in ("schema", "schema_version", "campaign")}
+        return from_json(data["campaign"]), facts
 
     def save(self, campaign: Campaign, facts: dict[str, Any]) -> None:
         data = {"schema": "hct.agent_loop", "schema_version": 1, "campaign": campaign.to_json(), **facts}

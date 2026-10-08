@@ -47,8 +47,10 @@ class Campaign:
     start_patch: Optional[Path] = None
     start_notes: str = ""
     min_score: Optional[float] = None
-    lock_timeout_s: int = 3600
-    eval_timeout_s: int = 1800
+    lock_timeout_s: int = 600
+    eval_timeout_s: int = 300
+    # Under the agent's 10 min Bash cap.
+    submit_deadline_s: int = 540
     retries: int = 1
     max_infra_errors: int = 5
 
@@ -57,13 +59,18 @@ class Campaign:
         return {k: str(v) if isinstance(v, Path) else list(v) if isinstance(v, tuple) else v for k, v in out.items()}
 
 
+# Copied as is when present.
+_PLAIN = ("evals", "model", "hidden_shapes", "repeats", "lock_timeout_s", "eval_timeout_s", "submit_deadline_s",
+          "retries", "max_infra_errors", "bench_id")
+DEFAULTS = Campaign.__dataclass_fields__
 # YAML key -> (type, required).
 _TOP = {
     "name": (str, True), "board": (str, True), "bench_id": (str, False), "legs": (list, False),
     "target": (dict, True), "kernels": (dict, True), "evals": (int, False), "cost_usd": ((int, float), False),
     "model": (str, False), "hidden_shapes": (int, False), "repeats": (int, False), "start_patch": (str, False),
     "start_notes": (str, False), "secrets_dir": (str, True), "min_score": ((int, float), False),
-    "lock_timeout_s": (int, False), "eval_timeout_s": (int, False), "retries": (int, False),
+    "lock_timeout_s": (int, False), "eval_timeout_s": (int, False), "submit_deadline_s": (int, False),
+    "retries": (int, False),
     "max_infra_errors": (int, False),
 }
 _TARGET = {"op": (str, True), "dtype": (str, True), "case_ids": (list, False)}
@@ -120,29 +127,27 @@ def parse_campaign(data: Any, base: Path) -> Campaign:
     if not all(isinstance(c, str) and CASE_RE.fullmatch(c) for c in case_ids):
         raise ConfigError("target.case_ids: plain case ids")
     for key, low in (("evals", 1), ("hidden_shapes", 0), ("repeats", 1), ("lock_timeout_s", 1),
-                     ("eval_timeout_s", 60), ("retries", 0), ("max_infra_errors", 1)):
+                     ("eval_timeout_s", 60), ("submit_deadline_s", 120), ("retries", 0), ("max_infra_errors", 1)):
         _at_least(top, key, low)
-    cost = float(top.get("cost_usd", 25.0))
+    cost = float(top.get("cost_usd", DEFAULTS["cost_usd"].default))
     if not math.isfinite(cost) or cost <= 0:
         raise ConfigError("cost_usd: must be positive")
-    hidden = top.get("hidden_shapes", 12)
+    hidden = top.get("hidden_shapes", DEFAULTS["hidden_shapes"].default)
     if hidden and (target["op"] not in HIDDEN_OPS or target["dtype"] not in HIDDEN_DTYPES):
         raise ConfigError(f"hidden_shapes: only {'/'.join(HIDDEN_OPS)} S8; set 0")
     min_score = top.get("min_score")
     if min_score is not None and not math.isfinite(float(min_score)):
         raise ConfigError("min_score: must be finite")
-    if not WORD_RE.fullmatch(top.get("bench_id", board.id).replace("-", "_")):
+    top.setdefault("bench_id", board.id)
+    if not WORD_RE.fullmatch(top["bench_id"].replace("-", "_")):
         raise ConfigError("bench_id: one word")
     return Campaign(
         name=top["name"], board=board.id, op=target["op"], dtype=target["dtype"],
         kernels_repo=_path(kernels["repo"], base), base_ref=kernels["ref"], secrets_dir=_path(top["secrets_dir"], base),
-        legs=legs, case_ids=case_ids, bench_id=top.get("bench_id", board.id), evals=top.get("evals", 12),
-        cost_usd=cost, model=top.get("model", "claude-opus-5-5"), hidden_shapes=hidden,
-        repeats=top.get("repeats", 3),
+        legs=legs, case_ids=case_ids, cost_usd=cost,
         start_patch=_path(top["start_patch"], base) if top.get("start_patch") else None,
         start_notes=top.get("start_notes", "").strip(), min_score=None if min_score is None else float(min_score),
-        lock_timeout_s=top.get("lock_timeout_s", 3600), eval_timeout_s=top.get("eval_timeout_s", 1800),
-        retries=top.get("retries", 1), max_infra_errors=top.get("max_infra_errors", 5),
+        **{key: top[key] for key in _PLAIN if key in top},
     )
 
 

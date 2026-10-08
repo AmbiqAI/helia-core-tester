@@ -12,13 +12,12 @@ from pathlib import Path
 from typing import Any, Iterable, Optional
 
 from .config import Campaign
+from .ledger import Ledger
 from .workspace import Workspace
 
 TOOLS = "Read,Edit,Write,Glob,Grep,Bash"
 WRAPPERS = ("submit", "check", "disasm")
 SELFTEST_MODEL = "haiku"
-# Workspace entries the agent may read.
-AGENT_READS = ("agent", "agent-results")
 
 
 def _rule_path(path: Path) -> str:
@@ -38,9 +37,10 @@ def agent_settings(ws: Workspace, campaign: Campaign, extra_denies: Iterable[Pat
         f"Bash({ws.bin / 'check'})",
         f"Bash({ws.bin / 'disasm'}:*)",
     ]
-    hidden = sorted({"tester", "base", "baselines", "ledger", "check", "logs", "size-ref-build", "size-ref.json",
-                     "campaign.json", "agent-run.json", "prompt.md", "agent-settings.json"})
-    deny = [f"Read({_rule_path(root / name)}/**)" for name in hidden]
+    dirs = (ws.tester, ws.base, root / "baselines", ws.ledger, ws.check_dir, ws.submit_dir, ws.logs, ws.size_build,
+            root / "agent.tmp")
+    files = (ws.size_ref, ws.state, ws.run_meta, ws.prompt, ws.settings)
+    deny = [f"Read({_rule_path(d)}/**)" for d in dirs] + [f"Read({_rule_path(f)})" for f in files]
     deny += [f"Read({_rule_path(ws.agent / 'Tests')}/**)", f"Read({_rule_path(campaign.secrets_dir)}/**)",
              f"Read({_rule_path(campaign.kernels_repo)}/**)", "Read(~/.claude/**)"]
     deny += [f"Read({_rule_path(p)}/**)" for p in extra_denies]
@@ -160,8 +160,6 @@ def readable(events: list[dict]) -> list[str]:
 
 def status(ws: Workspace, tail: int = 10) -> dict[str, Any]:
     """Ledger, process and cost."""
-    from .ledger import Ledger
-
     campaign, _ = ws.load()
     ledger = Ledger(ws.ledger)
     meta = read_meta(ws)
@@ -194,6 +192,9 @@ def probes(ws: Workspace, campaign: Campaign) -> list[dict[str, Any]]:
         {"tool": "Bash", "arg": f"cat {ws.state}", "allow": False},
         {"tool": "Bash", "arg": "curl -sI https://example.com", "allow": False},
         {"tool": "Bash", "arg": f"touch {ws.root / 'selftest-touch'}", "allow": False},
+        {"tool": "Bash", "arg": "git -C .. status", "allow": False},
+        {"tool": "Bash", "arg": f"git diff --no-index {ws.state} /dev/null", "allow": False},
+        {"tool": "Bash", "arg": "cat ../campaign.json", "allow": False},
     ]
 
 

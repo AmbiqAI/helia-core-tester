@@ -10,9 +10,10 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
+from helia_core_tester.hardware.candidate_eval import EXIT_ERROR, VERDICT_EXITS
+
 # Worst first; unknown counts as error.
 ORDER = ("error", "rejected", "refused", "not_comparable", "fail", "no_gain", "pass")
-EXITS = {"pass": 0, "fail": 1, "rejected": 3, "refused": 3, "not_comparable": 3, "no_gain": 4, "error": 5}
 EXIT_BUDGET = 6
 # Stages the agent cannot cause.
 INFRA_STAGES = ("tester", "baseline")
@@ -65,15 +66,19 @@ class Ledger:
     def charged(self) -> int:
         return sum(1 for row in self.rows() if row.get("charged"))
 
-    def infra_errors(self) -> int:
-        return sum(1 for row in self.rows() if row.get("infra"))
+    def infra_streak(self) -> int:
+        """Infra rows since the last other row."""
+        streak = 0
+        for row in reversed(self.rows()):
+            if not row.get("infra"):
+                break
+            streak += 1
+        return streak
 
 
 def is_infra(verdict: Optional[dict]) -> bool:
-    """No verdict, an error, or a setup refusal."""
+    """No verdict, or a setup refusal."""
     if not isinstance(verdict, dict) or not verdict.get("verdict"):
-        return True
-    if verdict["verdict"] == "error":
         return True
     return verdict["verdict"] == "refused" and verdict.get("stage") in INFRA_STAGES
 
@@ -140,7 +145,7 @@ def ledger_row(eid: str, overall: str, legs: dict, *, charged: bool, infra: bool
 def agent_view(overall: str, legs: dict, *, evals_left: int, size: dict, first_leg: str,
                note: Optional[str] = None) -> dict[str, Any]:
     """What submit prints for the agent."""
-    out: dict[str, Any] = {"verdict": overall, "exit_code": EXITS.get(overall, 5), "evals_left": evals_left}
+    out: dict[str, Any] = {"verdict": overall, "exit_code": VERDICT_EXITS.get(overall, EXIT_ERROR), "evals_left": evals_left}
     if note:
         out["note"] = note
     out["code_size"] = size

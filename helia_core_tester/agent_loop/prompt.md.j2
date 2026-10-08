@@ -44,9 +44,11 @@ leg (a few minutes in total):
 {%- if legs|length > 1 %}
 A later leg runs only when the earlier legs got as far as scoring.
 {%- endif %}
-A tree that fails the check or build is rejected before the board and costs
-no eval. A board or tester failure is reported as `error` with a note and
-costs no eval either; submit again.
+Submit judges a copy of the tree taken when it starts; later edits wait
+for the next submit. A tree that fails the check or build is rejected
+before the board and costs no eval. A busy or failing board is reported as
+`error` with a note and costs no eval; submit again. A run that faults or
+hangs on the board is an `error` that does cost an eval.
 
 Before spending an eval, run `{{ check }}` (no arguments,
 foreground, Bash timeout 600000 ms). It costs no eval and no board time

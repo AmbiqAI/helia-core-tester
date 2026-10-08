@@ -460,10 +460,13 @@ secrets_dir: ~/hct-secrets/conv-s8   # outside the workspace
 ```
 
 Optional: `min_score` (passed to `candidate eval`), `lock_timeout_s`
-(board lock wait, default 3600), `eval_timeout_s` (per leg, default 1800),
-`retries` (per leg after an infrastructure error, default 1) and
-`max_infra_errors` (default 5). Hidden shapes exist for `Convolve` and
-`DepthwiseConv` S8 only; set `hidden_shapes: 0` for other targets.
+(board lock wait, default 600), `eval_timeout_s` (per leg, default 300),
+`submit_deadline_s` (whole submit, default 540, under the agent's 10 minute
+Bash limit), `retries` (per leg, default 1) and `max_infra_errors` (busy or
+failing board results in a row, default 5). Hidden shapes exist for
+`Convolve` and `DepthwiseConv` S8 only; set `hidden_shapes: 0` for other
+targets. The hidden set always holds both ops, so a campaign for one op
+also runs the other op's hidden cases.
 `agent-loop validate FILE` checks a file without side effects.
 
 ### 2. Initialize the workspace
@@ -492,8 +495,9 @@ uv run helia_core_tester agent-loop init conv-s8.yaml -w ~/campaigns/conv-s8
    cycles per MAC) and the ceiling from `assets/scoring/ceilings.yaml`.
    Writes `W/agent-settings.json` (absolute paths) and `W/bin/{submit,check,disasm}`.
 
-A step whose output exists is skipped, so after a failure rerun the same
-command. On apollo330mP, a DepthwiseConv S8 campaign (50 public and 24
+Init saves the campaign first and skips any step whose output exists, so
+after a failure rerun the same command (a rerun reuses the campaign's
+seed). To change the campaign file, start a new workspace. On apollo330mP, a DepthwiseConv S8 campaign (50 public and 24
 hidden cases, `repeats: 2`) took about 6 minutes to initialize, and each
 `submit` about 3.5 minutes for both legs (measured).
 
@@ -510,7 +514,8 @@ A cheap model (`--model haiku`, no saved session, $1 cap) tries a fixed
 list of tool calls. It should be allowed to read the agent tree, write
 `Source/`, and run `bin/disasm`. It should be denied ledger, campaign,
 baseline, tester and secrets reads, writes outside `Source/`/`Include/`,
-and `cat`, `touch` and `curl` in the shell. Exit 0 when every call matches.
+and `cat`, `touch`, `curl` and git outside the agent tree in the shell.
+Exit 0 when every call matches.
 
 ### 4. Launch, watch, stop
 
@@ -538,15 +543,21 @@ uv run helia_core_tester agent-loop stop -w ~/campaigns/conv-s8
   base. No board, no eval.
 - `W/bin/disasm FN`: one function from the last check build, up to 600
   lines.
-- `W/bin/submit`: runs check first. A tree that fails is rejected and costs
-  no eval. Then it runs each leg under `bench-agent run --timeout
-  lock_timeout_s` and `timeout eval_timeout_s`. A later leg runs only when
-  the earlier legs reached stage `score`. The overall verdict is the worst
-  leg, and `pass` needs every leg.
-  - Infrastructure errors (no verdict, board busy past the timeout,
-    transport or tester errors, verdict `error`) are retried, then recorded
-    with `infra: true` and do not count against `evals`. After
-    `max_infra_errors` of them, submit tells the agent to stop.
+- `W/bin/submit`: stages a copy of the agent's trees in `W/submit/tree`
+  and runs check on it. A tree that fails is rejected and costs no eval.
+  Every leg then judges that frozen copy, so edits made during a submit
+  wait for the next one. Each leg runs under `bench-agent run --timeout`
+  and `timeout`, both cut to fit `submit_deadline_s`. A later leg runs
+  only when the earlier legs reached stage `score`. The overall verdict is
+  the worst leg, and `pass` needs every leg.
+  - No verdict at all (board busy past the lock wait, bench-agent or
+    tester failure, `refused` at stage `tester` or `baseline`) is retried,
+    then recorded with `infra: true`. It costs no eval, and the view hides
+    any earlier leg's scores. After `max_infra_errors` such submits in a
+    row, submit tells the agent to stop.
+  - Verdict `error` from `candidate eval` (often a kernel fault) is
+    retried once, then charged. A leg killed by `timeout` (a hang) is
+    charged without a retry.
   - The printed view keeps touched case rows only, a count and speedup
     range for untouched cases, and hints for the ten slowest touched cases
     (first leg only). The same text goes to `W/agent-results/NNN.json`,
@@ -555,7 +566,7 @@ uv run helia_core_tester agent-loop stop -w ~/campaigns/conv-s8
 
 ### After the run
 
-`W/ledger/` holds, per eval `NNN`: the diff (`NNN.diff`, base -> agent),
+`W/ledger/` holds, per eval `NNN`: the diff of the judged copy (`NNN.diff`),
 each leg's full verdict (`NNN.<leg>.json`, may name hidden cases' kernels
 but never their shapes) and stderr. `ledger.jsonl` has one row per submit
 with verdict, charged and infra flags, per-family geomeans and code size

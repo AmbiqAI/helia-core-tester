@@ -76,7 +76,10 @@ def test_ledger_counter_ignores_rows(tmp_path: Path) -> None:
     assert [led.next_id(), led.next_id()] == ["001", "002"]
     led.append({"eval": "002", "charged": False, "infra": True})
     led.append({"eval": "003", "charged": True, "infra": False})
-    assert led.next_id() == "003" and led.charged() == 1 and led.infra_errors() == 1
+    assert led.next_id() == "003" and led.charged() == 1 and led.infra_streak() == 0
+    led.append({"eval": "004", "charged": False, "infra": True})
+    led.append({"eval": "005", "charged": False, "infra": True})
+    assert led.infra_streak() == 2
 
 
 @pytest.mark.parametrize("legs, wanted, overall", [
@@ -93,7 +96,7 @@ def test_merge_legs(legs, wanted, overall) -> None:
 
 def test_is_infra() -> None:
     assert ledger.is_infra(None)
-    assert ledger.is_infra({"verdict": "error", "stage": "run"})
+    assert not ledger.is_infra({"verdict": "error", "stage": "run"})
     assert ledger.is_infra({"verdict": "refused", "stage": "tester"})
     assert not ledger.is_infra({"verdict": "refused", "stage": "check"})
     assert not ledger.is_infra({"verdict": "fail", "stage": "score"})
@@ -125,10 +128,11 @@ def test_leg_view_compact() -> None:
 @pytest.fixture
 def ws(tmp_path: Path) -> Workspace:
     w = Workspace(tmp_path / "ws")
-    for tree in ("base", "agent"):
+    for tree in ("base", "agent", "submit/tree"):
         (w.root / tree / "Source").mkdir(parents=True)
         (w.root / tree / "Source" / "a.c").write_text("int a;\n")
-    (w.agent / "Source" / "a.c").write_text("int a = 1;\n")
+    # The fake check skips staging.
+    (w.submit_dir / "tree" / "Source" / "a.c").write_text("int a = 1;\n")
     camp = _campaign(evals=2, retries=1, max_infra_errors=3, secrets_dir=str(tmp_path / "secret"))
     w.save(camp, {"base_commit": "b" * 40, "tester_commit": "c" * 40})
     return w
@@ -147,7 +151,7 @@ class FakeBoard:
         return subprocess.CompletedProcess(cmd, 0 if out else 1, stdout=text)
 
 
-def _ok_check(ws, campaign, base):
+def _ok_check(ws, campaign, base, area):
     return True, {"check": {"ok": True}, "build": "ok", "code_size": {"delta_bytes": 64}}
 
 
@@ -166,6 +170,7 @@ def test_submit_pass_charges_and_records(ws: Workspace, capsys) -> None:
     rc, view = _submit(ws, board, capsys)
     assert rc == 0 and view["verdict"] == "pass" and view["evals_left"] == 1
     assert [Path(c[c.index("--baseline") + 1]).name for c in board.calls] == ["tcm", "mram"]
+    assert {c[c.index("--kernels") + 1] for c in board.calls} == {str(ws.submit_dir / "tree")}
     assert "hints" in view["legs"]["tcm"] and "hints" not in view["legs"]["mram"]
     row = ledger.Ledger(ws.ledger).rows()[0]
     assert row["eval"] == "001" and row["charged"] and row["size_delta"] == 64
@@ -182,12 +187,13 @@ def test_submit_skips_mram_when_unscored(ws: Workspace, capsys) -> None:
 
 def test_submit_infra_is_free_and_retried(ws: Workspace, capsys, monkeypatch) -> None:
     monkeypatch.setattr(judge, "RETRY_PAUSE_S", 0)
-    board = FakeBoard(["", {"verdict": "error", "stage": "run", "reason": "hardware run exited 5"}])
+    board = FakeBoard([_leg("pass"), "", ""])
     rc, view = _submit(ws, board, capsys)
     assert rc == 5 and view["verdict"] == "error" and "not charged" in view["note"]
-    assert view["evals_left"] == 2 and len(board.calls) == 2
+    # No free scores from the tcm leg.
+    assert view["evals_left"] == 2 and len(board.calls) == 3 and view["legs"] == {}
     row = ledger.Ledger(ws.ledger).rows()[0]
-    assert row["infra"] and not row["charged"] and row["attempts"] == {"tcm": 2}
+    assert row["infra"] and not row["charged"] and row["attempts"] == {"tcm": 1, "mram": 2}
     # Retry succeeds: one call more, charged.
     board = FakeBoard(["", _leg("pass"), _leg("no_gain")])
     rc, view = _submit(ws, board, capsys)
@@ -195,8 +201,29 @@ def test_submit_infra_is_free_and_retried(ws: Workspace, capsys, monkeypatch) ->
     assert ledger.Ledger(ws.ledger).rows()[-1]["eval"] == "002"
 
 
+def test_submit_candidate_errors_are_charged(ws: Workspace, capsys, monkeypatch) -> None:
+    monkeypatch.setattr(judge, "RETRY_PAUSE_S", 0)
+    crash = {"verdict": "error", "stage": "run", "reason": "hardware run exited 5"}
+    board = FakeBoard([crash, crash])
+    rc, view = _submit(ws, board, capsys)
+    assert rc == 5 and view["evals_left"] == 1 and "faults or hangs" in view["note"] and len(board.calls) == 2
+    hang = subprocess.CompletedProcess([], judge.TIMED_OUT, stdout="")
+    rc, view = judge.submit(ws, runner=lambda cmd, **kw: hang, checker=_ok_check), json.loads(capsys.readouterr().out)
+    assert view["evals_left"] == 0 and "timed out" in view["legs"]["tcm"]["reason"]
+
+
+def test_submit_respects_deadline(ws: Workspace, capsys, monkeypatch) -> None:
+    campaign, facts = ws.load()
+    ws.save(Campaign(**{**campaign.__dict__, "submit_deadline_s": 120, "eval_timeout_s": 300}), facts)
+    board = FakeBoard([_leg("pass"), _leg("pass")])
+    _submit(ws, board, capsys)
+    call = board.calls[0]
+    lock_s, eval_s = int(call[call.index("--timeout") + 1]), int(call[call.index("timeout") + 1])
+    assert eval_s <= 110 and lock_s + eval_s <= 120
+
+
 def test_submit_precheck_is_free(ws: Workspace, capsys) -> None:
-    def bad(ws, campaign, base):
+    def bad(ws, campaign, base, area):
         return False, {"check": {"ok": True}, "build": {"ok": False, "errors": ["a.c:1: error: x"]}}
 
     board = FakeBoard([])
@@ -214,7 +241,7 @@ def test_submit_budget_spent(ws: Workspace, capsys) -> None:
     assert not board.calls and len(ledger.Ledger(ws.ledger).rows()) == 2
 
 
-def test_submit_stops_after_infra_cap(ws: Workspace, capsys) -> None:
+def test_submit_stops_after_infra_streak(ws: Workspace, capsys) -> None:
     led = ledger.Ledger(ws.ledger)
     for n in range(3):
         led.append({"eval": f"x{n}", "charged": False, "infra": True})
@@ -251,6 +278,13 @@ def test_apply_patch_any_prefix(tmp_path: Path, old: str, new: str) -> None:
     assert (tree / "Include" / "b.h").read_text() == "int b;\n"
 
 
+def test_apply_patch_new_file_from_dev_null(tmp_path: Path) -> None:
+    tree = _patch_tree(tmp_path)
+    diff = b"diff --git a/Source/n.c b/Source/n.c\n--- /dev/null\n+++ b/Source/n.c\n@@ -0,0 +1 @@\n+int n;\n"
+    judge.apply_patch(tree, diff)
+    assert (tree / "Source" / "n.c").read_text() == "int n;\n"
+
+
 def test_apply_patch_refuses_other_trees(tmp_path: Path) -> None:
     diff = b"--- base/nsx/x.txt\n+++ agent/nsx/x.txt\n@@ -0,0 +1 @@\n+x\n"
     with pytest.raises(ValueError, match="outside Source/Include"):
@@ -258,7 +292,7 @@ def test_apply_patch_refuses_other_trees(tmp_path: Path) -> None:
 
 
 def test_tree_diff_round_trips(ws: Workspace, tmp_path: Path) -> None:
-    diff = judge.tree_diff(ws)
+    diff = judge.tree_diff(ws, ws.submit_dir / "tree")
     copy = tmp_path / "copy"
     (copy / "Source").mkdir(parents=True)
     (copy / "Source" / "a.c").write_text("int a;\n")
@@ -281,8 +315,9 @@ def test_settings_use_absolute_rules(ws: Workspace) -> None:
     assert f"Read(/{root}/agent/**)" in perms["allow"]
     assert f"Edit(/{root}/agent/Source/**)" in perms["allow"]
     assert f"Bash({root}/bin/submit)" in perms["allow"] and f"Bash({root}/bin/disasm:*)" in perms["allow"]
-    for name in ("ledger", "baselines", "tester", "base", "check", "logs", "campaign.json"):
+    for name in ("ledger", "baselines", "tester", "base", "check", "submit", "logs"):
         assert f"Read(/{root}/{name}/**)" in perms["deny"]
+    assert f"Read(/{root}/campaign.json)" in perms["deny"]
     assert f"Read(/{campaign.secrets_dir}/**)" in perms["deny"] and "Read(//src/tester/**)" in perms["deny"]
     assert all(rule.startswith(("Read(//", "Edit(//", "Bash(/")) for rule in perms["allow"])
 
