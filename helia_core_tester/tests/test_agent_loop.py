@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 import shlex
 import subprocess
@@ -673,7 +674,8 @@ def test_size_ref_per_toolchain(ws: Workspace, atfe_root: Path, monkeypatch) -> 
     monkeypatch.setattr(setup, "object_sizes", lambda lib: {lib.name: 1})
     for toolchain in camp.toolchains:
         setup.make_size_ref(ws, camp, toolchain)
-    assert [c[c.index("--toolchain") + 1] for c, _ in cmds] == ["gcc", "atfe"]
+    # gcc gets no flag: older testers lack it.
+    assert ["--toolchain" in c for c, _ in cmds] == [False, True] and cmds[1][0][-3] == "atfe"
     assert [Path(c[c.index("--build-dir") + 1]).name for c, _ in cmds] == ["size-ref-build", "size-ref-build-atfe"]
     assert [log.name for _, log in cmds] == ["size-ref.log", "size-ref-atfe.log"]
     assert json.loads(ws.size_ref_of("atfe").read_text()) == {"size-ref-build-atfe": 1}
@@ -718,7 +720,7 @@ LEGS4 = ("tcm", "mram", "tcm-atfe", "mram-atfe")
 
 def _two_toolchains(ws: Workspace) -> None:
     campaign, facts = ws.load()
-    ws.save(Campaign(**{**campaign.__dict__, "toolchains": ("gcc", "atfe")}), facts)
+    ws.save(dataclasses.replace(campaign, toolchains=("gcc", "atfe")), facts)
 
 
 def _keyed_check(ws, campaign, base, area, deadline=None):
@@ -776,14 +778,15 @@ def test_baseline_rerecords_on_new_compiler(ws: Workspace, atfe_root: Path, monk
     out = ws.baseline("tcm-atfe")
     bundle = out / "bundles" / "s1"
     bundle.mkdir(parents=True)
-    manifest = {"build": {"toolchain": {"name": "atfe", "version": "21.0.0"}}}
-    (bundle / "session_manifest.json").write_text(json.dumps(manifest))
+    (out / "baseline.json").write_text("{}")
+    manifest: dict = {"build": {}}
     monkeypatch.setattr(setup, "read_baseline", lambda path: {"sessions": ["s1"]})
     leg = Leg("tcm-atfe", "tcm", "atfe")
-    assert not setup.baseline_current(out, leg)
-    manifest["build"]["toolchain"]["version"] = "22.1.0"
-    (bundle / "session_manifest.json").write_text(json.dumps(manifest))
-    assert setup.baseline_current(out, leg)
+    for version, stale in ((None, False), ("21.0.0", True), ("22.1.0", False)):
+        manifest["build"]["toolchain"] = version and {"name": "atfe", "version": version}
+        (bundle / "session_manifest.json").write_text(json.dumps(manifest))
+        assert setup.baseline_stale(out, leg) == stale
+    ws.size_ref_of("atfe").write_text("{}")
     cmds, lines = [], []
     monkeypatch.setattr(setup, "_run", lambda cmd, log, cwd=None: cmds.append(cmd))
     setup.make_baseline(ws, _campaign(toolchains=["gcc", "atfe"]), leg, lines.append)
@@ -793,7 +796,7 @@ def test_baseline_rerecords_on_new_compiler(ws: Workspace, atfe_root: Path, monk
     setup.make_baseline(ws, _campaign(toolchains=["gcc", "atfe"]), leg, lines.append)
     cmd = cmds[0]
     assert cmd[cmd.index("--toolchain") + 1] == "atfe" and cmd[cmd.index("--placement") + 1] == "tcm"
-    assert "Re-recording" in lines[0] and not bundle.exists()
+    assert "re-recording" in lines[0] and not bundle.exists() and not ws.size_ref_of("atfe").exists()
 
 
 def test_settings_deny_every_size_ref(ws: Workspace, atfe_root: Path) -> None:

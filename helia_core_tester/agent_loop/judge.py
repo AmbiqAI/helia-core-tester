@@ -16,7 +16,7 @@ from helia_core_tester.hardware.candidate_check import _git
 from helia_core_tester.hardware.candidate_eval import SNAPSHOT_TREES, VERDICT_EXITS, CopyBudget, TooLarge, copy_tree
 from helia_core_tester.hardware.candidate_scan import run_binutil
 
-from helia_core_tester.hardware.toolchain import atfe_clang, toolchain_spec
+from helia_core_tester.hardware.toolchain import toolchain_spec
 
 from .config import Campaign
 from .ledger import EXIT_BUDGET, Ledger, LockBusy, agent_view, file_lock, is_infra, ledger_row, merge_legs, scored
@@ -182,12 +182,6 @@ def check(ws: Workspace) -> int:
     return 0 if ok else 1
 
 
-def objdump_for(toolchain: str) -> str:
-    """llvm-objdump for atfe, else GNU."""
-    clang = atfe_clang()
-    return str(clang.with_name("llvm-objdump")) if toolchain == "atfe" and clang else "arm-none-eabi-objdump"
-
-
 def disasm(ws: Workspace, name: str, toolchain: str = "") -> int:
     """One function from the check build."""
     campaign, _ = ws.load()
@@ -197,7 +191,7 @@ def disasm(ws: Workspace, name: str, toolchain: str = "") -> int:
         return 2
     try:
         lib = kernel_lib(toolchain_spec(toolchain).build_dir(ws.check_dir / "build"))
-        text = run_binutil(objdump_for(toolchain), ["-d", "--no-show-raw-insn", str(lib)])
+        text = run_binutil(toolchain_spec(toolchain).objdump(), ["-d", "--no-show-raw-insn", str(lib)])
     except FileNotFoundError:
         print("no build yet: run check first")
         return 2
@@ -223,7 +217,11 @@ def disasm(ws: Workspace, name: str, toolchain: str = "") -> int:
 
 def toolchain_drift(campaign: Campaign, facts: dict) -> bool:
     """A compiler differs from the baselines'."""
-    return any(toolchain_spec(t).installed() != facts["toolchains"].get(t) for t in campaign.toolchains)
+    for toolchain in campaign.toolchains:
+        old, now = facts["toolchains"].get(toolchain), toolchain_spec(toolchain).installed()
+        if old and now and old != now:
+            return True
+    return False
 
 
 def leg_command(ws: Workspace, campaign: Campaign, eid: str, leg: str, lock_s: int, eval_s: int) -> list[str]:

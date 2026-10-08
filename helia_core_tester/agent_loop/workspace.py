@@ -71,7 +71,7 @@ class Workspace:
 
     def size_ref_of(self, toolchain: str) -> Path:
         """Size reference of one toolchain."""
-        return toolchain_spec(toolchain).build_dir(self.size_ref.with_suffix("")).with_suffix(".json")
+        return self.root / f"size-ref{toolchain_spec(toolchain).dir_suffix}.json"
 
     def size_build_of(self, toolchain: str) -> Path:
         return toolchain_spec(toolchain).build_dir(self.size_build)

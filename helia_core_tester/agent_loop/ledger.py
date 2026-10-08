@@ -5,7 +5,6 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
-import math
 import statistics
 import time
 from contextlib import contextmanager
@@ -148,23 +147,26 @@ def diff_digest(diff: bytes) -> dict[str, Any]:
     return {"diff_sha": hashlib.sha256(diff).hexdigest()[:12], "diff_lines": diff.count(b"\n")}
 
 
-def size_deltas(size: dict) -> Any:
-    """Delta bytes, per toolchain when keyed."""
-    if size and all(isinstance(v, dict) for v in size.values()):
-        return {k: v.get("delta_bytes") for k, v in size.items()}
-    return size.get("delta_bytes")
+def toolchain_names(runs: tuple[Leg, ...]) -> list[str]:
+    return list(dict.fromkeys(leg.toolchain for leg in runs))
+
+
+def size_deltas(size: dict, runs: tuple[Leg, ...]) -> Any:
+    """Delta bytes; keyed when several toolchains."""
+    if len(toolchain_names(runs)) < 2:
+        return size.get("delta_bytes")
+    return {name: (size.get(name) or {}).get("delta_bytes") for name in toolchain_names(runs)}
 
 
 def toolchain_gains(legs: dict, runs: tuple[Leg, ...], size: dict) -> Optional[dict[str, Any]]:
     """Geomean and code bytes per toolchain."""
-    names = list(dict.fromkeys(leg.toolchain for leg in runs))
-    if len(names) < 2:
+    if len(toolchain_names(runs)) < 2:
         return None
-    deltas, out = size_deltas(size), {}
-    for name in names:
+    deltas, out = size_deltas(size, runs), {}
+    for name in toolchain_names(runs):
         means = [g for leg in runs if leg.toolchain == name for g in family_geomeans(legs.get(leg.name)).values() if g]
-        out[name] = {"geomean": round(math.exp(statistics.fmean(map(math.log, means))), 4) if means else None,
-                     "size_delta": deltas.get(name) if isinstance(deltas, dict) else None}
+        out[name] = {"geomean": round(statistics.geometric_mean(means), 4) if means else None,
+                     "size_delta": deltas[name]}
     return out
 
 
@@ -176,7 +178,7 @@ def ledger_row(eid: str, overall: str, legs: dict, *, charged: bool, infra: bool
         "infra": infra, "attempts": attempts,
         "legs": {k: {"verdict": v.get("verdict"), "stage": v.get("stage"), "score": v.get("score"),
                      "geomean": family_geomeans(v), "hidden": v.get("hidden")} for k, v in legs.items() if v},
-        "size_delta": size_deltas(size), **diff_digest(diff),
+        "size_delta": size_deltas(size, runs), **diff_digest(diff),
     }
     gains = toolchain_gains(legs, runs, size)
     if gains:

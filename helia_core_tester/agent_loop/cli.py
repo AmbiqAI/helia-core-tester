@@ -129,8 +129,10 @@ def status_command(
         charged = "" if row["charged"] else " (free)"
         means = ", ".join(f"{leg} {fam} {g:.3f}" for leg, fams in row["geomean"].items()
                           for fam, g in fams.items() if g is not None)
-        typer.echo(f"  {row['eval']} {row['verdict']:<14}{charged} size {row['size_delta']} {means}")
-        for name, gain in (row.get("toolchains") or {}).items():
+        gains = row.get("toolchains") or {}
+        size = "" if gains else f" size {row['size_delta']}"
+        typer.echo(f"  {row['eval']} {row['verdict']:<14}{charged}{size} {means}")
+        for name, gain in gains.items():
             typer.echo(f"      {name}: geomean {gain['geomean']}, size {gain['size_delta']}")
     for line in info["recent"]:
         typer.echo(f"  {line}")

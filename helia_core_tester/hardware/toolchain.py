@@ -93,6 +93,11 @@ class ToolchainSpec:
         clang = atfe_clang()
         return self.record(str(clang) if self.key == "atfe" and clang else arm_tool(self.compiler))
 
+    def objdump(self) -> str:
+        """llvm-objdump for atfe, else GNU."""
+        clang = atfe_clang()
+        return str(clang.with_name("llvm-objdump")) if self.key == "atfe" and clang else "arm-none-eabi-objdump"
+
     def require(self) -> None:
         """Fail fast without ATfE clang."""
         clang = atfe_clang()
