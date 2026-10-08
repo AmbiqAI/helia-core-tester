@@ -948,6 +948,17 @@ contradicts the tree is an error, and a tree that records no CPU requires `--cpu
 
 Defaults chosen so a repeat run is cheap and a hung kernel cannot wedge a leg.
 
+Seeds:
+
+- every run draws its cases (weights, inputs, derived quantization) from one run seed. `--seed N`
+  (also `HCT_SEED`) chooses it; otherwise the run draws a fresh seed, prints it, and records it in
+  every case's `descriptor.yaml` (`run_seed`, `case_seed`), its sidecar, `manifest.json`,
+  `generation_summary.json`, `run_seed.json` and the hardware bundle's `selection.seed`. A failure
+  reproduces with `--seed <run_seed> --name <case>`; a case's own seed is `sha256(run_seed, name)`.
+- `hardware run --seed`, `candidate baseline --seed` (drawn once and stored in `baseline.json`
+  otherwise) and the nightly legs (`HCT_NIGHTLY_SEED`, default the UTC date) pin it the same way,
+  and `score` refuses to compare bundles drawn from different seeds.
+
 Generation reuse:
 - each generated case carries a `.stamp` over its descriptor document, the case name, target CPU, suite, seed, the identity of the ns-cmsis-nn checkout (commit when the checkout is a clean git tree, a content digest of its `Include/`, UnitTest TestData and `Tests/KernelContracts` export otherwise), and a generator-version hash (the generation sources, `core/cpu_targets.py`, `core/path_layout.py`, the templates under `assets/templates`, a SHA-256 of `uv.lock` for the resolved dependency set, and the Python version and machine architecture). Float precision is not a stamp input: it selects which descriptors a run generates, not what any one of them emits.
 - a case whose stamp still matches is reused: no TFLite conversion, no inference, no file emission. Its manifest entry is rebuilt from the on-disk sidecar, so build and run see the same tree either way.
@@ -955,6 +966,8 @@ Generation reuse:
 - capability and kernel-symbol skips are re-evaluated every run, because a different ns-cmsis-nn checkout can add or remove a symbol.
 - `generation_summary.json` and `manifest.json` record generated, reused and pruned counts.
 - `--force-generate` (also `force_generate` in `helia_core_tester.toml`, `HELIA_CORE_TESTER_FORCE_GENERATE`) regenerates everything.
+- the seed is part of the stamp, so a run without `--seed` never reuses: pass the seed a run printed
+  to reuse its cases.
 - cases outside the active filter are pruned from the tree at the end of a run.
 
 Parallel FVP runs:

@@ -8,6 +8,9 @@ under, and the ns-cmsis-nn checkout the generator reads. A stamp folds all of
 those into one digest; a case whose on-disk stamp still matches, and whose
 artifacts still hash to what that stamp recorded, is reused verbatim.
 See issue #107.
+
+The seed is part of the stamp, and a run without `--seed` (or HCT_SEED) draws a
+fresh one, so reuse is an opt-in: pass the seed a run printed to reuse its cases.
 """
 
 from __future__ import annotations

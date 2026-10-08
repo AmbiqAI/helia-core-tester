@@ -305,7 +305,7 @@ def _run(tmp_path: Path, monkeypatch, nsx: list[tuple], repo_root: Path, **kwarg
     """Pipeline with NSX, generate, flash, stream faked."""
     build_dir = tmp_path / "build"
 
-    def _generate(repo_root, spec, suite, float_precision=None, cmsis_nn_root=None, select=None):
+    def _generate(repo_root, spec, suite, float_precision=None, cmsis_nn_root=None, select=None, seed=None):
         nsx.append(("generate", cmsis_nn_root))
 
     def _flash(spec, serial, *, force, **build_kwargs):

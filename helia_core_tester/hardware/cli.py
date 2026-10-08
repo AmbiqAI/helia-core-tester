@@ -544,7 +544,7 @@ def _check_ops(ops: tuple[str, ...]) -> None:
 
 def _stream_options(
     spec, suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id,
-    ops, dtypes, case_ids, cases_from, strict_compare, golden_from, golden_allow_failed, hidden_set=None,
+    ops, dtypes, case_ids, cases_from, strict_compare, golden_from, golden_allow_failed, hidden_set=None, seed=None,
 ):
     from .hardware_pipeline import (
         StreamOptions, apply_precision, fit_to_board, float_precision_for, resolve_pmu_options, validate_fvp_gate,
@@ -569,7 +569,7 @@ def _stream_options(
             ops=cases.ops, dtypes=cases.dtypes, case_ids=cases.case_ids,
             pmu_counters=selection, fvp_gate=fvp_gate, session_id=session_id,
             float_precision=float_precision_for(precision), strict_compare=strict_compare, golden_from=golden_from,
-            golden_allow_failed=golden_allow_failed, hidden_set=hidden_set,
+            golden_allow_failed=golden_allow_failed, hidden_set=hidden_set, seed=seed,
         )
         return fit_to_board(spec, options, explicit_pmu=bool(pmu_counters) or pmu_groups is not None)
     except ValueError as exc:
@@ -697,6 +697,7 @@ def run(
     hidden_set: Optional[Path] = typer.Option(
         None, "--hidden-set", help=_HIDDEN_SET_HELP, exists=True, file_okay=False, resolve_path=True,
     ),
+    seed: Optional[int] = typer.Option(None, "--seed", help="Run seed the generate step draws every case from (default: HCT_SEED, else a fresh draw recorded in the bundle). Pass the seed a run printed to reproduce its cases."),
     session_id: Optional[str] = typer.Option(None, "--session-id", help="Session ID; also the result-bundle directory name (default: <board>-<UTC timestamp>)."),
     skip_generate: bool = typer.Option(False, "--skip-generate", help="Reuse existing artifacts/generated_tests instead of regenerating."),
     skip_flash: bool = typer.Option(False, "--skip-flash", help="Skip build+flash and reuse whatever firmware is already running on the board (its TARGET_INFO build id is still checked against the build dir)."),
@@ -726,7 +727,7 @@ def run(
     _check_placement(placement, spec)
     options = _stream_options(
         spec, suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id,
-        op, dtype, case_id, cases_from, strict_compare, golden_from, golden_allow_failed, hidden_set,
+        op, dtype, case_id, cases_from, strict_compare, golden_from, golden_allow_failed, hidden_set, seed=seed,
     )
     build_dir = resolve_build_dir(repo_root(), spec, build_dir)
     # Neither builds nor generates: nothing to resolve.

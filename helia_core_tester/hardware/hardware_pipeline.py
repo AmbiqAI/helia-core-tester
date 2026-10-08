@@ -11,7 +11,7 @@ import contextlib
 import json
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, List, Optional, Sequence, Union
 
@@ -197,7 +197,8 @@ def generate_tests_for_board(
     float_precision: Optional[str] = None,
     cmsis_nn_root: Optional[Path] = None,
     select: Optional[CaseSelection] = None,
-) -> None:
+    seed: Optional[int] = None,
+) -> Optional[int]:
     """Run the generate step for the board's CPU and the requested suite, exactly as
     `helia_core_tester generate --cpu <board.cpu> --suite <suite>
     [--float-precision <float_precision>]` would. `float_precision` (f16/f32/both)
@@ -207,17 +208,19 @@ def generate_tests_for_board(
     from ..core.logging import setup_logger
     from ..core.steps import GenerateStep
 
-    config = _board_config(repo_root, board, suite, float_precision, cmsis_nn_root, select)
+    config = _board_config(repo_root, board, suite, float_precision, cmsis_nn_root, select, seed)
     setup_logger(verbosity=config.verbosity)
     with generation_lock(repo_root, board.cpu):
         result = GenerateStep(config).execute()
     if not (result.success or result.skipped):
         raise RuntimeError(f"Generation failed: {result.message}")
+    # The seed the step generated with (its own draw when none was given).
+    return ((getattr(result, "details", None) or {}).get("filters") or {}).get("seed")
 
 
 def _board_config(
     repo_root: Path, board: BoardSpec, suite: str, float_precision: Optional[str], cmsis_nn_root: Optional[Path] = None,
-    select: Optional[CaseSelection] = None,
+    select: Optional[CaseSelection] = None, seed: Optional[int] = None,
 ):
     """Generation config for the board's CPU."""
     from ..core.config import Config
@@ -239,6 +242,9 @@ def _board_config(
     if cmsis_nn_root is not None:
         kwargs["cmsis_nn_root"] = cmsis_nn_root
         overrides.add("cmsis_nn_root")
+    if seed is not None:
+        kwargs["seed"] = seed
+        overrides.add("seed")
     return Config(
         project_root=repo_root,
         cpu=board.cpu,
@@ -278,6 +284,8 @@ def resolved_selection(repo_root: Path, board: BoardSpec, options: "StreamOption
         "pmu_counters": options.pmu_counters,
         "fvp_gate": options.fvp_gate or DEFAULT_GATE,
         "compare": options.compare_record(),
+        # The generation seed the cases were drawn from (None: --skip-generate kept older cases).
+        "seed": options.seed,
     }
     if options.hidden_set is not None:
         selection["hidden_set"] = hidden_record(options.hidden_set, board.cpu)
@@ -353,6 +361,8 @@ class StreamOptions:
     """Accept golden cases the past run failed."""
     hidden_set: Optional[Path] = None
     """Root from `generate --hidden-dir`; its cases join the run."""
+    seed: Optional[int] = None
+    """Run seed for the generate step; None draws a fresh one (recorded in the bundle)."""
 
     def selection(self) -> CaseSelection:
         """The op, dtype and id filters."""
@@ -636,11 +646,14 @@ def run_hardware_pipeline(
         precision_note = f" float_precision={options.float_precision}" if options.float_precision else ""
         echo(f"[hardware] Generating tests (cpu={board.cpu} suite={options.suite}{precision_note} kernels={kernel_root})...")
         generate_started = time.monotonic()
-        generate_tests_for_board(
+        run_seed = generate_tests_for_board(
             repo_root, board, options.suite, float_precision=options.float_precision, cmsis_nn_root=kernel_root,
-            select=options.selection(),
+            select=options.selection(), seed=options.seed,
         )
         generate_s = time.monotonic() - generate_started
+        # The bundle records the seed the cases were actually drawn from.
+        options = replace(options, seed=run_seed)
+        echo(f"[hardware] Generation seed: {run_seed} (pass --seed {run_seed} to reproduce these cases)")
 
     # Check goldens and hidden cases before touching the board.
     checked = options.golden_from is not None or options.hidden_set is not None
