@@ -11,11 +11,13 @@ from typer.testing import CliRunner
 from helia_core_tester.cli import app
 from helia_core_tester.hardware import candidate_eval, code_graph
 from helia_core_tester.hardware.candidate_check import CheckError
+from helia_core_tester.hardware.toolchain import arm_tool
 from helia_core_tester.tests import test_score_bundles as sb
 from helia_core_tester.tests.test_harness_lock import _git, _repo
 
 runner = CliRunner()
 REAL_TESTER_DIRTY = candidate_eval.tester_dirty
+needs_gcc = pytest.mark.skipif(shutil.which(arm_tool("arm-none-eabi-gcc")) is None, reason="needs arm-none-eabi-gcc")
 
 
 @pytest.fixture(autouse=True)
@@ -95,6 +97,7 @@ def test_baseline_refuses_edited_tree(tmp_path, kernels) -> None:
         _baseline(tmp_path, kernels)
 
 
+@needs_gcc
 def test_faster_candidate_passes_from_a_snapshot(tmp_path, kernels) -> None:
     out, _ = _baseline(tmp_path, kernels)
     run = FakeRun(tmp_path / "reports", cycles={"conv_a": 800.0})
