@@ -11,7 +11,8 @@ baseline but not in the candidate fails. Only timing_status "valid" cases are ti
 Code layout moves untouched kernels, so given the touched case set
 (cases whose kernel code changed) the case and family gates, family
 geomeans and the score cover only those; untouched drift is reported
-per family but never fails. Correctness gates cover every case.
+per family but never fails. Correctness gates cover every case;
+untouched cases fail prepare only on missing cycles.
 With repeat baselines the floor is the small session floor instead of
 the board floor. Each family also fails when its geomean is slower than
 max(family floor, median case band / sqrt(cases)). Prepare cycles move
@@ -352,12 +353,13 @@ def _peak_pct(cpu: str | None, route: str, cycles_per_mac: float | None) -> floa
     return entry["cycles_per_mac"] / cycles_per_mac * 100.0 if entry and cycles_per_mac else None
 
 
-def _prepare_cause(a: float, b: float | None, allowed: float, saved: float, scoring: dict) -> str | None:
+def _prepare_cause(a: float, b: float | None, allowed: float, saved: float, scoring: dict, gated: bool) -> str | None:
     """Why prepare growth fails, or None."""
     if b is None:
         return "missing"
     growth = b - a
-    if growth <= allowed:
+    # Untouched code cannot move work.
+    if growth <= allowed or not gated:
         return None
     if b > a * scoring["prepare_max_ratio"]:
         return "blowup"
@@ -365,7 +367,9 @@ def _prepare_cause(a: float, b: float | None, allowed: float, saved: float, scor
     return "pays_for_gain" if saved > 0 and growth > saved * scoring["prepare_share_pct"] / 100.0 else None
 
 
-def _prepare(base: list[dict], cand: list[dict], timed: tuple[float | None, float | None], scoring: dict) -> dict | None:
+def _prepare(
+    base: list[dict], cand: list[dict], timed: tuple[float | None, float | None], scoring: dict, gated: bool = True,
+) -> dict | None:
     """Prepare cycles; None when the baseline lacks them."""
     a = _pool(base, "prepare_cycles")
     if a is None:
@@ -377,7 +381,7 @@ def _prepare(base: list[dict], cand: list[dict], timed: tuple[float | None, floa
     # Gains inside cross-build noise don't count.
     noise = max(scoring["floor_pct"], scoring["mad_k"] * _spread(base) / before * 100.0) if before else 0.0
     saved = before - after if before and after and before - after > before * noise / 100.0 else 0.0
-    cause = _prepare_cause(a, b, allowed, saved, scoring)
+    cause = _prepare_cause(a, b, allowed, saved, scoring, gated)
     return {"baseline": a, "candidate": b, "band_pct": band, "cause": cause, "regression": cause is not None}
 
 
@@ -435,10 +439,10 @@ def _case(
         "cycles_per_mac_candidate": cpm_b,
         "pct_of_peak_baseline": _peak_pct(cpu, base_route, cpm_a),
         "pct_of_peak_candidate": _peak_pct(cpu, inner or symbol, cpm_b),
-        "prepare": _prepare(base, cand, (a, b), scoring),
         "touched": None if touched is None else case_id in touched,
         "retired": _retired(base, cand),
     }
+    case["prepare"] = _prepare(base, cand, (a, b), scoring, _gated(case))
     case["in_focus"] = in_focus(base_route, symbol, case["dtype"], focus)
     if case["eligible"]:
         # Repeat baselines measure this session's noise.
@@ -519,8 +523,8 @@ def score_bundles(
     missing_case, input_digest, timing_lost, regression,
     family_regression, prepare_regression, no_eligible_cases.
 
-    Correctness and prepare gates cover every case, the case and
-    family gates every touched case; under
+    Correctness gates and missing prepare cycles cover every case;
+    prepare growth and the case and family gates every touched case; under
     focus the family gate judges the focus and rest subsets apart. The score covers
     focus cases only (by baseline route), with family weights
     renormalized over the families they hit.

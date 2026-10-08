@@ -380,7 +380,8 @@ The verdict (schema `hct.candidate_eval` v3) has these fields:
   so `prepare_regression` fires only when they go missing, pass
   `prepare_max_ratio` times the baseline, or grow enough to pay for the
   case's timed gain (`prepare_share_pct` of the cycles saved; see
-  `assets/scoring/noise_floors.yaml`).
+  `assets/scoring/noise_floors.yaml`). Under case gate scope `touched`,
+  untouched cases fail only on missing prepare cycles.
 - `cases`: one entry per public case, with cycles, speedup, delta, noise
   band and `touched`: whether code reachable from the case's inner symbol,
   or its timed symbol itself, changed in the built objects.
