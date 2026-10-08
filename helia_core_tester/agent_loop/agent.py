@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import math
 import os
 import shlex
 import signal
 import subprocess
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Iterable, Optional
@@ -91,18 +94,104 @@ def read_meta(ws: Workspace) -> dict[str, Any]:
 
 
 RESUME_PROMPT = "Continue the work plan from where you stopped."
+NOTE_HEAD = "Operator note:"
+NOTE_MAX_CHARS = 8000
+STOP_WAITS = ((signal.SIGINT, 20.0), (signal.SIGTERM, 10.0), (signal.SIGKILL, 5.0))
+
+# USD per MTok: in, out, cache read, 5m write, 1h write.
+# platform.claude.com/docs/en/about-claude/pricing, 2026-10.
+PRICES = {
+    "claude-opus-5-5": (4.0, 20.0, 0.20, 5.0, 8.0),
+    "claude-sonnet-5-5": (2.0, 10.0, 0.20, 2.5, 4.0),
+    "claude-haiku-4-5": (1.0, 5.0, 0.10, 1.25, 2.0),
+}
 
 
-def spent_usd(meta: dict[str, Any]) -> float:
-    """Cost of every finished run so far."""
+def note_prompt(text: str) -> str:
+    """Prefixed, size-capped operator note."""
+    text = text.strip()
+    if not text:
+        raise RuntimeError("Note is empty")
+    if len(text) > NOTE_MAX_CHARS:
+        raise RuntimeError(f"Note exceeds {NOTE_MAX_CHARS} characters")
+    return f"{NOTE_HEAD}\n{text}"
+
+
+def model_prices(model: str) -> Optional[tuple]:
+    """Longest price-table prefix match."""
+    keys = [k for k in PRICES if model.startswith(k)]
+    return PRICES[max(keys, key=len)] if keys else None
+
+
+def _visible_chars(content: list) -> int:
+    n = 0
+    for block in content:
+        if isinstance(block, dict):
+            n += len(block.get("text") or block.get("thinking") or "")
+            n += len(json.dumps(block["input"])) if "input" in block else 0
+    return n
+
+
+def usage_cost(events: list[dict]) -> Optional[float]:
+    """Estimate from message usage; None if unpriced."""
+    msgs: dict[str, dict] = {}
+    for n, ev in enumerate(events):
+        if ev.get("type") != "assistant":
+            continue
+        msg = ev.get("message") or {}
+        if msg.get("model") == "<synthetic>":
+            continue
+        prices, usage = model_prices(msg.get("model") or ""), msg.get("usage")
+        if prices is None or not usage:
+            return None
+        # Content blocks repeat the message id.
+        entry = msgs.setdefault(msg.get("id") or f"#{n}", {"prices": prices, "usage": usage, "chars": 0})
+        entry["chars"] += _visible_chars(msg.get("content") or [])
     total = 0.0
-    for log in meta.get("logs") or []:
-        cost = run_cost(stream_events(Path(log)))
-        total += cost.get("cost_usd") or 0.0
+    for entry in msgs.values():
+        p_in, p_out, p_read, p_5m, p_1h = entry["prices"]
+        u = entry["usage"]
+        split = u.get("cache_creation") or {}
+        w5 = split.get("ephemeral_5m_input_tokens", 0)
+        # Unsplit writes count at the 1h rate.
+        w1 = u.get("cache_creation_input_tokens", 0) - w5
+        # Streamed usage under-reports output tokens.
+        out = max(u.get("output_tokens", 0), math.ceil(entry["chars"] / 2))
+        total += (u.get("input_tokens", 0) * p_in + out * p_out + u.get("cache_read_input_tokens", 0) * p_read
+                  + w5 * p_5m + w1 * p_1h) / 1e6
     return total
 
 
-def launch(ws: Workspace, popen=subprocess.Popen, resume: bool = False) -> dict[str, Any]:
+def log_cost(path: Path) -> dict[str, Any]:
+    """Result cost, else usage estimate, else unknown."""
+    events = stream_events(path)
+    result = run_cost(events)
+    if result["finished"] and (result["cost_usd"] or 0) > 0:
+        return {"log": str(path), "cost_usd": result["cost_usd"], "estimated": False}
+    return {"log": str(path), "cost_usd": usage_cost(events), "estimated": True}
+
+
+def spend_summary(meta: dict[str, Any]) -> dict[str, Any]:
+    """Exact, estimated, assumed and unpriced spend."""
+    assumed = meta.get("assumed") or []
+    covered = {log for a in assumed for log in a.get("logs") or []}
+    runs = [log_cost(Path(log)) for log in meta.get("logs") or []]
+    unpriced = [r["log"] for r in runs if r["cost_usd"] is None and r["log"] not in covered]
+    priced = [r for r in runs if r["cost_usd"] is not None]
+    estimated = sum(r["cost_usd"] for r in priced if r["estimated"])
+    assumed_usd = sum(a.get("usd") or 0.0 for a in assumed)
+    total = sum(r["cost_usd"] for r in priced) + assumed_usd
+    return {"usd": round(total, 4), "estimated_usd": round(estimated, 4), "assumed_usd": assumed_usd,
+            "unpriced": unpriced, "runs": runs}
+
+
+def spent_usd(meta: dict[str, Any]) -> float:
+    """Cost of every run so far."""
+    return spend_summary(meta)["usd"]
+
+
+def launch(ws: Workspace, popen=subprocess.Popen, resume: bool = False, note: Optional[str] = None,
+           note_path: Optional[Path] = None, assume_spent: Optional[float] = None) -> dict[str, Any]:
     """Start or resume the agent detached."""
     campaign, _ = ws.load()
     meta = read_meta(ws)
@@ -110,12 +199,22 @@ def launch(ws: Workspace, popen=subprocess.Popen, resume: bool = False) -> dict[
         raise RuntimeError(f"Agent already running as pid {meta['pid']}")
     if resume and not meta.get("session_id"):
         raise RuntimeError("No session to resume; launch first")
-    left = campaign.cost_usd - (spent_usd(meta) if resume else 0.0)
-    if left <= 0:
+    if not resume and (note is not None or assume_spent is not None):
+        raise RuntimeError("--note and --assume-spent need --resume")
+    assumed = list(meta.get("assumed") or []) if resume else []
+    if assume_spent is not None:
+        assumed.append({"usd": assume_spent, "logs": spend_summary(meta)["unpriced"]})
+    spend = spend_summary({**meta, "assumed": assumed}) if resume else None
+    if resume and spend["unpriced"]:
+        raise RuntimeError("Run cost unknown; pass --assume-spent USD")
+    left = campaign.cost_usd - (spend["usd"] if spend else 0.0)
+    if left < 0.01:
         raise RuntimeError("Cost cap spent; raise cost_usd to resume")
+    prompt = ws.prompt.read_text(encoding="utf-8")
+    if resume:
+        prompt = RESUME_PROMPT if note is None else note_prompt(note)
     ws.logs.mkdir(parents=True, exist_ok=True)
     session = meta["session_id"] if resume else str(uuid.uuid4())
-    prompt = RESUME_PROMPT if resume else ws.prompt.read_text(encoding="utf-8")
     # Same locked-down flags either way.
     args = [*claude_args(ws, campaign.model, prompt), *(["--resume", session] if resume else ["--session-id", session]),
             "--max-budget-usd", f"{left:.2f}", "--name", f"agent-loop {campaign.name}"]
@@ -127,18 +226,38 @@ def launch(ws: Workspace, popen=subprocess.Popen, resume: bool = False) -> dict[
                      start_new_session=True)
     logs = [*(meta.get("logs") or []), str(log)] if resume else [str(log)]
     meta = {"pid": proc.pid, "session_id": session, "model": campaign.model, "max_budget_usd": round(left, 2),
-            "log": str(log), "logs": logs}
+            "log": str(log), "logs": logs, "assumed": assumed}
+    if note is not None:
+        meta["note"] = {"path": str(note_path) if note_path else None, "chars": len(note.strip()),
+                        "sha256": hashlib.sha256(note.encode("utf-8")).hexdigest()}
     ws.run_meta.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
     return meta
 
 
+def _wait_gone(pid: int, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while pid_alive(pid):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.5)
+    return True
+
+
 def stop(ws: Workspace) -> str:
-    """Terminate the agent's process group."""
+    """SIGINT, then SIGTERM, then SIGKILL."""
     pid = read_meta(ws).get("pid")
     if not pid_alive(pid):
         return "Agent is not running."
-    os.killpg(os.getpgid(pid), signal.SIGTERM)
-    return f"Sent SIGTERM to agent pid {pid}."
+    pgid = os.getpgid(pid)
+    for sig, wait in STOP_WAITS:
+        # SIGINT lets claude record the turn.
+        if sig == signal.SIGINT:
+            os.kill(pid, sig)
+        else:
+            os.killpg(pgid, sig)
+        if _wait_gone(pid, wait):
+            return f"Agent pid {pid} stopped after {sig.name}."
+    return f"Agent pid {pid} still alive after SIGKILL."
 
 
 def stream_events(path: Path) -> list[dict]:
@@ -186,12 +305,14 @@ def status(ws: Workspace, tail: int = 10) -> dict[str, Any]:
     ledger = Ledger(ws.ledger)
     meta = read_meta(ws)
     events = stream_events(Path(meta["log"])) if meta.get("log") else []
+    spend = spend_summary(meta)
     rows = [{"eval": r["eval"], "verdict": r["verdict"], "charged": r.get("charged"),
              "geomean": {leg: v.get("geomean") for leg, v in (r.get("legs") or {}).items()},
              "size_delta": r.get("size_delta")} for r in ledger.rows()]
     return {"campaign": campaign.name, "evals_used": ledger.charged(), "evals": campaign.evals, "rows": rows,
             "pid": meta.get("pid"), "running": pid_alive(meta.get("pid")), "session_id": meta.get("session_id"),
-            "cost": run_cost(events), "spent_usd": round(spent_usd(meta), 2), "recent": readable(events)[-tail:] if tail else []}
+            "cost": run_cost(events), "spend": spend, "spent_usd": round(spend["usd"], 2), "note": meta.get("note"),
+            "recent": readable(events)[-tail:] if tail else []}
 
 
 # --- selftest ---------------------------------------------------------------------------

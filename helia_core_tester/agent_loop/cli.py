@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Optional
 
 import typer
 
@@ -93,12 +94,21 @@ def disasm_command(
 def launch_command(
     workspace: Path = WS_OPT,
     resume: bool = typer.Option(False, "--resume", help="Continue the saved session; cap the remaining cost."),
+    note: Optional[Path] = typer.Option(None, "--note", exists=True, dir_okay=False, resolve_path=True,
+                                        help="Send this file as an operator note on resume."),
+    note_text: Optional[str] = typer.Option(None, "--note-text", help="Send this text as an operator note on resume."),
+    assume_spent: Optional[float] = typer.Option(None, "--assume-spent", min=0.0,
+                                                 help="USD spent by runs with no usage."),
 ) -> None:
     """Start the agent detached, with the cost cap."""
     from .agent import launch
 
+    if note and note_text is not None:
+        typer.echo("✗ Pass --note or --note-text, not both.", err=True)
+        raise typer.Exit(2)
+    text = note.read_text(encoding="utf-8") if note else note_text
     try:
-        meta = launch(_ws(workspace), resume=resume)
+        meta = launch(_ws(workspace), resume=resume, note=text, note_path=note, assume_spent=assume_spent)
     except RuntimeError as exc:
         typer.echo(f"✗ {exc}", err=True)
         raise typer.Exit(1)
@@ -123,7 +133,12 @@ def status_command(
     cost = info["cost"]
     if cost["finished"]:
         typer.echo(f"finished {cost['subtype']}: ${cost['cost_usd']}, {cost['turns']} turns, {cost['denials']} denials")
-    typer.echo(f"cost of finished runs: ${info['spent_usd']}")
+    spend = info["spend"]
+    typer.echo(f"spent: ${spend['usd']:.2f} (estimated ${spend['estimated_usd']:.2f}, assumed ${spend['assumed_usd']:.2f})")
+    for log in spend["unpriced"]:
+        typer.echo(f"  ✗ cost unknown: {log}")
+    if info["note"]:
+        typer.echo(f"note: {info['note']['path'] or '--note-text'} sha256 {info['note']['sha256'][:12]}")
     for row in info["rows"]:
         charged = "" if row["charged"] else " (free)"
         means = ", ".join(f"{leg} {fam} {g:.3f}" for leg, fams in row["geomean"].items()
