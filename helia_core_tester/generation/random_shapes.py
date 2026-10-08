@@ -218,8 +218,14 @@ def _matches(op: str, gen: Generator, wanted: str) -> bool:
 
     path = Path(gen.descriptor_file)
     probe = {"name": "", "operator": op, "_source_stem": path.stem, "_source_relpath": str(path)}
-    # Case-name prefixes, e.g. rs7_conv.
-    return descriptor_matches_op(probe, wanted) or re.fullmatch(rf"rs\d+_{gen.tag}(_\d+)?", wanted) is not None
+    # Names are drawn, so no case prefixes.
+    return descriptor_matches_op(probe, wanted)
+
+
+def random_case_pattern() -> re.Pattern:
+    """Names of drawn cases, any op."""
+    tags = "|".join(re.escape(gen.tag) for gen in GENERATORS.values())
+    return re.compile(rf"rs\d+_({tags})_\d+")
 
 
 def select_ops(op_filter: str | None = None, dtype_filter: str | None = None) -> tuple[str, ...]:
@@ -227,12 +233,16 @@ def select_ops(op_filter: str | None = None, dtype_filter: str | None = None) ->
     from helia_core_tester.generation.io.dtypes import normalize_dtype
 
     ops, dtypes = _parts(op_filter), [normalize_dtype(d) for d in _parts(dtype_filter)]
+    have = ", ".join(f"{op} {gen.dtype}" for op, gen in GENERATORS.items())
+    # Every token must name a generator.
+    unknown = [w for w in ops if not any(_matches(op, gen, w) for op, gen in GENERATORS.items())]
+    if unknown:
+        raise ValueError(f"No random shapes for {', '.join(unknown)}; have {have}")
     picked = tuple(
         op for op, gen in GENERATORS.items()
         if (not ops or any(_matches(op, gen, wanted) for wanted in ops)) and (not dtypes or gen.dtype in dtypes)
     )
     if not picked:
-        have = ", ".join(f"{op} {gen.dtype}" for op, gen in GENERATORS.items())
         raise ValueError(f"No random shapes for that op/dtype; have {have}")
     return picked
 

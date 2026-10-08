@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 from pathlib import Path
@@ -44,19 +45,30 @@ def test_ops_draw_independently() -> None:
     (None, None, ("Convolve", "DepthwiseConv")),
     ("Convolve", None, ("Convolve",)),
     ("DepthwiseConv", "s8", ("DepthwiseConv",)),
-    ("Convolve,Softmax", "S8", ("Convolve",)),
     ("depthwise_conv", None, ("DepthwiseConv",)),
-    ("rs7_conv", None, ("Convolve",)),
     (None, "S8", ("Convolve", "DepthwiseConv")),
 ])
 def test_select_ops_matches_filters(op, dtype, picked) -> None:
     assert rs.select_ops(op, dtype) == picked
 
 
-@pytest.mark.parametrize(("op", "dtype"), [("FullyConnected", None), ("Convolve", "S16"), (None, "S4"), ("rs", None)])
+@pytest.mark.parametrize(("op", "dtype"), [
+    ("FullyConnected", None), ("Convolve", "S16"), (None, "S4"), ("rs", None),
+    # A typo fails even beside a match.
+    ("Convolve,Softmax", "S8"),
+    # Drawn names cannot be filtered.
+    ("rs7_conv", None),
+])
 def test_select_ops_refuses_unknown(op, dtype) -> None:
     with pytest.raises(ValueError, match="have Convolve S8, DepthwiseConv S8"):
         rs.select_ops(op, dtype)
+
+
+def test_case_pattern_follows_registry(monkeypatch) -> None:
+    assert rs.random_case_pattern().fullmatch("rs7_dw_3")
+    assert not rs.random_case_pattern().fullmatch("rs7_fc_3")
+    monkeypatch.setitem(rs.GENERATORS, "FullyConnected", dataclasses.replace(rs.GENERATORS["Convolve"], tag="fc"))
+    assert rs.random_case_pattern().fullmatch("rs7_fc_3")
 
 
 def test_one_op_draw_is_a_subset() -> None:

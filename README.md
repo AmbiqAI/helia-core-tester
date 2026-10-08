@@ -66,7 +66,9 @@ Held-out shapes: `generate --random-shapes N --shape-seed S` draws N s8
 Convolve and N s8 DepthwiseConv cases (`rs<S>_conv_*`, `rs<S>_dw_*`) instead of
 the `assets/` descriptors. `--op`/`--dtype` limit the draw to matching ops
 (e.g. `--op Convolve` draws only `rs<S>_conv_*`, the same cases as an
-unfiltered draw); a filter no generator matches is refused. Each op draws
+unfiltered draw). Every `--op` token must name a registered op by operator,
+descriptor stem or path; case-name prefixes such as `rs7_conv` are refused,
+since drawn names (and hidden ids) cannot be filtered. Each op draws
 from its own seeded stream, cycling through every wrapper route and sized to fit
 the smallest board workspace. The descriptors, the drawn ops (`ops`) and a per-route count land in
 `artifacts/random_shapes/s<S>/<cpu>/`; the cases join the generated tree beside
@@ -457,7 +459,7 @@ kernels:
 evals: 12                      # charged board evals
 cost_usd: 25                   # claude --max-budget-usd
 model: claude-opus-5-5
-hidden_shapes: 12              # random s8 shapes per op; 0 for none
+hidden_shapes: 12              # random target-op shapes; 0 for none
 repeats: 3                     # baseline runs per leg
 secrets_dir: ~/hct-secrets/conv-s8   # outside the workspace
 # start_patch: ~/campaigns/conv-s8-1/ledger/007.diff
