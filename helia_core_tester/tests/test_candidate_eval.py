@@ -276,7 +276,8 @@ def _fake_cli(tmp_path: Path, body: str) -> str:
 
 
 @pytest.mark.parametrize(("body", "built"), [
-    ('printf 1 >&"$HCT_BUILT_FD"; echo \'{"bundle": "b"}\'', True),
+    # dash cannot redirect to fds above 9.
+    ('printf 1 > "/dev/fd/$HCT_BUILT_FD"; echo \'{"bundle": "b"}\'', True),
     ('echo \'{"bundle": "b"}\'', False),
 ])
 def test_hardware_run_signals_build(tmp_path, monkeypatch, body, built) -> None:
