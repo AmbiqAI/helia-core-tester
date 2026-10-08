@@ -185,6 +185,24 @@ def test_multi_case_session_rewinds_arena(tmp_path: Path) -> None:
     assert abs_bundle.workspace_bytes_required != conv_bundle.workspace_bytes_required
 
 
+def test_next_plan_follows_session_complete(tmp_path: Path) -> None:
+    abs_bundle = load_case_bundle(build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="abs_first").manifest_path)
+    conv_bundle = load_case_bundle(build_convolve_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="conv_second").manifest_path)
+    transport = FakeTargetTransport()
+    session = HostSession(transport, counter_passes=counter_passes_for_selection({"cpu": "default"}))
+
+    first = session.run_many([abs_bundle])
+    second = session.run_many([conv_bundle])
+
+    assert first.session_complete_cases == second.session_complete_cases == 1
+    assert transport.completed_case_count == 2
+    # Each result carries only its own plan's trace.
+    assert first.protocol_trace[:2] == ("RX:TARGET_INFO", "TX:TARGET_INFO_ACK")
+    assert second.protocol_trace[:2] == ("TX:SESSION_PLAN", "RX:REQUEST_CASE")
+    assert second.protocol_trace[-1] == "RX:SESSION_COMPLETE"
+    assert first.cases[0].comparison.passed and second.cases[0].comparison.passed
+
+
 def test_persistent_fake_target_multi_operator_session_without_reflash(tmp_path: Path) -> None:
     abs_bundle = load_case_bundle(build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="abs_persistent").manifest_path)
     conv_bundle = load_case_bundle(build_convolve_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="conv_persistent").manifest_path)

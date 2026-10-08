@@ -42,7 +42,7 @@ from .session import (
     check_case_ids_unique,
 )
 from .transport import JLinkRttTransport, Transport, TransportError, elf_symbols, symbol_address_from_elf
-from .wire import TargetInfo, session_plan_size
+from .wire import session_plan_size
 from ..core.config import VALID_SUITE_MODES
 
 OnCaseComplete = Callable[[CaseRunResult], None]
@@ -173,29 +173,6 @@ def symbol_at(symbols: list[tuple[int, str, str]], address: int) -> str | None:
     return name if address == start else f"{name}+0x{address - start:x}"
 
 
-_CONSISTENT_FIELDS = (
-    "build_id", "catalog_hash", "board_id", "target_cpu", "capability_flags", "pmu_counter_slots",
-    "max_rx_payload", "max_cases_per_session", "max_passes", "runtime_arena_capacity",
-    "boot_status", "core_clock_hz", "fpscr",
-)
-
-
-def check_target_info_consistent(first: TargetInfo, later: TargetInfo, *, batch_index: int) -> None:
-    """Every batch opens a fresh RTT session; the merged bundle must describe one firmware.
-    Fail fast if a later session announces a different build, catalog or limits (a board
-    reflashed mid-run, or a second host sharing the probe)."""
-    differing = [
-        f"{name}: {getattr(first, name)!r} -> {getattr(later, name)!r}"
-        for name in _CONSISTENT_FIELDS
-        if getattr(first, name) != getattr(later, name)
-    ]
-    if differing:
-        raise RuntimeError(
-            f"TARGET_INFO of batch {batch_index} differs from the first session's; refusing to merge "
-            f"results from different firmware: " + "; ".join(differing)
-        )
-
-
 def run_case_bundles(
     project_root: Path,
     case_bundles: Sequence[CaseBundle],
@@ -209,15 +186,15 @@ def run_case_bundles(
     expected_build_id: str | None = None,
     compare: dict | None = None,
 ) -> tuple[SessionResult, Path]:
-    """Stream `case_bundles` to the board in as many sessions as the target's limits
-    require, merge every case into one SessionResult, and write its result bundle.
+    """Stream `case_bundles` to the board in as many SESSION_PLANs as the target's
+    limits require, merge every case into one SessionResult, and write its result bundle.
 
-    Every session starts with the target's TARGET_INFO, so the next batch is cut from
-    the remaining cases only once that session's limits are known.
+    One reset and handshake serve every batch: the firmware takes the next plan
+    after SESSION_COMPLETE, so batches are cut once TARGET_INFO's limits are known.
 
     `expected_build_id` (the build dir's hct_build_id.txt), when given, is checked
-    against every session's TARGET_INFO so a board running some other firmware fails
-    the batch instead of producing a bundle that describes firmware that never ran.
+    against TARGET_INFO so a board running some other firmware fails the run instead
+    of producing a bundle that describes firmware that never ran.
 
     The pass count (measurement.MAX_PASSES_PER_PLAN) and every case id
     (session.MAX_CASE_ID_BYTES) are checked against the host's mirror of the firmware
@@ -248,37 +225,43 @@ def run_case_bundles(
     target_info = None
     limits: TargetLimits | None = None
     batch_index = 0
-    while remaining:
-        session, transport, rtt_address = open_rtt_session(board, serial_no, build_dir=build_dir, counter_passes=counter_passes)
-        batch: list[CaseBundle] = []
-        try:
-            info = session.handshake(expected_build_id=expected_build_id, expected_clock_hz=board.core_clock_hz)
-            if target_info is not None:
-                check_target_info_consistent(target_info, info, batch_index=batch_index)
-            target_info = target_info or info
-            build_id = build_id or info.build_id
-            limits = session.limits
-            # Floor case leads, when firmware has it.
-            if batch_index == 0 and EMPTY_CALL_KERNEL_ID in session.kernel_ids:
-                remaining.insert(0, build_floor_bundle(project_root, board_id=board.id, cpu=board.cpu))
-            batch = take_batch(remaining, counter_passes, limits)
-            result = session.run_many(batch, on_case_complete=report_case)
-        except BootFailure:
-            raise  # board-wide, not batch-specific
-        except (RuntimeError, ValueError) as exc:
-            # ValueError: take_batch() found a case that cannot fit the target's advertised
-            # plan size on its own. Re-wrap so the CLI's one-line hardware error covers it.
-            candidates = [b.case_id for b in (batch or (remaining[: limits.max_cases] if limits else remaining))]
-            state = stalled_target_state(transport, build_dir) if isinstance(exc, TransportError) else ""
-            message = " ".join(part for part in (str(exc), state) if part)
-            raise RuntimeError(f"{message} (batch {batch_index}, candidate case_ids={candidates})") from exc
-        finally:
+    session: HostSession | None = None
+    transport: Transport | None = None
+    try:
+        while remaining:
+            if session is None:
+                session, transport, rtt_address = open_rtt_session(
+                    board, serial_no, build_dir=build_dir, counter_passes=counter_passes
+                )
+            batch: list[CaseBundle] = []
+            try:
+                if target_info is None:
+                    target_info = session.handshake(expected_build_id=expected_build_id, expected_clock_hz=board.core_clock_hz)
+                    build_id = target_info.build_id
+                    limits = session.limits
+                    # Floor case leads, when firmware has it.
+                    if EMPTY_CALL_KERNEL_ID in session.kernel_ids:
+                        remaining.insert(0, build_floor_bundle(project_root, board_id=board.id, cpu=board.cpu))
+                batch = take_batch(remaining, counter_passes, limits)
+                # Later batches reuse this session.
+                result = session.run_many(batch, on_case_complete=report_case)
+            except BootFailure:
+                raise  # board-wide, not batch-specific
+            except (RuntimeError, ValueError) as exc:
+                # ValueError: take_batch() found a case that cannot fit the target's advertised
+                # plan size on its own. Re-wrap so the CLI's one-line hardware error covers it.
+                candidates = [b.case_id for b in (batch or (remaining[: limits.max_cases] if limits else remaining))]
+                state = stalled_target_state(transport, build_dir) if isinstance(exc, TransportError) else ""
+                message = " ".join(part for part in (str(exc), state) if part)
+                raise RuntimeError(f"{message} (batch {batch_index}, candidate case_ids={candidates})") from exc
+            all_cases.extend(result.cases)
+            all_trace.extend(f"batch{batch_index}:{entry}" for entry in result.protocol_trace)
+            session_complete_cases += result.session_complete_cases
+            remaining = remaining[len(batch):]
+            batch_index += 1
+    finally:
+        if transport is not None:
             transport.close()
-        all_cases.extend(result.cases)
-        all_trace.extend(f"batch{batch_index}:{entry}" for entry in result.protocol_trace)
-        session_complete_cases += result.session_complete_cases
-        remaining = remaining[len(batch):]
-        batch_index += 1
 
     batch_count = batch_index
     timing_floor, kernel_cases = apply_floor(all_cases)

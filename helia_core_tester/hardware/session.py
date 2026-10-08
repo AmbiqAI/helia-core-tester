@@ -389,6 +389,7 @@ class HostSession:
         must match it exactly (see `handshake()`); a session whose handshake already
         ran is re-checked against the same id.
         """
+        trace_start = len(self._trace)
         if self._target_info is None:
             target_info = self.handshake(expected_build_id=expected_build_id)
         else:
@@ -558,7 +559,7 @@ class HostSession:
         ordered = tuple(results[bundle.case_id] for bundle in case_bundles)
         return SessionResult(
             cases=ordered,
-            protocol_trace=tuple(self._trace),
+            protocol_trace=tuple(self._trace[trace_start:]),
             session_complete_cases=session_complete_cases,
             build_id=target_info.build_id,
             target_info=self._target_info,

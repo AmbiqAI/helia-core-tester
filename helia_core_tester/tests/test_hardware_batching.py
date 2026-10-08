@@ -268,7 +268,7 @@ def test_session_refuses_more_cases_than_the_target_takes(tmp_path: Path) -> Non
 
 # None: --allow-unverified-firmware.
 @pytest.mark.parametrize("expected", ["fake", None])
-def test_run_case_bundles_batches_from_each_sessions_target_info(tmp_path: Path, monkeypatch, expected) -> None:
+def test_run_case_bundles_batches_over_one_session(tmp_path: Path, monkeypatch, expected) -> None:
     bundles = [_DummyCaseBundle(f"case_{i}") for i in range(70)]
     calls: list[list[Any]] = []
     transports: list[_FakeTransport] = []
@@ -315,14 +315,14 @@ def test_run_case_bundles_batches_from_each_sessions_target_info(tmp_path: Path,
         expected_build_id=expected,
     )
 
-    # The target advertised 32 cases per plan: ceil(70/32) = 3 sessions of 32, 32, 6,
-    # each over its own transport, closed afterwards.
+    # The target advertised 32 cases per plan: ceil(70/32) = 3 plans of 32, 32, 6,
+    # over one transport, closed afterwards.
     assert [len(call) for call in calls] == [32, 32, 6]
     # Concurrent boards keep separate reports.
     assert report_roots == [tmp_path / "artifacts" / "hardware" / "benchmark_server" / "apollo510_evb"]
     assert [b.case_id for b in calls[0]] == [f"case_{i}" for i in range(0, 32)]
     assert [b.case_id for b in calls[2]] == [f"case_{i}" for i in range(64, 70)]
-    assert [t.closed for t in transports] == [1, 1, 1]
+    assert [t.closed for t in transports] == [1]
 
     # All per-batch case results are merged into one SessionResult, in order.
     assert merged.cases == tuple(f"result-for-case_{i}" for i in range(70))
@@ -331,8 +331,8 @@ def test_run_case_bundles_batches_from_each_sessions_target_info(tmp_path: Path,
     assert merged.target_info == announced["info"]
     # The bundle writer seeds its counter columns from the passes the plan asked for.
     assert merged.counter_passes == DEFAULT_PASSES
-    # The build dir's id is checked at every session's handshake and reported once.
-    assert [s.expected_build_id for s in sessions] == [expected] * 3
+    # One handshake checks the build dir's id.
+    assert [s.expected_build_id for s in sessions] == [expected]
     assert merged.build_id == "fake"
     assert all(entry.startswith("batch") for entry in merged.protocol_trace) and len(merged.protocol_trace) == 3
 
@@ -442,18 +442,6 @@ def test_stall_survives_an_unreadable_target(tmp_path: Path, monkeypatch) -> Non
         )
 
 
-def test_consistency_check_covers_boot_health() -> None:
-    first = _target_info(boot_status=0, core_clock_hz=250_000_000)
-    with pytest.raises(RuntimeError, match=r"core_clock_hz: 250000000 -> 96000000"):
-        session_runner.check_target_info_consistent(first, replace(first, core_clock_hz=96_000_000), batch_index=1)
-
-
-def test_consistency_check_covers_fpscr() -> None:
-    first = _target_info(fpscr_boot=0x03040000, fpscr=0x00040000)
-    with pytest.raises(RuntimeError, match=r"fpscr: 262144 -> 50593792"):
-        session_runner.check_target_info_consistent(first, replace(first, fpscr=0x03040000), batch_index=1)
-
-
 def test_boot_failure_skips_batch_context(tmp_path: Path, monkeypatch) -> None:
     def _open(board, serial_no, *, build_dir, counter_passes):
         return HostSession(FakeTargetTransport(boot_status=7, core_clock_hz=96_000_000)), _FakeTransport(), 0
@@ -478,26 +466,6 @@ def test_runner_checks_board_row_clock(tmp_path: Path, monkeypatch) -> None:
         )
 
 
-def test_run_case_bundles_refuses_to_merge_sessions_from_different_firmware(tmp_path: Path, monkeypatch) -> None:
-    # A board reflashed mid-run (or a second host on the probe) announces a different
-    # TARGET_INFO on a later batch; the runner must fail fast instead of merging results
-    # from two firmware builds into one bundle.
-    bundles = [_DummyCaseBundle(f"case_{i}") for i in range(40)]
-    calls: list[list[Any]] = []
-    infos = iter([_target_info(build_id="hct-first"), _target_info(build_id="hct-second", max_passes=8)])
-
-    def _open(board, serial_no, *, build_dir, counter_passes):
-        return _FakeSession(next(infos), calls), _FakeTransport(), 0
-
-    monkeypatch.setattr(session_runner, "open_rtt_session", _open)
-    with pytest.raises(RuntimeError, match=r"TARGET_INFO of batch 1 differs from the first session's.*build_id: 'hct-first' -> 'hct-second'.*max_passes: 32 -> 8"):
-        session_runner.run_case_bundles(
-            tmp_path, bundles, board=resolve_board("apollo510_evb"), serial_no=1160002276,  # type: ignore[arg-type]
-            counter_passes=DEFAULT_PASSES, session_id="s", build_dir=tmp_path,
-        )
-    assert [len(call) for call in calls] == [32]  # the first batch ran; the second never did
-
-
 def test_run_case_bundles_wraps_a_case_that_cannot_fit_the_advertised_plan_size(tmp_path: Path, monkeypatch) -> None:
     # take_batch() raises ValueError when one case alone exceeds max_rx_payload; the runner
     # must surface it as the RuntimeError the CLI turns into a one-line hardware error.
@@ -514,27 +482,6 @@ def test_run_case_bundles_wraps_a_case_that_cannot_fit_the_advertised_plan_size(
             serial_no=1160002276, counter_passes=DEFAULT_PASSES, session_id="s", build_dir=tmp_path,
         )
     assert calls == []
-
-
-def test_run_case_bundles_refuses_a_later_session_with_different_capabilities(tmp_path: Path, monkeypatch) -> None:
-    # A cycles-only plan never trips the PMU validation, so a later session that
-    # advertises different capability_flags (PMU gone, or appeared) must still be refused
-    # rather than merged under the first session's target metadata.
-    calls: list[list[Any]] = []
-    first = _target_info()
-    infos = iter([first, _target_info(capability_flags=first.capability_flags ^ 0x40)])
-
-    def _open(board, serial_no, *, build_dir, counter_passes):
-        return _FakeSession(next(infos), calls), _FakeTransport(), 0
-
-    monkeypatch.setattr(session_runner, "open_rtt_session", _open)
-    cycles_only = (CounterPass("cpu", 0, (), chained=True),)
-    with pytest.raises(RuntimeError, match=r"TARGET_INFO of batch 1 differs.*capability_flags: "):
-        session_runner.run_case_bundles(
-            tmp_path, [_DummyCaseBundle(f"case_{i}") for i in range(40)], board=resolve_board("apollo510_evb"),  # type: ignore[arg-type]
-            serial_no=1160002276, counter_passes=cycles_only, session_id="s", build_dir=tmp_path,
-        )
-    assert [len(call) for call in calls] == [32]
 
 
 def test_non_positive_target_limits_are_refused_before_batching() -> None:

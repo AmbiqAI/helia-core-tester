@@ -14,7 +14,8 @@ HEADER_SIZE = 32
 # TARGET_INFO advertising the target's session limits (max_cases_per_session,
 # max_passes) next to its PMU slots and receive-buffer bound.
 # v4: CASE_COMPLETE carries prepare cycles.
-SUPPORTED_VERSION = 4
+# v5: SESSION_PLAN follows SESSION_COMPLETE.
+SUPPORTED_VERSION = 5
 DEFAULT_MAX_PAYLOAD = 64 * 1024
 
 # F008: set on every non-final paginated KERNEL_CATALOG chunk; cleared on the final chunk.

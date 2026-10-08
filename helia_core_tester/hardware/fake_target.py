@@ -417,6 +417,7 @@ class FakeTargetTransport:
                 # Same ERROR frame as queue_error_frame().
                 self._queue_error(f"message_type={int(MessageType.SESSION_PLAN)} status={HCTP_STATUS_INVALID_ARGUMENT}")
                 return
+            self._current_case_index = 0
             self._state = _TargetState.WAIT_CASE_META
             self._request_case()
             return
@@ -617,5 +618,5 @@ class FakeTargetTransport:
             self._state = _TargetState.WAIT_CASE_META
             self._request_case()
             return
-        self._queue(MessageType.SESSION_COMPLETE, encode_session_complete(SessionComplete(self._completed_case_count)))
+        self._queue(MessageType.SESSION_COMPLETE, encode_session_complete(SessionComplete(len(self._plan.cases))))
         self._state = _TargetState.COMPLETE
