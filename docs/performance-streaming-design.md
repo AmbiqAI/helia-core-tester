@@ -110,10 +110,11 @@ The protocol is target-driven after plan load:
 14. target streams raw sample results
 15. target sends `CASE_COMPLETE`
 16. loop until `SESSION_COMPLETE`
+17. host sends the next batch's `SESSION_PLAN`, or closes
 
-### Messages (HCTP v3)
+### Messages (HCTP v5)
 
-Protocol version 3 (`hctp.SUPPORTED_VERSION` / `HCTP_SUPPORTED_VERSION`); a peer on
+Protocol version 5 (`hctp.SUPPORTED_VERSION` / `HCTP_SUPPORTED_VERSION`); a peer on
 another version is refused at the header. Message ids are compact and in protocol
 order; every payload is encoded and decoded on the host by exactly one pair of
 functions in `helia_core_tester/hardware/wire.py`, which the host session and the
@@ -139,7 +140,7 @@ firmware byte for byte.
 | 15 | `CORRECTNESS_ACK` | host -> target | `u8 passed` (informational) |
 | 16 | `RUN_PERFORMANCE` | host -> target | empty |
 | 17 | `SAMPLE_RESULT` | target -> host | one sample of one pass (below) |
-| 18 | `CASE_COMPLETE` | target -> host | `text case_id, u8 correctness_ran, u8 performance_ran, u32 workspace_used_bytes`, then `i32 kernel_status` only when `performance_ran` is 0 |
+| 18 | `CASE_COMPLETE` | target -> host | `text case_id, u8 correctness_ran, u8 performance_ran, u32 workspace_used_bytes, u32 prepare_cycles` (DWT cycles the correctness run spent outside the timed kernel calls: setup calls such as scratch sizing and weight sums, plus adapter glue; one cold sample), then `i32 kernel_status` only when `performance_ran` is 0 |
 | 19 | `SESSION_COMPLETE` | target -> host | `u16 case_count` |
 | 20 | `ERROR` | target -> host | `text message` |
 
@@ -158,14 +159,36 @@ The target sends nothing during `RUN_PERFORMANCE` until every pass has run
 (`passes x (warmups + samples x iterations)` kernel calls), so the host waits one
 RTT read timeout (10 s) per pass for the first `SAMPLE_RESULT`. That bounds one
 kernel call at about 10 s x f_cpu / (warmups + samples x iterations): at the
-generated plan (2 + 5 x 4 = 22 calls per pass) and the ~96 MHz the Apollo510
-firmware measures, about 43M cycles, whatever the pass count.
+generated plan (2 + 5 x 4 = 22 calls per pass), about 114M cycles at 250 MHz
+(Apollo510, Apollo330P) or 22M at 48 MHz (Apollo3P), whatever the pass count.
 
 `TARGET_INFO` (target -> host): `text build_id`, 32-byte catalog SHA-256,
 `u32 max_frame_payload`, `u32 runtime_arena_capacity`, `u8 transfer_mode`,
 `u8 output_mode`, `text board_id`, `text target_cpu`, `u8 transport_kind`,
 `u32 capability_flags`, `u8 pmu_counter_slots`, `u32 max_rx_payload`,
-`u16 max_cases_per_session`, `u8 max_passes`.
+`u16 max_cases_per_session`, `u8 max_passes`, then an optional boot-health tail:
+`i32 boot_status` (the `nsx_system_init()` return) and `u32 core_clock_hz` (the clock
+the HAL reports: `am_hal_pwrctrl_mcu_mode_status()` mapped to Hz per part, or
+`am_hal_burst_mode_status()` on Apollo3; 0 when unknown). Firmware that predates
+the tail ends at `max_passes`; the host decodes it with both fields unset. Each board
+row in `assets/hardware_boards.yaml` declares the `core_clock_hz` its healthy boot
+reports (250 MHz on apollo510_evb and apollo330mP_evb, 48 MHz on apollo3p_evb). Before
+`TARGET_INFO_ACK`, the host refuses to stream when `boot_status` is non-zero, or when
+`core_clock_hz` differs from the row's value; an exact match is required, and 0 is
+refused. Firmware without the tail still streams ("not reported"), and a row without
+`core_clock_hz` skips the clock check. The host stamps both fields in
+`session_manifest.json` (`boot`) and the run summary.
+An optional FPSCR tail follows: `u32 fpscr_boot` (what the boot ROM left) and
+`u32 fpscr` (read back after the firmware pins it). After `nsx_system_init()` the
+firmware clears AHP, DN, FZ, RMode and FZ16 in FPDSCR, and sets FPSCR to its LTPSIZE
+field alone (control bits and sticky flags cleared): the reset FPDSCR value, IEEE with
+round to nearest. No NSX, HAL or runtime code sets these bits, so without
+the pin kernels inherit the secure boot ROM's state, which differs per SoC (Apollo510
+leaves FZ=0 DN=0; Apollo330P leaves FZ=1 DN=1 in FPSCR only, with FPDSCR control bits still 0),
+and `arm_reduce_sum_f32` takes its MVE path only when FZ=1. The host stamps both
+values and the decoded control bits (`fp_mode`) in the manifest `boot` record; the
+board matrix shows the pinned `fpscr`. Batches must report the same pinned `fpscr`.
+A build without an FPU reports 0 for both.
 `capability_flags` bit 6 is `HCT_CAP_PMU_ARMV8M`, set only when the firmware was
 built for a core whose device header declares `__PMU_PRESENT == 1`;
 `pmu_counter_slots` is `__PMU_NUM_EVENTCNT` (8 on Cortex-M55, 0 without a PMU).
@@ -173,7 +196,7 @@ built for a core whose device header declares `__PMU_PRESENT == 1`;
 hold (`HCT_SERVER_RX_BUFFER_BYTES - HCTP_HEADER_SIZE`, 2016 today);
 `max_cases_per_session` and `max_passes` are the firmware's `HCT_SERVER_MAX_CASES`
 (32) and `HCT_SERVER_MAX_PASSES` (32). After the handshake the advertised values are
-authoritative: the host derives its batching (`session.TargetLimits`) from every
+authoritative: the host derives its batching (`session.TargetLimits`) from the
 session's `TARGET_INFO`, cuts each batch so the plan stays within all three, checks
 its chained-pair planning rule (four counters per pass) against `pmu_counter_slots / 2`,
 and refuses any later outbound payload (`CASE_META` included) larger than
@@ -364,7 +387,7 @@ Two sizing checkpoints now exist:
    - artifact: `artifacts/hardware/size_probe/<board>/<variant>/memory_report.json`
 2. **Real benchmark-server firmware image** (`hardware memory-report`, `memory_report.generate_memory_report`)
    - goal: measure the actual streaming skeleton with protocol, RTT binding, catalog, session state, and adapters
-   - artifact: `artifacts/hardware/benchmark_server/memory_report.json`, copied into every result bundle
+   - artifact: `artifacts/hardware/benchmark_server/memory_report.json`; a `hardware run` writes `artifacts/hardware/benchmark_server/<board>/` and copies it into the result bundle
 
 Both reports come from one analysis (`helia_core_tester/hardware/memory_report.py`) of:
 
@@ -376,10 +399,14 @@ Both reports come from one analysis (`helia_core_tester/hardware/memory_report.p
   flash/RAM region names (`flash_region`, `ram_region`) come from the board's row in
   `assets/hardware_boards.yaml`
 
-Reported percentages are computed against:
+Sections are classified by address against those regions (`objdump -h` VMA/LMA):
 
-- `MCU_MRAM` for flash image bytes
-- `MCU_TCM` for static TCM usage before heap
+- flash image bytes: every loaded section whose load address is in `flash_region`
+  (`MCU_MRAM` on Apollo5, `ROMEM` on Apollo3), vector table and `.data` image included
+- static RAM before heap (`ram_*` keys): every allocated section other than `.heap`
+  placed in `ram_region` (`MCU_TCM` on Apollo5, `RWMEM` on Apollo3); the usage block
+  records both region names
+- both gates pass at <= 75 % of the region
 
 ## Result bundle
 
@@ -402,6 +429,25 @@ Key files:
 - `logs/host.log`
 - `logs/target.log`
 - `junit.xml`
+
+`session_manifest.json` (`hct.hardware.session_manifest`) records the build in
+`build`: kernel source, NSX version, `nsx.lock` digest, every locked module
+(`modules`: name, project, kind, revision, tag, commit, url) and the ARM GCC that
+built the image (`toolchain`). `hardware run --json` prints
+`hct.hardware.nightly_run`: totals and cases plus `generated_at`, the
+`selection` the run used and the `github` run (null outside Actions); the nightly
+saves it as `hardware-nightly-run.json` beside the bundle. `selection` records
+values after defaults and board fitting: `precision` is the float precision
+generation resolves for the board's CPU (null when the run has no float cases),
+`fvp_gate` is `advisory` unless set, and `pmu_counters` is the group selection
+(`session_summary.json` lists the counters). Null `family` or `limit` means all.
+`ops`, `dtypes` and `case_ids` list the `--op`, `--dtype` and `--case-id`/
+`--cases-from` filters; empty means all. The bundle's `session_summary.json`
+carries the same `selection`, with or without `--json`.
+
+Schema versions: bump `schema_version` when a field changes meaning, type or
+goes away. New optional fields keep the version; readers must accept missing
+fields, since older files lack them.
 
 ## Real vs simulated status by layer
 
@@ -488,7 +534,7 @@ the fake-target tests; it is no longer a CLI command.
   host session and the fake target.
 - `session.py`: `HostSession` (handshake, plan, per-case streaming) and `TargetLimits`,
   the batching limits derived from `TARGET_INFO`.
-- `session_runner.py`: one RTT session per batch on a `BoardSpec`, case discovery
+- `session_runner.py`: one RTT session for every batch on a `BoardSpec`, case discovery
   from the generated-test tree, result-bundle writing.
 - `hardware_pipeline.py`: generate -> build -> flash -> stream orchestration behind
   `hardware run` / `hardware stream`.

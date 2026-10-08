@@ -7,6 +7,7 @@ import numpy as np
 import tensorflow as tf
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.ops._shared.fixed_batch import converter_for_batched_model
+from helia_core_tester.generation.ops._shared.quant_knobs import clamp_golden, kernel_init, value_range
 from helia_core_tester.generation.ops._shared.bias_init import (
     HoistedBiasInjectionError,
     SignedMagnitudeUniform,
@@ -16,7 +17,7 @@ from helia_core_tester.generation.ops._shared.bias_init import (
 from helia_core_tester.generation.harness import ArgumentPool, ArrayLiteral, Declaration, GuardedBuffer, Provider
 from helia_core_tester.generation.harness.faults import common_fault, null_context_buffer, struct_copy, with_fault
 from helia_core_tester.generation.entry import check_entry_fault, resolve_entry
-from helia_core_tester.generation.kernel_dispatch import resolve_convolve_kernel
+from helia_core_tester.generation.kernel_dispatch import autovectorize_declines_if, resolve_convolve_kernel
 
 
 
@@ -117,6 +118,25 @@ def convolve_argument_pool(context: Dict[str, Any], *, has_biases: bool, bias_is
     )
 
 
+def _depth(context: Dict[str, Any], dims: str) -> int:
+    return int(context[dims]["c"])
+
+
+# Shapes that break the whole-group rule (ns-cmsis-nn#725): the dims struct the kernel gets
+# and the channel count it carries.
+_DEPTH_FAULTS = {
+    "zero_filter_depth": lambda c: ("filter_dims", 0),
+    "filter_deeper_than_input": lambda c: ("filter_dims", 2 * _depth(c, "input_dims")),
+    # One filter depth plus one channel: input_ch / filter_ch = 1 group that leaves a channel over.
+    "partial_filter_group": lambda c: ("input_dims", _depth(c, "filter_dims") + 1),
+    "negative_output_depth": lambda c: ("output_dims", -_depth(c, "output_dims")),
+    # One output channel past a whole number of groups.
+    "output_not_whole_groups": lambda c: ("output_dims", _depth(c, "output_dims") + 1),
+    "negative_input_depth": lambda c: ("input_dims", -_depth(c, "input_dims")),
+    "negative_filter_depth": lambda c: ("filter_dims", -_depth(c, "filter_dims")),
+}
+
+
 def convolve_fault(pool: ArgumentPool, kind: str, context: Dict[str, Any]) -> ArgumentPool:
     """The pool of a Convolve fault case: the passing pool with the faulted argument edited."""
     n = context["name"]
@@ -130,6 +150,9 @@ def convolve_fault(pool: ArgumentPool, kind: str, context: Dict[str, Any]) -> Ar
                            {"c": 2 * int(context["filter_dims"]["c"]) + 1})
     elif edit is None and kind == "null_weight_sum_ctx":
         edit = null_context_buffer(pool, kind, "weight_sum_ctx", f"{n}_weight_sum_ctx")
+    elif edit is None and kind in _DEPTH_FAULTS:
+        param, value = _DEPTH_FAULTS[kind](context)
+        edit = struct_copy(pool, kind, param, "cmsis_nn_dims", f"{n}_{param}", {"c": value})
     if edit is None:
         raise ValueError(f"{n}: no Convolve fault edit for {kind!r}")
     return with_fault(pool, edit)
@@ -146,6 +169,23 @@ class OpConvolve(OperationBase):
         "null_input",
         "null_output",
         "invalid_layout",
+        "zero_filter_depth",
+        "filter_deeper_than_input",
+        "partial_filter_group",
+        "negative_output_depth",
+        "output_not_whole_groups",
+        "negative_input_depth",
+        "negative_filter_depth",
+    )
+    # Shapes that break the whole-group rule arm_convolve_wrapper_s16 checks first (ns-cmsis-nn#725).
+    S16_GROUP_FAULTS = (
+        "zero_filter_depth",
+        "filter_deeper_than_input",
+        "partial_filter_group",
+        "negative_output_depth",
+        "output_not_whole_groups",
+        "negative_input_depth",
+        "negative_filter_depth",
     )
 
     def _hint(self) -> Dict[str, Any]:
@@ -154,6 +194,8 @@ class OpConvolve(OperationBase):
 
     def _check_fault_reachable(self, kind: str, context: Dict[str, Any]) -> None:
         kernel_fn = context["kernel_fn"]
+        if kind in self.S16_GROUP_FAULTS and kernel_fn != "arm_convolve_wrapper_s16":
+            raise self.fault_unreachable(kind, f"{kernel_fn} is not covered by the s16 whole-group rule")
         if context["float_kernel"]:
             if kind in ("null_ctx_buf", "null_weight_sum_ctx", "zero_stride", "channel_group_mismatch"):
                 raise self.fault_unreachable(kind, f"{kernel_fn} has no such guard")
@@ -164,6 +206,10 @@ class OpConvolve(OperationBase):
             raise self.fault_unreachable(kind, f"{kernel_fn} does not check pointers or layout")
         if kind == "null_weight_sum_ctx" and kernel_fn != "arm_convolve_wrapper_s8":
             raise self.fault_unreachable(kind, f"{kernel_fn} takes no weight-sum context")
+        if kind == "partial_filter_group" and int(context["filter_dims"]["c"]) < 2:
+            raise self.fault_unreachable(kind, "needs a filter depth of at least 2")
+        if kind == "output_not_whole_groups" and int(context["input_dims"]["c"]) < 2 * int(context["filter_dims"]["c"]):
+            raise self.fault_unreachable(kind, "needs at least two groups")
         if kind == "channel_group_mismatch" and kernel_fn == "arm_convolve_wrapper_s4":
             raise self.fault_unreachable(kind, f"{kernel_fn} has no group divisibility guard")
         input_dims = context["input_dims"]
@@ -307,7 +353,7 @@ class OpConvolve(OperationBase):
             groups=groups,
             use_bias=use_bias,
             activation=act,
-            kernel_initializer=tf.keras.initializers.GlorotUniform(seed=1234),
+            kernel_initializer=kernel_init(self.desc, 1234),
             bias_initializer=bias_initializer,
             name='conv_2d'
         )(x)
@@ -366,10 +412,11 @@ class OpConvolve(OperationBase):
                 f.write(tflite_model)
             return
 
-        converter = converter_for_batched_model(model, [self.desc['input_shape']])
-        
         activation_dtype = str(self.desc.get('activation_dtype', 'S8')).upper()
-        
+        self.round_float16_weights(model)
+
+        converter = converter_for_batched_model(model, [self.desc['input_shape']])
+
         if activation_dtype == 'S8':
             converter.optimizations = [tf.lite.Optimize.DEFAULT]
             converter.target_spec.supported_types = [tf.int8]
@@ -391,7 +438,10 @@ class OpConvolve(OperationBase):
         def representative_data_gen():
             rep_rng = np.random.default_rng(42)
             for _ in range(100):
-                if 'input_shape' in self.desc:
+                if 'input_shape' in self.desc and 'calibration_range' in self.desc:
+                    lo, hi = value_range(self.desc, 'calibration_range', ())
+                    yield [rep_rng.uniform(lo, hi, size=self.desc['input_shape']).astype(np.float32)]
+                elif 'input_shape' in self.desc:
                     inputs = rep_rng.integers(-32, 32, size=self.desc['input_shape']).astype(np.float32)
                     yield [inputs]
                 elif 'input_1_shape' in self.desc and 'input_2_shape' in self.desc:
@@ -604,10 +654,12 @@ class OpConvolve(OperationBase):
             output_tensor = subgraph.tensors[int(subgraph.outputs[0])]
 
         expected_tensor = None
+        golden_index = int(subgraph.outputs[0])
         if bts_op_index is not None:
             bts_outs = subgraph.operators[bts_op_index].outputs
             if bts_outs is not None and len(bts_outs) > 0:
                 expected_tensor = subgraph.tensors[int(bts_outs[0])]
+                golden_index = int(bts_outs[0])
 
         input_shape = get_tensor_shape_from_litert(input_tensor) if input_tensor is not None else None
         output_shape = (
@@ -811,8 +863,14 @@ class OpConvolve(OperationBase):
             input_q = np.round(input_data / float(input_scale) + float(input_zp)).astype(np.int32)
             input_q = np.clip(input_q, qmin, qmax).astype(np_in_dtype)
 
-            # Run inference (dtype must match interpreter input)
-            output_data = self.run_inference(str(tflite_path), input_q)
+            # Reference kernels; XNNPACK diverges on some shapes.
+            from ai_edge_litert.interpreter import OpResolverType
+            from helia_core_tester.generation.utils.litert_utils import run_inference_litert_tensor
+
+            output_data = run_inference_litert_tensor(
+                str(tflite_path), input_q, golden_index, op_resolver_type=OpResolverType.BUILTIN_REF
+            )
+            output_data = clamp_golden(self.desc, output_data)
 
         # Bias handling (S16 wrapper expects int64 bias)
         has_biases = biases is not None and getattr(biases, "size", 0) > 0
@@ -929,10 +987,11 @@ class OpConvolve(OperationBase):
             or (contract_decl is not None and takes(contract_decl, "weight_sum_ctx")),
             'bias_is_struct': bias_is_struct,
             'entry_scratch_bytes': entry_scratch_bytes,
+            'entry_extra_sizers': kernel_info.get("entry_extra_sizers"),
             'expected_status': self.expected_status(),
-            # The entry lives only on ns-cmsis-nn's MVE integer paths, so it declines on a build
-            # that compiles them out (HELIA_CMSIS_NN_INT_AUTOVECTORIZE, set by CMakeLists.txt).
+            # The entry lives only on ns-cmsis-nn's MVE paths, so it declines on a build without them.
             'autovectorize_declines': bool(self.desc.get("autovectorize_declines", False)),
+            'autovectorize_declines_if': autovectorize_declines_if(kernel_info["input_c_type"]),
         }
         if float_kernel:
             context['conv_activation_min_literal'] = builder.format_float_literal(conv_params['activation_min'])

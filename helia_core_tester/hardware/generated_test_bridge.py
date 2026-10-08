@@ -27,10 +27,14 @@ from typing import Callable
 import numpy as np
 import yaml
 
-from .case_bundle import BlobInfo, CaseBundle, _blob_info, _case_root, _manifest_blob_entry, _write_blob, _write_manifest
-from .kernel_registry import AmbiguousKernelError, UnknownKernelError, lookup_kernel_id
+from .case_bundle import (
+    DEGENERATE_REASON_KEY, BlobInfo, CaseBundle, _blob_info, _case_root, _manifest_blob_entry, _write_blob, _write_manifest,
+)
+from .kernel_registry import AmbiguousKernelError, UnknownKernelError, lookup_entry_id, lookup_kernel_id
 from .pathutil import display_path
-from helia_core_tester.generation.io.dtypes import resolve_comparison
+from helia_core_tester.generation.io.descriptors import descriptor_matches_op
+from helia_core_tester.generation.kernel_dispatch import depthwise_3x3_scratch_bytes
+from helia_core_tester.generation.io.dtypes import descriptor_matches_dtype_filter, normalize_dtype, resolve_comparison
 from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
 
@@ -84,6 +88,44 @@ class GeneratedTestCase:
     directory: Path
     descriptor: dict
     suite: str = "int"
+    board: str | None = None
+
+    @property
+    def target(self) -> str:
+        """Staging key: the board, else the CPU."""
+        return self.board or self.cpu
+
+
+HW_CASE_SUFFIX = "_hw_generated"
+
+
+@dataclass(frozen=True)
+class CaseSelection:
+    """Op, dtype and case-id filters (OR within, AND across).
+
+    `ops` and `dtypes` match exactly like `generate --op/--dtype`.
+    `case_ids` take a test name or its `_hw_generated` case id."""
+
+    ops: tuple[str, ...] = ()
+    dtypes: tuple[str, ...] = ()
+    case_ids: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        # Fail on bad dtypes before any I/O.
+        object.__setattr__(self, "dtypes", tuple(normalize_dtype(d) for d in self.dtypes))
+        bare = (i.removesuffix(HW_CASE_SUFFIX) for i in self.case_ids)
+        object.__setattr__(self, "case_ids", tuple(dict.fromkeys(bare)))
+
+    def matches(self, name: str, descriptor: dict) -> bool:
+        if self.case_ids and name not in self.case_ids:
+            return False
+        if self.ops and not any(descriptor_matches_op(descriptor, op) for op in self.ops):
+            return False
+        return not self.dtypes or any(descriptor_matches_dtype_filter(descriptor, d) for d in self.dtypes)
+
+    def unmatched_ids(self, names: list[str]) -> list[str]:
+        """Requested ids absent from these test names."""
+        return [i for i in self.case_ids if i not in set(names)]
 
 
 _INT_ARRAY_RE = re.compile(r"=\s*\{([^}]*)\}")
@@ -358,11 +400,11 @@ def _extract_bare_scalar(header_text: str, variable_name: str) -> int | None:
 
 
 def _extract_define_int(source_text: str, name: str) -> int:
-    pattern = re.compile(rf"^\s*#define\s+{re.escape(name)}\s+\(?(-?\d+)\)?\s*$", re.MULTILINE)
+    pattern = re.compile(rf"^\s*#define\s+{re.escape(name)}\s+\(?(-?\d+|true|false)\)?\s*$", re.MULTILINE)
     match = pattern.search(source_text)
     if match is None:
         raise UnsupportedGeneratedTestError(f"Could not find #define `{name}` in generated source")
-    return int(match.group(1))
+    return {"true": 1, "false": 0}.get(match.group(1)) if match.group(1) in ("true", "false") else int(match.group(1))
 
 
 def _extract_null_pointer_decl(header_text: str, variable_name: str) -> bool:
@@ -510,23 +552,11 @@ def _is_convolve_1x1_fast(*, stride_h: int, stride_w: int) -> bool:
     return stride_w == 1 and stride_h == 1
 
 
-def _is_convolve_1_x_n(input_dims: dict[str, int], filter_dims: dict[str, int], *, stride_w: int, dilation_w: int) -> bool:
-    return (
-        input_dims["h"] == 1
-        and dilation_w == 1
-        and filter_dims["h"] == 1
-        and ((stride_w * input_dims["c"]) % 4 == 0)
-        and input_dims["c"] == filter_dims["c"]
-    )
-
-
 def _calculate_convolve_s4_scratch_bytes(
     input_dims: dict[str, int],
     filter_dims: dict[str, int],
     output_dims: dict[str, int],
     *,
-    stride_h: int,
-    stride_w: int,
     pad_h: int,
     pad_w: int,
     dilation_h: int,
@@ -534,22 +564,8 @@ def _calculate_convolve_s4_scratch_bytes(
 ) -> int:
     if _is_convolve_1x1(input_dims, filter_dims, pad_h=pad_h, pad_w=pad_w, dilation_h=dilation_h, dilation_w=dilation_w):
         return 0
-
-    rhs_cols = filter_dims["w"] * filter_dims["h"] * input_dims["c"]
-    if _is_convolve_1_x_n(input_dims, filter_dims, stride_w=stride_w, dilation_w=dilation_w):
-        input_x = input_dims["w"]
-        kernel_x = filter_dims["w"]
-        output_x = output_dims["w"]
-        total_pad = (output_x - 1) * stride_w + kernel_x - input_x
-        asym_pad = total_pad % 2
-        right_pad_num = max(1, (pad_w + asym_pad + stride_w - 1) // stride_w) if (pad_w + asym_pad) != 0 else 0
-        left_pad_num = max(1, (pad_w + stride_w - 1) // stride_w) if pad_w != 0 else 0
-        no_pad_num = max(output_x - (right_pad_num + left_pad_num), 0)
-        if right_pad_num + no_pad_num + left_pad_num == output_x:
-            return 0
-
-    col_length_mve = (rhs_cols + 15) // 16
-    return 4 * col_length_mve * 16
+    # Bound every non-1x1 route's sizer.
+    return TemplateContextBuilder.calculate_buffer_size_max(input_dims, filter_dims, output_dims, output_dtype="S8")
 
 
 def _calculate_depthwise_conv_s4_scratch_bytes(
@@ -575,6 +591,24 @@ def _calculate_depthwise_conv_s4_scratch_bytes(
     return 0
 
 
+def _with_weight_sums(scratch: int, channels: int) -> int:
+    """Mirror place_weight_sums: aligned int32 sums."""
+    return _align_up(int(scratch), 16) + channels * 4
+
+
+def _depthwise_s8_scratch_bytes(
+    input_dims: dict[str, int], filter_dims: dict[str, int], output_dims: dict[str, int], sizers: object = None
+) -> int:
+    """Bound wrapper or entry scratch plus weight sums."""
+    scratch = TemplateContextBuilder.calculate_depthwise_buffer_size_max(input_dims, filter_dims, output_dims, output_dtype="S8")
+    scratch = max(scratch, depthwise_3x3_scratch_bytes(sizers, input_dims))
+    # One input channel may run as conv.
+    if input_dims["c"] == 1:
+        conv = TemplateContextBuilder.calculate_buffer_size_max(input_dims, filter_dims, output_dims, output_dtype="S8")
+        scratch = max(scratch, conv + _shape_product(tuple(filter_dims.values())))
+    return _with_weight_sums(scratch, output_dims["c"])
+
+
 def discover_generated_tests(
     project_root: Path,
     *,
@@ -583,11 +617,14 @@ def discover_generated_tests(
     name_filter: str | None = None,
     limit: int | None = None,
     suite: str = "int",
+    select: CaseSelection | None = None,
+    tests_root: Path | None = None,
 ) -> list[GeneratedTestCase]:
     """Discover generated-test directories with a parseable descriptor.yaml under
     artifacts/generated_tests/<suite>/<cpu>/<family>. `suite="int"` (default) covers the
-    quantized/S4/S8/S16/S32 test tree; `suite="float"` covers the FP16/FP32 tree."""
-    root = project_root / "artifacts" / "generated_tests" / suite / cpu / family
+    quantized/S4/S8/S16/S32 test tree; `suite="float"` covers the FP16/FP32 tree.
+    `select` filters before `limit` counts. `tests_root` replaces project_root as the tree."""
+    root = (tests_root or project_root) / "artifacts" / "generated_tests" / suite / cpu / family
     if not root.is_dir():
         return []
     results: list[GeneratedTestCase] = []
@@ -599,6 +636,8 @@ def discover_generated_tests(
         if name_filter is not None and name_filter not in name:
             continue
         descriptor = yaml.safe_load(descriptor_path.read_text(encoding="utf-8"))
+        if select is not None and not select.matches(name, descriptor):
+            continue
         descriptor["resolved_comparison"] = resolve_comparison(
             descriptor, descriptor.get("resolved_tensor_dtypes")
         )
@@ -682,7 +721,7 @@ def build_case_bundle_from_generated_test(
     `require_fvp_pass=False` to skip the check entirely (e.g. for host-only bridge unit
     tests that don't have a real FVP report to check against).
     """
-    from .fvp_gate import GATE_POLICIES, evaluate_fvp_gate
+    from .fvp_gate import DEFAULT_GATE, GATE_POLICIES, evaluate_fvp_gate
     from .known_limitations import lookup_known_limitation
 
     known_limitation = lookup_known_limitation(generated_test.name)
@@ -696,7 +735,18 @@ def build_case_bundle_from_generated_test(
             "has no golden output to stream"
         )
 
-    policy = fvp_gate if fvp_gate is not None else ("advisory" if require_fvp_pass else "off")
+    entry = generated_test.descriptor.get("entry")
+    if entry and lookup_entry_id(project_root, str(entry)) is None:
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: direct-entry case ({entry}) has no firmware adapter"
+        )
+    expected_status = generated_test.descriptor.get("expected_status", "ARM_CMSIS_NN_SUCCESS")
+    if entry and expected_status != "ARM_CMSIS_NN_SUCCESS":
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: direct-entry case ({entry}) expects {expected_status}; nothing to time"
+        )
+
+    policy = fvp_gate if fvp_gate is not None else (DEFAULT_GATE if require_fvp_pass else "off")
     if policy not in GATE_POLICIES:
         raise ValueError(f"fvp_gate must be one of {GATE_POLICIES}, got {policy!r}")
 
@@ -740,6 +790,14 @@ def build_case_bundle_from_generated_test(
     return bundle
 
 
+def _case_kernel_id(project_root: Path, generated_test: GeneratedTestCase, **lookup) -> int:
+    """The named entry's kernel_id, else the operator's."""
+    entry = generated_test.descriptor.get("entry")
+    if entry:
+        return lookup_entry_id(project_root, str(entry))
+    return _kernel_id(project_root, **lookup)
+
+
 def _write_generated_blobs(blobs_dir: Path, arrays: list, *, numpy_dtype=None) -> list[BlobInfo]:
     """Emit the caller's ordered blobs, preserving its optional storage cast."""
     blobs: list[BlobInfo] = []
@@ -762,7 +820,7 @@ def _generated_manifest_header(
     descriptor_text: str,
 ) -> dict:
     """Build identity before the caller evaluates kernel lookup and policy fields."""
-    return {
+    header = {
         "schema_name": "hct.case_manifest",
         "schema_version": 1,
         "case_id": case_id,
@@ -770,6 +828,11 @@ def _generated_manifest_header(
         "descriptor_path": display_path(descriptor_path, project_root),
         "descriptor_sha256": hashlib.sha256(descriptor_text.encode("utf-8")).hexdigest(),
     }
+    # Intended constant goldens stay timing-valid.
+    reason = generated_test.descriptor.get(DEGENERATE_REASON_KEY)
+    if reason:
+        header[DEGENERATE_REASON_KEY] = str(reason)
+    return header
 
 
 def _finish_generated_bundle(
@@ -843,7 +906,7 @@ def _build_convolve_case(
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: weight_dtype={weight_dtype!r} activation_dtype={activation_dtype!r} "
             f"is not bridgeable -- hardware benchmark firmware only dispatches arm_convolve_wrapper_s4, "
-            f"arm_convolve_s8, arm_convolve_wrapper_s16, arm_convolve_f32, and arm_convolve_f16."
+            f"arm_convolve_wrapper_s8, arm_convolve_wrapper_s16, arm_convolve_f32, and arm_convolve_f16."
         )
 
     header_path = _find_header_file(generated_test.directory)
@@ -856,7 +919,7 @@ def _build_convolve_case(
     if input_dims["n"] != 1:
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: batch size {input_dims['n']} > 1 is not yet supported by the "
-            f"hardware bridge (firmware dispatches a single arm_convolve_s8 invocation per case)."
+            f"hardware bridge (firmware runs one invocation per case)."
         )
     input_shape = (input_dims["n"], input_dims["h"], input_dims["w"], input_dims["c"])
     filter_shape = (filter_dims["h"], filter_dims["w"], filter_dims["c"], filter_dims["n"])
@@ -976,8 +1039,6 @@ def _build_convolve_case(
             input_dims_dict,
             filter_dims_dict,
             output_dims_dict,
-            stride_h=strides[0],
-            stride_w=strides[1],
             pad_h=pad_h,
             pad_w=pad_w,
             dilation_h=dilation_h,
@@ -988,11 +1049,11 @@ def _build_convolve_case(
             input_dims_dict, filter_dims_dict, output_dims_dict, output_dtype=activation_dtype
         )
         if activation_dtype == "S8":
-            scratch_bytes = _align_up(int(scratch_bytes), 16) + output_channels * 4
+            scratch_bytes = _with_weight_sums(scratch_bytes, output_channels)
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, "ConvolutionFunctions", case_id, suite=generated_test.suite)
+    case_root = _case_root(bundle_root, "ConvolutionFunctions", case_id, suite=generated_test.suite, target=generated_test.target)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1027,8 +1088,9 @@ def _build_convolve_case(
         operator=operator,
         family="ConvolutionFunctions",
         target_cpu=generated_test.cpu,
-        kernel_id=_kernel_id(
+        kernel_id=_case_kernel_id(
             project_root,
+            generated_test,
             family="ConvolutionFunctions",
             operator="Convolve",
             dtype=activation_dtype,
@@ -1149,7 +1211,7 @@ def _build_nn_activation_float_case(
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, generated_test.family, case_id, suite=generated_test.suite)
+    case_root = _case_root(bundle_root, generated_test.family, case_id, suite=generated_test.suite, target=generated_test.target)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1219,7 +1281,7 @@ def _build_reduce_sum_case(
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, generated_test.family, case_id, suite=generated_test.suite)
+    case_root = _case_root(bundle_root, generated_test.family, case_id, suite=generated_test.suite, target=generated_test.target)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
     arrays = [
@@ -1305,7 +1367,7 @@ def _build_batch_norm_case(
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, generated_test.family, case_id, suite=generated_test.suite)
+    case_root = _case_root(bundle_root, generated_test.family, case_id, suite=generated_test.suite, target=generated_test.target)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
     arrays = [
@@ -1347,7 +1409,7 @@ def _build_depthwise_conv_case(
     hardware CaseBundle.
 
     Supported paths:
-    - S8 activation + S8 weights -> arm_depthwise_conv_s8
+    - S8 activation + S8 weights -> arm_depthwise_conv_wrapper_s8
     - S8 activation + S4 weights -> arm_depthwise_conv_wrapper_s4
     - S16 activation + S8 weights -> arm_depthwise_conv_wrapper_s16
     - FP32 activation + FP32 weights -> arm_depthwise_conv_f32
@@ -1370,7 +1432,7 @@ def _build_depthwise_conv_case(
     ):
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: weight_dtype={weight_dtype!r} activation_dtype={activation_dtype!r} "
-            f"is not bridgeable -- hardware benchmark firmware only dispatches arm_depthwise_conv_s8, "
+            f"is not bridgeable -- hardware benchmark firmware only dispatches arm_depthwise_conv_wrapper_s8, "
             f"arm_depthwise_conv_wrapper_s4, arm_depthwise_conv_wrapper_s16, arm_depthwise_conv_f32, and arm_depthwise_conv_f16."
         )
 
@@ -1384,8 +1446,7 @@ def _build_depthwise_conv_case(
     if input_dims["n"] != 1:
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: batch size {input_dims['n']} > 1 is not yet supported by the "
-            f"hardware bridge (firmware dispatches a single arm_depthwise_conv_s8 "
-            f"invocation per case)."
+            f"hardware bridge (firmware runs one invocation per case)."
         )
     input_shape = (input_dims["n"], input_dims["h"], input_dims["w"], input_dims["c"])
     # Native (N, H, W, C_OUT) order, per arm_depthwise_conv_s8's filter_dims docstring.
@@ -1490,7 +1551,7 @@ def _build_depthwise_conv_case(
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, "ConvolutionFunctions", case_id, suite=generated_test.suite)
+    case_root = _case_root(bundle_root, "ConvolutionFunctions", case_id, suite=generated_test.suite, target=generated_test.target)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1517,7 +1578,9 @@ def _build_depthwise_conv_case(
             output_dtype=activation_dtype,
         )
     else:
-        scratch_bytes = 0
+        scratch_bytes = _depthwise_s8_scratch_bytes(
+            input_dims, filter_dims, output_dims, sizers=generated_test.descriptor.get("entry_sizer")
+        )
 
     arrays = [
         (1, "input_0", activation_dtype, input_shape, input_data, False, False),
@@ -1556,8 +1619,9 @@ def _build_depthwise_conv_case(
         operator=operator,
         family="ConvolutionFunctions",
         target_cpu=generated_test.cpu,
-        kernel_id=_kernel_id(
+        kernel_id=_case_kernel_id(
             project_root,
+            generated_test,
             family="ConvolutionFunctions",
             operator="DepthwiseConv",
             dtype=activation_dtype,
@@ -1722,7 +1786,7 @@ def _build_transpose_conv_case(
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, "ConvolutionFunctions", case_id, suite=generated_test.suite)
+    case_root = _case_root(bundle_root, "ConvolutionFunctions", case_id, suite=generated_test.suite, target=generated_test.target)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1875,7 +1939,7 @@ def _build_pooling_case(
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, "PoolingFunctions", case_id, suite=generated_test.suite)
+    case_root = _case_root(bundle_root, "PoolingFunctions", case_id, suite=generated_test.suite, target=generated_test.target)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2015,7 +2079,7 @@ def _build_pooling_float_case(
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, "PoolingFunctions", case_id, suite=generated_test.suite)
+    case_root = _case_root(bundle_root, "PoolingFunctions", case_id, suite=generated_test.suite, target=generated_test.target)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2093,9 +2157,6 @@ _ACTIVATION_CMSIS_FUNCTION = {
     ("HardSwishPrecise", "S8"): "arm_hard_swish_precise_s8",
     ("HardSwishPrecise", "S16"): "arm_hard_swish_precise_s16",
 }
-# CMSIS-NN only implements these two ops in S16 -- the generator forces S16 even when the
-# descriptor's activation_dtype says S8 (see OpLogistic/OpTanh generate_c_files()).
-_ACTIVATION_FORCE_S16_OPERATORS = ("Logistic", "Tanh")
 _ACTIVATION_ARG_COUNT = {
     "Relu": 7,
     "Relu6": 9,
@@ -2167,8 +2228,6 @@ def _build_activation_case(
     descriptor = generated_test.descriptor
     operator = str(descriptor.get("operator", ""))
     activation_dtype = str(descriptor.get("activation_dtype", ""))
-    if operator in _ACTIVATION_FORCE_S16_OPERATORS:
-        activation_dtype = "S16"
     if (operator, activation_dtype) not in _ACTIVATION_CMSIS_FUNCTION:
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: operator={operator!r} activation_dtype={activation_dtype!r} is not "
@@ -2212,7 +2271,7 @@ def _build_activation_case(
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, "ActivationFunctions", case_id, suite=generated_test.suite)
+    case_root = _case_root(bundle_root, "ActivationFunctions", case_id, suite=generated_test.suite, target=generated_test.target)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2343,7 +2402,7 @@ def _build_quantize_case(
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, "QuantizationFunctions", case_id, suite=generated_test.suite)
+    case_root = _case_root(bundle_root, "QuantizationFunctions", case_id, suite=generated_test.suite, target=generated_test.target)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2463,7 +2522,7 @@ def _build_dequantize_case(
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, "QuantizationFunctions", case_id, suite=generated_test.suite)
+    case_root = _case_root(bundle_root, "QuantizationFunctions", case_id, suite=generated_test.suite, target=generated_test.target)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2544,7 +2603,7 @@ def _build_requantize_case(
     expected_output = expected_flat.reshape(input_shape)
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, generated_test.family, case_id, suite=generated_test.suite)
+    case_root = _case_root(bundle_root, generated_test.family, case_id, suite=generated_test.suite, target=generated_test.target)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2645,7 +2704,7 @@ def _build_comparison_case(
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, generated_test.family, case_id, suite=generated_test.suite)
+    case_root = _case_root(bundle_root, generated_test.family, case_id, suite=generated_test.suite, target=generated_test.target)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2780,7 +2839,7 @@ def _build_prelu_case(
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, "ActivationFunctions", case_id, suite=generated_test.suite)
+    case_root = _case_root(bundle_root, "ActivationFunctions", case_id, suite=generated_test.suite, target=generated_test.target)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2892,7 +2951,7 @@ def _build_prelu_scalar_case(
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, "ActivationFunctions", case_id, suite=generated_test.suite)
+    case_root = _case_root(bundle_root, "ActivationFunctions", case_id, suite=generated_test.suite, target=generated_test.target)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -3024,7 +3083,7 @@ def _build_softmax_case(
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, "SoftmaxFunctions", case_id, suite=generated_test.suite)
+    case_root = _case_root(bundle_root, "SoftmaxFunctions", case_id, suite=generated_test.suite, target=generated_test.target)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -3143,7 +3202,7 @@ def _build_abs_case(
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, generated_test.family, case_id, suite=generated_test.suite)
+    case_root = _case_root(bundle_root, generated_test.family, case_id, suite=generated_test.suite, target=generated_test.target)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -3294,7 +3353,7 @@ def _build_basic_math_reduction_case(
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, generated_test.family, case_id, suite=generated_test.suite)
+    case_root = _case_root(bundle_root, generated_test.family, case_id, suite=generated_test.suite, target=generated_test.target)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -3407,7 +3466,7 @@ def _build_basic_math_lut_case(
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, generated_test.family, case_id, suite=generated_test.suite)
+    case_root = _case_root(bundle_root, generated_test.family, case_id, suite=generated_test.suite, target=generated_test.target)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -3571,7 +3630,7 @@ def _write_elementwise_binary_bundle(
     descriptor = generated_test.descriptor
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, generated_test.family, case_id, suite=generated_test.suite)
+    case_root = _case_root(bundle_root, generated_test.family, case_id, suite=generated_test.suite, target=generated_test.target)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -4106,7 +4165,7 @@ def _build_fully_connected_case(
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, "FullyConnectedFunctions", case_id, suite=generated_test.suite)
+    case_root = _case_root(bundle_root, "FullyConnectedFunctions", case_id, suite=generated_test.suite, target=generated_test.target)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -4130,13 +4189,28 @@ def _build_fully_connected_case(
     manifest_header = _generated_manifest_header(
         project_root, generated_test, case_id, descriptor_path, descriptor_text
     )
+    is_packed = descriptor.get("entry") == "arm_fully_connected_per_channel_packed_s8"
+    source_max = None
+    if is_float or is_packed:
+        source_text = _find_source_file(generated_test.directory).read_text(encoding="utf-8")
+        source_max = int(_extract_define_int(source_text, f"{prefix.upper()}_BUFFER_SIZE_MAX"))
+    if weight_dtype == "S4":
+        scratch_bytes = 0
+    elif is_float:
+        scratch_bytes = source_max
+    elif is_packed:
+        # Kernel sums, then the packed stream.
+        scratch_bytes = _align_up(output_units * 4, 16) + source_max
+    else:
+        scratch_bytes = output_units * 4
     return _finish_generated_bundle(
         case_root, blobs, manifest_header,
         operator=operator,
         family="FullyConnectedFunctions",
         target_cpu=generated_test.cpu,
-        kernel_id=_kernel_id(
+        kernel_id=_case_kernel_id(
             project_root,
+            generated_test,
             family="FullyConnectedFunctions",
             operator="FullyConnected",
             dtype=activation_dtype,
@@ -4162,7 +4236,7 @@ def _build_fully_connected_case(
         blob_roles=[_manifest_blob_entry(blob) for blob in blobs],
         expected_output={"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
         comparison=dict(descriptor["resolved_comparison"]),
-        scratch_bytes=0 if weight_dtype == "S4" else (int(_extract_define_int(_find_source_file(generated_test.directory).read_text(encoding="utf-8"), f"{prefix.upper()}_BUFFER_SIZE_MAX")) if is_float else output_units * 4),
+        scratch_bytes=scratch_bytes,
         capabilities=[
             "fully_connected_s4"
             if weight_dtype == "S4"
@@ -4274,7 +4348,7 @@ def _build_batch_matmul_case(
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, "FullyConnectedFunctions", case_id, suite=generated_test.suite)
+    case_root = _case_root(bundle_root, "FullyConnectedFunctions", case_id, suite=generated_test.suite, target=generated_test.target)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -4351,10 +4425,11 @@ def _build_data_movement_bundle(
     scalar_parameters: dict[str, int],
     scratch_bytes: int = 0,
     output_root: Path | None = None,
+    weight_dtype: str | None = None,
 ) -> CaseBundle:
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, generated_test.family, case_id, suite=generated_test.suite)
+    case_root = _case_root(bundle_root, generated_test.family, case_id, suite=generated_test.suite, target=generated_test.target)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -4370,7 +4445,7 @@ def _build_data_movement_bundle(
         operator=str(generated_test.descriptor.get("operator", "")),
         family=generated_test.family,
         target_cpu=generated_test.cpu,
-        kernel_id=_kernel_id(project_root, family=generated_test.family, operator=str(generated_test.descriptor.get("operator", "")), dtype=lookup_dtype),
+        kernel_id=_kernel_id(project_root, family=generated_test.family, operator=str(generated_test.descriptor.get("operator", "")), dtype=lookup_dtype, weight_dtype=weight_dtype),
         scalar_parameters=scalar_parameters,
         tensor_dtypes=tensor_dtypes,
         blob_roles=[_manifest_blob_entry(blob) for blob in blobs],
@@ -4935,6 +5010,139 @@ def _build_data_movement_case(
     raise UnsupportedGeneratedTestError(f"{generated_test.name}: unsupported phase 3e operator {operator!r}.")
 
 
+def _require_s8_activation(generated_test: GeneratedTestCase, kernels: str) -> None:
+    dtype = str(generated_test.descriptor.get("activation_dtype", ""))
+    if dtype != "S8":
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: activation_dtype={dtype!r} has no hardware adapter; firmware runs {kernels} only."
+        )
+
+
+_SVDF_META = ("INPUT_MULTIPLIER", "INPUT_SHIFT", "OUTPUT_MULTIPLIER", "OUTPUT_SHIFT", "INPUT_ACTIVATION_MIN", "INPUT_ACTIVATION_MAX")
+
+
+def _build_svdf_case(project_root: Path, generated_test: GeneratedTestCase, *, output_root: Path | None = None) -> CaseBundle:
+    """Bridge an S8 SVDF case with an S8 or S16 state.
+
+    The kernel rewrites the state blob in place, so only the first call (the
+    correctness run) matches the golden; timed calls reuse the shifted state,
+    which leaves the kernel's work unchanged.
+    """
+    _require_s8_activation(generated_test, "arm_svdf_s8 and arm_svdf_state_s16_s8")
+    header = _find_header_file(generated_test.directory).read_text(encoding="utf-8")
+    prefix = generated_test.name
+    macro = prefix.upper() + "_"
+    state_s16 = re.search(rf"\bint16_t\s+{re.escape(prefix)}_state_init\b", header) is not None
+    state_dtype = "S16" if state_s16 else "S8"
+    dims = {key: _extract_dims(header, f"{prefix}_{key}_dims") for key in ("input", "state", "weights_feature", "weights_time", "output")}
+    # Header says n=1; the array holds every filter.
+    dims["weights_time"]["n"] = dims["weights_feature"]["n"]
+
+    def tensor(name: str, dtype: str, dims_key: str) -> tuple[tuple[int, ...], np.ndarray]:
+        shape = _dims_dict_to_shape(dims[dims_key])
+        flat = _extract_typed_array(header, f"{prefix}_{name}", dtype)
+        if flat.size != _shape_product(shape):
+            raise UnsupportedGeneratedTestError(f"{generated_test.name}: {name} has {flat.size} values, dims {shape}.")
+        return shape, flat.reshape(shape)
+
+    input_shape, input_data = tensor("input_data", "S8", "input")
+    state_shape, state_data = tensor("state_init", state_dtype, "state")
+    feature_shape, feature_data = tensor("weights_feature", "S8", "weights_feature")
+    time_shape, time_data = tensor("weights_time", state_dtype, "weights_time")
+    output_shape, expected = tensor("output_ref", "S8", "output")
+    bias = _extract_array_if_present(header, f"{prefix}_bias", "S32")
+    meta = [_extract_define_int(header, macro + "RANK")] + [_extract_define_int(header, macro + key) for key in _SVDF_META]
+    arrays = [
+        ("input_0", "S8", input_shape, input_data, False, False),
+        ("input_1", state_dtype, state_shape, state_data, True, False),
+        ("input_2", state_dtype, time_shape, time_data, False, False),
+        ("weights", "S8", feature_shape, feature_data, False, False),
+        *([("bias", "S32", (bias.size,), bias, False, False)] if bias is not None else []),
+        ("meta_0", "S32", (len(meta),), np.array(meta, dtype=np.int32), False, False),
+        ("expected_output", "S8", output_shape, expected, False, True),
+    ]
+    # Input and output ctx, then kernel sums.
+    ctx_bytes = _align_up(dims["input"]["n"] * dims["weights_feature"]["n"] * 4, 16)
+    return _build_data_movement_bundle(
+        project_root, generated_test,
+        lookup_dtype="S8",
+        weight_dtype=state_dtype if state_s16 else None,
+        cmsis_function="arm_svdf_state_s16_s8" if state_s16 else "arm_svdf_s8",
+        arrays=[(blob_id, *entry) for blob_id, entry in enumerate(arrays, start=1)],
+        tensor_dtypes={entry[0]: entry[1] for entry in arrays},
+        comparison=dict(generated_test.descriptor["resolved_comparison"]),
+        output_root=output_root,
+        scalar_parameters={
+            "input_offset": _extract_define_int(header, macro + "INPUT_OFFSET"),
+            "output_offset": _extract_define_int(header, macro + "OUTPUT_OFFSET"),
+            "activation_min": _extract_define_int(header, macro + "OUTPUT_ACTIVATION_MIN"),
+            "activation_max": _extract_define_int(header, macro + "OUTPUT_ACTIVATION_MAX"),
+        },
+        scratch_bytes=2 * ctx_bytes + dims["weights_feature"]["n"] * 4,
+    )
+
+
+_LSTM_GATES = ("INPUT", "FORGET", "CELL", "OUTPUT")
+_LSTM_PARAMS = (
+    "TIME_MAJOR", "BATCH_SIZE", "TIME_STEPS", "INPUT_SIZE", "HIDDEN_SIZE", "INPUT_ZERO_POINT",
+    "FORGET_TO_CELL_MULTIPLIER", "FORGET_TO_CELL_SHIFT", "INPUT_TO_CELL_MULTIPLIER", "INPUT_TO_CELL_SHIFT",
+    "CELL_CLIP", "CELL_SCALE_POWER", "OUTPUT_MULTIPLIER", "OUTPUT_SHIFT", "OUTPUT_ZERO_POINT",
+)
+
+
+def _build_lstm_case(project_root: Path, generated_test: GeneratedTestCase, *, output_root: Path | None = None) -> CaseBundle:
+    """Bridge an S8 unidirectional LSTM case.
+
+    meta_0 carries `_LSTM_PARAMS`, then each gate's input and hidden
+    multiplier/shift in `_LSTM_GATES` order. The weights blob packs the four
+    input matrices, then the four hidden ones; the bias blob packs four biases.
+    """
+    _require_s8_activation(generated_test, "arm_lstm_unidirectional_s8")
+    header = _find_header_file(generated_test.directory).read_text(encoding="utf-8")
+    dataset = str(generated_test.descriptor.get("dataset", ""))
+    macro = dataset.upper() + "_"
+
+    def array(name: str, dtype: str) -> np.ndarray:
+        return _extract_typed_array(header, f"{dataset.lower()}_{name}", dtype)
+
+    meta = [_extract_define_int(header, macro + key) for key in _LSTM_PARAMS]
+    for gate in _LSTM_GATES:
+        for source in ("INPUT", "HIDDEN"):
+            meta += [_extract_define_int(header, f"{macro}{gate}_GATE_{source}_{kind}") for kind in ("MULTIPLIER", "SHIFT")]
+    batch, steps, input_size, hidden = meta[1:5]
+    weights = np.concatenate(
+        [array(f"{gate.lower()}_gate_input_weights", "S8") for gate in _LSTM_GATES]
+        + [array(f"{gate.lower()}_gate_hidden_weights", "S8") for gate in _LSTM_GATES]
+    )
+    bias = np.concatenate([array(f"{gate.lower()}_gate_bias", "S32") for gate in _LSTM_GATES])
+    input_data = array("input_tensor", "S8")
+    expected = array("output", "S8")
+    sizes = {"input": batch * steps * input_size, "weights": 4 * hidden * (input_size + hidden), "bias": 4 * hidden, "output": batch * steps * hidden}
+    actual = {"input": input_data.size, "weights": weights.size, "bias": bias.size, "output": expected.size}
+    if sizes != actual:
+        raise UnsupportedGeneratedTestError(f"{generated_test.name}: LSTM tensor sizes {actual} do not match header params {sizes}.")
+    arrays = [
+        ("input_0", "S8", (input_data.size,), input_data, False, False),
+        ("weights", "S8", (weights.size,), weights, False, False),
+        ("bias", "S32", (bias.size,), bias, False, False),
+        ("meta_0", "S32", (len(meta),), np.array(meta, dtype=np.int32), False, False),
+        ("expected_output", "S8", (expected.size,), expected, False, True),
+    ]
+    # Kernel sums, temp1, temp2, cell state.
+    state_bytes = _align_up(batch * hidden * 2, 16)
+    return _build_data_movement_bundle(
+        project_root, generated_test,
+        lookup_dtype="S8",
+        cmsis_function="arm_lstm_unidirectional_s8",
+        arrays=[(blob_id, *entry) for blob_id, entry in enumerate(arrays, start=1)],
+        tensor_dtypes={entry[0]: entry[1] for entry in arrays},
+        comparison=dict(generated_test.descriptor["resolved_comparison"]),
+        output_root=output_root,
+        scalar_parameters={},
+        scratch_bytes=_align_up(8 * hidden * 4, 16) + 3 * state_bytes,
+    )
+
+
 # Dispatch table: (family, operator) -> builder. Add new bridged ops here (and a matching
 # registry row + adapter spec; see the header of assets/kernel_registry.yaml) to extend
 # hardware coverage.
@@ -5000,6 +5208,8 @@ _BUILDERS: dict[tuple[str, str], Callable[..., CaseBundle]] = {
     ("BroadcastFunctions", "BroadcastTo"): _build_data_movement_case,
     ("DynamicUpdateSliceFunctions", "DynamicUpdateSlice"): _build_data_movement_case,
     ("StridedSliceFunctions", "StridedSlice"): _build_data_movement_case,
+    ("SVDFunctions", "SVDF"): _build_svdf_case,
+    ("LSTMFunctions", "LSTMUnidirectional"): _build_lstm_case,
 }
 
 

@@ -21,7 +21,13 @@ from helia_core_tester.core.steps import BuildStep, CleanStep, GenerateStep, Run
 from helia_core_tester.reporting.coverage_merge import run_coverage_merge
 from helia_core_tester.contract.cli import contract_app
 from helia_core_tester.hardware.cli import boards as boards_command
+from helia_core_tester.hardware.cli import explain as explain_command
 from helia_core_tester.hardware.cli import hardware_app, probes_app
+from helia_core_tester.hardware.candidate_check import candidate_app
+# Registers candidate baseline and eval.
+import helia_core_tester.hardware.candidate_eval  # noqa: F401
+from helia_core_tester.hardware.score import score as score_command
+from helia_core_tester.agent_loop.cli import agent_loop_app
 
 # Once, for every subcommand (including the hardware group's) for the lifetime of
 # this process -- see ensure_arm_toolchain_on_path()'s own docstring for why this
@@ -37,7 +43,11 @@ app = typer.Typer(
 app.add_typer(hardware_app, name="hardware")
 app.add_typer(probes_app, name="probes")
 app.add_typer(contract_app, name="contract")
+app.add_typer(candidate_app, name="candidate")
+app.add_typer(agent_loop_app, name="agent-loop")
 app.command(name="boards")(boards_command)
+app.command(name="explain")(explain_command)
+app.command(name="score")(score_command)
 
 
 def _print_plan_item(plan_item) -> None:
@@ -120,15 +130,19 @@ def run_step_exit(step, config: Config, success_msg: str, failure_prefix: Option
 
 @app.command()
 def generate(
-    op: Optional[str] = typer.Option(None, help="Generate only specific operator"),
-    dtype: Optional[str] = typer.Option(None, help="Generate only specific dtype"),
-    name: Optional[str] = typer.Option(None, help="Generate only specific test by name"),
+    op: Optional[str] = typer.Option(None, help="Only these operators, comma-separated"),
+    dtype: Optional[str] = typer.Option(None, help="Only this case dtype: activations, or S4 weights"),
+    name: Optional[str] = typer.Option(None, help="Only these exact test names, comma-separated"),
     limit: Optional[int] = typer.Option(None, help="Limit number of models to generate"),
     seed: Optional[int] = typer.Option(None, help="Random seed for test generation"),
     cpu: str = typer.Option("cortex-m55", help="Target CPU(s), comma-separated (e.g. m0,m4,m55)"),
     suite: str = typer.Option("int", "--suite", help="Test suite selection: int, float, or both"),
     float_precision: str = typer.Option("both", "--float-precision", help="Float precision filter: f16, f32, or both"),
     force_generate: bool = typer.Option(False, "--force-generate", help="Regenerate every case even when its reuse stamp still matches"),
+    random_shapes: Optional[int] = typer.Option(None, "--random-shapes", help="Draw N random shapes per matching op"),
+    shape_seed: Optional[int] = typer.Option(None, "--shape-seed", help="Seed for --random-shapes, 0 to 2**32-1 (default 0)"),
+    hidden_dir: Optional[Path] = typer.Option(None, "--hidden-dir", help="Write secret-seeded shapes here, outside the tree"),
+    hidden_seed_file: Optional[Path] = typer.Option(None, "--hidden-seed-file", help="Secret seed file; else HCT_HIDDEN_SEED"),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help="Verbosity level (0-3)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be done"),
     plan: bool = typer.Option(False, "--plan", help="Print execution plan and exit"),
@@ -149,6 +163,10 @@ def generate(
         suite=suite,
         float_precision=float_precision,
         force_generate=force_generate,
+        random_shapes=random_shapes,
+        shape_seed=shape_seed,
+        hidden_dir=hidden_dir,
+        hidden_seed_file=hidden_seed_file,
     )
     if config.plan:
         _print_plan_item(GenerateStep(config).plan())
@@ -249,9 +267,9 @@ def run(
 
 @app.command()
 def full(
-    op: Optional[str] = typer.Option(None, help="Generate only specific operator"),
-    dtype: Optional[str] = typer.Option(None, help="Generate only specific dtype"),
-    name: Optional[str] = typer.Option(None, help="Generate only specific test by name"),
+    op: Optional[str] = typer.Option(None, help="Only these operators, comma-separated"),
+    dtype: Optional[str] = typer.Option(None, help="Only this case dtype: activations, or S4 weights"),
+    name: Optional[str] = typer.Option(None, help="Only these exact test names, comma-separated"),
     limit: Optional[int] = typer.Option(None, help="Limit number of models to generate"),
     seed: Optional[int] = typer.Option(None, help="Random seed for test generation"),
     cpu: str = typer.Option("cortex-m55", help="Target CPU(s), comma-separated (e.g. m0,m4,m55)"),

@@ -31,7 +31,7 @@ kernels:
     family: ConvolutionFunctions
     operator: Convolve
     dtype: S8
-    cmsis_function: arm_convolve_s8
+    cmsis_function: arm_convolve_wrapper_s8
 
   - kernel_id: 3
     c_define: HCT_KERNEL_ID_ADD_S8
@@ -73,7 +73,7 @@ kernels:
     family: ConvolutionFunctions
     operator: DepthwiseConv
     dtype: S8
-    cmsis_function: arm_depthwise_conv_s8
+    cmsis_function: arm_depthwise_conv_wrapper_s8
 
   - kernel_id: 9
     c_define: HCT_KERNEL_ID_ADD_S16
@@ -1247,3 +1247,98 @@ kernels:
     dtype: FP16
     weight_dtype: FP16
     cmsis_function: arm_convolve_f16
+
+  # Times an empty call: the board's floor.
+  - kernel_id: 174
+    c_define: HCT_KERNEL_ID_EMPTY_CALL
+    family: Timing
+    operator: EmptyCall
+    dtype: S8
+    cmsis_function: hct_empty_call
+
+  # Direct entries: descriptors name them with `entry:`.
+  - kernel_id: 175
+    c_define: HCT_KERNEL_ID_CONVOLVE_S8_SMALL_CIN
+    family: ConvolutionFunctions
+    operator: Convolve
+    dtype: S8
+    cmsis_function: arm_convolve_s8_small_cin
+    direct_entry: true
+
+  - kernel_id: 176
+    c_define: HCT_KERNEL_ID_CONVOLVE_S8_3X3_C16_S1
+    family: ConvolutionFunctions
+    operator: Convolve
+    dtype: S8
+    cmsis_function: arm_convolve_s8_3x3_c16_s1
+    direct_entry: true
+
+  - kernel_id: 177
+    c_define: HCT_KERNEL_ID_CONVOLVE_1X1_S8_SHORT_K
+    family: ConvolutionFunctions
+    operator: Convolve
+    dtype: S8
+    cmsis_function: arm_convolve_1x1_s8_short_k
+    direct_entry: true
+
+  - kernel_id: 178
+    c_define: HCT_KERNEL_ID_DEPTHWISE_CONV_S8_OPT_3X3
+    family: ConvolutionFunctions
+    operator: DepthwiseConv
+    dtype: S8
+    cmsis_function: arm_depthwise_conv_s8_opt_3x3
+    direct_entry: true
+
+  - kernel_id: 179
+    c_define: HCT_KERNEL_ID_DEPTHWISE_CONV_S8_OPT_3X3_C64_S1
+    family: ConvolutionFunctions
+    operator: DepthwiseConv
+    dtype: S8
+    cmsis_function: arm_depthwise_conv_s8_opt_3x3_c64_s1
+    direct_entry: true
+
+  - kernel_id: 180
+    c_define: HCT_KERNEL_ID_DEPTHWISE_CONV_S8_OPT_PLANAR
+    family: ConvolutionFunctions
+    operator: DepthwiseConv
+    dtype: S8
+    cmsis_function: arm_depthwise_conv_s8_opt_planar
+    direct_entry: true
+
+  - kernel_id: 181
+    c_define: HCT_KERNEL_ID_DEPTHWISE_CONV_S8_OPT_CHANNELWISE
+    family: ConvolutionFunctions
+    operator: DepthwiseConv
+    dtype: S8
+    cmsis_function: arm_depthwise_conv_s8_opt_channelwise
+    direct_entry: true
+
+  - kernel_id: 182
+    c_define: HCT_KERNEL_ID_FULLY_CONNECTED_PER_CHANNEL_PACKED_S8
+    family: FullyConnectedFunctions
+    operator: FullyConnected
+    dtype: S8
+    cmsis_function: arm_fully_connected_per_channel_packed_s8
+    direct_entry: true
+
+  - kernel_id: 183
+    c_define: HCT_KERNEL_ID_SVDF_S8
+    family: SVDFunctions
+    operator: SVDF
+    dtype: S8
+    cmsis_function: arm_svdf_s8
+
+  - kernel_id: 184
+    c_define: HCT_KERNEL_ID_SVDF_STATE_S16_S8
+    family: SVDFunctions
+    operator: SVDF
+    dtype: S8
+    weight_dtype: S16
+    cmsis_function: arm_svdf_state_s16_s8
+
+  - kernel_id: 185
+    c_define: HCT_KERNEL_ID_LSTM_UNIDIRECTIONAL_S8
+    family: LSTMFunctions
+    operator: LSTMUnidirectional
+    dtype: S8
+    cmsis_function: arm_lstm_unidirectional_s8

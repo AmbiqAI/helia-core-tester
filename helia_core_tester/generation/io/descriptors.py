@@ -559,3 +559,17 @@ def get_io_dtypes(desc: Dict[str, Any]) -> Dict[str, str]:
         'W_T': descriptor_dtype_to_c_type(weight_dtype),
         'OUT_T': descriptor_dtype_to_c_type(output_dtype),
     }
+
+
+def descriptor_matches_op(desc: Dict[str, Any], op: str) -> bool:
+    """True when `op` names the case's operator or source."""
+    name = str(desc["name"])
+    if name == op or name.startswith(op + "_"):
+        return True
+    keys = ("_base_name", "_source_stem", "_source_relpath", "operator")
+    return any(desc.get(key) == op for key in keys)
+
+
+def unmatched_ops(descriptors: List[Dict[str, Any]], ops: List[str]) -> List[str]:
+    """Ops that match no descriptor."""
+    return [op for op in ops if not any(descriptor_matches_op(desc, op) for desc in descriptors)]

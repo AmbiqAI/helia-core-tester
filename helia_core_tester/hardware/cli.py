@@ -15,15 +15,20 @@ rather than a hardware error. The commands are thin adapters: the behaviour
 lives in boards.py, probes.py, firmware_build.py, hardware_pipeline.py and
 run_summary.py.
 
-Failures inside the pipeline -- a cmake/J-Link subprocess exiting non-zero, a
-pylink error, a stalled transport -- print one line and exit 1; the traceback
-is shown with `--verbosity 1` or higher (also `$HELIA_CORE_TESTER_VERBOSITY`,
-the same knob the generate/build/run commands use).
+Exit codes, shared with `score`: 0 pass; 1 a case failed correctness; 2 bad
+flags; 3 refused before running (dirty tester, a --skip-flash or --golden-from
+mismatch, no case matches); 5 error (cmake, J-Link, transport, probe, or a
+tester bug); 130 interrupted (Ctrl-C). Known operational failures print one
+line; their traceback is shown with `--verbosity 1` or higher (also
+`$HELIA_CORE_TESTER_VERBOSITY`, the same knob the generate/build/run commands
+use). Unexpected tester bugs always print a traceback.
 """
 
 from __future__ import annotations
 
 import contextlib
+import dataclasses
+import functools
 import json
 import os
 import subprocess
@@ -37,6 +42,8 @@ import typer
 from .boards import BoardSpec, UnknownBoardError, default_board_id, load_board_table, repo_root, resolve_board
 from .memory_report import generate_memory_report
 from .probes import ProbeResolutionError, list_probes, resolve_serial
+from .score import EXIT_FAIL, EXIT_REFUSED
+from .wire import clock_mhz
 
 hardware_app = typer.Typer(
     name="hardware",
@@ -66,9 +73,39 @@ _ALLOW_UNVERIFIED_HELP = (
 )
 
 
-def _fail(message: str) -> None:
+# Score's codes, plus usage and error.
+# 130: interrupted, as shells report.
+EXIT_USAGE, EXIT_ERROR, EXIT_INTERRUPTED = 2, 5, 130
+
+
+def _fail(message: str, code: int = EXIT_USAGE) -> None:
     typer.echo(f"✗ {message}", err=True)
-    sys.exit(1)
+    sys.exit(code)
+
+
+def _bugs_exit_error(command):
+    """Unexpected errors exit 5, not 1."""
+
+    @functools.wraps(command)
+    def wrapper(*args, **kwargs):
+        import click
+
+        try:
+            return command(*args, **kwargs)
+        # Usage, refusal and normal exits.
+        except (click.exceptions.ClickException, click.exceptions.Exit):
+            raise
+        except KeyboardInterrupt:
+            typer.echo("✗ Interrupted", err=True)
+            sys.exit(EXIT_INTERRUPTED)
+        except click.exceptions.Abort:
+            typer.echo("✗ Aborted", err=True)
+            sys.exit(EXIT_ERROR)
+        except Exception:
+            traceback.print_exc()
+            sys.exit(EXIT_ERROR)
+
+    return wrapper
 
 
 def _verbosity(explicit: Optional[int]) -> int:
@@ -90,29 +127,39 @@ def _is_jlink_exception(exc: BaseException) -> bool:
 def _pipeline_errors(verbosity: int) -> Iterator[None]:
     """Turn the failures the hardware pipeline is known to raise into one-line errors.
 
+    RunRefused (a golden or case-selection misfit) exits EXIT_REFUSED.
     RuntimeError covers this package's own errors (probe resolution, J-Link library
     config, session/protocol failures); CalledProcessError is cmake or the J-Link
     flash target; pylink's JLinkException is the probe/RTT layer; TimeoutError and
-    FileNotFoundError are the transport write timeout and a missing ELF. Anything
-    else is a bug and keeps its traceback.
+    FileNotFoundError are the transport write timeout and a missing ELF. These
+    exit EXIT_ERROR. Anything else is a bug: it prints its traceback and
+    also exits EXIT_ERROR, never the correctness code.
     """
+    from .errors import RunRefused
+
     try:
         yield
     except subprocess.CalledProcessError as exc:
         if verbosity >= 1:
             traceback.print_exc()
         command = " ".join(str(part) for part in exc.cmd) if isinstance(exc.cmd, (list, tuple)) else str(exc.cmd)
-        _fail(f"Command failed with exit status {exc.returncode}: {command}")
+        _fail(f"Command failed with exit status {exc.returncode}: {command}", EXIT_ERROR)
+    except RunRefused as exc:
+        if verbosity >= 1:
+            traceback.print_exc()
+        _fail(str(exc), EXIT_REFUSED)
     except (RuntimeError, TimeoutError, FileNotFoundError) as exc:
         if verbosity >= 1:
             traceback.print_exc()
-        _fail(str(exc))
+        _fail(str(exc), EXIT_ERROR)
     except Exception as exc:
         if not _is_jlink_exception(exc):
-            raise
+            # A bug: keep the traceback, exit 5.
+            traceback.print_exc()
+            sys.exit(EXIT_ERROR)
         if verbosity >= 1:
             traceback.print_exc()
-        _fail(f"J-Link error: {exc}")
+        _fail(f"J-Link error: {exc}", EXIT_ERROR)
 
 
 def _board(board_id: Optional[str]) -> BoardSpec:
@@ -127,10 +174,14 @@ def _serial(explicit: Optional[int]) -> int:
     try:
         return resolve_serial(explicit)
     except ProbeResolutionError as exc:
-        _fail(str(exc))
+        _fail(str(exc), EXIT_ERROR)
         raise AssertionError("unreachable")
 
 
+_DIRTY_TESTER_HELP = (
+    "Run a --cmsis-nn-root candidate from an uncommitted tester. "
+    "The bundle records harness.tester_dirty and a diff hash."
+)
 _CMSIS_NN_REF_HELP = "ns-cmsis-nn tag or commit to build (default: see --cmsis-nn-root)."
 _CMSIS_NN_ROOT_HELP = (
     "Local ns-cmsis-nn checkout to build. Default: the last build's checkout or "
@@ -138,15 +189,38 @@ _CMSIS_NN_ROOT_HELP = (
     "ns-cmsis-nn/Tests/helia-core-tester, else the pinned release. "
     "Copies its Include/, Source/, cmake/ and nsx/ into the app."
 )
+_PLACEMENT_HELP = (
+    "Operand memory: tcm (one workspace: DTCM on Apollo5, SRAM on Apollo3P) "
+    "or mram (weights and bias in cached MRAM, evicted before each call; "
+    "activations and scratch in DTCM). Default: tcm."
+)
 _JOBS_HELP = "Parallel build jobs (default: CPU count + 2, like ninja)."
 _UPDATE_DEPS_HELP = "Re-resolve NSX modules and rewrite nsx.lock before building."
-_INLINE_ASM_HELP = (
-    "Build requantize with or without inline assembly (default: the last "
-    "build's setting in this build dir, else on)."
-)
+_INLINE_ASM_HELP = "Build requantize with or without inline assembly (default: on)."
 
 
-def _app_options(build_dir: Path, cmsis_nn_ref, cmsis_nn_root, inline_asm):
+def _check_placement(placement, spec: BoardSpec) -> None:
+    from .nsx_app import PLACEMENTS
+
+    if placement is not None and placement not in PLACEMENTS:
+        _fail(f"--placement must be one of: {', '.join(PLACEMENTS)}.")
+    if placement == "mram" and not spec.has_mram:
+        _fail(f"{spec.id} has no cached MRAM; use tcm.")
+
+
+def _check_tester_clean(allow: bool, echo) -> None:
+    """Candidate runs need a committed tester."""
+    from .harness_lock import tester_state
+
+    # Unknown state counts as dirty.
+    if tester_state(repo_root())["dirty"] is False:
+        return
+    if not allow:
+        _fail("Tester worktree is dirty; commit or pass --allow-dirty-tester.", EXIT_REFUSED)
+    echo("[hardware] WARNING: tester is dirty; bundle marks tester_dirty.")
+
+
+def _app_options(build_dir: Path, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement=None):
     """Kernel flags over the build dir's saved options."""
     from .firmware_build import nsx_app_dir
     from .nsx_app import AppRenderError, resolve_options, saved_options
@@ -157,9 +231,10 @@ def _app_options(build_dir: Path, cmsis_nn_ref, cmsis_nn_root, inline_asm):
     try:
         options = resolve_options(
             app_dir, repo_root(), cmsis_nn_ref=cmsis_nn_ref, cmsis_nn_root=cmsis_nn_root, inline_asm=inline_asm,
+            placement=placement,
         )
     except AppRenderError as exc:
-        _fail(f"{exc}; pass --cmsis-nn-root or --cmsis-nn-ref.")
+        _fail(f"{exc}; pass --cmsis-nn-root or --cmsis-nn-ref.", EXIT_REFUSED)
     saved = saved_options(app_dir)
     # Compare values: templates embed paths.
     changes = options.changes_from(saved) if saved else []
@@ -170,7 +245,7 @@ def _app_options(build_dir: Path, cmsis_nn_ref, cmsis_nn_root, inline_asm):
     return options
 
 
-def _built_options(build_dir: Path, cmsis_nn_ref, cmsis_nn_root, inline_asm):
+def _built_options(build_dir: Path, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement=None, stream_only=False):
     """The flashed build's options, unchanged."""
     from .firmware_build import nsx_app_dir
     from .nsx_app import AppRenderError, resolve_options, saved_options
@@ -180,18 +255,22 @@ def _built_options(build_dir: Path, cmsis_nn_ref, cmsis_nn_root, inline_asm):
     app_dir = nsx_app_dir(build_dir)
     saved = saved_options(app_dir)
     if saved is None:
-        _fail("--skip-flash needs a saved build; run hardware build.")
+        _fail("--skip-flash needs a saved build; run hardware build.", EXIT_REFUSED)
     try:
         wanted = resolve_options(
             app_dir, repo_root(), cmsis_nn_ref=cmsis_nn_ref, cmsis_nn_root=cmsis_nn_root, inline_asm=inline_asm,
-            follow_pin=False,
+            placement=placement, follow_pin=False,
         )
     except AppRenderError as exc:
-        _fail(f"{exc}; pass --skip-generate to stream only.")
+        if not stream_only:
+            _fail(f"{exc}; pass --skip-generate to stream only.", EXIT_REFUSED)
+        # Streaming never reads the checkout.
+        passed = {"requantize_inline_asm": inline_asm, "placement": placement}
+        wanted = dataclasses.replace(saved, **{k: v for k, v in passed.items() if v is not None})
     # Generation must match the flashed firmware.
     changes = wanted.changes_from(saved)
     if changes:
-        _fail(f"--skip-flash keeps the built kernels: {'; '.join(changes)}")
+        _fail(f"--skip-flash keeps the built kernels: {'; '.join(changes)}", EXIT_REFUSED)
     typer.echo(f"[hardware] Kernels: {saved.summary()}", err=True)
     return saved
 
@@ -205,15 +284,51 @@ def _saved_kernels(build_dir: Path, echo) -> None:
     echo(f"[hardware] Kernels: {saved.summary() if saved else 'unknown, no saved options'}")
 
 
+# --- explain -----------------------------------------------------------------------
+
+
+def explain(
+    bundle: Path = typer.Argument(..., help="Bundle dir, or a dir holding bundles."),
+    case: Optional[list[str]] = typer.Option(None, "--case", help="Case id substring (repeatable)."),
+    op: Optional[list[str]] = typer.Option(
+        None, "--op", help="conv, depthwise or fc; else a case or symbol substring (repeatable)."
+    ),
+    all_cases: bool = typer.Option(False, "--all", help="Include cases without MAC counts."),
+    as_json: bool = typer.Option(False, "--json", help="Print one JSON document."),
+) -> None:
+    """Explain PMU counters per case: peak, stalls, hints."""
+    from .pmu_explain import SCHEMA, SCHEMA_VERSION, explain_bundle
+
+    dirs = sorted(path.parent for path in bundle.rglob("cases.json") if (path.parent / "session_manifest.json").is_file())
+    if not dirs:
+        raise typer.BadParameter(f"No result bundle under {bundle}")
+    results = [explain_bundle(path, tuple(case or ()), tuple(op or ()), all_cases) for path in dirs]
+    if as_json:
+        # One flat case list; each names its bundle.
+        cases = [
+            {"bundle": result["bundle"], **explanation.to_dict()} for result in results for explanation in result["cases"]
+        ]
+        bundles = [{key: value for key, value in result.items() if key != "cases"} for result in results]
+        typer.echo(json.dumps({"schema": SCHEMA, "schema_version": SCHEMA_VERSION, "bundles": bundles, "cases": cases}, indent=2))
+        return
+    for result in results:
+        typer.echo(f"# {result['board']} ({result['cpu']}, {result['placement']}): {result['bundle']}")
+        for explanation in result["cases"]:
+            typer.echo("\n".join(explanation.lines()))
+
+
 # --- boards / probes ---------------------------------------------------------------
 
 
 def boards() -> None:
     """List the known hardware boards (assets/hardware_boards.yaml)."""
     table = load_board_table()
-    header = ("id", "nsx_board", "cpu", "pmu_tier", "has_mve", "jlink_device", "swd_khz", "workspace_bytes")
+    header = ("id", "nsx_board", "cpu", "pmu_tier", "has_mve", "jlink_device", "swd_khz", "workspace_bytes", "core_clock")
     rows = [
-        (b.id, b.nsx_board, b.cpu, b.pmu_tier, "yes" if b.has_mve else "no", b.jlink_device, str(b.swd_speed_khz), str(b.workspace_bytes))
+        (
+            b.id, b.nsx_board, b.cpu, b.pmu_tier, "yes" if b.has_mve else "no", b.jlink_device, str(b.swd_speed_khz),
+            str(b.workspace_bytes), clock_mhz(b.core_clock_hz) if b.core_clock_hz else "-",
+        )
         for b in table
     ]
     widths = [max(len(h), *(len(r[i]) for r in rows)) for i, h in enumerate(header)]
@@ -228,7 +343,7 @@ def probes_list() -> None:
     try:
         probes = list_probes()
     except ProbeResolutionError as exc:
-        _fail(str(exc))
+        _fail(str(exc), EXIT_ERROR)
     if not probes:
         typer.echo("No connected J-Link probes detected.")
         return
@@ -241,7 +356,7 @@ def probes_match(
     board: Optional[str] = typer.Option(None, "--board", help=_BOARD_HELP),
 ) -> None:
     """Print the J-Link serial the hardware commands would use for --board
-    ($HPX_JLINK_SERIAL, else the single connected probe). Exits 1 on 0 or >1 candidates."""
+    ($HPX_JLINK_SERIAL, else the single connected probe). Exits 5 on 0 or >1 candidates."""
     spec = _board(board)
     serial = _serial(None)
     typer.echo(f"[probes] {spec.id} ({spec.jlink_device}) -> J-Link serial {serial}", err=True)
@@ -252,6 +367,7 @@ def probes_match(
 
 
 @hardware_app.command()
+@_bugs_exit_error
 def build(
     board: Optional[str] = typer.Option(None, "--board", help=_BOARD_HELP),
     build_dir: Optional[Path] = typer.Option(None, "--build-dir", help=_BUILD_DIR_HELP),
@@ -260,6 +376,7 @@ def build(
     cmsis_nn_ref: Optional[str] = typer.Option(None, "--cmsis-nn-ref", help=_CMSIS_NN_REF_HELP),
     cmsis_nn_root: Optional[Path] = typer.Option(None, "--cmsis-nn-root", help=_CMSIS_NN_ROOT_HELP),
     inline_asm: Optional[bool] = typer.Option(None, "--inline-asm/--no-inline-asm", help=_INLINE_ASM_HELP),
+    placement: Optional[str] = typer.Option(None, "--placement", help=_PLACEMENT_HELP),
     update_dependencies: bool = typer.Option(False, "--update-dependencies", help=_UPDATE_DEPS_HELP),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help=_VERBOSITY_HELP),
 ) -> None:
@@ -267,8 +384,9 @@ def build(
     from .firmware_build import build_firmware, resolve_build_dir
 
     spec = _board(board)
+    _check_placement(placement, spec)
     build_dir = resolve_build_dir(repo_root(), spec, build_dir)
-    app_options = _app_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm)
+    app_options = _app_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement)
     with _pipeline_errors(_verbosity(verbosity)):
         elf = build_firmware(
             spec, build_dir=build_dir, jobs=jobs,
@@ -278,6 +396,7 @@ def build(
 
 
 @hardware_app.command()
+@_bugs_exit_error
 def flash(
     board: Optional[str] = typer.Option(None, "--board", help=_BOARD_HELP),
     serial_no: Optional[int] = typer.Option(None, "--serial-no", help=_SERIAL_HELP),
@@ -288,6 +407,7 @@ def flash(
     cmsis_nn_ref: Optional[str] = typer.Option(None, "--cmsis-nn-ref", help=_CMSIS_NN_REF_HELP),
     cmsis_nn_root: Optional[Path] = typer.Option(None, "--cmsis-nn-root", help=_CMSIS_NN_ROOT_HELP),
     inline_asm: Optional[bool] = typer.Option(None, "--inline-asm/--no-inline-asm", help=_INLINE_ASM_HELP),
+    placement: Optional[str] = typer.Option(None, "--placement", help=_PLACEMENT_HELP),
     update_dependencies: bool = typer.Option(False, "--update-dependencies", help=_UPDATE_DEPS_HELP),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help=_VERBOSITY_HELP),
 ) -> None:
@@ -297,8 +417,9 @@ def flash(
     from .firmware_build import flash_firmware, resolve_build_dir
 
     spec = _board(board)
+    _check_placement(placement, spec)
     build_dir = resolve_build_dir(repo_root(), spec, build_dir)
-    app_options = _app_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm)
+    app_options = _app_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement)
     serial = _serial(serial_no)
     with _pipeline_errors(_verbosity(verbosity)):
         decision = flash_firmware(
@@ -313,6 +434,7 @@ def flash(
 
 
 @hardware_app.command(name="memory-report")
+@_bugs_exit_error
 def memory_report(
     board: Optional[str] = typer.Option(None, "--board", help=_BOARD_HELP),
     build_dir: Optional[Path] = typer.Option(None, "--build-dir", help=_BUILD_DIR_HELP),
@@ -351,6 +473,18 @@ _PRECISION_HELP = (
 )
 
 
+_OP_HELP = (
+    "Only bridge cases of this operator (repeatable), matched like "
+    "`generate --op`: operator, descriptor stem or name prefix, e.g. DepthwiseConv."
+)
+_DTYPE_HELP = (
+    "Only bridge cases of this dtype (repeatable), matched like `generate --dtype`: "
+    "the activation dtype, or S4 for s4-weight cases, e.g. S8 or FP16."
+)
+_CASE_ID_HELP = "Only bridge this exact case id or test name (repeatable)."
+_CASES_FROM_HELP = "File of case ids, one per line ('#' comments)."
+
+
 _PMU_COUNTERS_HELP = (
     "PMU counters to capture, as GROUP:SELECTION (repeatable; hpx syntax). GROUP is cpu, "
     "memory or mve; SELECTION is 'all', 'default', or a comma-separated list of ARM_PMU_* "
@@ -361,10 +495,61 @@ _PMU_COUNTERS_HELP = (
     "Default: cpu:default memory:default mve:default."
 )
 _PMU_GROUPS_HELP = "Deprecated alias for --pmu-counters GROUP:default per listed group."
+_STRICT_HELP = (
+    "Require bit-exact integer outputs: ignore per-operator LSB tolerances. "
+    "Every bundle records max_abs_diff and diff_count either way."
+)
+_GOLDEN_FROM_HELP = (
+    "Result bundle dir whose outputs/ become the goldens (self-golden). "
+    "Implies --strict-compare: every int case must match that run bit for bit; "
+    "float cases keep their tolerance. Use it to judge kernel changes. "
+    "Refuses a case the bundle lacks, one that run failed "
+    "(see --golden-allow-failed), or one run on other inputs."
+)
+_GOLDEN_ALLOW_HELP = "With --golden-from, accept cases the golden run failed."
+_HIDDEN_SET_HELP = "Add every case from this `generate --hidden-dir` root."
 
 
-def _stream_options(suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id):
-    from .hardware_pipeline import StreamOptions, apply_precision, float_precision_for, resolve_pmu_options, validate_fvp_gate
+def _read_case_ids(case_ids: Optional[list[str]], cases_from: Optional[Path]) -> tuple[str, ...]:
+    """Join --case-id with --cases-from lines."""
+    ids = list(case_ids or [])
+    if cases_from is not None:
+        try:
+            lines = cases_from.read_text(encoding="utf-8").splitlines()
+        except OSError as exc:
+            _fail(f"Cannot read --cases-from: {exc}")
+        listed = [line.strip() for line in lines if line.strip() and not line.lstrip().startswith("#")]
+        # Empty would mean "run everything".
+        if not listed:
+            _fail(f"--cases-from lists no case ids: {cases_from}")
+        ids += listed
+    return tuple(ids)
+
+
+def _check_ops(ops: tuple[str, ...]) -> None:
+    """Fail on an op no descriptor matches."""
+    from ..core.discovery import find_descriptors_dir
+    from ..generation.io.descriptors import DescriptorLoadError, load_all_descriptors, unmatched_ops
+
+    if not ops:
+        return
+    try:
+        catalog = load_all_descriptors(str(find_descriptors_dir(repo_root())))
+    except DescriptorLoadError as exc:
+        raise ValueError(f"Descriptor catalog failed to load: {exc}") from exc
+    unknown = unmatched_ops(catalog, list(ops))
+    if unknown:
+        raise ValueError(f"No descriptor matches --op: {', '.join(unknown)}")
+
+
+def _stream_options(
+    spec, suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id,
+    ops, dtypes, case_ids, cases_from, strict_compare, golden_from, golden_allow_failed, hidden_set=None,
+):
+    from .hardware_pipeline import (
+        StreamOptions, apply_precision, fit_to_board, float_precision_for, resolve_pmu_options, validate_fvp_gate,
+    )
+    from .generated_test_bridge import CaseSelection
     from .session_runner import canonical_suite
 
     try:
@@ -373,14 +558,22 @@ def _stream_options(suite, family, test_name, limit, precision, pmu_counters, pm
         suite = canonical_suite(suite)
         suite, test_name = apply_precision(precision, suite, test_name)
         validate_fvp_gate(fvp_gate)
+        cases = CaseSelection(tuple(ops or ()), tuple(dtypes or ()), _read_case_ids(case_ids, cases_from))
+        _check_ops(cases.ops)
+        # Exact ids already bound the run.
+        if cases.case_ids and limit is not None:
+            raise ValueError("--limit cannot combine with --case-id or --cases-from.")
         selection = resolve_pmu_options(pmu_counters or [], pmu_groups, warn=lambda msg: typer.echo(msg, err=True))
+        options = StreamOptions(
+            suite=suite, family=family, test_name=test_name, limit=limit,
+            ops=cases.ops, dtypes=cases.dtypes, case_ids=cases.case_ids,
+            pmu_counters=selection, fvp_gate=fvp_gate, session_id=session_id,
+            float_precision=float_precision_for(precision), strict_compare=strict_compare, golden_from=golden_from,
+            golden_allow_failed=golden_allow_failed, hidden_set=hidden_set,
+        )
+        return fit_to_board(spec, options, explicit_pmu=bool(pmu_counters) or pmu_groups is not None)
     except ValueError as exc:
         _fail(str(exc))
-    return StreamOptions(
-        suite=suite, family=family, test_name=test_name, limit=limit,
-        pmu_counters=selection, fvp_gate=fvp_gate, session_id=session_id,
-        float_precision=float_precision_for(precision),
-    )
 
 
 def _quiet_stdout(as_json: bool):
@@ -391,18 +584,20 @@ def _quiet_stdout(as_json: bool):
     return stdout_to_stderr() if as_json else contextlib.nullcontext()
 
 
-def _report(outcome, spec: BoardSpec, *, as_json: bool) -> None:
+def _report(outcome, spec: BoardSpec, options, *, as_json: bool) -> None:
+    from .hardware_pipeline import resolved_selection
     from .run_summary import build_json_summary, print_run_report
 
-    failed = print_run_report(outcome.result, outcome.skipped, outcome.bundle, err=as_json)
+    failed = print_run_report(outcome.result, outcome.skipped, outcome.bundle, err=as_json, coverage=outcome.coverage)
     if as_json:
         typer.echo(json.dumps(build_json_summary(
             outcome.result, outcome.skipped, session_id=outcome.session_id, board_id=spec.id, bundle=outcome.bundle,
-            timing=outcome.timing,
+            selection=resolved_selection(repo_root(), spec, options), timing=outcome.timing,
+            coverage=outcome.coverage,
         ), indent=2))
     if failed:
         typer.echo(typer.style("✗ One or more generated-test cases failed correctness", fg=typer.colors.RED, bold=True), err=True)
-        sys.exit(1)
+        sys.exit(EXIT_FAIL)
     typer.echo(
         typer.style(f"✓ {len(outcome.result.cases)} generated test case(s) passed on {spec.id}", fg=typer.colors.GREEN, bold=True),
         err=as_json,
@@ -410,6 +605,7 @@ def _report(outcome, spec: BoardSpec, *, as_json: bool) -> None:
 
 
 @hardware_app.command()
+@_bugs_exit_error
 def stream(
     board: Optional[str] = typer.Option(None, "--board", help=_BOARD_HELP),
     serial_no: Optional[int] = typer.Option(None, "--serial-no", help=_SERIAL_HELP),
@@ -417,10 +613,19 @@ def stream(
     family: Optional[str] = typer.Option(None, "--family", help="Operator family under artifacts/generated_tests to bridge. Omit to bridge every family with real firmware dispatch support (see generated_test_bridge.bridged_families())."),
     test_name: Optional[str] = typer.Option(None, "--test-name", help="Only bridge generated tests whose directory name contains this substring."),
     limit: Optional[int] = typer.Option(None, "--limit", help="Only bridge the first N discovered generated tests (per suite/family)."),
+    op: Optional[list[str]] = typer.Option(None, "--op", help=_OP_HELP),
+    dtype: Optional[list[str]] = typer.Option(None, "--dtype", help=_DTYPE_HELP),
+    case_id: Optional[list[str]] = typer.Option(None, "--case-id", help=_CASE_ID_HELP),
+    cases_from: Optional[Path] = typer.Option(None, "--cases-from", help=_CASES_FROM_HELP),
     precision: Optional[str] = typer.Option(None, "--precision", help=_PRECISION_HELP),
     pmu_counters: Optional[list[str]] = typer.Option(None, "--pmu-counters", help=_PMU_COUNTERS_HELP),
     pmu_groups: Optional[str] = typer.Option(None, "--pmu-groups", help=_PMU_GROUPS_HELP, hidden=True),
     fvp_gate: Optional[str] = typer.Option(None, "--fvp-gate", help=_FVP_GATE_HELP),
+    strict_compare: bool = typer.Option(False, "--strict-compare", help=_STRICT_HELP),
+    golden_from: Optional[Path] = typer.Option(
+        None, "--golden-from", help=_GOLDEN_FROM_HELP, exists=True, file_okay=False, resolve_path=True,
+    ),
+    golden_allow_failed: bool = typer.Option(False, "--golden-allow-failed", help=_GOLDEN_ALLOW_HELP),
     session_id: Optional[str] = typer.Option(None, "--session-id", help="Session ID; also the result-bundle directory name (default: <board>-<UTC timestamp>)."),
     build_dir: Optional[Path] = typer.Option(None, "--build-dir", help=_BUILD_DIR_HELP + " Must hold the flashed firmware's ELF."),
     allow_unverified_firmware: bool = typer.Option(False, "--allow-unverified-firmware", help=_ALLOW_UNVERIFIED_HELP),
@@ -435,16 +640,24 @@ def stream(
     dispatch table in `generated_test_bridge.py` (or call `bridged_families()` at
     runtime). Everything else is reported as skipped with the reason. Bridged cases are
     batched by the limits the target advertises (cases and PMU passes per plan, receive
-    buffer), each batch run over its own fresh reset-on-open RTT session and merged into
-    one result bundle.
+    buffer), all batches run over one reset-on-open RTT session and merged into one
+    result bundle.
     """
     from .firmware_build import resolve_build_dir
-    from .hardware_pipeline import finalize_timing, stream_generated_tests
+    from .hardware_pipeline import finalize_timing, prepare_bundles, stream_generated_tests
 
     # Options first, probe last: a bad flag combination must fail with its own
     # message, not with whatever probe enumeration happens to hit.
     spec = _board(board)
-    options = _stream_options(suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id)
+    options = _stream_options(
+        spec, suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id,
+        op, dtype, case_id, cases_from, strict_compare, golden_from, golden_allow_failed,
+    )
+    prepared = None
+    if golden_from is not None:
+        # Check goldens before probe access.
+        with _pipeline_errors(_verbosity(verbosity)), _quiet_stdout(as_json):
+            prepared = prepare_bundles(repo_root(), spec, options)
     serial = _serial(serial_no)
     echo = lambda msg: typer.echo(msg, err=as_json)  # noqa: E731
     build_dir = resolve_build_dir(repo_root(), spec, build_dir)
@@ -453,12 +666,14 @@ def stream(
         outcome = stream_generated_tests(
             repo_root(), spec, serial, build_dir=build_dir,
             options=options, echo=echo, progress_to_stderr=as_json, allow_unverified_firmware=allow_unverified_firmware,
+            prepared=prepared,
         )
         finalize_timing(outcome, echo=echo)
-    _report(outcome, spec, as_json=as_json)
+    _report(outcome, spec, options, as_json=as_json)
 
 
 @hardware_app.command()
+@_bugs_exit_error
 def run(
     board: Optional[str] = typer.Option(None, "--board", help=_BOARD_HELP),
     serial_no: Optional[int] = typer.Option(None, "--serial-no", help=_SERIAL_HELP),
@@ -466,10 +681,22 @@ def run(
     family: Optional[str] = typer.Option(None, "--family", help="Operator family under artifacts/generated_tests to bridge. Omit to bridge every family with real firmware dispatch support."),
     test_name: Optional[str] = typer.Option(None, "--test-name", help="Only bridge generated tests whose directory name contains this substring."),
     limit: Optional[int] = typer.Option(None, "--limit", help="Only bridge the first N discovered generated tests (per suite/family)."),
+    op: Optional[list[str]] = typer.Option(None, "--op", help=_OP_HELP),
+    dtype: Optional[list[str]] = typer.Option(None, "--dtype", help=_DTYPE_HELP),
+    case_id: Optional[list[str]] = typer.Option(None, "--case-id", help=_CASE_ID_HELP),
+    cases_from: Optional[Path] = typer.Option(None, "--cases-from", help=_CASES_FROM_HELP),
     precision: Optional[str] = typer.Option(None, "--precision", help=_PRECISION_HELP),
     pmu_counters: Optional[list[str]] = typer.Option(None, "--pmu-counters", help=_PMU_COUNTERS_HELP),
     pmu_groups: Optional[str] = typer.Option(None, "--pmu-groups", help=_PMU_GROUPS_HELP, hidden=True),
     fvp_gate: Optional[str] = typer.Option(None, "--fvp-gate", help=_FVP_GATE_HELP),
+    strict_compare: bool = typer.Option(False, "--strict-compare", help=_STRICT_HELP),
+    golden_from: Optional[Path] = typer.Option(
+        None, "--golden-from", help=_GOLDEN_FROM_HELP, exists=True, file_okay=False, resolve_path=True,
+    ),
+    golden_allow_failed: bool = typer.Option(False, "--golden-allow-failed", help=_GOLDEN_ALLOW_HELP),
+    hidden_set: Optional[Path] = typer.Option(
+        None, "--hidden-set", help=_HIDDEN_SET_HELP, exists=True, file_okay=False, resolve_path=True,
+    ),
     session_id: Optional[str] = typer.Option(None, "--session-id", help="Session ID; also the result-bundle directory name (default: <board>-<UTC timestamp>)."),
     skip_generate: bool = typer.Option(False, "--skip-generate", help="Reuse existing artifacts/generated_tests instead of regenerating."),
     skip_flash: bool = typer.Option(False, "--skip-flash", help="Skip build+flash and reuse whatever firmware is already running on the board (its TARGET_INFO build id is still checked against the build dir)."),
@@ -482,8 +709,10 @@ def run(
     cmsis_nn_ref: Optional[str] = typer.Option(None, "--cmsis-nn-ref", help=_CMSIS_NN_REF_HELP),
     cmsis_nn_root: Optional[Path] = typer.Option(None, "--cmsis-nn-root", help=_CMSIS_NN_ROOT_HELP),
     inline_asm: Optional[bool] = typer.Option(None, "--inline-asm/--no-inline-asm", help=_INLINE_ASM_HELP),
+    placement: Optional[str] = typer.Option(None, "--placement", help=_PLACEMENT_HELP),
     update_dependencies: bool = typer.Option(False, "--update-dependencies", help=_UPDATE_DEPS_HELP),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help=_VERBOSITY_HELP),
+    allow_dirty_tester: bool = typer.Option(False, "--allow-dirty-tester", help=_DIRTY_TESTER_HELP),
 ) -> None:
     """The whole hardware pipeline: generate tests for the board's CPU, build the
     firmware, flash it unless the board already runs this exact build, stream the
@@ -494,18 +723,28 @@ def run(
     if skip_flash and force_flash:
         _fail("--skip-flash and --force-flash cannot be combined.")
     spec = _board(board)
-    options = _stream_options(suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id)
+    _check_placement(placement, spec)
+    options = _stream_options(
+        spec, suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id,
+        op, dtype, case_id, cases_from, strict_compare, golden_from, golden_allow_failed, hidden_set,
+    )
     build_dir = resolve_build_dir(repo_root(), spec, build_dir)
     # Neither builds nor generates: nothing to resolve.
     streams_only = skip_generate and skip_flash
     if streams_only:
+        # Passed build flags must match it.
+        if any(flag is not None for flag in (cmsis_nn_ref, cmsis_nn_root, inline_asm, placement)):
+            _built_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement, stream_only=True)
         app_options = None
     elif skip_flash:
-        app_options = _built_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm)
+        app_options = _built_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement)
     else:
-        app_options = _app_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm)
-    serial = _serial(serial_no)
+        app_options = _app_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement)
     echo = lambda msg: typer.echo(msg, err=as_json)  # noqa: E731
+    # Refuse before probing the board.
+    if cmsis_nn_root is not None:
+        _check_tester_clean(allow_dirty_tester, echo)
+    serial = _serial(serial_no)
     if streams_only:
         _saved_kernels(build_dir, echo)
     with _pipeline_errors(_verbosity(verbosity)), _quiet_stdout(as_json):
@@ -516,4 +755,4 @@ def run(
             allow_unverified_firmware=allow_unverified_firmware, app_options=app_options,
             update_dependencies=update_dependencies,
         )
-    _report(outcome, spec, as_json=as_json)
+    _report(outcome, spec, options, as_json=as_json)

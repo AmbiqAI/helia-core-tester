@@ -105,6 +105,11 @@ static uint8_t workspace[32768u];
 static uint8_t inbound_frame[1024];
 static uint32_t next_host_sequence = 0u;
 extern uint32_t hct_host_fail_call;
+extern uint32_t hct_host_skip_call;
+extern uint32_t hct_host_mutate_call;
+extern uint32_t hct_host_input_moves;
+extern const uint8_t *hct_host_last_input;
+extern uint32_t hct_host_misaligned;
 
 static hctp_status_t send_frame(hct_server_session_t *session, uint16_t message_type, const uint8_t *payload, size_t payload_length)
 {
@@ -113,7 +118,7 @@ static hctp_status_t send_frame(hct_server_session_t *session, uint16_t message_
 }
 
 /* CASE_META for one abs_s8 case. */
-static size_t encode_abs_meta(uint8_t *payload, const char *case_id)
+static size_t encode_abs_meta(uint8_t *payload, const char *case_id, uint8_t mutable_data, uint32_t alignment)
 {
     size_t offset = 0u;
     write_text(payload, &offset, case_id);
@@ -138,9 +143,9 @@ static size_t encode_abs_meta(uint8_t *payload, const char *case_id)
     write_u32(payload, &offset, 0u);
     write_u32(payload, &offset, 0u);
     write_u32(payload, &offset, (uint32_t)sizeof(kInput));
-    write_u32(payload, &offset, 1u);
+    write_u32(payload, &offset, alignment);
     write_u32(payload, &offset, hctp_crc32((const uint8_t *)kInput, sizeof(kInput)));
-    write_u8(payload, &offset, 0u);
+    write_u8(payload, &offset, mutable_data);
     write_u32(payload, &offset, 0u);
     return offset;
 }
@@ -174,7 +179,7 @@ static int stream_input(hct_server_session_t *session)
 }
 
 /* Count samples, then check CASE_COMPLETE. */
-static int expect_case_complete(hct_server_session_t *session, uint8_t correctness_ran, uint8_t performance_ran, int samples)
+static int expect_case_complete(hct_server_session_t *session, uint8_t correctness_ran, uint8_t performance_ran, int samples, int32_t rejected_status)
 {
     uint8_t outbound[1024];
     hctp_frame_view_t frame;
@@ -189,12 +194,12 @@ static int expect_case_complete(hct_server_session_t *session, uint8_t correctne
             continue;
         }
         if (frame.header.message_type != HCTP_MSG_CASE_COMPLETE || samples != 0) return 61;
-        /* id, ran flags, workspace, [status]. */
+        /* id, ran flags, workspace, prepare, [status]. */
         id_length = (uint32_t)frame.payload[0] | ((uint32_t)frame.payload[1] << 8);
         if (frame.payload[2u + id_length] != correctness_ran || frame.payload[3u + id_length] != performance_ran) return 62;
-        if (performance_ran != 0u) return frame.header.payload_length == 2u + id_length + 6u ? 0 : 63;
-        if (frame.header.payload_length != 2u + id_length + 10u) return 64;
-        return (int32_t)read_u32(&frame.payload[2u + id_length + 6u]) == ARM_CMSIS_NN_ARG_ERROR ? 0 : 65;
+        if (performance_ran != 0u) return frame.header.payload_length == 2u + id_length + 10u ? 0 : 63;
+        if (frame.header.payload_length != 2u + id_length + 14u) return 64;
+        return (int32_t)read_u32(&frame.payload[2u + id_length + 10u]) == rejected_status ? 0 : 65;
     }
 }
 
@@ -205,7 +210,7 @@ static int run_next_case(hct_server_session_t *session)
     size_t length = 0u;
     int status;
     if (drain_single_message(session, HCTP_MSG_REQUEST_CASE, payload, &length) != 0 || payload[0] != 1u) return 70;
-    if (send_frame(session, HCTP_MSG_CASE_META, payload, encode_abs_meta(payload, "abs_next_s8")) != HCTP_STATUS_OK) return 71;
+    if (send_frame(session, HCTP_MSG_CASE_META, payload, encode_abs_meta(payload, "abs_next_s8", 1u, 1u)) != HCTP_STATUS_OK) return 71;
     status = stream_input(session);
     if (status != 0) return status;
     if (send_frame(session, HCTP_MSG_RUN_CORRECTNESS, payload, 0u) != HCTP_STATUS_OK) return 72;
@@ -216,15 +221,18 @@ static int run_next_case(hct_server_session_t *session)
     while (hct_server_session_take_next_frame(session, payload, sizeof(payload)) != 0u) {}
     payload[0] = 1u;
     if (send_frame(session, HCTP_MSG_CORRECTNESS_ACK, payload, 1u) != HCTP_STATUS_OK) return 74;
+    /* Stateful case: timed outputs go unchecked. */
+    hct_host_skip_call = 3u;
     if (send_frame(session, HCTP_MSG_RUN_PERFORMANCE, payload, 0u) != HCTP_STATUS_OK) return 75;
-    status = expect_case_complete(session, 1u, 1u, 6);
+    hct_host_skip_call = 0u;
+    status = expect_case_complete(session, 1u, 1u, 6, 0);
     if (status != 0) return status;
     if (drain_single_message(session, HCTP_MSG_SESSION_COMPLETE, payload, &length) != 0 || payload[0] != 2u) return 76;
     return session->state == HCT_SERVER_STATE_COMPLETE ? 0 : 77;
 }
 
 /* A refused case ends alone, with its status. */
-static int probe_rejection(const hct_server_session_t *session, uint16_t trigger, uint32_t fail_call, uint8_t correctness_ran, int samples, const char *label)
+static int probe_rejection(const hct_server_session_t *session, uint16_t trigger, uint32_t fail_call, uint32_t skip_call, uint32_t mutate_call, uint8_t correctness_ran, int samples, const char *label)
 {
     static hct_server_session_t probe;
     static uint8_t probe_workspace[sizeof(workspace)];
@@ -238,8 +246,15 @@ static int probe_rejection(const hct_server_session_t *session, uint16_t trigger
     strcpy(probe.planned_case_ids[1], "abs_next_s8");
     probe.planned_kernel_ids[1] = 1u;
     hct_host_fail_call = fail_call;
+    hct_host_skip_call = skip_call;
+    hct_host_mutate_call = mutate_call;
     if (send_frame(&probe, trigger, payload, 0u) != HCTP_STATUS_OK) return 50;
-    status = expect_case_complete(&probe, correctness_ran, 0u, samples);
+    hct_host_skip_call = 0u;
+    hct_host_mutate_call = 0u;
+    status = expect_case_complete(&probe, correctness_ran, 0u, samples,
+                                  skip_call != 0u     ? HCT_STATUS_OUTPUT_CHANGED
+                                  : mutate_call != 0u ? HCT_STATUS_OPERAND_CHANGED
+                                                      : ARM_CMSIS_NN_ARG_ERROR);
     if (status == 0) status = run_next_case(&probe);
     if (status == 0) printf("rejected %s samples_dropped=%d\n", label, samples);
     return status;
@@ -266,6 +281,8 @@ int main(void)
     static const int8_t kExpected[] = {12, 1, 0, 7, 99, 5, 8, 3, 4, 11, 2, 100};
     hct_server_session_t session;
     uint8_t inbound_payload[512];
+    uint8_t plan_copy[512];
+    size_t plan_length;
     uint8_t outbound_payload[1024];
     size_t outbound_length = 0u;
     size_t offset = 0u;
@@ -273,8 +290,14 @@ int main(void)
     int status;
     hctp_frame_view_t frame;
 
-    hct_server_session_init(&session, 0xC0DE1234u, 256u, workspace, (uint32_t)sizeof(workspace));
+    static const hct_boot_info_t kBoot = {7, 96000000u, 0x03040000u, 0x00040000u};
+    hct_server_session_init(&session, 0xC0DE1234u, 256u, workspace, (uint32_t)sizeof(workspace), &kBoot);
     if (drain_single_message(&session, HCTP_MSG_TARGET_INFO, outbound_payload, &outbound_length) != 0) return 10;
+    /* Boot health trails TARGET_INFO. */
+    if (outbound_length < 16u || read_u32(&outbound_payload[outbound_length - 16u]) != 7u ||
+        read_u32(&outbound_payload[outbound_length - 12u]) != 96000000u ||
+        read_u32(&outbound_payload[outbound_length - 8u]) != 0x03040000u ||
+        read_u32(&outbound_payload[outbound_length - 4u]) != 0x00040000u) return 19;
 
     offset = 0u;
     if (hct_server_session_accept_frame(&session, inbound_frame, encode_frame(HCTP_MSG_TARGET_INFO_ACK, session.session_id, next_host_sequence++, inbound_payload, 0u, inbound_frame)) != HCTP_STATUS_OK) return 11;
@@ -317,10 +340,12 @@ int main(void)
 #else
     (void)second_id_offset;
 #endif
+    memcpy(plan_copy, inbound_payload, offset);
+    plan_length = offset;
     if (hct_server_session_accept_frame(&session, inbound_frame, encode_frame(HCTP_MSG_SESSION_PLAN, session.session_id, next_host_sequence++, inbound_payload, offset, inbound_frame)) != HCTP_STATUS_OK) return 13;
     if (drain_single_message(&session, HCTP_MSG_REQUEST_CASE, outbound_payload, &outbound_length) != 0) return 14;
 
-    if (send_frame(&session, HCTP_MSG_CASE_META, inbound_payload, encode_abs_meta(inbound_payload, "abs_default_s8_stream_demo")) != HCTP_STATUS_OK) return 15;
+    if (send_frame(&session, HCTP_MSG_CASE_META, inbound_payload, encode_abs_meta(inbound_payload, "abs_default_s8_stream_demo", 0u, 64u)) != HCTP_STATUS_OK) return 15;
 
     /* Regression: a BLOB_CHUNK whose declared length is near UINT32_MAX must be refused
      * as truncated, never handed to memcpy (has_capacity() used to compute offset+needed,
@@ -342,7 +367,7 @@ int main(void)
 
     /* Kernel refusals: correctness, warmup, mid-sampling. */
     session.output_capacity_bytes = 4u;
-    status = probe_rejection(&session, HCTP_MSG_RUN_CORRECTNESS, 0u, 0u, 0, "correctness");
+    status = probe_rejection(&session, HCTP_MSG_RUN_CORRECTNESS, 0u, 0u, 0u, 0u, 0, "correctness");
     session.output_capacity_bytes = (uint32_t)sizeof(kExpected);
     if (status != 0) return status;
     if (hct_server_session_accept_frame(&session, inbound_frame, encode_frame(HCTP_MSG_RUN_CORRECTNESS, session.session_id, next_host_sequence++, inbound_payload, 0u, inbound_frame)) != HCTP_STATUS_OK) return 20;
@@ -385,10 +410,22 @@ int main(void)
     write_u8(inbound_payload, &offset, 1u);
     if (hct_server_session_accept_frame(&session, inbound_frame, encode_frame(HCTP_MSG_CORRECTNESS_ACK, session.session_id, next_host_sequence++, inbound_payload, offset, inbound_frame)) != HCTP_STATUS_OK) return 27;
     /* Call 1: warmup. Call 19: pass 1 sampling. */
-    status = probe_rejection(&session, HCTP_MSG_RUN_PERFORMANCE, 1u, 1u, 0, "warmup");
-    if (status == 0) status = probe_rejection(&session, HCTP_MSG_RUN_PERFORMANCE, 19u, 1u, 3, "sampling");
+    status = probe_rejection(&session, HCTP_MSG_RUN_PERFORMANCE, 1u, 0u, 0u, 1u, 0, "warmup");
+    if (status == 0) status = probe_rejection(&session, HCTP_MSG_RUN_PERFORMANCE, 19u, 0u, 0u, 1u, 3, "sampling");
+    /* Call 3, the first timed call, skips. */
+    if (status == 0) status = probe_rejection(&session, HCTP_MSG_RUN_PERFORMANCE, 0u, 3u, 0u, 1u, 0, "memoized");
+    /* Last timed call skips. */
+    if (status == 0) status = probe_rejection(&session, HCTP_MSG_RUN_PERFORMANCE, 0u, 26u, 0u, 1u, 5, "memoized-late");
+    /* Last call corrupts its input after running. */
+    if (status == 0) status = probe_rejection(&session, HCTP_MSG_RUN_PERFORMANCE, 0u, 0u, 28u, 1u, 6, "mutated");
     if (status != 0) return status;
+    hct_host_input_moves = 0u;
+    hct_host_last_input = NULL;
     if (hct_server_session_accept_frame(&session, inbound_frame, encode_frame(HCTP_MSG_RUN_PERFORMANCE, session.session_id, next_host_sequence++, inbound_payload, 0u, inbound_frame)) != HCTP_STATUS_OK) return 28;
+    /* Every timed call reads the other copy. */
+    printf("input_moves=%u\n", (unsigned)hct_host_input_moves);
+    /* 64-byte input: twin keeps alignment. */
+    printf("misaligned=%u\n", (unsigned)hct_host_misaligned);
     {
         int sample_count = 0;
         int cpu_pass_samples = 0;
@@ -446,6 +483,9 @@ int main(void)
             else if (frame.header.message_type == HCTP_MSG_SESSION_COMPLETE)
             {
                 if (sample_count != 6 || cpu_pass_samples != 3 || mve_pass_samples != 3) return 36;
+                /* The next plan restarts at case 0. */
+                if (hct_server_session_accept_frame(&session, inbound_frame, encode_frame(HCTP_MSG_SESSION_PLAN, session.session_id, next_host_sequence++, plan_copy, plan_length, inbound_frame)) != HCTP_STATUS_OK) return 44;
+                if (drain_single_message(&session, HCTP_MSG_REQUEST_CASE, outbound_payload, &outbound_length) != 0 || outbound_length != 2u || outbound_payload[0] != 0u || outbound_payload[1] != 0u) return 45;
                 printf("samples=%d passes=2 state=%d\n", sample_count, (int)session.state);
                 return 0;
             }

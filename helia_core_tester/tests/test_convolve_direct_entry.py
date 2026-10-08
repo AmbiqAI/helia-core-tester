@@ -13,6 +13,8 @@ from helia_core_tester.generation.test_ops import _required_kernel_symbols, gene
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _CONVOLVE_ENTRIES = ["arm_convolve_s8_small_cin", "arm_convolve_s8_3x3_c16_s1"]
+# arm_convolve_1x1_s8_fast's arguments and its one-argument scratch query.
+_CONVOLVE_1X1_ENTRIES = ["arm_convolve_1x1_s8_short_k"]
 
 
 def _descriptor(name: str) -> dict:
@@ -79,8 +81,40 @@ def test_entry_case_calls_the_entry_with_arm_convolve_s8_arguments(tmp_path: Pat
     assert "arm_convolve_wrapper_s8(" not in source
 
 
-def test_declined_case_checks_the_status_and_an_untouched_output(tmp_path: Path) -> None:
-    source = _source("convolve_entry_3x3_c16_declines_stride2_8x8_s8", tmp_path)
+def test_1x1_entries_resolve_with_arm_convolve_1x1_s8_fast_query() -> None:
+    for entry in _CONVOLVE_1X1_ENTRIES:
+        assert _resolve(entry, entry_sizer="arm_convolve_1x1_s8_fast_get_buffer_size") == {
+            "kernel_fn": entry,
+            "kernel_get_buffer_size_fn": "arm_convolve_1x1_s8_fast_get_buffer_size",
+            "entry_family": "contract",
+            "kernel_needs_layout": False,
+            "buffer_size_needs_layout": False,
+        }
+
+
+def test_1x1_entry_case_calls_the_entry_with_arm_convolve_1x1_s8_fast_arguments(tmp_path: Path) -> None:
+    name = "convolve_entry_1x1_short_k_c8_2x4_co16_s8"
+    assert _required_kernel_symbols(_descriptor(name)) == [
+        "arm_convolve_1x1_s8_short_k", "arm_convolve_1x1_s8_fast_get_buffer_size"
+    ]
+    source = _source(name, tmp_path)
+
+    code = re.sub(r"/\*.*?\*/|//[^\n]*", " ", source, flags=re.S)
+    call = re.search(r"return (\w+)\(\s*&\w+_ctx,\s*&\w+_weight_sum_ctx,(.*?)\);", code, re.S)
+    assert call and call.group(1) == "arm_convolve_1x1_s8_short_k"
+    # arm_convolve_1x1_s8_fast's arguments: no upscale_dims between the bias and the output dims.
+    assert re.search(r"_biases,\s*&\w+_output_dims,", call.group(2))
+    assert "upscale_dims" not in source
+    assert re.search(r"arm_convolve_1x1_s8_fast_get_buffer_size\(\s*&\w+_input_dims\s*\)", code)
+    assert "arm_convolve_weight_sum(" in source
+    assert "arm_convolve_wrapper_s8(" not in source
+
+
+@pytest.mark.parametrize(
+    "name", ["convolve_entry_3x3_c16_declines_stride2_8x8_s8", "convolve_entry_1x1_short_k_declines_c17_2x4_s8"]
+)
+def test_declined_case_checks_the_status_and_an_untouched_output(name: str, tmp_path: Path) -> None:
+    source = _source(name, tmp_path)
 
     assert "HELIA_GUARD_CHECK_UNTOUCHED(" in source
     assert re.search(r"HELIA_VALIDATE_EXPECTED_STATUS\([^;]*ARM_CMSIS_NN_NO_IMPL_ERROR", source)

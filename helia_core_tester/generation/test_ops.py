@@ -4,6 +4,7 @@ Thin generator that discovers YAML descriptors and generates TFLite models.
 """
 
 import hashlib
+import re
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,9 +15,10 @@ import yaml
 
 from helia_core_tester.core.discovery import find_descriptors_dir, find_generated_tests_dir, find_repo_root
 from helia_core_tester.core.cpu_targets import missing_required_capabilities, normalize_cpu
+from helia_core_tester.generation.golden_check import DegenerateGoldenError, check_case_golden
 from helia_core_tester.generation.kernel_dispatch import DEPTHWISE_CONV_S8_PLANAR_RULE
 from helia_core_tester.generation.io.dtypes import descriptor_matches_dtype_filter, resolve_comparison, resolve_tensor_dtypes
-from helia_core_tester.generation.io.descriptors import load_all_descriptors
+from helia_core_tester.generation.io.descriptors import descriptor_matches_op, load_all_descriptors, unmatched_ops
 from helia_core_tester.core.path_layout import generation_report_dir
 from helia_core_tester.generation.ops import get_op_map, get_operator_spec
 from helia_core_tester.generation.reuse import (
@@ -59,6 +61,23 @@ def _float_precision_mode(filters: Dict[str, Any]) -> str:
     return str(filters.get("float_precision") or "both").strip().lower()
 
 
+def _shape_filters(filters: Dict[str, Any]) -> Dict[str, Any]:
+    """Random-shape count and seed, if set."""
+    if not filters.get("random_shapes"):
+        return {}
+    if filters.get("hidden_dir"):
+        from helia_core_tester.generation.random_shapes import hidden_secret, seed_commitment
+
+        # Never the seed itself.
+        return {"random_shapes": filters["random_shapes"], "seed_commitment": seed_commitment(hidden_secret())}
+    return {"random_shapes": filters["random_shapes"], "shape_seed": filters.get("shape_seed") or 0}
+
+
+def _split_filter(value: Any) -> List[str]:
+    """Comma-separated filter values; any one matches."""
+    return [part.strip() for part in str(value or "").split(",") if part.strip()]
+
+
 def should_run_test(desc: Dict[str, Any], filters: Dict[str, Any]) -> bool:
     """
     Determine if test should run based on filters.
@@ -70,29 +89,14 @@ def should_run_test(desc: Dict[str, Any], filters: Dict[str, Any]) -> bool:
     Returns:
         True if test should run
     """
-    if filters.get('name'):
-        if desc['name'] != filters['name']:
-            return False
+    if filters.get('name') and desc['name'] not in _split_filter(filters['name']):
+        return False
 
-    if filters.get('op'):
-        filter_op = filters['op']
-        desc_name = desc['name']
-        base_name = desc.get('_base_name', None)
-        source_stem = desc.get('_source_stem', None)
-        source_relpath = desc.get('_source_relpath', None)
-        desc_operator = desc.get('operator', None)
-        
-        name_matches = desc_name == filter_op or desc_name.startswith(filter_op + '_')
-        base_matches = base_name == filter_op if base_name else False
-        stem_matches = source_stem == filter_op if source_stem else False
-        relpath_matches = source_relpath == filter_op if source_relpath else False
-        operator_matches = desc_operator == filter_op if desc_operator else False
-        
-        if not name_matches and not base_matches and not stem_matches and not relpath_matches and not operator_matches:
-            return False
-        
-    # Filter by activation dtype
-    if filters.get('dtype') and not descriptor_matches_dtype_filter(desc, str(filters['dtype'])):
+    if filters.get('op') and not any(descriptor_matches_op(desc, op) for op in _split_filter(filters['op'])):
+        return False
+
+    dtypes = _split_filter(filters.get('dtype'))
+    if dtypes and not any(descriptor_matches_dtype_filter(desc, dtype) for dtype in dtypes):
         return False
 
     descriptor_suite = _descriptor_suite(desc).strip().lower()
@@ -170,8 +174,10 @@ def _required_kernel_symbols(desc: Dict[str, Any]) -> list[str]:
     raw = list(raw)
     if desc.get("entry"):
         raw.append(desc["entry"])
-    if desc.get("entry_sizer"):
-        raw.append(desc["entry_sizer"])
+    sizers = desc.get("entry_sizer")
+    if sizers:
+        # One query, or the entry's own beside the family's (scratch takes the larger answer).
+        raw.extend([sizers] if isinstance(sizers, str) else list(sizers))
     if desc.get("planar_supported") is not None:
         raw.append(DEPTHWISE_CONV_S8_PLANAR_RULE)
     ordered: list[str] = []
@@ -376,6 +382,7 @@ def generate_test(
     try:
         op.generate_c_files(test_dir)
         op.assert_input_mode_consumed()
+        check_case_golden(test_dir, desc)
     except NotImplementedError:
         # Operator doesn't support C file generation yet
         print(f"INFO: {name} - C file generation not implemented")
@@ -405,8 +412,30 @@ def test_generation(test_filters):
     Generate TFLite models for all descriptors.
     """
     # Load all descriptors using discovery
-    descriptors_dir = find_descriptors_dir()
+    random_shapes = test_filters.get("random_shapes")
+    hidden_dir = test_filters.get("hidden_dir")
+    if random_shapes:
+        from helia_core_tester.generation.random_shapes import select_ops
+
+        shape_ops = select_ops(test_filters.get("op"), test_filters.get("dtype"))
+    if random_shapes and hidden_dir:
+        from helia_core_tester.generation.random_shapes import prepare_hidden
+
+        descriptors_dir = prepare_hidden(
+            Path(hidden_dir), random_shapes, normalize_cpu(test_filters.get("cpu") or "cortex-m55"), shape_ops,
+        )
+    elif random_shapes:
+        from helia_core_tester.generation.random_shapes import prepare_shapes
+
+        descriptors_dir = prepare_shapes(
+            find_repo_root(), random_shapes, int(test_filters.get("shape_seed") or 0),
+            normalize_cpu(test_filters.get("cpu") or "cortex-m55"), shape_ops,
+        )
+    else:
+        descriptors_dir = find_descriptors_dir()
     descriptors = load_all_descriptors(str(descriptors_dir))
+    unknown_ops = unmatched_ops(descriptors, _split_filter(test_filters.get("op")))
+    assert not unknown_ops, f"No descriptor matches --op: {', '.join(unknown_ops)}"
 
     # Apply filters
     filtered_descriptors = []
@@ -432,7 +461,8 @@ def test_generation(test_filters):
     top_generated.mkdir(parents=True, exist_ok=True)
     print(f"Generated tests output dir: {top_generated}")
     repo_root = find_repo_root()
-    report_dir = generation_report_dir(repo_root, target_cpu, suite=suite_mode)
+    # Hidden reports stay outside the tree.
+    report_dir = generation_report_dir(Path(hidden_dir) if hidden_dir else repo_root, target_cpu, suite=suite_mode)
     report_dir.mkdir(parents=True, exist_ok=True)
 
     # Place models in generated tests root
@@ -561,6 +591,15 @@ def test_generation(test_filters):
             write_stamp(test_dir, stamp)
             generated_count += 1
         except Exception as e:
+            if random_shapes and isinstance(e, DegenerateGoldenError):
+                # A flat random draw is dropped.
+                generation_failures[:] = [f for f in generation_failures if f.get("name") != case_name]
+                reset_case_dir(test_dir)
+                skipped_entries.append(
+                    _skip_manifest_entry(desc, cpu=target_cpu, missing_capabilities=[], status="skipped_degenerate")
+                )
+                print(f"Dropping {case_name}: {e}")
+                continue
             print(f"Failed to generate TFLite model for {desc['name']}: {e}")
             # Continue with other models
             continue
@@ -587,10 +626,27 @@ def test_generation(test_filters):
     )
 
     produced_count = generated_count + reused_count
-    pruned_count = prune_unlisted_cases(
-        top_generated,
-        {str(entry["relative_test_dir"]) for entry in manifest_entries},
-    )
+    produced_dirs = {str(entry["relative_test_dir"]) for entry in manifest_entries}
+    if test_filters.get("keep_unselected"):
+        # Drop selected cases this run skipped.
+        stale = [
+            test_dir for test_dir in (_descriptor_test_dir(Path(top_generated), d) for d in filtered_descriptors)
+            if test_dir.is_dir() and str(test_dir.relative_to(top_generated)) not in produced_dirs
+        ]
+        if random_shapes:
+            from helia_core_tester.generation.random_shapes import random_case_pattern
+
+            # Drop earlier random draws.
+            drawn = random_case_pattern()
+            stale += [
+                d for d in Path(top_generated).glob("*/rs*")
+                if drawn.fullmatch(d.name) and str(d.relative_to(top_generated)) not in produced_dirs
+            ]
+        for test_dir in stale:
+            reset_case_dir(test_dir)
+        pruned_count = len(stale)
+    else:
+        pruned_count = prune_unlisted_cases(top_generated, produced_dirs)
     if pruned_count:
         print(f"Pruned {pruned_count} case director(ies) outside the active filter")
 
@@ -683,6 +739,7 @@ def test_generation(test_filters):
             "suite": suite_mode,
             "float_precision": float_precision_mode,
             "force_generate": force_generate,
+            **_shape_filters(test_filters),
         },
         "counts": {
             "descriptors_total": len(descriptors),
@@ -696,6 +753,9 @@ def test_generation(test_filters):
             ),
             "skipped_kernel_symbol": sum(
                 1 for entry in skipped_entries if entry.get("status") == "skipped_kernel_symbol"
+            ),
+            "skipped_degenerate": sum(
+                1 for entry in skipped_entries if entry.get("status") == "skipped_degenerate"
             ),
             "conversion_failures": len(conversion_failures),
             "generation_failures": len(generation_failures),
@@ -755,6 +815,7 @@ def _write_manifest_and_cmake(
             "cpu": cpu,
             "suite": _suite_mode(test_filters),
             "float_precision": _float_precision_mode(test_filters),
+            **_shape_filters(test_filters),
         },
         "tests": entries,
         "skipped": skipped_entries,

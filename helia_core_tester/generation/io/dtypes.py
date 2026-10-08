@@ -6,12 +6,12 @@ from typing import Any, Dict, Mapping
 
 
 TENSOR_DTYPE_KEYS = ("input", "output", "weights", "bias")
-ALLOWED_TENSOR_DTYPES = ("FP32", "FP16", "S8", "S16", "S32", "S4", "BOOL")
+ALLOWED_TENSOR_DTYPES = ("FP32", "FP16", "S8", "S16", "S32", "S4", "U16", "BOOL")
 LEGACY_ACTIVATION_DTYPES = ("S8", "S16", "S32")
 LEGACY_WEIGHT_DTYPES = ("S4", "S8")
 
 FLOAT_DTYPES = frozenset({"FP32", "FP16"})
-INTEGER_DTYPES = frozenset({"S8", "S16", "S32", "S4"})
+INTEGER_DTYPES = frozenset({"S8", "S16", "S32", "S4", "U16"})
 
 _DTYPE_TO_C_TYPE = {
     "FP32": "float",
@@ -20,6 +20,7 @@ _DTYPE_TO_C_TYPE = {
     "S16": "int16_t",
     "S32": "int32_t",
     "S4": "int8_t",
+    "U16": "uint16_t",
     "BOOL": "bool",
 }
 
@@ -30,6 +31,7 @@ _DTYPE_TO_LITERT = {
     "S16": "int16",
     "S32": "int32",
     "S4": "int4",
+    "U16": "uint16",
     "BOOL": "bool",
 }
 
@@ -151,7 +153,6 @@ def get_resolved_tensor_dtype(desc: Mapping[str, Any], role: str, default: str |
 # fallback are listed explicitly below so generated C, sidecars, and streamed
 # hardware manifests all consume the same resolved comparison object.
 _OPERATOR_TOLERANCE_OVERRIDES: Dict[str, int] = {
-    "PReLU": 2,
     # LUT-style requantization with a scalar-vs-MVE rounding divergence of 1 LSB
     # observed on real Apollo510 hardware against the scalar golden.
     "LeakyRelu": 1,
@@ -159,9 +160,6 @@ _OPERATOR_TOLERANCE_OVERRIDES: Dict[str, int] = {
     # Exact match required, even though hardware has been observed to
     # diverge by up to 2 LSB on the dilation/non-optimized path.
     "DepthwiseConv": 0,
-    # convolve_grouped_conv_case_01_s8 mismatched real hardware by exactly
-    # 1 LSB while FVP validated it under a tolerant fallback of 1.
-    "Convolve": 1,
     # Pure byte-copy/index-permutation kernels (arm_reshape_s8,
     # arm_concatenation_s8, arm_split_s8, arm_pad_s8, arm_transpose_*,
     # arm_strided_slice_*, arm_space_to_depth_s8, arm_batch_to_space_nd_s8,
@@ -177,34 +175,40 @@ _OPERATOR_TOLERANCE_OVERRIDES: Dict[str, int] = {
     "SpaceToDepth": 0,
     "BatchToSpaceND": 0,
     "SpaceToBatchND": 0,
-    # Preserve the historical standalone/FVP tolerant-int contract while making
-    # the same resolved comparison authoritative for streamed hardware cases.
+    # Kernel rounds 1 LSB off TFLite.
+    "Convolve": 1,
     "TransposeConv": 1,
-    "FullyConnected": 1,
-    "BatchMatMul": 1,
-    "AvgPool": 1,
-    "MaxPool": 1,
-    "Softmax": 1,
-    "Quantize": 1,
-    "Logistic": 1,
-    "Relu": 1,
-    "Relu6": 1,
-    "Tanh": 1,
-    "HardSwish": 1,
     "Mean": 1,
+    "Quantize": 1,
+    # Exact on MVE, DSP and pure C.
+    "PReLU": 0,
+    "FullyConnected": 0,
+    "BatchMatMul": 0,
+    "AvgPool": 0,
+    "MaxPool": 0,
+    "Logistic": 0,
+    "Relu": 0,
+    "Relu6": 0,
+    "Tanh": 0,
+    "ReduceMax": 0,
+    "ReduceMin": 0,
+    "Sub": 0,
+    # Unmeasured off MVE: keep 1 LSB.
+    "Softmax": 1,
+    "HardSwish": 1,
     "MinMax": 1,
-    "ReduceMax": 1,
-    "ReduceMin": 1,
-    "Sub": 1,
 }
 
 # Per-operator tolerance overrides that apply only when the resolved output
 # dtype is S16 (int16_t). Distinct from _OPERATOR_TOLERANCE_OVERRIDES because
-# these operators are exact for S8 output but need slack for S16 accumulation.
+# s8 and s16 outputs take different kernels.
 _OPERATOR_INT16_TOLERANCE_OVERRIDES: Dict[str, int] = {
-    "Abs": 2,
-    "Add": 3,
-    "SquaredDifference": 3,
+    # Kernel rounds 1 LSB off TFLite.
+    "FullyConnected": 1,
+    "Convolve": 0,
+    "Abs": 0,
+    "Add": 0,
+    "SquaredDifference": 0,
 }
 
 
@@ -280,10 +284,14 @@ def resolve_comparison(desc: Mapping[str, Any], resolved_tensor_dtypes: Mapping[
     return comparison
 
 
-def descriptor_matches_dtype_filter(desc: Mapping[str, Any], dtype: str) -> bool:
-    wanted = normalize_dtype(dtype)
+def case_dtype(desc: Mapping[str, Any]) -> str | None:
+    """Kernel-name dtype: S4 weights, else activations."""
+    # arm_convolve_s4 takes s8 activations.
     resolved = desc.get("resolved_tensor_dtypes") or resolve_tensor_dtypes(desc)
-    if wanted in resolved.values():
-        return True
-    activation_dtype = desc.get("activation_dtype")
-    return activation_dtype is not None and normalize_dtype(str(activation_dtype)) == wanted
+    if resolved.get("weights") == "S4":
+        return "S4"
+    return derive_legacy_activation_dtype(desc, resolved)
+
+
+def descriptor_matches_dtype_filter(desc: Mapping[str, Any], dtype: str) -> bool:
+    return case_dtype(desc) == normalize_dtype(dtype)

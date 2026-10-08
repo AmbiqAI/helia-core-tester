@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
 from pathlib import Path
@@ -11,8 +11,11 @@ import zlib
 
 import numpy as np
 
+from .comparison import strict_comparison
 from .pathutil import write_text_lf
+from .transfer import staged_extent
 
+from helia_core_tester.generation.golden_check import EDGE_CASE_KEY
 from helia_core_tester.generation.io.descriptors import load_descriptor
 from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 from helia_core_tester.generation.utils.tflite_utils import calculate_per_channel_multiplier_shift, requantize_np
@@ -99,10 +102,15 @@ class CaseBundle:
 
     @property
     def workspace_bytes_required(self) -> int:
-        """Exact firmware bump-allocation footprint for this case."""
+        """Exact firmware footprint with TCM weights."""
+        return self.workspace_bytes_for("tcm")
+
+    def workspace_bytes_for(self, placement: str) -> int:
+        """Exact firmware footprint under placement."""
         used = 0
         for blob in self.streamable_blobs:
-            used = _align_up(used, max(blob.required_alignment, 1)) + blob.byte_length
+            length, alignment = staged_extent(blob.role, blob.byte_length, blob.required_alignment, placement)
+            used = _align_up(used, alignment) + length
         scratch = int(self.manifest.get("scratch_buffer", {}).get("bytes", 0))
         if scratch:
             used = _align_up(used, 16) + scratch
@@ -114,6 +122,82 @@ class CaseBundle:
     def blob_by_role(self, role: str) -> BlobInfo:
         return next(blob for blob in self.blobs if blob.role == role)
 
+
+def strict_bundle(bundle: CaseBundle) -> CaseBundle:
+    """The bundle, judged with no int tolerance."""
+    manifest = {**bundle.manifest, "correctness_comparison": strict_comparison(bundle.comparison)}
+    return replace(bundle, manifest=manifest)
+
+
+def hidden_bundle(bundle: CaseBundle) -> CaseBundle:
+    """The bundle, marked as a hidden case."""
+    return replace(bundle, manifest={**bundle.manifest, "hidden": True})
+
+
+def input_digest(bundle: CaseBundle) -> str:
+    """Hash of everything streamed but the golden."""
+    entries = [_manifest_blob_entry(blob) for blob in bundle.blobs]
+    return _digest_inputs(bundle.manifest, entries)
+
+
+def _digest_inputs(manifest: dict[str, Any], entries: list[dict[str, Any]]) -> str:
+    # Golden and host-only blobs excluded.
+    blobs = [
+        {key: entry.get(key) for key in ("role", "dtype", "dimensions", "sha256")}
+        for entry in entries
+        if entry.get("role") != "expected_output" and not entry.get("host_only")
+    ]
+    doc = {
+        "kernel_id": manifest.get("kernel_id"),
+        "scalars": manifest.get("serialized_scalar_parameters", {}),
+        "blobs": blobs,
+    }
+    return _sha256_bytes(json.dumps(doc, sort_keys=True).encode("utf-8"))
+
+
+def golden_record(bundle: CaseBundle, golden_dir: Path) -> dict[str, Any] | None:
+    """The past run's record; None if absent."""
+    record = golden_dir / "correctness" / f"{bundle.case_id}.json"
+    if not record.is_file():
+        return None
+    # Unreadable records count as unjudged.
+    try:
+        doc = json.loads(record.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return doc if isinstance(doc, dict) else {}
+
+
+def golden_usable(bundle: CaseBundle, golden_dir: Path) -> bool:
+    """True if the past output fits this case."""
+    if bundle.expected_status_code is not None:
+        return True
+    path = golden_dir / "outputs" / f"{bundle.case_id}.bin"
+    # Read now; fail before the board.
+    try:
+        return len(path.read_bytes()) == bundle.expected_output.byte_length
+    except OSError:
+        return False
+
+
+def golden_bundle(bundle: CaseBundle, golden_dir: Path) -> CaseBundle:
+    """The bundle, judged against a past run's output."""
+    if bundle.expected_status_code is not None:
+        return bundle
+    path = golden_dir / "outputs" / f"{bundle.case_id}.bin"
+    expected = bundle.expected_output
+    try:
+        payload = path.read_bytes()
+    except OSError:
+        payload = None
+    if payload is None or len(payload) != expected.byte_length:
+        raise RuntimeError(f"No usable golden output for {bundle.case_id} in {golden_dir}")
+    # Bundles record the compared digest.
+    swapped = replace(
+        expected, path=path, expected_crc32=zlib.crc32(payload) & 0xFFFFFFFF, sha256=_sha256_bytes(payload),
+    )
+    blobs = tuple(swapped if blob is expected else blob for blob in bundle.blobs)
+    return replace(strict_bundle(bundle), blobs=blobs)
 
 
 def _sha256_bytes(payload: bytes) -> str:
@@ -235,14 +319,16 @@ def _write_manifest(case_root: Path, manifest: dict[str, Any]) -> Path:
             raise ValueError(
                 f"expected_output.{key}={expected.get(key)!r} does not match referenced blob {blob.get(key)!r}"
             )
+    manifest["input_digest"] = _digest_inputs(manifest, manifest.get("blob_roles", []))
     manifest_path = case_root / "case_manifest.json"
     write_text_lf(manifest_path, json.dumps(manifest, indent=2))
     return manifest_path
 
 
 
-def _case_root(bundle_root: Path, family: str, case_id: str, *, suite: str = "int") -> Path:
-    return bundle_root / "artifacts" / "stream_cases" / suite / "cortex-m55" / family / case_id
+def _case_root(bundle_root: Path, family: str, case_id: str, *, suite: str = "int", target: str = "cortex-m55") -> Path:
+    # Keyed by board, else CPU.
+    return bundle_root / "artifacts" / "stream_cases" / suite / target / family / case_id
 
 
 
@@ -307,6 +393,53 @@ def build_abs_s8_case_bundle(
         "required_target_capabilities": [],
         "repeated_invocation_safe": True,
         "timing": {"warmups": 2, "samples": 3, "iterations_per_sample": 4, "min_cycles": 512, "max_iterations": 128},
+    }
+    return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=blobs)
+
+
+
+FLOOR_CASE_ID = "hct_empty_call_floor"
+DEGENERATE_REASON_KEY = EDGE_CASE_KEY
+# Matches assets/kernel_registry.yaml.
+EMPTY_CALL_KERNEL_ID = 174
+
+
+def build_floor_bundle(
+    project_root: Path, *, board_id: str | None = None, cpu: str = "cortex-m55",
+) -> CaseBundle:
+    """A no-op case timed like every kernel."""
+    case_root = _case_root(project_root, "Timing", FLOOR_CASE_ID, target=board_id or cpu)
+    blobs_dir = case_root / "blobs"
+    blobs_dir.mkdir(parents=True, exist_ok=True)
+    # Firmware ignores it; cases need one.
+    _write_blob(blobs_dir / "input_0.bin", np.zeros(4, dtype=np.int8))
+    _write_blob(blobs_dir / "expected_output.bin", np.zeros(0, dtype=np.int8))
+    blobs = (
+        _blob_info(blobs_dir / "input_0.bin", blob_id=1, role="input_0", dtype="S8", dimensions=(4,)),
+        _blob_info(blobs_dir / "expected_output.bin", blob_id=2, role="expected_output", dtype="S8",
+                   dimensions=(0,), host_only=True),
+    )
+    manifest = {
+        "schema_name": "hct.case_manifest",
+        "schema_version": 1,
+        "case_id": FLOOR_CASE_ID,
+        "descriptor_name": FLOOR_CASE_ID,
+        "descriptor_sha256": hashlib.sha256(FLOOR_CASE_ID.encode("utf-8")).hexdigest(),
+        "operator": "EmptyCall",
+        "family": "Timing",
+        "target_cpu": cpu,
+        "kernel_id": EMPTY_CALL_KERNEL_ID,
+        "adapter_metadata_schema": 1,
+        "serialized_scalar_parameters": {},
+        "tensor_dtypes": {"input": "S8", "output": "S8"},
+        "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
+        "expected_output": {"dtype": "S8", "byte_length": 0, "blob_id": 2},
+        "correctness_comparison": {"mode": "exact_int"},
+        "scratch_buffer": {"bytes": 0},
+        "required_target_capabilities": [],
+        "repeated_invocation_safe": True,
+        # Same timing plan as generated cases.
+        "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
     }
     return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=blobs)
 

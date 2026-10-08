@@ -23,7 +23,7 @@ from helia_core_tester.hardware.fake_target import FakeTargetTransport
 from helia_core_tester.hardware.hctp import MessageType
 from helia_core_tester.hardware.measurement import CounterPass, counter_passes_for_selection
 from helia_core_tester.hardware.pmu_catalog import CounterDescriptor
-from helia_core_tester.hardware.session import HostSession
+from helia_core_tester.hardware.session import OPERAND_CHANGED_STATUS, OUTPUT_CHANGED_STATUS, HostSession
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PASSES = counter_passes_for_selection({"cpu": "default"})
@@ -67,13 +67,29 @@ def test_rejected_case_fails_alone_and_the_session_continues(tmp_path: Path, sta
         assert first_case.count("RX:SAMPLE_RESULT") > 0
 
 
+@pytest.mark.parametrize(
+    ("status", "reason"),
+    [
+        (OUTPUT_CHANGED_STATUS, "timed output differs from first call"),
+        (OPERAND_CHANGED_STATUS, "kernel changed a read-only operand"),
+    ],
+)
+def test_integrity_failure_names_the_cause(tmp_path: Path, status: int, reason: str) -> None:
+    transport = FakeTargetTransport(rejections={"abs_a": ("performance", status)})
+
+    rejected = HostSession(transport, counter_passes=PASSES).run_many(_bundles(tmp_path)).cases[0]
+
+    assert rejected.rejection is not None and rejected.comparison.passed is False
+    assert rejected.rejection.reason == reason
+
+
 def test_runner_writes_the_bundle_with_the_rejected_case(tmp_path: Path, monkeypatch) -> None:
     transport = FakeTargetTransport(rejections={"conv_b": ("correctness", ARG_ERROR)})
     monkeypatch.setattr(
         session_runner, "open_rtt_session",
-        lambda board, serial_no, *, build_dir, counter_passes: (HostSession(transport, counter_passes=counter_passes), transport, 0),
+        lambda board, serial_no, *, build_dir, counter_passes, reset=True: (HostSession(transport, counter_passes=counter_passes), transport, 0),
     )
-    monkeypatch.setattr(session_runner, "generate_memory_report", lambda board, project_root=None, build_dir=None: tmp_path / "memory_report.json")
+    monkeypatch.setattr(session_runner, "generate_memory_report", lambda board, **_: tmp_path / "memory_report.json")
     (tmp_path / "memory_report.json").write_text("{}", encoding="utf-8")
     (tmp_path / "cmake" / "hardware").mkdir(parents=True)
     (tmp_path / "cmake" / "hardware" / "kernel_catalog.json").write_text("[]", encoding="utf-8")
@@ -127,14 +143,15 @@ class _SilentSampling(FakeTargetTransport):
     [
         # pmu_event_known() refuses an unmapped id: ERROR frame.
         (FakeTargetTransport(), (CounterPass("cpu", 0, (CounterDescriptor("vendor", 0x0C00, "cpu"),)),), r"^message_type=4 status=-1"),
-        (_SilentSampling(silent=len(PASSES)), PASSES, r"^Transport stalled"),
+        # The stall names the case it interrupted.
+        (_SilentSampling(silent=len(PASSES)), PASSES, r"^Transport stalled .* \(while running case_id='abs_a'\) \(batch 0, "),
     ],
     ids=["error-frame", "transport-stall"],
 )
 def test_broken_session_still_fails_without_a_bundle(tmp_path: Path, monkeypatch, transport, passes, message) -> None:
     monkeypatch.setattr(
         session_runner, "open_rtt_session",
-        lambda board, serial_no, *, build_dir, counter_passes: (HostSession(transport, counter_passes=counter_passes), transport, 0),
+        lambda board, serial_no, *, build_dir, counter_passes, reset=True: (HostSession(transport, counter_passes=counter_passes), transport, 0),
     )
     monkeypatch.setattr(session_runner, "write_result_bundle", lambda *a, **k: pytest.fail("bundle written"))
 

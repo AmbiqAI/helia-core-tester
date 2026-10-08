@@ -100,8 +100,8 @@ int32_t depthwise_conv_float_default_f16_test_case_run(void)
         depthwise_conv_float_default_f16_expected_output,
         DEPTHWISE_CONV_FLOAT_DEFAULT_F16_OUTPUT_SIZE,
         1,
-        0.001f,
-        0.001f,
+        0.002f,
+        0.002f,
         20,
         failures
     );

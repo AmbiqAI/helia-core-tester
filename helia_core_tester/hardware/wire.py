@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Sequence
 
 from .hctp import ByteReader, ByteWriter
@@ -35,6 +35,8 @@ CAP_ABS_S8 = 1 << 5
 # Set only when the firmware was built for a core with the Armv8.1-M PMU
 # (__PMU_PRESENT == 1); absent on DWT-only targets such as Cortex-M4.
 CAP_PMU_ARMV8M = 1 << 6
+# Weights and bias live in cached MRAM.
+CAP_WEIGHTS_MRAM = 1 << 7
 
 CATALOG_HASH_SIZE = 32
 BLOB_MAX_RANK = 6
@@ -79,10 +81,75 @@ class TargetInfo:
     # the host batches cases and refuses over-long pass lists from these.
     max_cases_per_session: int
     max_passes: int
+    # Boot health; None from older firmware.
+    boot_status: int | None = None
+    core_clock_hz: int | None = None
+    # FPSCR at boot, then as pinned.
+    fpscr_boot: int | None = None
+    fpscr: int | None = None
 
     @property
     def has_pmu(self) -> bool:
         return bool(self.capability_flags & CAP_PMU_ARMV8M)
+
+    @property
+    def placement(self) -> str:
+        return "mram" if self.capability_flags & CAP_WEIGHTS_MRAM else "tcm"
+
+
+def clock_mhz(hz: int) -> str:
+    """Clock as "250 MHz"."""
+    return f"{hz / 1e6:g} MHz"
+
+
+def boot_line(info: TargetInfo | None) -> str:
+    """Boot health as one short phrase."""
+    if info is None or info.boot_status is None:
+        return "not reported"
+    clock = clock_mhz(info.core_clock_hz) if info.core_clock_hz else "clock unknown"
+    return f"status {info.boot_status}, core {clock}"
+
+
+def fp_mode(value: int | None) -> dict | None:
+    """FPSCR control bits; match HCT_FPSCR_CONTROL_MASK."""
+    if value is None:
+        return None
+    return {
+        "ahp": value >> 26 & 1,
+        "dn": value >> 25 & 1,
+        "fz": value >> 24 & 1,
+        "rmode": value >> 22 & 3,
+        "fz16": value >> 19 & 1,
+    }
+
+
+def boot_record(info: TargetInfo | None) -> dict:
+    """Boot health for bundle and summary JSON."""
+    return {
+        "status": info.boot_status if info else None,
+        "core_clock_hz": info.core_clock_hz if info else None,
+        "fpscr_boot": info.fpscr_boot if info else None,
+        "fpscr": info.fpscr if info else None,
+        "fp_mode": fp_mode(info.fpscr if info else None),
+    }
+
+
+def placement_record(info: TargetInfo | None) -> dict:
+    """Operand memory and cache policy."""
+    if info is None:
+        return {"name": None, "weights": None, "activations": None, "dcache": None, "weights_cache": None}
+    mram = info.placement == "mram"
+    m4 = info.target_cpu == "cortex-m4"
+    # M4 static BSS lands in SRAM.
+    workspace = "sram" if m4 else "dtcm"
+    return {
+        "name": info.placement,
+        "weights": "mram" if mram else workspace,
+        "activations": workspace,
+        # Cortex-M4 has no D-cache; TCM bypasses it.
+        "dcache": "none" if m4 else "on",
+        "weights_cache": "cold" if mram else "uncached",
+    }
 
 
 def encode_target_info(info: TargetInfo) -> bytes:
@@ -103,12 +170,19 @@ def encode_target_info(info: TargetInfo) -> bytes:
     writer.u32(info.max_rx_payload)
     writer.u16(info.max_cases_per_session)
     writer.u8(info.max_passes)
+    if info.boot_status is not None:
+        writer.i32(info.boot_status)
+        writer.u32(info.core_clock_hz or 0)
+        if info.fpscr is not None:
+            writer.u32(info.fpscr_boot or 0)
+            writer.u32(info.fpscr)
     return writer.finish()
 
 
 def decode_target_info(payload: bytes) -> TargetInfo:
+    """Older firmware omits the boot and FPSCR tails."""
     reader = ByteReader(payload)
-    return _consumed(reader, "TARGET_INFO", TargetInfo(
+    info = TargetInfo(
         build_id=reader.text(),
         catalog_hash=reader.fixed(CATALOG_HASH_SIZE),
         max_frame_payload=reader.u32(),
@@ -123,7 +197,12 @@ def decode_target_info(payload: bytes) -> TargetInfo:
         max_rx_payload=reader.u32(),
         max_cases_per_session=reader.u16(),
         max_passes=reader.u8(),
-    ))
+    )
+    if reader.remaining():
+        info = replace(info, boot_status=reader.i32(), core_clock_hz=reader.u32())
+    if reader.remaining():
+        info = replace(info, fpscr_boot=reader.u32(), fpscr=reader.u32())
+    return _consumed(reader, "TARGET_INFO", info)
 
 
 # --- KERNEL_CATALOG ------------------------------------------------------------------
@@ -644,6 +723,8 @@ class CaseComplete:
     performance_ran: bool = True
     # On the wire only when performance_ran is False.
     kernel_status: int = 0
+    # Untimed adapter cycles, correctness run.
+    prepare_cycles: int = 0
 
 
 def encode_case_complete(complete: CaseComplete) -> bytes:
@@ -652,6 +733,7 @@ def encode_case_complete(complete: CaseComplete) -> bytes:
     writer.u8(1 if complete.correctness_ran else 0)
     writer.u8(1 if complete.performance_ran else 0)
     writer.u32(complete.workspace_used_bytes)
+    writer.u32(complete.prepare_cycles)
     if not complete.performance_ran:
         writer.i32(complete.kernel_status)
     return writer.finish()
@@ -663,12 +745,14 @@ def decode_case_complete(payload: bytes) -> CaseComplete:
     correctness_ran = bool(reader.u8())
     performance_ran = bool(reader.u8())
     workspace_used_bytes = reader.u32()
+    prepare_cycles = reader.u32()
     return _consumed(reader, "CASE_COMPLETE", CaseComplete(
         case_id=case_id,
         workspace_used_bytes=workspace_used_bytes,
         correctness_ran=correctness_ran,
         performance_ran=performance_ran,
         kernel_status=0 if performance_ran else reader.i32(),
+        prepare_cycles=prepare_cycles,
     ))
 
 

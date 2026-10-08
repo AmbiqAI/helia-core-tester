@@ -259,8 +259,12 @@ class PoolFamilyBase(OperationBase):
             quant_params['output']
         )
         
-        input_data = self.generate_input_data()
         float_kernel = kernel_info["input_c_type"] in {"float", "float16_t"}
+        if float_kernel:
+            input_data = self.generate_input_data()
+        else:
+            # Match the [-1, 1] calibration range.
+            input_data = self._sample_uniform(self.desc.get('input_shape', [1, 1, 1, 1]))
         
         if float_kernel:
             float_dtype = np.float16 if kernel_info["input_c_type"] == "float16_t" else np.float32

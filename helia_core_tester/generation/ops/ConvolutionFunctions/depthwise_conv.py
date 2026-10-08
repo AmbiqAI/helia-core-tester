@@ -6,6 +6,7 @@ import numpy as np
 import tensorflow as tf
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.ops._shared.fixed_batch import converter_for_batched_model
+from helia_core_tester.generation.ops._shared.quant_knobs import clamp_golden, kernel_init, value_range
 from helia_core_tester.generation.ops._shared.bias_init import (
     HoistedBiasInjectionError,
     bias_is_hoisted_by_lowering,
@@ -23,6 +24,8 @@ from helia_core_tester.generation.harness import (
 from helia_core_tester.generation.harness.faults import common_fault, null_context_buffer, struct_copy, with_fault
 from helia_core_tester.generation.kernel_dispatch import (
     DEPTHWISE_CONV_S8_PLANAR_RULE,
+    autovectorize_declines_if,
+    depthwise_3x3_scratch_bytes,
     resolve_depthwise_conv_kernel,
 )
 
@@ -319,7 +322,7 @@ class OpDepthwiseConv(OperationBase):
             # Fixed seeds keep the weights a function of the descriptor alone, so the
             # goldens reproduce regardless of case order or the Keras global RNG state
             # the process happens to be in.
-            'depthwise_initializer': tf.keras.initializers.GlorotUniform(seed=1234),
+            'depthwise_initializer': kernel_init(self.desc, 1234),
             'name': 'depthwise_conv'
         }
         
@@ -377,6 +380,7 @@ class OpDepthwiseConv(OperationBase):
 
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
         """Convert Keras model to TFLite with quantization."""
+        self.round_float16_weights(model)
         weight_dtype = str(self.desc.get("weight_dtype", "S8")).upper()
         if weight_dtype == "S4":
             from helia_core_tester.generation.utils.litert_builder import build_depthwise_conv2d_s4_op
@@ -454,10 +458,12 @@ class OpDepthwiseConv(OperationBase):
             converter.optimizations = []
 
         
+        calibration = value_range(self.desc, 'calibration_range', (-1.0, 1.0))
+
         def representative_data_gen():
             for _ in range(100):
                 if 'input_shape' in self.desc:
-                    inputs = self.rng.uniform(-1.0, 1.0, size=self.desc['input_shape']).astype(np.float32)
+                    inputs = self.rng.uniform(*calibration, size=self.desc['input_shape']).astype(np.float32)
                     yield [inputs]
                 elif 'input_1_shape' in self.desc and 'input_2_shape' in self.desc:
                     inputs1 = self.rng.uniform(-1.0, 1.0, size=self.desc['input_1_shape']).astype(np.float32)
@@ -916,7 +922,11 @@ class OpDepthwiseConv(OperationBase):
                 'buffer_size_max': buffer_size_max,
                 'force_no_scratch': bool(self._hint().get("force_no_scratch", False)),
                 'entry_scratch_bytes': kernel_info.get("entry_scratch_bytes"),
+                'entry_extra_sizers': kernel_info.get("entry_extra_sizers"),
                 'float_kernel': True,
+                'expected_status': self.expected_status(),
+                'autovectorize_declines': bool(self.desc.get("autovectorize_declines", False)),
+                'autovectorize_declines_if': autovectorize_declines_if(kernel_info["input_c_type"]),
                 'dw_conv_params_type': (
                     'cmsis_nn_dw_conv_params_f16'
                     if kernel_info["input_c_type"] == "float16_t"
@@ -1052,6 +1062,7 @@ class OpDepthwiseConv(OperationBase):
         output_data = run_inference_litert_tensor(
             str(tflite_path), input_q, out_tensor_idx, op_resolver_type=OpResolverType.BUILTIN_REF
         )
+        output_data = clamp_golden(self.desc, output_data)
         
         # Bias handling
         has_biases = biases is not None and getattr(biases, "size", 0) > 0
@@ -1123,6 +1134,9 @@ class OpDepthwiseConv(OperationBase):
         )
         if kernel_info.get("entry_scratch_bytes") is not None:
             buffer_size_max = max(buffer_size_max, int(kernel_info["entry_scratch_bytes"]))
+        # The 3x3 entries size their own path from the input dims; scratch takes the larger answer.
+        buffer_size_max = max(buffer_size_max,
+                              depthwise_3x3_scratch_bytes(kernel_info.get("entry_extra_sizers"), input_dims))
         # An entry gets the weight-sum context exactly when its prototype takes one; the wrapper
         # keeps the rule it always had.
         takes_weight_sum_ctx = kernel_info["kernel_fn"] == "arm_depthwise_conv_wrapper_s8"
@@ -1135,6 +1149,7 @@ class OpDepthwiseConv(OperationBase):
         
         
         # Build template context
+        self.reject_autovectorize_declines()
         context = {
             'name': name,
             'input_dims': input_dims,
@@ -1159,6 +1174,7 @@ class OpDepthwiseConv(OperationBase):
             'buffer_size_max': buffer_size_max,
             'takes_weight_sum_ctx': takes_weight_sum_ctx,
             'entry_scratch_bytes': kernel_info.get("entry_scratch_bytes"),
+            'entry_extra_sizers': kernel_info.get("entry_extra_sizers"),
             'expected_status': self.expected_status(),
             'planar_supported': self.desc.get("planar_supported"),
             'planar_rule_fn': DEPTHWISE_CONV_S8_PLANAR_RULE,

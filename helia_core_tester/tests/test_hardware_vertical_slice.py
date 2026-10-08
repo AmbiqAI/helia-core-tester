@@ -12,7 +12,14 @@ from helia_core_tester.hardware.case_bundle import (
     blob_numpy,
     load_case_bundle,
 )
-from helia_core_tester.hardware.fake_target import FakeAbsS8Adapter, FakeKernelAdapter, FakeTargetTransport
+from helia_core_tester.hardware.fake_target import (
+    FakeAbsS8Adapter,
+    FakeConvolveS8Adapter,
+    FakeKernelAdapter,
+    FakeTargetTransport,
+)
+from helia_core_tester.hardware.generated_test_bridge import build_case_bundle_from_generated_test
+from helia_core_tester.hardware.kernel_registry import load_kernel_registry
 from helia_core_tester.hardware.measurement import (
     MAX_CASES_PER_PLAN,
     MAX_PASSES_PER_PLAN,
@@ -35,6 +42,7 @@ from helia_core_tester.hardware.session import (
     session_plan_for_bundles,
 )
 from helia_core_tester.hardware.wire import PlannedCase, SessionPlan, encode_session_plan, session_plan_size
+from helia_core_tester.tests.generated_inputs import discover_or_skip
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -134,6 +142,30 @@ def test_fake_convolve_vertical_slice_end_to_end(tmp_path: Path) -> None:
 
 
 
+def test_fake_adapters_match_kernel_registry() -> None:
+    registry = {entry.kernel_id: entry.cmsis_function for entry in load_kernel_registry(PROJECT_ROOT)}
+    for adapter in (FakeAbsS8Adapter, FakeConvolveS8Adapter):
+        assert adapter.entry.canonical_name == registry[adapter.entry.kernel_id]
+
+
+# Offset+padding, OHWI weights, groups, dilation.
+@pytest.mark.parametrize(
+    "case_name",
+    [
+        "convolve_stride2pad1_s8",
+        "convolve_kernel_support_groups1_s8",
+        "convolve_grouped_conv_case_02_s8",
+        "convolve_2x2_dilation_s8",
+    ],
+)
+def test_fake_convolve_passes_generated_case(tmp_path: Path, case_name: str) -> None:
+    (case,) = (c for c in discover_or_skip(PROJECT_ROOT, name_filter=case_name) if c.name == case_name)
+    bundle = build_case_bundle_from_generated_test(PROJECT_ROOT, case, output_root=tmp_path, require_fvp_pass=False)
+    passes = counter_passes_for_selection({"cpu": "default"})
+    result = HostSession(FakeTargetTransport(), counter_passes=passes).run(load_case_bundle(bundle.manifest_path))
+    assert result.cases[0].comparison.mismatch_count == 0
+
+
 def test_multi_case_session_rewinds_arena(tmp_path: Path) -> None:
     abs_bundle = load_case_bundle(build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="abs_case_a").manifest_path)
     conv_bundle = load_case_bundle(build_convolve_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="conv_case_b").manifest_path)
@@ -151,6 +183,24 @@ def test_multi_case_session_rewinds_arena(tmp_path: Path) -> None:
         conv_bundle.workspace_bytes_required,
     )
     assert abs_bundle.workspace_bytes_required != conv_bundle.workspace_bytes_required
+
+
+def test_next_plan_follows_session_complete(tmp_path: Path) -> None:
+    abs_bundle = load_case_bundle(build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="abs_first").manifest_path)
+    conv_bundle = load_case_bundle(build_convolve_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="conv_second").manifest_path)
+    transport = FakeTargetTransport()
+    session = HostSession(transport, counter_passes=counter_passes_for_selection({"cpu": "default"}))
+
+    first = session.run_many([abs_bundle])
+    second = session.run_many([conv_bundle])
+
+    assert first.session_complete_cases == second.session_complete_cases == 1
+    assert transport.completed_case_count == 2
+    # Each result carries only its own plan's trace.
+    assert first.protocol_trace[:2] == ("RX:TARGET_INFO", "TX:TARGET_INFO_ACK")
+    assert second.protocol_trace[:2] == ("TX:SESSION_PLAN", "RX:REQUEST_CASE")
+    assert second.protocol_trace[-1] == "RX:SESSION_COMPLETE"
+    assert first.cases[0].comparison.passed and second.cases[0].comparison.passed
 
 
 def test_persistent_fake_target_multi_operator_session_without_reflash(tmp_path: Path) -> None:
@@ -358,6 +408,21 @@ def test_case_one_byte_over_advertised_workspace_fails_before_plan(tmp_path: Pat
         session.run(bundle)
 
     assert "TX:SESSION_PLAN" not in session._trace
+
+
+def test_mram_workspace_padding(tmp_path: Path) -> None:
+    # Firmware pads MRAM weights/bias to 16-byte rows.
+    bundle = load_case_bundle(build_convolve_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path).manifest_path)
+    required = bundle.workspace_bytes_for("mram")
+    assert required > bundle.workspace_bytes_required
+
+    session = HostSession(FakeTargetTransport(runtime_arena_capacity=required - 1, placement="mram"))
+    with pytest.raises(RuntimeError, match=rf"requires {required} workspace bytes"):
+        session.run(bundle)
+    assert "TX:SESSION_PLAN" not in session._trace
+
+    result = HostSession(FakeTargetTransport(runtime_arena_capacity=required, placement="mram")).run(bundle)
+    assert result.comparison.passed is True
 
 
 def test_large_correctness_output_exceeding_old_outbox_streams_in_order(tmp_path: Path) -> None:

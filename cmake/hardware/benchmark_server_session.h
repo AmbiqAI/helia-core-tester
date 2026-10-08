@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "benchmark_server_messages.h"
 #include "hctp_protocol.h"
 
 #ifdef __cplusplus
@@ -32,7 +33,12 @@ extern "C" {
 #define HCT_SERVER_WORKSPACE_BYTES 114688u
 #endif
 #define HCT_SERVER_MAX_OUTBOX_BYTES 32768u
-#define HCT_SERVER_BLOB_CHUNK_BYTES 64u
+/* One BLOB_CHUNK frame fits the RTT down ring. */
+#define HCT_SERVER_BLOB_CHUNK_BYTES 448u
+/* Timed output differs from first call. */
+#define HCT_STATUS_OUTPUT_CHANGED (-1000)
+/* Kernel changed a read-only operand. */
+#define HCT_STATUS_OPERAND_CHANGED (-1001)
 
 typedef enum
 {
@@ -61,6 +67,11 @@ typedef struct
     uint32_t crc32;
     uint32_t arena_offset;
     uint32_t bytes_received;
+    /* Read-only copy outside the workspace. */
+    const uint8_t *placed;
+    /* Second input copy, if twinned. */
+    uint32_t twin_offset;
+    uint8_t twinned;
 } hct_server_blob_t;
 
 /* One PMU measurement pass from SESSION_PLAN: which event ids to program into the
@@ -276,19 +287,29 @@ typedef struct
     uint32_t output_length;
     uint32_t output_stream_offset;
     uint32_t output_stream_checksum;
+    /* Next free MRAM address this case. */
+    uintptr_t mram_cursor;
     uint8_t output_stream_active;
     uint8_t *workspace;
     uint32_t workspace_bytes;
     hct_server_blob_t blobs[HCT_SERVER_MAX_BLOBS];
     uint8_t outbox[HCT_SERVER_MAX_OUTBOX_BYTES];
     size_t outbox_length;
+    /* Untimed adapter cycles; last keeps offsets. */
+    uint32_t prepare_cycles;
+    /* First-call output; 0 bytes skips checks. */
+    uint32_t checked_bytes;
+    uint32_t checked_digest;
+    /* Workspace end past the input twins. */
+    uint32_t twin_end;
 } hct_server_session_t;
 
 void hct_server_session_init(hct_server_session_t *session,
                              uint32_t session_id,
                              uint32_t max_frame_payload,
                              void *workspace,
-                             uint32_t workspace_bytes);
+                             uint32_t workspace_bytes,
+                             const hct_boot_info_t *boot);
 
 hctp_status_t hct_server_session_accept_frame(hct_server_session_t *session,
                                               const uint8_t *frame_bytes,

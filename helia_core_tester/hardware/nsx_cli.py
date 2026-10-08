@@ -89,14 +89,26 @@ def lock_digest(app_dir: Path) -> Optional[str]:
     return hash_file(path) if path.is_file() else None
 
 
-def locked_commit(app_dir: Path, module: str) -> Optional[str]:
-    """A module's locked git commit, if any."""
+def locked_modules(app_dir: Path) -> Optional[list[dict[str, Any]]]:
+    """Each locked module's source, if readable."""
     try:
         lock = read_lock(app_dir)
     except (NSXError, ValueError):
         return None
-    entry = lock.modules.get(module) if lock else None
-    return entry.commit if entry else None
+    if lock is None:
+        return None
+    return [
+        {
+            "name": name,
+            "project": entry.project or None,
+            "kind": str(entry.kind),
+            "revision": entry.constraint or None,
+            "tag": entry.tag,
+            "commit": entry.commit,
+            "url": entry.url,
+        }
+        for name, entry in lock.modules.items()
+    ]
 
 
 def tree_hash(root: Path) -> str:

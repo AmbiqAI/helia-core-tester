@@ -1,7 +1,7 @@
 """Run case bundles on a board over SEGGER RTT and write the result bundle.
 
-Cases are streamed in batches: each batch is one fresh (reset-on-open) RTT session
-and one SESSION_PLAN, sized from what the target announced in TARGET_INFO (cases
+Cases are streamed in batches over one reset-on-open RTT session: each batch is one
+SESSION_PLAN, sized from what the target announced in TARGET_INFO (cases
 per plan, receive-buffer bytes, PMU passes) rather than from mirrored constants.
 The batches' results are merged into a single SessionResult and result bundle.
 
@@ -12,13 +12,20 @@ session streams (`build_generated_test_case_bundles`).
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Sequence
 
 from .boards import DEFAULT_BOARD_ID, BoardSpec, default_session_id, resolve_board
-from .case_bundle import CaseBundle, build_abs_s8_case_bundle, build_convolve_s8_case_bundle, load_case_bundle
+from .case_bundle import (
+    EMPTY_CALL_KERNEL_ID, FLOOR_CASE_ID, CaseBundle, build_abs_s8_case_bundle, build_convolve_s8_case_bundle,
+    build_floor_bundle, load_case_bundle,
+)
+from .case_validity import apply_floor
+from .errors import RunRefused
 from .firmware_build import elf_path
 from .generated_test_bridge import (
+    CaseSelection,
     GeneratedTestCase,
     UnsupportedGeneratedTestError,
     bridged_families,
@@ -28,10 +35,14 @@ from .generated_test_bridge import (
 from .measurement import CounterPass, check_pass_count, counter_passes_for_selection
 from .memory_report import generate_memory_report
 from .pmu_catalog import default_selection
+from .entry_coverage import NO_ADAPTER
 from .result_bundle import write_result_bundle
-from .session import CaseRunResult, HostSession, SessionResult, TargetLimits, check_case_id_length, check_case_ids_unique
-from .transport import JLinkRttTransport, Transport, symbol_address_from_elf
-from .wire import TargetInfo, session_plan_size
+from .session import (
+    BootFailure, CaseRunResult, HostSession, SessionResult, TargetLimits, check_case_id_length,
+    check_case_ids_unique,
+)
+from .transport import JLinkRttTransport, Transport, TransportError, elf_symbols, symbol_address_from_elf
+from .wire import session_plan_size
 from ..core.config import VALID_SUITE_MODES
 
 OnCaseComplete = Callable[[CaseRunResult], None]
@@ -96,43 +107,71 @@ def open_rtt_session(
     *,
     build_dir: Path,
     counter_passes: Sequence[CounterPass],
+    reset: bool = True,
 ) -> tuple[HostSession, Transport, int]:
     """Open a fresh reset-on-open RTT session to the board's flashed firmware. Returns
     the host session, its transport (the caller closes it) and the RTT control-block
-    address taken from the ELF in `build_dir`."""
+    address taken from the ELF in `build_dir`. reset=False: the board just booted."""
     rtt_address = symbol_address_from_elf(str(elf_path(build_dir)), "_SEGGER_RTT")
     transport = JLinkRttTransport(
         serial_no=serial_no,
         chip_name=board.jlink_device,
         speed_khz=board.swd_speed_khz,
         rtt_address=rtt_address,
-        reset_on_open=True,
+        reset_on_open=reset,
         # Sampling waits this long per pass.
         read_timeout_s=10.0,
     )
     return HostSession(transport, counter_passes=counter_passes), transport, rtt_address
 
 
-_CONSISTENT_FIELDS = (
-    "build_id", "catalog_hash", "board_id", "target_cpu", "capability_flags", "pmu_counter_slots",
-    "max_rx_payload", "max_cases_per_session", "max_passes", "runtime_arena_capacity",
-)
+def stalled_target_state(transport: Transport, build_dir: Path) -> str:
+    """Name the stalled target's core and RTT state."""
+    read_state = getattr(transport, "target_state", None)
+    if read_state is None:
+        return ""
+    try:
+        return describe_target_state(read_state(), str(elf_path(build_dir)))
+    except Exception as exc:  # Diagnostics must not mask the stall.
+        return f"Target state unreadable: {exc}."
 
 
-def check_target_info_consistent(first: TargetInfo, later: TargetInfo, *, batch_index: int) -> None:
-    """Every batch opens a fresh RTT session; the merged bundle must describe one firmware.
-    Fail fast if a later session announces a different build, catalog or limits (a board
-    reflashed mid-run, or a second host sharing the probe)."""
-    differing = [
-        f"{name}: {getattr(first, name)!r} -> {getattr(later, name)!r}"
-        for name in _CONSISTENT_FIELDS
-        if getattr(first, name) != getattr(later, name)
-    ]
-    if differing:
-        raise RuntimeError(
-            f"TARGET_INFO of batch {batch_index} differs from the first session's; refusing to merge "
-            f"results from different firmware: " + "; ".join(differing)
-        )
+def describe_target_state(state: dict[str, int], elf_path: str | None = None) -> str:
+    """One line: where the core sits and why it went quiet."""
+    symbols = elf_symbols(elf_path) if elf_path else []
+    parts = []
+    for key in ("pc", "lr", "sp"):
+        if key in state:
+            # LR often holds EXC_RETURN; name PC only.
+            name = symbol_at(symbols, state[key]) if key == "pc" else None
+            parts.append(f"{key.upper()}=0x{state[key]:08x}" + (f" ({name})" if name else ""))
+    parts.append(f"CFSR=0x{state['cfsr']:08x} HFSR=0x{state['hfsr']:08x}")
+    if "rtt_size" in state:
+        parts.append(f"RTT up write={state['rtt_write']} read={state['rtt_read']} size={state['rtt_size']}")
+    if state["cfsr"] or state["hfsr"]:
+        verdict = "Target faulted; decode CFSR/HFSR."
+    elif "rtt_size" in state and (state["rtt_write"] + 1) % state["rtt_size"] == state["rtt_read"]:
+        verdict = "Target blocked on a full RTT buffer."
+    elif "rtt_size" in state and state["rtt_write"] == state["rtt_read"]:
+        verdict = "No fault; target sent all queued RTT bytes."
+    else:
+        verdict = "Target running; no fault latched."
+    return f"{verdict} {', '.join(parts)}."
+
+
+def symbol_at(symbols: list[tuple[int, str, str]], address: int) -> str | None:
+    """The code symbol holding `address`, as name+offset."""
+    address &= ~1  # Drop the Thumb bit.
+    preceding = [entry for entry in symbols if entry[0] <= address]
+    if not preceding:
+        return None
+    start = max(entry[0] for entry in preceding)
+    # Aliases share one address.
+    names = [name for at, kind, name in preceding if at == start and kind in "tTwW"]
+    if not names:
+        return None
+    name = "/".join(names)
+    return name if address == start else f"{name}+0x{address - start:x}"
 
 
 def run_case_bundles(
@@ -146,21 +185,25 @@ def run_case_bundles(
     build_dir: Path | None = None,
     on_case_complete: OnCaseComplete | None = None,
     expected_build_id: str | None = None,
+    compare: dict | None = None,
+    fresh_boot: bool = False,
 ) -> tuple[SessionResult, Path]:
-    """Stream `case_bundles` to the board in as many sessions as the target's limits
-    require, merge every case into one SessionResult, and write its result bundle.
+    """Stream `case_bundles` to the board in as many SESSION_PLANs as the target's
+    limits require, merge every case into one SessionResult, and write its result bundle.
 
-    Every session starts with the target's TARGET_INFO, so the next batch is cut from
-    the remaining cases only once that session's limits are known.
+    One reset and handshake serve every batch: the firmware takes the next plan
+    after SESSION_COMPLETE, so batches are cut once TARGET_INFO's limits are known.
 
     `expected_build_id` (the build dir's hct_build_id.txt), when given, is checked
-    against every session's TARGET_INFO so a board running some other firmware fails
-    the batch instead of producing a bundle that describes firmware that never ran.
+    against TARGET_INFO so a board running some other firmware fails the run instead
+    of producing a bundle that describes firmware that never ran.
 
     The pass count (measurement.MAX_PASSES_PER_PLAN) and every case id
     (session.MAX_CASE_ID_BYTES) are checked against the host's mirror of the firmware
     limits before the probe is opened; the target's advertised limits are re-checked
     at every handshake.
+
+    `fresh_boot`: a flash just reset the board, so the open skips its reset.
     """
     build_dir = build_dir or board.build_dir(project_root)
     sid = session_id or default_session_id(board)
@@ -173,6 +216,11 @@ def run_case_bundles(
         check_case_id_length(bundle.case_id)
 
     remaining = list(case_bundles)
+
+    def report_case(case: CaseRunResult) -> None:
+        if on_case_complete is not None and case.case_bundle.case_id != FLOOR_CASE_ID:
+            on_case_complete(case)
+
     all_cases: list[CaseRunResult] = []
     all_trace: list[str] = []
     session_complete_cases = 0
@@ -181,43 +229,61 @@ def run_case_bundles(
     target_info = None
     limits: TargetLimits | None = None
     batch_index = 0
-    while remaining:
-        session, transport, rtt_address = open_rtt_session(board, serial_no, build_dir=build_dir, counter_passes=counter_passes)
-        batch: list[CaseBundle] = []
-        try:
-            info = session.handshake(expected_build_id=expected_build_id)
-            if target_info is not None:
-                check_target_info_consistent(target_info, info, batch_index=batch_index)
-            target_info = target_info or info
-            build_id = build_id or info.build_id
-            limits = session.limits
-            batch = take_batch(remaining, counter_passes, limits)
-            result = session.run_many(batch, on_case_complete=on_case_complete)
-        except (RuntimeError, ValueError) as exc:
-            # ValueError: take_batch() found a case that cannot fit the target's advertised
-            # plan size on its own. Re-wrap so the CLI's one-line hardware error covers it.
-            candidates = [b.case_id for b in (batch or (remaining[: limits.max_cases] if limits else remaining))]
-            raise RuntimeError(f"{exc} (batch {batch_index}, candidate case_ids={candidates})") from exc
-        finally:
+    session: HostSession | None = None
+    transport: Transport | None = None
+    try:
+        while remaining:
+            if session is None:
+                session, transport, rtt_address = open_rtt_session(
+                    board, serial_no, build_dir=build_dir, counter_passes=counter_passes, reset=not fresh_boot,
+                )
+            batch: list[CaseBundle] = []
+            try:
+                if target_info is None:
+                    target_info = session.handshake(expected_build_id=expected_build_id, expected_clock_hz=board.core_clock_hz)
+                    build_id = target_info.build_id
+                    limits = session.limits
+                    # Floor case leads, when firmware has it.
+                    if EMPTY_CALL_KERNEL_ID in session.kernel_ids:
+                        remaining.insert(0, build_floor_bundle(project_root, board_id=board.id, cpu=board.cpu))
+                batch = take_batch(remaining, counter_passes, limits)
+                # Later batches reuse this session.
+                result = session.run_many(batch, on_case_complete=report_case)
+            except BootFailure:
+                raise  # board-wide, not batch-specific
+            except (RuntimeError, ValueError) as exc:
+                # ValueError: take_batch() found a case that cannot fit the target's advertised
+                # plan size on its own. Re-wrap so the CLI's one-line hardware error covers it.
+                candidates = [b.case_id for b in (batch or (remaining[: limits.max_cases] if limits else remaining))]
+                state = stalled_target_state(transport, build_dir) if isinstance(exc, TransportError) else ""
+                message = " ".join(part for part in (str(exc), state) if part)
+                raise RuntimeError(f"{message} (batch {batch_index}, candidate case_ids={candidates})") from exc
+            all_cases.extend(result.cases)
+            all_trace.extend(f"batch{batch_index}:{entry}" for entry in result.protocol_trace)
+            session_complete_cases += result.session_complete_cases
+            remaining = remaining[len(batch):]
+            batch_index += 1
+    finally:
+        if transport is not None:
             transport.close()
-        all_cases.extend(result.cases)
-        all_trace.extend(f"batch{batch_index}:{entry}" for entry in result.protocol_trace)
-        session_complete_cases += result.session_complete_cases
-        remaining = remaining[len(batch):]
-        batch_index += 1
 
     batch_count = batch_index
+    timing_floor, kernel_cases = apply_floor(all_cases)
     merged_result = SessionResult(
-        cases=tuple(all_cases),
+        cases=tuple(kernel_cases),
         protocol_trace=tuple(all_trace),
-        session_complete_cases=session_complete_cases,
+        session_complete_cases=session_complete_cases - (len(all_cases) - len(kernel_cases)),
         build_id=build_id,
         batch_count=batch_count,
         target_info=target_info,
         counter_passes=counter_passes,
     )
 
-    memory_report = json.loads(generate_memory_report(board, project_root=project_root, build_dir=build_dir).read_text())
+    # Per-board report dir: concurrent runs.
+    report_root = project_root / "artifacts" / "hardware" / "benchmark_server" / board.id
+    memory_report = json.loads(
+        generate_memory_report(board, project_root=project_root, build_dir=build_dir, output_root=report_root).read_text()
+    )
     kernel_catalog = json.loads((project_root / "cmake" / "hardware" / "kernel_catalog.json").read_text())
     host_log = (
         f"hardware session_id={sid}\n"
@@ -240,6 +306,8 @@ def run_case_bundles(
         target_info=board.target_info(),
         host_log_text=host_log,
         target_log_text=target_log,
+        timing_floor=timing_floor,
+        compare=compare,
         # Unverified firmware gets no provenance.
         build_dir=build_dir if expected_build_id is not None and build_id == expected_build_id else None,
     )
@@ -255,7 +323,7 @@ def run_demo_session(
     session_id: str | None = None,
     build_dir: Path | None = None,
 ) -> tuple[SessionResult, Path]:
-    """Two-kernel synthetic demo session (arm_abs_s8 + arm_convolve_s8) on the board;
+    """Two-kernel synthetic demo session (arm_abs_s8 + arm_convolve_wrapper_s8) on the board;
     library code only, not exposed on the CLI. `counter_passes` defaults to every
     PMU group at its default selection, like the hardware CLI."""
     board = board or resolve_board(DEFAULT_BOARD_ID)
@@ -310,6 +378,9 @@ def build_generated_test_case_bundles(
     suite: str = "int",
     require_fvp_pass: bool = True,
     fvp_gate: str | None = None,
+    board_id: str | None = None,
+    select: CaseSelection | None = None,
+    tests_root: Path | None = None,
 ) -> tuple[list[CaseBundle], list[tuple[GeneratedTestCase, str]]]:
     """Discover generated (`helia_core_tester generate`) kernel tests and bridge the
     ones with real hardware benchmark firmware dispatch support into CaseBundles.
@@ -330,23 +401,45 @@ def build_generated_test_case_bundles(
     FVP model at all, where a fresh FVP report can never be produced locally and the
     gate would otherwise skip every case.
 
+    `board_id` keys staged cases per board, so boards run concurrently.
+    `select` narrows by op, dtype or case id.
+    `tests_root` reads and stages cases under another root.
+
     Returns (bridged_case_bundles, [(skipped_test, reason), ...]).
     """
-    families = bridged_families() if family is None else [family]
+    bridged = bridged_families()
     bundles: list[CaseBundle] = []
     skipped: list[tuple[GeneratedTestCase, str]] = []
     for suite_name in normalize_suites(suite):
+        families = [family] if family is not None else [
+            *bridged, *unbridged_families(tests_root or project_root, cpu=cpu, suite=suite_name, bridged=bridged),
+        ]
         for fam in families:
             discovered = discover_generated_tests(
-                project_root, cpu=cpu, family=fam, name_filter=name_filter, limit=limit, suite=suite_name
+                project_root, cpu=cpu, family=fam, name_filter=name_filter, limit=limit, suite=suite_name,
+                select=select, tests_root=tests_root,
             )
             for test in discovered:
+                test = replace(test, board=board_id)
+                if fam not in bridged:
+                    # Unbridged families skip, not vanish.
+                    skipped.append((test, f"{NO_ADAPTER}: {fam} has no firmware adapter"))
+                    continue
                 try:
                     bundles.append(build_case_bundle_from_generated_test(
-                        project_root, test, require_fvp_pass=require_fvp_pass, fvp_gate=fvp_gate))
+                        project_root, test, output_root=tests_root, require_fvp_pass=require_fvp_pass,
+                        fvp_gate=fvp_gate))
                 except UnsupportedGeneratedTestError as exc:
                     skipped.append((test, str(exc)))
     return bundles, skipped
+
+
+def unbridged_families(project_root: Path, *, cpu: str, suite: str, bridged: Sequence[str]) -> list[str]:
+    """Generated families with no firmware adapter."""
+    root = project_root / "artifacts" / "generated_tests" / suite / cpu
+    if not root.is_dir():
+        return []
+    return sorted(p.name for p in root.iterdir() if p.is_dir() and p.name not in bridged)
 
 
 def no_bridgeable_cases_error(
@@ -356,38 +449,39 @@ def no_bridgeable_cases_error(
     family: str | None,
     name_filter: str | None,
     suite: str,
-) -> RuntimeError:
+) -> RunRefused:
     """The error to raise when discovery bridged nothing, leading with the reasons
     cases were rejected (an all-FVP-gate rejection in particular is fixed by refreshing
     or bypassing the gate, not by regenerating)."""
     base = (
         f"No bridgeable generated tests found for cpu={cpu} "
-        f"family={family if family is not None else '<all bridged families>'} "
+        f"family={family if family is not None else '<all generated families>'} "
         f"name_filter={name_filter!r} suite={suite!r} (skipped {len(skipped)})"
     )
     if not skipped:
-        return RuntimeError(f"{base}; run `helia_core_tester generate` first.")
+        return RunRefused(f"{base}; run `helia_core_tester generate` first.")
     fvp_skips = [(t, r) for t, r in skipped if "FVP" in r or "artifact" in r]
+    adapter_gaps = sum(r.startswith(NO_ADAPTER) for _, r in skipped)
     detail = "\n".join(f"  - {t.name}: {r}" for t, r in skipped[:5])
     if len(skipped) > 5:
         detail += f"\n  ... and {len(skipped) - 5} more"
     hint = ""
-    if len(fvp_skips) == len(skipped):
+    if fvp_skips and len(fvp_skips) + adapter_gaps == len(skipped):
         stale_only = all("does not match" in r or "no artifact_sha256" in r for _, r in fvp_skips)
         if stale_only:
             # Only --fvp-gate strict blocks on staleness, so the useful advice is
             # "stop being strict", not "bypass the gate".
             hint = (
-                "\nEvery case was rejected as stale by --fvp-gate strict. Either refresh the "
+                "\nEvery bridgeable case was rejected as stale by --fvp-gate strict. Either refresh the "
                 "report (`uv run helia_core_tester build && uv run helia_core_tester run`) or "
                 "drop back to --fvp-gate advisory, which runs stale cases and records them as "
                 "stale in case_summary.csv."
             )
         else:
             hint = (
-                "\nEvery case was rejected by the FVP gate because the FVP recorded a FAILURE "
+                "\nEvery bridgeable case was rejected by the FVP gate because the FVP recorded a FAILURE "
                 "for these exact artifacts -- that is evidence the kernel is wrong, not a stale "
                 "report. Investigate before overriding; --fvp-gate off will run them anyway and "
                 "record fvp_status=failed in case_summary.csv."
             )
-    return RuntimeError(f"{base}:\n{detail}{hint}")
+    return RunRefused(f"{base}:\n{detail}{hint}")

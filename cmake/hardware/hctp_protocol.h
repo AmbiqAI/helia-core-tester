@@ -13,8 +13,10 @@ extern "C" {
 /* v3: TARGET_INFO / KERNEL_CATALOG / SESSION_PLAN vocabulary with compact message ids
  * and TARGET_INFO advertising the session limits (max cases per plan, max PMU passes)
  * next to the PMU slot count and receive-buffer bound. Must match
- * helia_core_tester/hardware/hctp.py. */
-#define HCTP_SUPPORTED_VERSION 3u
+ * helia_core_tester/hardware/hctp.py.
+ * v4: CASE_COMPLETE carries prepare cycles.
+ * v5: SESSION_PLAN follows SESSION_COMPLETE. */
+#define HCTP_SUPPORTED_VERSION 5u
 #define HCTP_DEFAULT_MAX_PAYLOAD (64u * 1024u)
 
 #define HCTP_FLAG_NONE 0u

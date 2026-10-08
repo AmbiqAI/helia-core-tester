@@ -226,6 +226,7 @@ class OpTransposeConv(OperationBase):
 
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
         """Convert Keras model to TFLite with quantization."""
+        self.round_float16_weights(model)
         # Create converter
         converter = tf.lite.TFLiteConverter.from_keras_model(model)
         

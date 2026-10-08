@@ -53,14 +53,20 @@ class HarnessPlan:
     void_return: bool = False
     run_calls: Sequence[str] = ()
     outputs: Sequence = ()
+    # (query, bound call): scratch queries whose answer raises the main sizer's when larger.
+    extra_sizer_calls: Sequence[tuple[str, str]] = ()
 
 
 def plan_harness(pool: ArgumentPool, *, kernel_fn: str, sizer_fn: Optional[str], scratch_bytes: Optional[int],
-                 contracts: ContractSet, indent: str = "        ") -> HarnessPlan:
-    """Bind `kernel_fn` (and `sizer_fn`) from `pool`; exactly one of sizer_fn and scratch_bytes."""
+                 contracts: ContractSet, indent: str = "        ",
+                 extra_sizer_fns: Sequence[str] = ()) -> HarnessPlan:
+    """Bind `kernel_fn` (and `sizer_fn`) from `pool`; exactly one of sizer_fn and scratch_bytes.
+    `extra_sizer_fns` are further queries bound the same way; scratch takes the largest answer."""
     pool.validate()
     if (sizer_fn is None) == (scratch_bytes is None):
         raise HarnessError(f"{pool.name}: give either a scratch query or entry_scratch bytes, not both or neither")
+    if extra_sizer_fns and sizer_fn is None:
+        raise HarnessError(f"{pool.name}: extra scratch queries {list(extra_sizer_fns)} need a main query to raise")
     local_prototype = ""
     if pool.prototype_from:
         if contracts.find(kernel_fn) is not None:
@@ -139,6 +145,14 @@ def plan_harness(pool: ArgumentPool, *, kernel_fn: str, sizer_fn: Optional[str],
         if sizer.kind != "sizer":
             raise HarnessError(f"{pool.name}: {sizer_fn} is a {sizer.kind}, not a scratch-size query")
         sizer_call = render_call(sizer, bind(sizer, values), indent=indent)
+    extra_sizer_calls = []
+    for fn in extra_sizer_fns:
+        if fn == sizer_fn or fn in (name for name, _ in extra_sizer_calls):
+            raise HarnessError(f"{pool.name}: scratch query {fn} is listed twice")
+        extra = require_bound_symbol(contracts, fn)
+        if extra.kind != "sizer":
+            raise HarnessError(f"{pool.name}: {fn} is a {extra.kind}, not a scratch-size query")
+        extra_sizer_calls.append((extra.name, render_call(extra, bind(extra, values), indent=indent)))
     return HarnessPlan(
         header_declarations=[render_declaration(d) for d in pool.header],
         source_declarations=[render_declaration(d) for d in pool.source],
@@ -163,6 +177,7 @@ def plan_harness(pool: ArgumentPool, *, kernel_fn: str, sizer_fn: Optional[str],
         void_return=kernel.returns.strip() == "void",
         run_calls=[call(False, overrides) for overrides in pool.calls or (({},) if pool.post_call.strip() else ())],
         outputs=tuple(pool.outputs),
+        extra_sizer_calls=tuple(extra_sizer_calls),
     )
 
 

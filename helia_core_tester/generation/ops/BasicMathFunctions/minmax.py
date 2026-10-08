@@ -22,6 +22,15 @@ def build_minmax_op(*, operator: str, input_1_shape, input_2_shape, dtype: str) 
     )
 
 
+def _split_scalar(input1_q: np.ndarray, input2_q: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Set a scalar operand to the other's median."""
+    if input1_q.size == 1 and input2_q.size > 1:
+        return np.full_like(input1_q, np.median(input2_q)), input2_q
+    if input2_q.size == 1 and input1_q.size > 1:
+        return input1_q, np.full_like(input2_q, np.median(input1_q))
+    return input1_q, input2_q
+
+
 class OpMinMax(BinaryBasicMathBase):
     """Maximum and Minimum operation implementation."""
 
@@ -191,6 +200,8 @@ class OpMinMax(BinaryBasicMathBase):
         else:
             raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
         if not float_kernel:
+            input1_data = self._widen_s8(input1_data, input1_scale, kernel_info["input_c_type"])
+            input2_data = self._widen_s8(input2_data, input2_scale, kernel_info["input_c_type"])
             input1_q = np.round(input1_data / float(input1_scale) + float(input1_zp)).astype(np.int32)
             input1_q = np.clip(input1_q, qmin, qmax).astype(np_in_dtype)
 
@@ -200,6 +211,7 @@ class OpMinMax(BinaryBasicMathBase):
                 (("input_1", input1_q, input1_zp), ("input_2", input2_q, input2_zp)),
                 steerable=("input_1", "input_2"),
             )
+            input1_q, input2_q = _split_scalar(input1_q, input2_q)
 
             desc_input1_shape = tuple(self.desc.get("input_1_shape", input1_shape))
             desc_input2_shape = tuple(self.desc.get("input_2_shape", input2_shape))

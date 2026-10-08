@@ -22,6 +22,7 @@ from .pmu_catalog import (  # noqa: F401 -- CounterDescriptor is re-exported for
     counter_name_for_event_id,
     counters_in_group,
 )
+from .errors import RunRefused
 from .hctp import HEADER_SIZE
 
 # Cortex-M55 has 8 PMU event counters, each 16 bits wide. Chaining an even/odd pair
@@ -100,6 +101,8 @@ class SampleStatistics:
     valid_for_regression: bool
     overflow_detected: bool
     unsupported_counters: tuple[str, ...]
+    # Set by case_validity.classify_case.
+    timing_status: str = "valid"
 
 
 @dataclass(frozen=True)
@@ -139,7 +142,7 @@ def check_pass_count(passes: Iterable[CounterPass], *, limit: int = MAX_PASSES_P
     )
 
 
-class OutboxOverflowError(RuntimeError):
+class OutboxOverflowError(RunRefused):
     """One case's performance frames overflow the firmware outbox."""
 
 
@@ -155,7 +158,7 @@ def sample_frame_bytes(counter_pass: CounterPass) -> int:
 
 def case_tail_bytes(case_id: str) -> int:
     """CASE_COMPLETE plus REQUEST_CASE or SESSION_COMPLETE."""
-    case_complete = HEADER_SIZE + 2 + len(case_id.encode("utf-8")) + 1 + 1 + 4
+    case_complete = HEADER_SIZE + 2 + len(case_id.encode("utf-8")) + 1 + 1 + 4 + 4
     return case_complete + HEADER_SIZE + 2
 
 
@@ -323,7 +326,7 @@ def compute_sample_statistics(samples: Iterable[NormalizedSample]) -> SampleStat
     """
     materialized = list(samples)
     if not materialized:
-        return SampleStatistics(0, 0.0, 0.0, 0.0, 0.0, 0.0, False, False, ())
+        return SampleStatistics(0, 0.0, 0.0, 0.0, 0.0, 0.0, False, False, (), timing_status="zero_cycles")
     cycle_values = [sample.cycles_per_invocation for sample in materialized]
     median_cycles = float(statistics.median(cycle_values))
     abs_deviation = [abs(value - median_cycles) for value in cycle_values]
@@ -339,6 +342,8 @@ def compute_sample_statistics(samples: Iterable[NormalizedSample]) -> SampleStat
         valid_for_regression=not overflow,
         overflow_detected=overflow,
         unsupported_counters=tuple(unsupported),
+        # The runner refines this later.
+        timing_status="overflow" if overflow else "valid",
     )
 
 

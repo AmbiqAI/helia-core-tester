@@ -192,6 +192,8 @@ class OpSub(BinaryBasicMathBase):
             input2_data = self.rng.uniform(-1.0, 1.0, size=input2_shape).astype(np.float32)
 
             self.rng.__setstate__(rng_state)
+            input1_data = self._widen_s8(input1_data, input1_scale, kernel_info["input_c_type"])
+            input2_data = self._widen_s8(input2_data, input2_scale, kernel_info["input_c_type"])
 
             # Quantize inputs
             if kernel_info["input_c_type"] == "int8_t":

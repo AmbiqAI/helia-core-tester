@@ -342,10 +342,11 @@ wheels = [
 
 [[package]]
 name = "helia-core-tester"
-version = "0.6.0"
+version = "0.9.0"
 source = { editable = "." }
 dependencies = [
     { name = "ai-edge-litert" },
+    { name = "certifi" },
     { name = "jinja2" },
     { name = "neuralspotx" },
     { name = "numpy" },
@@ -368,6 +369,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "ai-edge-litert", specifier = ">=2.1.1" },
+    { name = "certifi", specifier = ">=2023.7.22" },
     { name = "jinja2", specifier = ">=3.0.0,<4.0.0" },
     { name = "neuralspotx", specifier = "==0.8.1" },
     { name = "numpy", specifier = ">=1.20.0,<2.0.0" },

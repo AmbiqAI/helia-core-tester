@@ -3,10 +3,11 @@
 Every entry is resolved from the kernel contract, for operators whose pool binds its call from
 the contract (CONTRACT_BOUND_OPERATORS): the entry must be a declared kernel, its tensor
 pointers must match the descriptor's dtypes, and its scratch comes from
-`<entry>_get_buffer_size[_mve|_dsp]`, from `entry_sizer`, or is declared absent with
-`entry_scratch`. Every other case fails at generation, naming what is missing. Whether an
-entry takes weight sums, a struct-typed bias or a layout follows from its prototype, so no
-per-entry table exists any more.
+`<entry>_get_buffer_size[_mve|_dsp]`, from `entry_sizer` (one query, or a list whose first
+answer the others may raise), or is declared absent with `entry_scratch`; the operators whose
+cases pass no context (SCRATCHLESS_OPERATORS) take neither. Every other case fails at
+generation, naming what is missing. Whether an entry takes weight sums, a struct-typed bias
+or a layout follows from its prototype, so no per-entry table exists any more.
 """
 
 from __future__ import annotations
@@ -18,7 +19,10 @@ from helia_core_tester.contract.bind import ContractBindError, check_types, take
 from helia_core_tester.contract.ir import ContractSet
 
 # Operators whose template renders its kernel and sizer calls by binding from the contract.
-CONTRACT_BOUND_OPERATORS: frozenset[str] = frozenset({"Convolve", "DepthwiseConv", "FullyConnected", "TransposeConv"})
+CONTRACT_BOUND_OPERATORS: frozenset[str] = frozenset(
+    {"Convolve", "DepthwiseConv", "FullyConnected", "TransposeConv", "Add", "Mul", "Dequantize"})
+# Operators whose cases pass no context: an entry of theirs declares no scratch at all.
+SCRATCHLESS_OPERATORS: frozenset[str] = frozenset({"Add", "Mul", "Dequantize"})
 
 ENTRY_SCRATCH_NONE = "none"
 
@@ -74,18 +78,27 @@ def resolve_entry(
 
     resolved: Dict[str, Any] = {"kernel_fn": entry, "entry_family": "contract",
                                 "kernel_needs_layout": takes(decl, "layout"), "buffer_size_needs_layout": False}
+    if operator in SCRATCHLESS_OPERATORS:
+        if sizer is not None or scratch is not None:
+            raise EntryError(f"{where}: {operator} cases pass no scratch, so an entry takes neither entry_sizer "
+                             "nor entry_scratch")
+        resolved["kernel_get_buffer_size_fn"] = None
+        resolved["entry_scratch_bytes"] = 0
+        return resolved
     if scratch is not None:
         resolved["kernel_get_buffer_size_fn"] = None
         resolved["entry_scratch_bytes"] = entry_scratch_bytes(scratch, where)
         return resolved
     if sizer is not None:
-        sizer_decl = contracts.find(str(sizer))
-        if sizer_decl is None:
-            raise EntryError(f"{where}: entry_sizer {sizer!r} is not a public function of this checkout")
-        if sizer_decl.kind != "sizer":
-            raise EntryError(f"{where}: entry_sizer {sizer!r} is a {sizer_decl.kind}, not a scratch-size query")
-        resolved["kernel_get_buffer_size_fn"] = sizer_decl.name
-        resolved["buffer_size_needs_layout"] = takes(sizer_decl, "layout")
+        # One query, or the family's followed by the entry's own: scratch takes the larger answer.
+        names = [sizer] if isinstance(sizer, str) else list(sizer) if isinstance(sizer, list) else []
+        if not names or not all(isinstance(name, str) and name.strip() for name in names):
+            raise EntryError(f"{where}: entry_sizer must name a scratch-size query or a list of them, got {sizer!r}")
+        decls = [_sizer_decl(contracts, name.strip(), where) for name in names]
+        resolved["kernel_get_buffer_size_fn"] = decls[0].name
+        resolved["buffer_size_needs_layout"] = takes(decls[0], "layout")
+        if len(decls) > 1:
+            resolved["entry_extra_sizers"] = [decl.name for decl in decls[1:]]
         return resolved
     found = contracts.sizer_for(entry, cpu)
     if found is None:
@@ -94,6 +107,15 @@ def resolve_entry(
     resolved["kernel_get_buffer_size_fn"] = found
     resolved["buffer_size_needs_layout"] = takes(contracts.find(found), "layout")
     return resolved
+
+
+def _sizer_decl(contracts: ContractSet, sizer: str, where: str):
+    sizer_decl = contracts.find(sizer)
+    if sizer_decl is None:
+        raise EntryError(f"{where}: entry_sizer {sizer!r} is not a public function of this checkout")
+    if sizer_decl.kind != "sizer":
+        raise EntryError(f"{where}: entry_sizer {sizer!r} is a {sizer_decl.kind}, not a scratch-size query")
+    return sizer_decl
 
 
 FLOAT_DTYPES = frozenset({"FP32", "FP16"})

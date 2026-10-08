@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import struct
 
 import pytest
 
@@ -55,6 +56,39 @@ def test_target_info_round_trip_and_layout() -> None:
     assert reader.remaining() == b""
     with pytest.raises(ValueError, match="catalog_hash"):
         wire.encode_target_info(_target_info(catalog_hash=b"short"))
+
+
+def test_target_info_boot_tail() -> None:
+    old = wire.encode_target_info(_target_info())
+    info = _target_info(boot_status=7, core_clock_hz=96_000_000)
+    payload = wire.encode_target_info(info)
+    # i32 boot_status, u32 core_clock_hz trail max_passes.
+    assert payload[: len(old)] == old
+    assert payload[len(old):] == struct.pack("<iI", 7, 96_000_000)
+    assert wire.decode_target_info(payload) == info
+    assert wire.boot_line(info) == "status 7, core 96 MHz"
+    assert wire.boot_line(_target_info(boot_status=0, core_clock_hz=0)) == "status 0, core clock unknown"
+    # Old firmware: no tail, fields None.
+    legacy = wire.decode_target_info(old)
+    assert legacy.boot_status is None and legacy.core_clock_hz is None
+    assert wire.boot_line(legacy) == wire.boot_line(None) == "not reported"
+    with pytest.raises(ValueError, match="Unexpected end of payload"):
+        wire.decode_target_info(payload[:-1])
+
+
+def test_target_info_fpscr_tail() -> None:
+    boot = _target_info(boot_status=0, core_clock_hz=250_000_000)
+    info = _target_info(boot_status=0, core_clock_hz=250_000_000, fpscr_boot=0x03040000, fpscr=0x00040000)
+    payload = wire.encode_target_info(info)
+    # u32 fpscr_boot, u32 fpscr trail the clock.
+    assert payload == wire.encode_target_info(boot) + struct.pack("<II", 0x03040000, 0x00040000)
+    assert wire.decode_target_info(payload) == info
+    assert wire.decode_target_info(wire.encode_target_info(boot)).fpscr is None
+    record = wire.boot_record(info)
+    assert (record["fpscr_boot"], record["fpscr"]) == (0x03040000, 0x00040000)
+    assert record["fp_mode"] == {"ahp": 0, "dn": 0, "fz": 0, "rmode": 0, "fz16": 0}
+    assert wire.fp_mode(0x07C80000) == {"ahp": 1, "dn": 1, "fz": 1, "rmode": 3, "fz16": 1}
+    assert wire.boot_record(boot)["fp_mode"] is None
 
 
 def test_kernel_catalog_round_trip_and_hash() -> None:
@@ -192,7 +226,7 @@ def test_sample_result_round_trip_resolves_names_from_catalog() -> None:
 
 
 def test_case_and_session_complete_round_trip() -> None:
-    complete = wire.CaseComplete(case_id="abs_default_s8_hw_generated", workspace_used_bytes=4096)
+    complete = wire.CaseComplete(case_id="abs_default_s8_hw_generated", workspace_used_bytes=4096, prepare_cycles=1234)
     assert wire.decode_case_complete(wire.encode_case_complete(complete)) == complete
     partial = wire.CaseComplete("c", 0, correctness_ran=True, performance_ran=False, kernel_status=-1)
     assert wire.decode_case_complete(wire.encode_case_complete(partial)) == partial
@@ -211,7 +245,7 @@ def test_error_round_trip() -> None:
 
 
 def test_every_decoder_rejects_trailing_bytes() -> None:
-    info = _target_info()
+    info = _target_info(boot_status=0, core_clock_hz=250_000_000, fpscr_boot=0, fpscr=0)
     with pytest.raises(ValueError, match=r"TARGET_INFO payload carries 1 trailing byte"):
         wire.decode_target_info(wire.encode_target_info(info) + b"\x00")
     with pytest.raises(ValueError, match=r"REQUEST_CASE payload carries 2 trailing byte"):
@@ -242,3 +276,18 @@ def test_case_meta_rejects_rank_above_the_wire_limit() -> None:
     payload.u8(wire.BLOB_MAX_RANK + 1)
     with pytest.raises(ValueError, match=rf"blob 7 has rank {wire.BLOB_MAX_RANK + 1}; the wire carries at most {wire.BLOB_MAX_RANK}"):
         wire.decode_case_meta(payload.finish())
+
+
+def test_placement_rides_a_capability_bit() -> None:
+    tcm = _target_info()
+    mram = wire.decode_target_info(wire.encode_target_info(_target_info(capability_flags=tcm.capability_flags | wire.CAP_WEIGHTS_MRAM)))
+    assert (tcm.placement, mram.placement) == ("tcm", "mram")
+    assert wire.placement_record(tcm) == {
+        "name": "tcm", "weights": "dtcm", "activations": "dtcm", "dcache": "on", "weights_cache": "uncached",
+    }
+    assert wire.placement_record(mram)["weights"] == "mram"
+    assert wire.placement_record(mram)["weights_cache"] == "cold"
+    assert wire.placement_record(_target_info(target_cpu="cortex-m4")) == {
+        "name": "tcm", "weights": "sram", "activations": "sram", "dcache": "none", "weights_cache": "uncached",
+    }
+    assert wire.placement_record(None)["name"] is None

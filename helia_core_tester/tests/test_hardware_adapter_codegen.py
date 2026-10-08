@@ -7,21 +7,26 @@ kernel's real firmware C dispatch body is authored, and
 is produced from it by `scripts/generate_hardware_adapters.py`. See that module's docstring for the full
 rationale (and why the firmware still can't literally reuse the FVP-generated `.c.j2`
 per-descriptor test files -- that would reintroduce the "one ELF per case" scalability
-problem the streaming architecture exists to avoid).
+problem the streaming architecture exists to avoid). The `--check` test also covers
+`scripts/generate_kernel_catalog.py`.
 """
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 from helia_core_tester.contract.ir import load_contract_set
+import pytest
+
 from helia_core_tester.hardware.adapter_specs import (
     FIRMWARE_ADAPTERS,
     GENERATED_BLOCK_BEGIN,
     GENERATED_BLOCK_END,
     generated_test_bridge_scalar_fields,
+    render_adapter_body,
     render_generated_adapters_source,
     timed_kernel_calls,
 )
@@ -58,6 +63,7 @@ GENERATOR_SCRIPT = PROJECT_ROOT / "scripts" / "generate_hardware_adapters.py"
 # bodies render without an ns-cmsis-nn checkout on the machine.
 PILOT_CONTRACT_ROOT = Path(__file__).parent / "fixtures" / "contract" / "hardware_pilot"
 PILOT_CONTRACTS = load_contract_set(PILOT_CONTRACT_ROOT)
+CATALOG_SCRIPT = PROJECT_ROOT / "scripts" / "generate_kernel_catalog.py"
 
 
 def test_generated_file_is_marked_and_session_c_holds_no_generated_code() -> None:
@@ -88,11 +94,11 @@ def test_only_kernel_calls_count_in_a_sample() -> None:
     adapters make is routed through HCT_TIMED()."""
     text = ADAPTERS_C_PATH.read_text(encoding="utf-8")
     timed = timed_kernel_calls(text)
-    for setup in ("arm_convolve_weight_sum", "arm_vector_sum_s8", "arm_convolve_s8_get_buffer_size",
-                  "arm_transpose_conv_s8_get_reverse_conv_buffer_size"):
+    for setup in ("arm_convolve_weight_sum", "arm_depthwise_convolve_weight_sum", "arm_vector_sum_s8",
+                  "arm_convolve_wrapper_s8_get_buffer_size", "arm_transpose_conv_s8_get_reverse_conv_buffer_size"):
         assert setup not in timed
-    for kernel in ("arm_convolve_s8", "arm_fully_connected_wrapper_s8", "arm_transpose_conv_wrapper_s8",
-                   "arm_concatenation_s8_x"):
+    for kernel in ("arm_convolve_wrapper_s8", "arm_depthwise_conv_wrapper_s8", "arm_fully_connected_wrapper_s8",
+                   "arm_transpose_conv_wrapper_s8", "arm_concatenation_s8_x"):
         assert kernel in timed
     assert timed_kernel_calls("/* arm_relu_s8(x) */ arm_relu_s16(y);") == ["arm_relu_s16"]
     for name in timed:
@@ -119,9 +125,11 @@ def test_every_kernel_id_is_dispatched_exactly_once() -> None:
     assert "return hct_run_abs_once(session);" in rendered
 
 
-def test_generator_script_check_mode_passes_on_committed_file() -> None:
+@pytest.mark.parametrize("script", [GENERATOR_SCRIPT, CATALOG_SCRIPT], ids=lambda p: p.stem)
+def test_generator_script_check_mode_passes_on_committed_file(script: Path) -> None:
     result = subprocess.run(
-        [sys.executable, str(GENERATOR_SCRIPT), "--check", "--cmsis-nn-root", str(PILOT_CONTRACT_ROOT)],
+        [sys.executable, str(script), "--check"]
+        + (["--cmsis-nn-root", str(PILOT_CONTRACT_ROOT)] if script == GENERATOR_SCRIPT else []),
         cwd=PROJECT_ROOT,
         capture_output=True,
         text=True,
@@ -351,6 +359,23 @@ def test_s8_fully_connected_firmware_body_gates_the_kernel_sum_on_mve() -> None:
     assert "kernel_bias," in body and body.count("arm_vector_sum_s8") == 1
 
 
+@pytest.mark.parametrize("function_name", ["run_convolve_once", "run_transpose_conv_once"])
+def test_s8_conv_weight_sum_is_mve_only(function_name: str) -> None:
+    """Non-MVE arm_convolve_weight_sum() returns NO_IMPL.
+
+    The adapters map any non-success status to ARG_ERROR, so an unguarded call
+    fails every s8 case on DSP/scalar builds (measured on apollo3p_evb).
+    """
+    body = next(spec for spec in FIRMWARE_ADAPTERS if spec.function_name == function_name).c_body
+    calls = [match.start() for match in re.finditer(r"arm_convolve_weight_sum\(\(", body)]
+    assert calls, f"{function_name} no longer calls arm_convolve_weight_sum"
+    for call in calls:
+        before = body[:call]
+        guard = before.rfind("#if defined(ARM_MATH_MVEI)")
+        assert guard != -1 and "#endif" not in before[guard:], f"{function_name}: weight sum outside the MVE guard"
+        assert "#else" not in before[guard:], f"{function_name}: weight sum in the non-MVE branch"
+
+
 def test_batch_matmul_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:
     from helia_core_tester.tests.generated_inputs import discover_or_skip
 
@@ -485,3 +510,23 @@ def test_nn_activation_float_builder_scalar_keys_are_subset_of_firmware_adapter_
     manifest_keys = set(bundle.manifest["serialized_scalar_parameters"])
     firmware_fields = set(generated_test_bridge_scalar_fields("run_nn_activation_float_once"))
     assert manifest_keys <= firmware_fields, manifest_keys - firmware_fields
+
+
+def test_s8_convolutions_time_the_tflm_wrappers() -> None:
+    """TFLM calls the wrappers, so samples must too."""
+    timed = timed_kernel_calls(ADAPTERS_C_PATH.read_text(encoding="utf-8"))
+    assert "arm_convolve_s8" not in timed
+    assert "arm_depthwise_conv_s8" not in timed
+
+
+def test_registry_names_the_timed_call() -> None:
+    """Bundles report the registry name as timed_symbol."""
+    from helia_core_tester.hardware.kernel_registry import load_kernel_registry
+
+    header = ADAPTERS_H_PATH.read_text(encoding="utf-8")
+    ids = {name: int(value) for name, value in re.findall(r"^#define (HCT_KERNEL_ID_[A-Z0-9_]+) (\d+)u$", header, re.M)}
+    names = {entry.kernel_id: entry.cmsis_function for entry in load_kernel_registry(PROJECT_ROOT)}
+    for adapter in FIRMWARE_ADAPTERS:
+        timed = timed_kernel_calls(render_adapter_body(adapter, PILOT_CONTRACTS))
+        for kernel_id in adapter.kernel_ids:
+            assert names[ids[kernel_id]] in timed, (adapter.function_name, kernel_id)

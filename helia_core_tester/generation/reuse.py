@@ -341,12 +341,20 @@ def reset_case_dir(test_dir: Path) -> None:
     the directory also removes the stamp, so an interrupted regeneration leaves
     nothing that can be mistaken for a complete case.
     """
-    if not test_dir.exists():
+    if not test_dir.is_symlink() and not test_dir.exists():
         return
     try:
-        shutil.rmtree(test_dir)
+        _remove_entry(test_dir)
     except FileNotFoundError as error:
         raise _concurrent_run_error(test_dir, "resetting") from error
+
+
+def _remove_entry(path: Path) -> None:
+    """Delete path; unlink links, never follow."""
+    if path.is_symlink() or not path.is_dir():
+        path.unlink()
+    else:
+        shutil.rmtree(path)
 
 
 def case_reusable(test_dir: Path, stamp: str) -> bool:
@@ -385,16 +393,22 @@ def prune_unlisted_cases(generated_tests_dir: Path, keep_relative_dirs: set[str]
     removed = 0
     keep = {str(Path(item)) for item in keep_relative_dirs}
     for family_dir in sorted(generated_tests_dir.iterdir()):
+        if family_dir.is_symlink():
+            # Never recurse into a linked family.
+            if not any(Path(item).parts[0] == family_dir.name for item in keep):
+                family_dir.unlink()
+                removed += 1
+            continue
         if not family_dir.is_dir():
             continue
         for case_dir in sorted(family_dir.iterdir()):
-            if not case_dir.is_dir():
+            if not case_dir.is_dir() and not case_dir.is_symlink():
                 continue
             relative = str(case_dir.relative_to(generated_tests_dir))
             if relative in keep:
                 continue
             try:
-                shutil.rmtree(case_dir)
+                _remove_entry(case_dir)
             except FileNotFoundError as error:
                 raise _concurrent_run_error(case_dir, "pruning") from error
             removed += 1

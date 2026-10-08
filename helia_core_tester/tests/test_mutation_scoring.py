@@ -10,6 +10,7 @@ import json
 import os
 import re
 import shutil
+import sys
 from dataclasses import replace
 from pathlib import Path
 
@@ -30,6 +31,7 @@ from helia_core_tester.mutation.host_build import (
     CaseResult,
     build_and_run_case,
     discover_cases,
+    host_sizer_defines,
 )
 from helia_core_tester.mutation.patching import AppliedMutant, MutantApplyError, verify_pristine
 from helia_core_tester.mutation.runner import (
@@ -277,6 +279,10 @@ class TestFailureKinds:
         (case / "includes").mkdir(parents=True)
         (case / "case_a.c").write_text("int main(void){return 0;}\n")
         (tmp_path / "tree" / "Include").mkdir(parents=True)
+        # A compiler that always fails.
+        cc = tmp_path / "fail-cc"
+        cc.write_text(f"#!{sys.executable}\nraise SystemExit(1)\n")
+        cc.chmod(0o755)
         result = build_and_run_case(
             case,
             tmp_path / "tree",
@@ -284,7 +290,7 @@ class TestFailureKinds:
             tmp_path / "runtime.o",
             TESTER_ROOT,
             tmp_path / "bin",
-            cc="/bin/false",  # every compile invocation fails
+            cc=str(cc),
         )
         assert not result.passed
         assert result.kind == KIND_COMPILE_FAILED
@@ -323,14 +329,16 @@ def _crafted_checkout(tmp_path: Path) -> Path:
     return checkout
 
 
-def _crafted_case(tmp_path: Path) -> Path:
-    case = tmp_path / "cases" / "CraftedFamily" / "crafted_case"
+def _crafted_case(
+    tmp_path: Path, name: str = "crafted_case", fn: str = "helia_mut_test_kernel", want: int = 42
+) -> Path:
+    case = tmp_path / "cases" / "CraftedFamily" / name
     (case / "includes").mkdir(parents=True)
-    (case / "crafted_case.c").write_text(
+    (case / f"{name}.c").write_text(
         "#include <stdint.h>\n"
         "extern void helia_test_finish(int32_t failures);\n"
-        "int32_t helia_mut_test_kernel(void);\n"
-        "int main(void) { helia_test_finish(helia_mut_test_kernel() == 42 ? 0 : 1); return 0; }\n"
+        f"int32_t {fn}(void);\n"
+        f"int main(void) {{ helia_test_finish({fn}() == {want} ? 0 : 1); return 0; }}\n"
     )
     return case
 
@@ -452,6 +460,38 @@ class TestRunnerFailureClassification:
                 log=lambda *_: None,
             )
 
+
+
+class TestHostSizerDefines:
+    def test_maps_only_mve_sizers(self, tmp_path: Path):
+        src = tmp_path / "case.c"
+        src.write_text(
+            "n = arm_convolve_wrapper_s8_get_buffer_size_mve(&p, &i, &f, &o);\n"
+            "m = arm_avgpool_s8_get_buffer_size(w, c);\n"
+        )
+        assert host_sizer_defines([src]) == [
+            "-Darm_convolve_wrapper_s8_get_buffer_size_mve=arm_convolve_wrapper_s8_get_buffer_size"
+        ]
+
+    @needs_gcc
+    def test_m55_case_gets_the_host_size(self, tmp_path: Path):
+        # The MVE sizer answers smaller than the DSP kernel needs.
+        checkout = _crafted_checkout(tmp_path)
+        (checkout / "Source" / "BasicMathFunctions" / "kernel.c").write_text(
+            "#include <stdint.h>\n"
+            "int32_t arm_fake_get_buffer_size(void) { return 48; }\n"
+            "int32_t arm_fake_get_buffer_size_mve(void) { return 16; }\n"
+        )
+        case = _crafted_case(tmp_path, "sizer_case", "arm_fake_get_buffer_size_mve", 48)
+        report = run_mutation_scoring(
+            cmsis_nn_root=checkout,
+            case_dirs=[case],
+            mutants=[],
+            tester_root=TESTER_ROOT,
+            workdir=tmp_path / "work",
+            log=lambda *_: None,
+        )
+        assert report.baseline_failed == []
 
 
 
@@ -654,3 +694,72 @@ class TestCorpusCapabilityDerivation:
         explicit = _invoke_run(tmp_path, root, ["--cpu", "cortex-m4"])
         assert explicit.exit_code == 0, explicit.output
         assert captured["capabilities"] == get_cpu_profile("cortex-m4").capabilities
+
+
+def _described_case(root: Path, name: str, operator: str) -> Path:
+    case_dir = root / "ConvolutionFunctions" / name
+    (case_dir / "includes").mkdir(parents=True)
+    (case_dir / f"{name}_conv.c").write_text("int main(void){return 0;}\n")
+    (case_dir / "descriptor.yaml").write_text(f"operator: {operator}\nname: {name}\n")
+    return case_dir
+
+
+def _capture_scoring(monkeypatch) -> dict:
+    captured = {}
+
+    def fake_scoring(**kwargs):
+        captured.update(kwargs)
+        return _StubReport()
+
+    monkeypatch.setattr(mutation_cli, "run_mutation_scoring", fake_scoring)
+    return captured
+
+
+class TestRunOptions:
+    """Issue #373: --ops, --workdir and --cmsis-nn-root plumbing."""
+
+    def test_ops_filters_cases_root(self, tmp_path: Path, monkeypatch):
+        root = tmp_path / "artifacts" / "generated_tests" / "int" / "cortex-m55"
+        dw = _described_case(root, "depthwise_conv_a_s8", "DepthwiseConv")
+        conv = _described_case(root, "convolve_a_s8", "Convolve")
+        captured = _capture_scoring(monkeypatch)
+        result = _invoke_run(tmp_path, root, ["--ops", "DepthwiseConv"])
+        assert result.exit_code == 0, result.output
+        assert captured["case_dirs"] == [dw]
+        # No --ops keeps every case.
+        result = _invoke_run(tmp_path, root)
+        assert result.exit_code == 0, result.output
+        assert captured["case_dirs"] == [conv, dw]
+
+    def test_ops_matching_nothing_fails(self, tmp_path: Path, monkeypatch):
+        root = tmp_path / "artifacts" / "generated_tests" / "int" / "cortex-m55"
+        _described_case(root, "convolve_a_s8", "Convolve")
+        _capture_scoring(monkeypatch)
+        result = _invoke_run(tmp_path, root, ["--ops", "DepthwiseConv"])
+        assert result.exit_code == 1
+        assert "no generated cases found" in result.output
+
+    def test_generation_gets_absolute_paths(self, tmp_path: Path, monkeypatch):
+        calls = []
+
+        def fake_run(cmd, cwd=None, env=None):
+            calls.append((cmd, cwd, env))
+            out_dir = Path(cmd[cmd.index("--generated-tests-dir") + 1])
+            _described_case(out_dir / "int" / "cortex-m55", "depthwise_conv_a_s8", "DepthwiseConv")
+            return type("Proc", (), {"returncode": 0})()
+
+        monkeypatch.setattr(mutation_cli.subprocess, "run", fake_run)
+        captured = _capture_scoring(monkeypatch)
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("CMSIS_NN_ROOT", raising=False)
+        result = CliRunner().invoke(
+            mutation_cli.app,
+            ["run", "--cmsis-nn-root", "checkout", "--ops", "DepthwiseConv", "--workdir", "rel/work", "--cc", "sh"],
+        )
+        assert result.exit_code == 0, result.output
+        (cmd, cwd, env), = calls
+        assert Path(cmd[cmd.index("--generated-tests-dir") + 1]) == tmp_path / "rel" / "work" / "gen" / "DepthwiseConv"
+        assert Path(cwd).name == "generation"
+        assert env["CMSIS_NN_ROOT"] == str(tmp_path / "checkout")
+        assert captured["workdir"] == tmp_path / "rel" / "work"
+        assert captured["cmsis_nn_root"] == tmp_path / "checkout"

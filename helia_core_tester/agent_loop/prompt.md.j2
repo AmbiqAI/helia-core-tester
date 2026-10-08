@@ -1,0 +1,139 @@
+You are optimizing one kernel family in ns-cmsis-nn, Ambiq's fork of Arm CMSIS-NN.
+Your working directory is an ns-cmsis-nn checkout at {{ base_ref }} (git tag `base`).
+{%- if start %}
+A previous attempt is already applied (uncommitted; `git diff base` shows it).
+{%- endif %}
+
+Goal: make {{ dtype_lower }} {{ op_text }} faster on the {{ cpu_text }} while keeping
+every output bit-exact. The cases are the tester's {{ op }} {{ dtype }} cases
+({{ public_cases }} public{% if hidden_cases %}, plus {{ hidden_cases }} hidden cases you never see{% endif %}).
+Models reach the kernels through these routes (timed symbol -> inner kernel,
+measured on the base tree, {{ first_leg }} leg):
+{% for r in routes %}
+- `{{ r.timed }}`{% if r.inner and r.inner != r.timed %} -> `{{ r.inner }}`{% endif %}: {{ r.cases }} case{{ "s" if r.cases != 1 }}, median {{ r.median }} cycles/MAC, best {{ r.best }}{% if r.ceiling %}; ceiling {{ r.ceiling }}{% endif %}
+{%- endfor %}
+{%- if median is not none %}
+
+Overall median is {{ median }} cycles per MAC{% if ceilings %}; the hardware ceiling is {{ ceilings }}{% endif %}.
+{%- endif %}
+{%- for basis in bases %}
+Ceiling basis: {{ basis }}.
+{%- endfor %}
+{%- if is_depthwise %}
+Depthwise has no reduction across channels: vectorize over channels and reuse
+each loaded weight across several output pixels.
+{%- endif %}
+
+Rules:
+- Edit only files under `Source/` and `Include/`. Edits elsewhere are rejected.
+- No pragmas other than `#pragma GCC unroll N`, no unusual attributes, no
+  touching debug or timer registers, no build-flag changes. The evaluator
+  checks this.
+- Outputs must match the baseline bit for bit on every public and hidden case.
+- Do not special-case test shapes; unseen shapes are scored too.
+- Other kernels must not get slower.
+
+How to evaluate: run exactly `{{ submit }}` (no arguments),
+in the foreground, with the Bash tool timeout set to 600000 ms. Do not run it
+in the background or redirect its output.
+It checks and builds your current tree, then runs it on the board once per
+leg (a few minutes in total):
+{%- for leg in legs %}
+- leg `{{ leg.name }}`: {{ leg.text }}
+{%- endfor %}
+{%- if legs|length > 1 %}
+A later leg runs only when the earlier legs got as far as scoring.
+{%- endif %}
+Submit judges a copy of the tree taken when it starts; later edits wait
+for the next submit. A tree that fails the check or build is rejected
+before the board and costs no eval. A busy or failing board is reported as
+`error` with a note and costs no eval; submit again. A run that faults or
+hangs on the board is an `error` that does cost an eval.
+
+Before spending an eval, run `{{ check }}` (no arguments,
+foreground, Bash timeout 600000 ms). It costs no eval and no board time
+(about 30 s): it applies the evaluator's source rules, compiles your tree
+for the {{ cpu }} and reports `check.findings`, `build` (compiler errors and
+warnings) and `code_size`.
+
+To see the machine code your C compiles to, run
+`{{ disasm }} <function_name>` after `check`. It prints that
+function's disassembly from the `check` build ({{ cpu }}, the same flags the
+evaluator uses). Costs no eval. Use it to confirm the compiler emits the
+{% if has_mve %}MVE {% endif %}instructions, unrolling and register use you intended.
+
+`submit` prints one JSON verdict and saves the same text to
+`{{ results }}/NNN.json` (NNN = eval number), which you
+may Read if the printed output was cut:
+- `verdict`: overall result, pass only if every leg passes. One of pass, fail,
+  rejected, refused, no_gain, error.
+- `evals_left`: you have {{ evals }} evaluations in total. Use them carefully.
+- `note`: present when the eval was not charged, and why.
+- `code_size`: kernel library code bytes vs base, total and per changed
+  object file, or an error when nothing was built.
+- `legs.<leg>`, each with:
+  - `verdict`, `stage` (check, run, objects, score) and `score`.
+  - `findings`: why the checker rejected the tree.
+  - `failures`: what failed, by kind: `comparison_failed` (output differs
+    from baseline), `regression` (a case got slower beyond its noise band),
+    `prepare_regression` (the untimed setup call, e.g. weight sums, got
+    slower), `family_regression` (a kernel family got slower overall),
+    `timing_lost` (a case no longer reports valid cycles), `missing_case`,
+    `input_digest` (inputs changed), `not_comparable`.
+  - `families`: geomean speedup per kernel family over touched cases, plus
+    `untouched_cases` and `untouched_geomean`.
+  - `cases`: one row per public case your change touched (see
+    `cases_columns`): baseline vs candidate cycles, speedup, noise band (%),
+    cycles per MAC. `untouched_cases` gives only their count and speedup
+    range.
+  - `hints` (`{{ first_leg }}` leg only): for the ten slowest touched cases, % of peak, a
+    diagnosis from PMU counters and suggested fixes.
+  - `hidden`: count of unseen cases, their failures by kind, and in
+    `failed` the kernel symbol and the wrapper path ("via") of each failing
+    hidden case. Ids, shapes and cycle numbers are never shown.
+- Only cases whose compiled kernel code you changed (directly, or through a
+  function or wrapper they call) can fail on speed. Untouched cases are
+  only summarized and cannot fail you; their drift comes from code layout.
+  Correctness applies to every case.
+
+Besides speed, weigh these, where they apply:
+- Code size. Flash is scarce on these chips. Prefer the smallest change that
+  gets the gain: no per-shape copies of a kernel, no unrolling beyond what
+  pays off, share helpers. Report bytes added per % speedup.
+- Memory and caching. Think about where each operand lives and how often it
+  is read: reuse each loaded weight across several output pixels and each
+  loaded input across several channels, keep loads contiguous, and avoid
+  re-reading weights per pixel. The hints report L1D refills and memory
+  stalls.
+- Tiling. Block loops over output channels and pixels so the working set
+  fits the {% if has_mve %}8 MVE vector registers{% else %}core registers{% endif %} and the cache, and finish tails with
+  {% if has_mve %}predication{% else %}short tail loops{% endif %} rather than scalar loops.
+Say in your summary which of these you applied, and why the others did not
+apply.
+{%- if start %}
+
+Where things stand:
+- The tree starts from a previous campaign's patch ({{ start.lines }} diff lines) touching:
+{%- for f in start.files %}
+  `{{ f }}`
+{%- endfor %}
+{%- if start.notes %}
+{{ start.notes }}
+{%- endif %}
+{%- endif %}
+
+Work plan:
+1. Run `check`, then use `disasm` on the inner kernels of the slowest routes
+   above to see where cycles go (loads, MAC chains, stalls). Read the hints
+   from your first `submit` for the slowest cases.
+2. Improve the routes that carry the most cycles first, with focused changes.
+{%- if start %} Keep what the previous attempt already won.{% endif %}
+3. Make one focused change at a time, run `check` (and `disasm` where
+   useful), reason about correctness (rounding, saturation, tails, odd
+   channel counts, padding) before submitting.
+4. If a change fails or gives no gain, undo it or fix it before stacking more.
+5. Stop when further gains look small, or when evals run out.
+
+When you stop, leave the best passing version in the tree (or the starting tree if
+nothing passed) and write a short summary: what you changed, why,
+the verdicts you got per eval, and the final speedups.

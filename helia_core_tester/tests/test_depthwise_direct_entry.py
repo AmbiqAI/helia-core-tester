@@ -64,6 +64,27 @@ def test_entry_and_planar_rule_gate_the_case_on_the_checkout() -> None:
     assert _required_kernel_symbols(_descriptor("depthwise_conv_dilated_1d_k7_d2_c24_s8")) == []
 
 
+def test_3x3_entry_gates_on_both_queries_it_calls() -> None:
+    assert _required_kernel_symbols(_descriptor("depthwise_conv_entry_3x3_25x5_c64_s8")) == [
+        "arm_depthwise_conv_s8_opt_3x3",
+        "arm_depthwise_conv_s8_opt_get_buffer_size",
+        "arm_depthwise_conv_s8_opt_3x3_get_buffer_size",
+    ]
+
+
+def test_a_second_query_resolves_as_an_extra_sizer() -> None:
+    resolved = _resolve("arm_depthwise_conv_s8_opt_3x3", entry_sizer=[
+        "arm_depthwise_conv_s8_opt_get_buffer_size", "arm_depthwise_conv_s8_opt_3x3_get_buffer_size"])
+
+    assert resolved["kernel_get_buffer_size_fn"] == "arm_depthwise_conv_s8_opt_get_buffer_size"
+    assert resolved["entry_extra_sizers"] == ["arm_depthwise_conv_s8_opt_3x3_get_buffer_size"]
+    with pytest.raises(EntryError, match="is a kernel, not a scratch-size query"):
+        _resolve("arm_depthwise_conv_s8_opt_3x3", entry_sizer=[
+            "arm_depthwise_conv_s8_opt_get_buffer_size", "arm_depthwise_conv_s8_opt_planar"])
+    with pytest.raises(EntryError, match="must name a scratch-size query or a list"):
+        _resolve("arm_depthwise_conv_s8_opt_3x3", entry_sizer=[])
+
+
 def test_entry_case_calls_the_entry_with_weight_sums_and_its_scratch_query(tmp_path: Path) -> None:
     name = "depthwise_conv_entry_3x3_25x5_c64_s8"
     source = _source(name, tmp_path)
@@ -75,6 +96,24 @@ def test_entry_case_calls_the_entry_with_weight_sums_and_its_scratch_query(tmp_p
     assert re.search(r"arm_depthwise_conv_s8_opt_get_buffer_size\(\s*&\w+_input_dims,\s*&\w+_filter_dims\s*\)", code)
     assert "arm_depthwise_conv_wrapper_s8(" not in source
     assert "HELIA_VALIDATE_OUTPUTS(" in source
+
+
+@pytest.mark.parametrize(
+    ("name", "calls_3x3_sizer"),
+    [
+        ("depthwise_conv_entry_3x3_28x28_c64_stride2_s8", True),
+        ("depthwise_conv_entry_3x3_c64_s1_14x28_s8", True),
+        ("depthwise_conv_entry_channelwise_25x5_c64_s8", False),
+    ],
+)
+def test_3x3_entries_also_query_their_own_size(tmp_path: Path, name: str, calls_3x3_sizer: bool) -> None:
+    source = _source(name, tmp_path)
+    code = re.sub(r"/\*.*?\*/|//[^\n]*", " ", source, flags=re.S)
+
+    assert re.search(r"arm_depthwise_conv_s8_opt_get_buffer_size\(", code)
+    assert bool(re.search(r"arm_depthwise_conv_s8_opt_3x3_get_buffer_size\(\s*&\w+_input_dims\s*\)", code)) == calls_3x3_sizer
+    # The entry's answer raises the family's when larger, before the sizer checks.
+    assert ("scratch takes the larger answer" in source) == calls_3x3_sizer
 
 
 def test_declined_case_checks_the_status_and_an_untouched_output(tmp_path: Path) -> None:

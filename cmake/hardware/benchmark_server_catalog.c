@@ -14,6 +14,11 @@
 #define HCT_PMU_CAPABILITY_FLAGS 0u
 #define HCT_PMU_COUNTER_SLOTS 0u
 #endif
+#if defined(HCT_PLACEMENT_MRAM)
+#define HCT_PLACEMENT_CAPABILITY_FLAGS HCT_CAP_WEIGHTS_MRAM
+#else
+#define HCT_PLACEMENT_CAPABILITY_FLAGS 0u
+#endif
 
 #ifndef HCT_BENCHMARK_SERVER_BOARD_ID
 #define HCT_BENCHMARK_SERVER_BOARD_ID "apollo510_evb"
@@ -29,13 +34,13 @@
  */
 static const hct_kernel_catalog_entry_t g_hct_kernel_catalog[] = {
     {1u, "arm_abs_s8", "BasicMathFunctions", 1u, "S8", 1u, true, true, false, 0u},
-    {2u, "arm_convolve_s8", "ConvolutionFunctions", 1u, "S8", 1u, true, true, false, 0u},
+    {2u, "arm_convolve_wrapper_s8", "ConvolutionFunctions", 1u, "S8", 1u, true, true, false, 0u},
     {3u, "arm_add_s8", "BasicMathFunctions", 1u, "S8", 1u, true, true, false, 0u},
     {4u, "arm_sub_s8", "BasicMathFunctions", 1u, "S8", 1u, true, true, false, 0u},
     {5u, "arm_mul_s8", "BasicMathFunctions", 1u, "S8", 1u, true, true, false, 0u},
     {6u, "arm_maximum_s8", "BasicMathFunctions", 1u, "S8", 1u, true, true, false, 0u},
     {7u, "arm_minimum_s8", "BasicMathFunctions", 1u, "S8", 1u, true, true, false, 0u},
-    {8u, "arm_depthwise_conv_s8", "ConvolutionFunctions", 1u, "S8", 1u, true, true, false, 0u},
+    {8u, "arm_depthwise_conv_wrapper_s8", "ConvolutionFunctions", 1u, "S8", 1u, true, true, false, 0u},
     {9u, "arm_add_s16", "BasicMathFunctions", 1u, "S16", 1u, true, true, false, 0u},
     {10u, "arm_sub_s16", "BasicMathFunctions", 1u, "S16", 1u, true, true, false, 0u},
     {11u, "arm_mul_s16", "BasicMathFunctions", 1u, "S16", 1u, true, true, false, 0u},
@@ -201,13 +206,25 @@ static const hct_kernel_catalog_entry_t g_hct_kernel_catalog[] = {
     {171u, "arm_batch_matmul_f16", "FullyConnectedFunctions", 1u, "FP16", 1u, true, true, false, 0u},
     {172u, "arm_convolve_f32", "ConvolutionFunctions", 1u, "FP32", 1u, true, true, false, 0u},
     {173u, "arm_convolve_f16", "ConvolutionFunctions", 1u, "FP16", 1u, true, true, false, 0u},
+    {174u, "hct_empty_call", "Timing", 1u, "S8", 1u, true, true, false, 0u},
+    {175u, "arm_convolve_s8_small_cin", "ConvolutionFunctions", 1u, "S8", 1u, true, true, false, 0u},
+    {176u, "arm_convolve_s8_3x3_c16_s1", "ConvolutionFunctions", 1u, "S8", 1u, true, true, false, 0u},
+    {177u, "arm_convolve_1x1_s8_short_k", "ConvolutionFunctions", 1u, "S8", 1u, true, true, false, 0u},
+    {178u, "arm_depthwise_conv_s8_opt_3x3", "ConvolutionFunctions", 1u, "S8", 1u, true, true, false, 0u},
+    {179u, "arm_depthwise_conv_s8_opt_3x3_c64_s1", "ConvolutionFunctions", 1u, "S8", 1u, true, true, false, 0u},
+    {180u, "arm_depthwise_conv_s8_opt_planar", "ConvolutionFunctions", 1u, "S8", 1u, true, true, false, 0u},
+    {181u, "arm_depthwise_conv_s8_opt_channelwise", "ConvolutionFunctions", 1u, "S8", 1u, true, true, false, 0u},
+    {182u, "arm_fully_connected_per_channel_packed_s8", "FullyConnectedFunctions", 1u, "S8", 1u, true, true, false, 0u},
+    {183u, "arm_svdf_s8", "SVDFunctions", 1u, "S8", 1u, true, true, false, 0u},
+    {184u, "arm_svdf_state_s16_s8", "SVDFunctions", 1u, "S8", 1u, true, true, false, 0u},
+    {185u, "arm_lstm_unidirectional_s8", "LSTMFunctions", 1u, "S8", 1u, true, true, false, 0u},
 };
 
 static const uint8_t g_hct_kernel_catalog_hash[32] = {
-    0x83u, 0x2bu, 0x22u, 0x63u, 0x9au, 0xe9u, 0xfcu, 0x14u,
-    0x14u, 0xb4u, 0x66u, 0xf3u, 0x51u, 0x69u, 0xebu, 0x60u,
-    0x1eu, 0x1eu, 0xe3u, 0x02u, 0xc2u, 0xa4u, 0xd3u, 0xf3u,
-    0xe9u, 0x63u, 0x75u, 0x2cu, 0xbfu, 0x00u, 0xdcu, 0xc2u,
+    0x6cu, 0x4cu, 0x8bu, 0x1du, 0x80u, 0xfau, 0xe5u, 0xcdu,
+    0x19u, 0xa3u, 0x16u, 0x23u, 0x44u, 0xe9u, 0x8au, 0x53u,
+    0xe8u, 0x8cu, 0xa9u, 0x50u, 0x4au, 0x99u, 0xdeu, 0xf9u,
+    0x9du, 0x55u, 0xe9u, 0x54u, 0x7au, 0x4bu, 0x1du, 0xc1u,
 };
 
 const hct_kernel_catalog_entry_t *hct_benchmark_server_catalog(size_t *count)
@@ -252,7 +269,8 @@ uint32_t hct_benchmark_server_capability_flags(void)
          | HCT_CAP_RTT_TRANSPORT
          | HCT_CAP_KERNEL_CATALOG
          | HCT_CAP_ABS_S8
-         | HCT_PMU_CAPABILITY_FLAGS;
+         | HCT_PMU_CAPABILITY_FLAGS
+         | HCT_PLACEMENT_CAPABILITY_FLAGS;
 }
 
 uint8_t hct_benchmark_server_pmu_counter_slots(void)

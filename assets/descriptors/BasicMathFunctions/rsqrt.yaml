@@ -1,4 +1,6 @@
+# LUT error: per_op 1 LSB, universal 3.
 name: rsqrt_small_tensor_per_op_s16
+comparison: {tolerance: 1}
 operator: Rsqrt
 activation_dtype: S16
 weight_dtype: S8
@@ -7,6 +9,7 @@ hint:
 input_shape: [1, 2, 3, 4]
 ---
 name: rsqrt_small_tensor_universal_s16
+comparison: {tolerance: 3}
 operator: Rsqrt
 activation_dtype: S16
 weight_dtype: S8
@@ -15,6 +18,7 @@ hint:
 input_shape: [1, 2, 3, 4]
 ---
 name: rsqrt_long_row_per_op_s16
+comparison: {tolerance: 1}
 operator: Rsqrt
 activation_dtype: S16
 weight_dtype: S8
@@ -23,6 +27,7 @@ hint:
 input_shape: [1, 1, 64, 1]
 ---
 name: rsqrt_long_row_universal_s16
+comparison: {tolerance: 3}
 operator: Rsqrt
 activation_dtype: S16
 weight_dtype: S8
@@ -31,6 +36,7 @@ hint:
 input_shape: [1, 1, 64, 1]
 ---
 name: rsqrt_multi_batch_per_op_s16
+comparison: {tolerance: 1}
 operator: Rsqrt
 activation_dtype: S16
 weight_dtype: S8
@@ -39,9 +45,51 @@ hint:
 input_shape: [2, 3, 5, 3]
 ---
 name: rsqrt_multi_batch_universal_s16
+comparison: {tolerance: 3}
 operator: Rsqrt
 activation_dtype: S16
 weight_dtype: S8
 hint:
   call_style: universal
 input_shape: [2, 3, 5, 3]
+---
+# Small q; tolerance is measured max error.
+name: rsqrt_small_input_per_op_s16
+comparison: {tolerance: 55}
+operator: Rsqrt
+activation_dtype: S16
+weight_dtype: S8
+hint:
+  call_style: per_op
+  input_q_range: [0, 1024]
+input_shape: [1, 1, 64, 1]
+---
+name: rsqrt_small_input_universal_s16
+comparison: {tolerance: 17}
+operator: Rsqrt
+activation_dtype: S16
+weight_dtype: S8
+hint:
+  call_style: universal
+  input_q_range: [0, 1024]
+input_shape: [1, 1, 64, 1]
+---
+name: rsqrt_mid_input_per_op_s16
+comparison: {tolerance: 8}
+operator: Rsqrt
+activation_dtype: S16
+weight_dtype: S8
+hint:
+  call_style: per_op
+  input_q_range: [1024, 4096]
+input_shape: [1, 1, 64, 1]
+---
+name: rsqrt_mid_input_universal_s16
+comparison: {tolerance: 7}
+operator: Rsqrt
+activation_dtype: S16
+weight_dtype: S8
+hint:
+  call_style: universal
+  input_q_range: [1024, 4096]
+input_shape: [1, 1, 64, 1]

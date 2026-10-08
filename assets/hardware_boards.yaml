@@ -7,6 +7,8 @@
 # SoC directory the NSX linker script lives in and the flash/RAM region names
 # the memory report measures against) are derived from the row here. Loaded by
 # helia_core_tester/hardware/boards.py.
+#
+# core_clock_hz: exact hct_core_clock_hz() boot value.
 schema: hct.hardware_boards
 schema_version: 1
 boards:
@@ -21,3 +23,36 @@ boards:
     workspace_bytes: 114688
     flash_region: MCU_MRAM
     ram_region: MCU_TCM
+    # HP mode.
+    core_clock_hz: 250000000
+    # Cached MRAM: --placement mram.
+    has_mram: true
+  - id: apollo330mP_evb
+    nsx_board: apollo330mP_evb
+    soc: apollo330P
+    cpu: cortex-m55
+    pmu_tier: armv8m
+    has_mve: true
+    # Custom Ambiq J-Link entry; NSX flashes it too.
+    jlink_device: Apollo330P_510L
+    swd_speed_khz: 4000
+    # Fits largest case, stays under 75% TCM.
+    workspace_bytes: 112640
+    flash_region: MCU_MRAM
+    ram_region: MCU_TCM
+    # HP2 mode.
+    core_clock_hz: 250000000
+    has_mram: true
+  - id: apollo3p_evb
+    nsx_board: apollo3p_evb
+    soc: apollo3p
+    cpu: cortex-m4
+    pmu_tier: dwt
+    has_mve: false
+    jlink_device: AMA3B2KK-KBR
+    swd_speed_khz: 4000
+    workspace_bytes: 114688
+    flash_region: ROMEM
+    ram_region: RWMEM
+    # Burst off; NSX perf mode is a no-op.
+    core_clock_hz: 48000000

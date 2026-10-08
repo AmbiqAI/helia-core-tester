@@ -8,13 +8,14 @@ from __future__ import annotations
 
 import os
 import shutil
+import time
 from pathlib import Path
 
 import pytest
 import yaml
 
 from helia_core_tester.hardware import nsx_app, nsx_cli
-from helia_core_tester.hardware.boards import resolve_board
+from helia_core_tester.hardware.boards import load_board_table, resolve_board
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 BOARD = resolve_board("apollo510_evb")
@@ -121,8 +122,9 @@ def test_local_kernels_are_written_as_hpx_writes_them(tmp_path: Path) -> None:
     }
     assert (module / "CMakeLists.txt").read_text(encoding="utf-8") == nsx_app.KERNEL_SHIM
     assert (module / "nsx-module.yaml").read_bytes() == (checkout / "nsx" / "nsx-module.yaml").read_bytes()
-    # Mtimes survive; the shim is kept.
-    os.utime(checkout / "Source" / "arm_add.c", (1, 1))
+    # Same bytes keep the module mtime; the shim is kept.
+    os.utime(checkout / "Source" / "arm_add.c", (3, 3))
+    os.utime(module / "Source" / "arm_add.c", (1, 1))
     os.utime(module / "CMakeLists.txt", (2, 2))
     (checkout / "Source" / "sub" / "arm_sub.c").unlink()
     _render(tmp_path, cmsis_nn_root=checkout)
@@ -181,6 +183,129 @@ def test_module_under_the_checkout_is_allowed(tmp_path: Path) -> None:
     module = checkout / "Tests" / "helia-core-tester" / "build" / "nsx-cmsis-nn"
     nsx_app.write_kernels(checkout, module)
     assert (module / "Include").is_dir()
+
+
+def _snapshot(root: Path) -> dict:
+    return {
+        p: (p.is_symlink(), p.read_bytes() if p.is_file() and not p.is_symlink() else None)
+        for p in root.rglob("*") if p.suffix != ".lock"
+    }
+
+
+@pytest.mark.parametrize("case", ["root-link-to-itself", "module-link-into-source"])
+def test_linked_overlap_refused_untouched(tmp_path: Path, case: str) -> None:
+    checkout = make_checkout(tmp_path / "ns-cmsis-nn")
+    link = tmp_path / "link"
+    if case == "root-link-to-itself":
+        link.symlink_to(checkout)
+        root, module = link, link
+    else:
+        link.symlink_to(checkout / "Source")
+        root, module = checkout, link
+    before = _snapshot(checkout)
+    with pytest.raises(nsx_app.AppRenderError, match="overlaps"):
+        nsx_app.write_kernels(root, module)
+    assert _snapshot(checkout) == before and link.is_symlink()
+
+
+def test_stale_entry_types_replaced(tmp_path: Path) -> None:
+    from helia_core_tester.hardware.nsx_cli import tree_hash
+
+    checkout = make_checkout(tmp_path / "ns-cmsis-nn")
+    clean = tmp_path / "clean"
+    nsx_app.write_kernels(checkout, clean)
+    stale = tmp_path / "stale"
+    _write(stale / "nsx", "a file, not a dir\n")
+    (stale / "CMakeLists.txt").mkdir()
+    (stale / "nsx-module.yaml").mkdir()
+    _write(stale / "Tests" / "old.c", "old\n")
+    nsx_app.write_kernels(checkout, stale)
+    assert tree_hash(stale) == tree_hash(clean)
+    assert not [p for p in tmp_path.iterdir() if p.name.startswith(".stale.")]
+
+
+@pytest.mark.parametrize("linked", [False, True])
+def test_failed_swap_restores_module(tmp_path: Path, monkeypatch, linked: bool) -> None:
+    checkout = make_checkout(tmp_path / "ns-cmsis-nn")
+    module = tmp_path / "module"
+    nsx_app.write_kernels(checkout, tmp_path / "real")
+    if linked:
+        module.symlink_to(tmp_path / "real")
+    else:
+        os.rename(tmp_path / "real", module)
+    before = _snapshot(tmp_path)
+
+    def fail(src, dst):
+        raise OSError("target appeared")
+
+    monkeypatch.setattr(nsx_app.os, "replace", fail)
+    with pytest.raises(OSError, match="target appeared"):
+        nsx_app.write_kernels(checkout, module)
+    assert _snapshot(tmp_path) == before and module.is_symlink() == linked
+
+
+def test_raced_swap_names_both_paths(tmp_path: Path, monkeypatch) -> None:
+    checkout = make_checkout(tmp_path / "ns-cmsis-nn")
+    module = tmp_path / "module"
+    nsx_app.write_kernels(checkout, module)
+    original = _snapshot(module)
+    real_replace = os.replace
+
+    def racing(src, dst):
+        # Another writer recreates the target.
+        _write(Path(dst) / "other.txt", "other\n")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(nsx_app.os, "replace", racing)
+    with pytest.raises(nsx_app.SwapError) as info:
+        nsx_app.write_kernels(checkout, module)
+    stranded = info.value.stranded
+    assert str(stranded) in str(info.value) and str(module) in str(info.value) and isinstance(info.value.__cause__, OSError)
+    assert {p.relative_to(stranded) for p in _snapshot(stranded)} == {p.relative_to(module) for p in original}
+    assert (module / "other.txt").is_file()
+
+
+def test_lock_serializes_writers(tmp_path: Path) -> None:
+    import subprocess
+    import sys
+    import time
+
+    pytest.importorskip("fcntl")
+    checkout = make_checkout(tmp_path / "ns-cmsis-nn")
+    module = tmp_path / "module"
+    ready = tmp_path / "ready"
+    holder = (
+        "import fcntl, os, sys, time\n"
+        f"fd = os.open({str(module) + '.lock'!r}, os.O_RDWR | os.O_CREAT)\n"
+        "fcntl.flock(fd, fcntl.LOCK_EX)\n"
+        f"open({str(ready)!r}, 'w').close()\n"
+        "time.sleep(1.5)\n"
+    )
+    proc = subprocess.Popen([sys.executable, "-c", holder])
+    try:
+        deadline = time.monotonic() + 10
+        while not ready.exists():
+            assert proc.poll() is None and time.monotonic() < deadline, "lock holder never started"
+            time.sleep(0.01)
+        start = time.monotonic()
+        nsx_app.write_kernels(checkout, module)
+        waited = time.monotonic() - start
+    finally:
+        proc.wait(timeout=10)
+    assert waited > 1.0 and (module / "Source/arm_add.c").is_file()
+
+
+def test_rewrite_keeps_mtimes(tmp_path: Path) -> None:
+    checkout = make_checkout(tmp_path / "ns-cmsis-nn")
+    module = tmp_path / "module"
+    nsx_app.write_kernels(checkout, module)
+    paths = ("CMakeLists.txt", "nsx/CMakeLists.txt", "Source/arm_add.c")
+    for rel in paths:
+        os.utime(module / rel, ns=(1_000_000_000, 1_000_000_000))
+    os.utime(checkout / "Source/arm_add.c", ns=(1_000_000_000, 1_000_000_000))
+    os.utime(checkout / "nsx/CMakeLists.txt", ns=(1_000_000_000, 1_000_000_000))
+    nsx_app.write_kernels(checkout, module)
+    assert all((module / rel).stat().st_mtime_ns == 1_000_000_000 for rel in paths)
 
 
 @pytest.mark.parametrize("name", ["Include", "Source", "nsx/nsx-module.yaml"])
@@ -273,6 +398,8 @@ def test_server_sources_compile_out_of_this_checkout(tmp_path: Path) -> None:
     assert "patch_build_id.py" in text, "the post-link build-id stamp must survive"
     # MVE in the harness skews MVE counters.
     assert "-fno-tree-vectorize" in text
+    # Pinned kernel alignment: no layout drift.
+    assert "target_compile_options(nsx_cmsis_nn PRIVATE -falign-functions=64)" in text
     assert 'RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/hardware"' in text
     assert '"$<TARGET_FILE_DIR:hct_benchmark_server>/hct_benchmark_server.elf"' in text
 
@@ -334,3 +461,127 @@ def test_synced_modules_cmake_is_left_alone(tmp_path: Path) -> None:
     synced.write_text("# written by nsx sync\n", encoding="utf-8")
     _render(tmp_path)
     assert synced.read_text(encoding="utf-8") == "# written by nsx sync\n"
+
+
+# --- placement ---------------------------------------------------------------------
+
+
+def test_mram_placement_defines_the_switch(tmp_path: Path) -> None:
+    assert "HCT_PLACEMENT_MRAM" not in _render(tmp_path / "tcm").cmakelists
+    assert "    HCT_PLACEMENT_MRAM\n" in _render(tmp_path / "mram", placement="mram").cmakelists
+
+
+def test_mram_placement_needs_cached_mram(tmp_path: Path) -> None:
+    with pytest.raises(nsx_app.AppRenderError, match="no cached MRAM"):
+        nsx_app.render_app(resolve_board("apollo3p_evb"), nsx_app.AppOptions(placement="mram"), tmp_path / "app")
+    with pytest.raises(ValueError, match="placement"):
+        nsx_app.AppOptions(placement="sram")
+    assert [board.id for board in load_board_table() if board.has_mram] == ["apollo510_evb", "apollo330mP_evb"]
+
+
+def test_placement_is_a_saved_option(tmp_path: Path) -> None:
+    options = nsx_app.AppOptions(cmsis_nn_ref="v9", placement="mram")
+    assert nsx_app.AppOptions.from_json(options.to_json()) == options
+    assert "placement tcm -> mram" in options.changes_from(nsx_app.AppOptions(cmsis_nn_ref="v9"))
+    with pytest.raises(TypeError, match="placement"):
+        nsx_app.AppOptions.from_json('{"placement": "sram"}')
+    # Records without the field built tcm.
+    assert nsx_app.AppOptions.from_json('{"cmsis_nn_ref": "v9"}').placement == "tcm"
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+    nsx_app.save_options(app_dir, options)
+    # Only a passed placement or the flashed build.
+    assert nsx_app.resolve_options(app_dir, tmp_path).placement == "tcm"
+    assert nsx_app.resolve_options(app_dir, tmp_path, placement="mram").placement == "mram"
+    assert nsx_app.resolve_options(app_dir, tmp_path, follow_pin=False).placement == "mram"
+
+
+def test_vendor_keeps_mtimes_of_same_bytes(tmp_path: Path) -> None:
+    """Fresh clones rebuild only edits."""
+    checkout = make_checkout(tmp_path / "ns-cmsis-nn")
+    module = tmp_path / "module"
+    nsx_app.write_kernels(checkout, module)
+    old = 1_000_000_000_000_000_000
+    for path in module.rglob("*"):
+        if path.is_file():
+            os.utime(path, ns=(old, old))
+    # A fresh clone: every mtime is new.
+    edited = next(p for p in checkout.joinpath("Source").rglob("*") if p.is_file())
+    edited.write_text(edited.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+    nsx_app.write_kernels(checkout, module)
+    rel = edited.relative_to(checkout)
+    times = {p.relative_to(module): p.stat().st_mtime_ns for p in module.rglob("*") if p.is_file()}
+    assert times.pop(rel) != old
+    assert set(times.values()) == {old}
+
+
+def test_new_file_rebuilds_everything(tmp_path: Path) -> None:
+    """A new header may shadow; no mtime kept."""
+    checkout = make_checkout(tmp_path / "ns-cmsis-nn")
+    module = tmp_path / "module"
+    nsx_app.write_kernels(checkout, module)
+    old = 1_000_000_000_000_000_000
+    for path in module.rglob("*"):
+        if path.is_file():
+            os.utime(path, ns=(old, old))
+    (checkout / "Source" / "shadow.h").write_text("\n", encoding="utf-8")
+    nsx_app.write_kernels(checkout, module)
+    assert all(p.stat().st_mtime_ns != old for p in module.joinpath("Source").rglob("*") if p.is_file())
+
+
+def test_old_source_mtime_still_rebuilds(tmp_path: Path) -> None:
+    """Changed bytes get a fresh mtime."""
+    checkout = make_checkout(tmp_path / "ns-cmsis-nn")
+    module = tmp_path / "module"
+    nsx_app.write_kernels(checkout, module)
+    source = checkout / "Source" / "arm_add.c"
+    source.write_text("int changed;\n", encoding="utf-8")
+    os.utime(source, ns=(1_000_000_000, 1_000_000_000))
+    before = time.time_ns() - 1_000_000_000
+    nsx_app.write_kernels(checkout, module)
+    assert (module / "Source" / "arm_add.c").stat().st_mtime_ns > before
+
+
+def test_unstamped_module_keeps_no_mtime(tmp_path: Path) -> None:
+    """Old mtimes need a fresh-vendor stamp."""
+    checkout = make_checkout(tmp_path / "ns-cmsis-nn")
+    module = tmp_path / "module"
+    nsx_app.write_kernels(checkout, module)
+    old = 1_000_000_000
+    for path in module.rglob("*"):
+        if path.is_file():
+            os.utime(path, ns=(old, old))
+    module.with_name("module.fresh").unlink()
+    nsx_app.write_kernels(checkout, module)
+    assert all(p.stat().st_mtime_ns != old for p in module.joinpath("Source").rglob("*") if p.is_file())
+
+
+def test_in_place_edit_drops_old_mtime(tmp_path: Path) -> None:
+    """An overwrite with an old mtime rebuilds."""
+    checkout = make_checkout(tmp_path / "ns-cmsis-nn")
+    module = tmp_path / "module"
+    nsx_app.write_kernels(checkout, module)
+    old = 1_000_000_000
+    # Edited bytes copied in with an old mtime.
+    edited = tmp_path / "edited.c"
+    edited.write_text("int edited;\n", encoding="utf-8")
+    os.utime(edited, ns=(old, old))
+    shutil.copy2(edited, module / "Source" / "arm_add.c")
+    shutil.copy2(edited, checkout / "Source" / "arm_add.c")
+    before = time.time_ns() - 1_000_000_000
+    nsx_app.write_kernels(checkout, module)
+    assert (module / "Source" / "arm_add.c").stat().st_mtime_ns > before
+
+
+def test_old_inode_stamp_keeps_no_mtime(tmp_path: Path) -> None:
+    """A pre-hash stamp is not trusted."""
+    checkout = make_checkout(tmp_path / "ns-cmsis-nn")
+    module = tmp_path / "module"
+    nsx_app.write_kernels(checkout, module)
+    old = 1_000_000_000
+    for path in module.rglob("*"):
+        if path.is_file():
+            os.utime(path, ns=(old, old))
+    module.with_name("module.fresh").write_text(f"{module.stat().st_ino}\n", encoding="utf-8")
+    nsx_app.write_kernels(checkout, module)
+    assert all(p.stat().st_mtime_ns != old for p in module.joinpath("Source").rglob("*") if p.is_file())

@@ -97,6 +97,15 @@ static cmsis_nn_context {{ name }}_ctx;
     {% if harness.sizer_call %}
     // Calculate required buffer size
     int32_t required_buffer_size = {{ harness.sizer_call }};
+    {% for fn, call in harness.extra_sizer_calls %}
+    // {{ fn }} sizes the entry's own path: scratch takes the larger answer.
+    {
+        const int32_t entry_buffer_size = {{ call }};
+        if (required_buffer_size >= 0 && (entry_buffer_size < 0 || entry_buffer_size > required_buffer_size)) {
+            required_buffer_size = entry_buffer_size;
+        }
+    }
+    {% endfor %}
     {% elif harness.scratch_buffer and not (force_no_scratch | default(false) or harness.no_scratch or harness.context_setup) %}
     // The entry takes no scratch query (entry_scratch in the descriptor).
     int32_t required_buffer_size = {{ harness.scratch_bytes }};
@@ -275,7 +284,7 @@ int32_t {{ name }}_test_case_run(void)
     {% endif %}
     {% endfor %}
     {% elif autovectorize_declines %}
-#if defined(HELIA_CMSIS_NN_INT_AUTOVECTORIZE)
+#if {{ autovectorize_declines_if }}
     HELIA_GUARD_ARM({{ name }}_output, true /* the entry declines on this build: poison */);
 #else
     HELIA_GUARD_ARM({{ name }}_output, false /* real output, not scratch: don't poison */);
@@ -336,7 +345,7 @@ int32_t {{ name }}_test_case_run(void)
     );
     {% endfor %}
     {% elif autovectorize_declines %}
-#if defined(HELIA_CMSIS_NN_INT_AUTOVECTORIZE)
+#if {{ autovectorize_declines_if }}
     HELIA_GUARD_CHECK_UNTOUCHED({{ name }}_output, "{{ label }} output", failures);
     HELIA_VALIDATE_EXPECTED_STATUS(
         "{{ label }}",

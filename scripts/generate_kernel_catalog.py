@@ -91,7 +91,9 @@ def validate_against_contract(kernels: list[KernelEntry], cmsis_nn_root: Optiona
     if not contracts.present:
         where = contracts.path if contracts.path is not None else "no ns-cmsis-nn checkout"
         return f"kernel contract absent ({where}); cmsis_function names not validated"
-    missing = [entry for entry in kernels if contracts.find(entry.cmsis_function) is None]
+    # The firmware's own helpers (hct_*) are not ns-cmsis-nn kernels and have no contract row.
+    missing = [entry for entry in kernels
+               if not entry.cmsis_function.startswith("hct_") and contracts.find(entry.cmsis_function) is None]
     if missing:
         shown = ", ".join(f"kernel_id={entry.kernel_id} {entry.cmsis_function}" for entry in missing[:8])
         more = f" (+{len(missing) - 8} more)" if len(missing) > 8 else ""
@@ -185,6 +187,11 @@ def _render_catalog_c(entries: list[dict]) -> str:
     lines.append("#define HCT_PMU_CAPABILITY_FLAGS 0u")
     lines.append("#define HCT_PMU_COUNTER_SLOTS 0u")
     lines.append("#endif")
+    lines.append("#if defined(HCT_PLACEMENT_MRAM)")
+    lines.append("#define HCT_PLACEMENT_CAPABILITY_FLAGS HCT_CAP_WEIGHTS_MRAM")
+    lines.append("#else")
+    lines.append("#define HCT_PLACEMENT_CAPABILITY_FLAGS 0u")
+    lines.append("#endif")
     lines.append("")
     lines.append("#ifndef HCT_BENCHMARK_SERVER_BOARD_ID")
     lines.append('#define HCT_BENCHMARK_SERVER_BOARD_ID "apollo510_evb"')
@@ -270,7 +277,8 @@ def _render_catalog_c(entries: list[dict]) -> str:
     lines.append("         | HCT_CAP_RTT_TRANSPORT")
     lines.append("         | HCT_CAP_KERNEL_CATALOG")
     lines.append("         | HCT_CAP_ABS_S8")
-    lines.append("         | HCT_PMU_CAPABILITY_FLAGS;")
+    lines.append("         | HCT_PMU_CAPABILITY_FLAGS")
+    lines.append("         | HCT_PLACEMENT_CAPABILITY_FLAGS;")
     lines.append("}")
     lines.append("")
     lines.append("uint8_t hct_benchmark_server_pmu_counter_slots(void)")

@@ -41,6 +41,9 @@ concurrency:
   # its own, or a regression on that commit can slip through unreported.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+permissions:
+  contents: read
+
 jobs:
   pytest:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
@@ -65,6 +68,11 @@ jobs:
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
+
+      # Before setup_ci.sh: its unlocked `uv sync` would quietly rewrite a
+      # stale lock instead of failing.
+      - name: Check uv.lock matches pyproject.toml
+        run: uv lock --check
 
       - name: Install Python dependencies (no ARM toolchain needed)
         run: ./scripts/setup_ci.sh --skip-build-deps

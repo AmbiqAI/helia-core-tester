@@ -607,10 +607,11 @@ MUTANTS_V1: Tuple[Mutant, ...] = (
                 replacement="    if (0) /* MUTANT drop_conv_ctx_guard */\n",
                 count=1,
             ),
+            # arm_convolve_s16 checks its groups in the same condition.
             Edit(
                 relpath="Source/ConvolutionFunctions/arm_convolve_s16.c",
-                pattern="    if (ctx->buf == NULL)\n",
-                replacement="    if (0) /* MUTANT drop_conv_ctx_guard */\n",
+                pattern="ctx->buf == NULL ||",
+                replacement="0 /* MUTANT drop_conv_ctx_guard */ ||",
                 count=1,
             ),
             Edit(
@@ -644,23 +645,30 @@ MUTANTS_V1: Tuple[Mutant, ...] = (
         edits=(
             Edit(
                 relpath="Source/ConvolutionFunctions/arm_convolve_s8.c",
-                pattern="    if (input_ch % groups != 0 || output_ch % groups != 0)\n",
+                pattern="    if (arm_nn_convolve_s8_groups_invalid(input_dims, filter_dims, output_dims))\n",
                 replacement="    if (0) /* MUTANT drop_conv_group_guard */\n",
                 count=1,
             ),
-            # Both the MVE and the non-MVE body of arm_convolve_s16 carry the
-            # check, so the edit stays live on the host build and on the FVP.
+            # The s16 wrapper checks the groups before it routes, and arm_convolve_s16
+            # checks them again; both go, or the wrapper still rejects the case.
+            Edit(
+                relpath="Source/ConvolutionFunctions/arm_convolve_wrapper_s16.c",
+                pattern="    if (arm_nn_convolve_groups_invalid(input_dims, filter_dims, output_dims))\n",
+                replacement="    if (0) /* MUTANT drop_conv_group_guard */\n",
+                count=1,
+            ),
             Edit(
                 relpath="Source/ConvolutionFunctions/arm_convolve_s16.c",
-                pattern="    if (input_ch % groups != 0 || output_ch % groups != 0)\n",
-                replacement="    if (0) /* MUTANT drop_conv_group_guard */\n",
-                count=2,
+                pattern="|| arm_nn_convolve_groups_invalid(input_dims, filter_dims, output_dims))",
+                replacement="|| 0 /* MUTANT drop_conv_group_guard */)",
+                count=1,
             ),
         ),
         expected_detected_by=(
             "convolve_fault_channel_group_mismatch_s8 and convolve_fault_channel_group_mismatch_s16 "
             "(tester#72): input_dims.c is set to 2 * filter_dims.c + 1 so that groups does not "
-            "divide it, and the case asserts ARM_CMSIS_NN_ARG_ERROR."
+            "divide it, and the case asserts ARM_CMSIS_NN_ARG_ERROR. The eight s16 whole-group "
+            "faults beside convolve_grouped_2_s16 also reach the removed checks."
         ),
         refs=("AmbiqAI/helia-core-tester#72",),
     ),
@@ -900,15 +908,14 @@ MUTANTS_V1: Tuple[Mutant, ...] = (
             # Both the MVE and the non-MVE arm_avgpool_s8 body carry the check.
             Edit(
                 relpath="Source/PoolingFunctions/arm_avgpool_s8.c",
-                pattern="    if (batch_cnt < 1)\n",
-                replacement="    if (0) /* MUTANT drop_pool_batch_guard */\n",
+                pattern="    if ((batch_cnt < 1) || (ch_src < 0))\n",
+                replacement="    if (ch_src < 0) /* MUTANT drop_pool_batch_guard */\n",
                 count=2,
             ),
             Edit(
                 relpath="Source/PoolingFunctions/arm_avgpool_s16.c",
-                # ns-cmsis-nn #627 folded the channel check into the batch guard; drop only the batch clause.
                 pattern="    if ((batch_cnt < 1) || (ch_src < 0))\n",
-                replacement="    if ((0 /* MUTANT drop_pool_batch_guard */) || (ch_src < 0))\n",
+                replacement="    if (ch_src < 0) /* MUTANT drop_pool_batch_guard */\n",
                 count=1,
             ),
             Edit(

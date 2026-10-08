@@ -8,9 +8,9 @@ from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.ops._shared.fixed_batch import converter_for_batched_model
 from helia_core_tester.generation.ops._shared.bias_init import SignedMagnitudeUniform
 from helia_core_tester.generation.entry import check_entry_fault, resolve_entry
-from helia_core_tester.generation.harness import ArgumentPool, ArrayLiteral, Declaration
+from helia_core_tester.generation.harness import ArgumentPool, ArrayLiteral, Declaration, Define, GuardedBuffer, Provider, SizeQuery
 from helia_core_tester.generation.harness.faults import common_fault, struct_copy, with_fault
-from helia_core_tester.generation.kernel_dispatch import resolve_fully_connected_kernel
+from helia_core_tester.generation.kernel_dispatch import autovectorize_declines_if, resolve_fully_connected_kernel
 from helia_core_tester.core.cpu_targets import get_cpu_profile
 import keras
 from pathlib import Path
@@ -35,6 +35,97 @@ def fc_quant_argument(context: Dict[str, Any]) -> str:
         raise ValueError(f"{n}: {kernel_fn} takes {ctype.strip()}, but this case's quantization is "
                          f"{'per-channel' if per_channel else 'per-tensor'}")
     return f"&{n}_quant_params"
+
+
+def fc_packed_entry(context: Dict[str, Any]) -> bool:
+    """Whether the kernel reads a weight stream packed ahead of the call in place of the weights,
+    kernel sums and quantization (arm_fully_connected_per_channel_packed_s8)."""
+    from helia_core_tester.contract.bind import takes
+    from helia_core_tester.contract.render import load_current_contracts, require_bound_symbol
+
+    if context.get("float_kernel") or context.get("entry_family") != "contract":
+        return False
+    return takes(require_bound_symbol(load_current_contracts(), context["kernel_fn"]), "packed_data")
+
+
+def fc_packed_stream_bound(filter_dims: Dict[str, Any]) -> int:
+    """A bound in whole words on the packed stream: ceil(C/4) blocks of four K-rows padded to 16
+    bytes plus 48 bytes of parameters. The run-time size query must fit it."""
+    return ((int(filter_dims['c']) + 3) * (int(filter_dims['n']) + 27) + 3) // 4 * 4
+
+
+def fc_packed_provider(context: Dict[str, Any]) -> Provider:
+    """The stream the packed entry reads, built the way its caller must build it: kernel sums with
+    the input offset and bias folded in (filter offset 0), then the entry's own packer."""
+    from helia_core_tester.contract.render import load_current_contracts
+
+    n, kernel_fn = context["name"], context["kernel_fn"]
+    upper = n.upper()
+    filter_dims = context["filter_dims"]
+    sizer = f"{kernel_fn}_get_packed_size"
+    if load_current_contracts().find(sizer) is None:
+        raise ValueError(f"{n}: {kernel_fn} packs a weight stream but this checkout declares no {sizer}")
+    bound = fc_packed_stream_bound(filter_dims)
+    bias = f"{n}_biases" if context.get("has_bias_array", context["has_biases"]) else "NULL"
+    setup = "\n".join([
+        "    // The stream is built the way the entry's caller must build it: kernel sums with the",
+        "    // input offset and bias folded in (filter offset 0), then the entry's packer.",
+        f"    {n}_packed_used = (size_t)packed_size;",
+        f"    HELIA_GUARD_STAMP_SLACK({n}_packed, {n}_packed_used);",
+        f"    arm_cmsis_nn_status pack_status = arm_vector_sum_s8(",
+        f"        {n}_kernel_sum,",
+        f"        {int(filter_dims['n'])},",
+        f"        {int(filter_dims['c'])},",
+        f"        {n}_weights,",
+        f"        {n}_fc_params.input_offset,",
+        "        0,",
+        f"        {bias}",
+        "    );",
+        "    if (pack_status == ARM_CMSIS_NN_SUCCESS) {",
+        f"        pack_status = {kernel_fn}_pack(",
+        f"            &{n}_filter_dims,",
+        f"            {n}_weights,",
+        f"            {n}_kernel_sum,",
+        f"            &{n}_quant_params,",
+        f"            (int8_t *){n}_packed",
+        "        );",
+        "    }",
+        "    if (pack_status != ARM_CMSIS_NN_SUCCESS) {",
+        "        return pack_status;",
+        "    }",
+    ])
+    return Provider(
+        param="packed_data",
+        expr=f"(const int8_t *){n}_packed",
+        # The bound keeps the harness's scratch macro name: the hardware bridge reads it as the stream size.
+        declarations=(Define(f"{upper}_BUFFER_SIZE_MAX", str(bound), comment="Packed weight stream (max upper bound; "
+                             "actual size queried at runtime)"),
+                      Declaration(f"{n}_packed_used", "size_t", "0", storage="static",
+                                  comment="Bytes of the stream the size query claimed")),
+        # Word storage keeps the stream 4-byte aligned, as the entry requires.
+        buffers=(GuardedBuffer(f"{n}_kernel_sum", "int32_t", str(int(filter_dims['c'])), label="kernel sums"),
+                 GuardedBuffer(f"{n}_packed", "int32_t", f"{upper}_PACKED_WORDS",
+                               count_value=f"({upper}_BUFFER_SIZE_MAX / 4)", label="packed weights")),
+        setup=setup,
+        size_query=SizeQuery(fn=sizer, result_var="packed_size", capacity=f"{upper}_BUFFER_SIZE_MAX"),
+    )
+
+
+def fc_packed_checks(context: Dict[str, Any]) -> str:
+    """The gate and the slack check of a packed case, run after the call with `failures` in scope."""
+    n = context["name"]
+    label = '{{ validation_label | default("Fully connected") }}'
+    expected = 1 if str(context.get("expected_status", "ARM_CMSIS_NN_SUCCESS")) == "ARM_CMSIS_NN_SUCCESS" else 0
+    return "\n".join([
+        f'    HELIA_GUARD_CHECK_SLACK({n}_packed, "{label} packed weights slack", {n}_packed_used, failures);',
+        "    // The gate the entry's caller asks first; a declined case expects it closed.",
+        "    HELIA_VALIDATE_SCALAR_EQ_INT(",
+        f'        "{label}",',
+        '        "arm_nn_fc_packed_s8_supported",',
+        f"        {expected},",
+        f"        arm_nn_fc_packed_s8_supported(&{n}_fc_params, &{n}_quant_params, &{n}_filter_dims)",
+        "    );",
+    ])
 
 
 def fc_sizer(context: Dict[str, Any]) -> Optional[str]:
@@ -84,6 +175,10 @@ def fc_argument_pool(context: Dict[str, Any]) -> ArgumentPool:
         "layout": context.get("kernel_layout") or "ARM_NN_LAYOUT_NHWC",
     }
     source = []
+    packed = fc_packed_entry(context)
+    if packed and not context["quant_params"].get("per_channel"):
+        raise ValueError(f"{n}: entry {context['kernel_fn']!r} takes per-channel quantization only; "
+                         "a single output channel is generated per-tensor")
     if not float_kernel:
         quant = context["quant_params"]
         if quant.get("per_channel"):
@@ -105,7 +200,8 @@ def fc_argument_pool(context: Dict[str, Any]) -> ArgumentPool:
             ]
             wrapper = {"multiplier": f"(int32_t*)&{n}_multiplier_val", "shift": f"(int32_t*)&{n}_shift_val",
                        "is_per_channel": "0"}
-        values["quant_params"] = fc_quant_argument(context)
+        # The packed entry takes its quantization through the stream its packer builds.
+        values["quant_params"] = f"&{n}_quant_params" if packed else fc_quant_argument(context)
         if values["quant_params"].endswith("_wrapper"):
             source.append(Declaration(f"{n}_quant_params_wrapper", "cmsis_nn_quant_params", wrapper,
                                       comment="The wrappers take per-channel and per-tensor parameters alike"))
@@ -118,7 +214,7 @@ def fc_argument_pool(context: Dict[str, Any]) -> ArgumentPool:
     else:
         header.append(Declaration(f"{n}_biases", f"{bias_ctype}*", "NULL", comment="No biases"))
     context_setup = ""
-    if context.get("has_weight_sum"):
+    if context.get("has_weight_sum") and not packed:
         header.append(Declaration(f"{n}_weight_sum", "int32_t", ArrayLiteral(context["weight_sum_array"]), array=True,
                                   extent=str(out_c), comment="Precomputed weight sum for s8 fully connected"))
         context_setup = (f"    // The context carries the precomputed kernel sums, not scratch.\n"
@@ -131,6 +227,13 @@ def fc_argument_pool(context: Dict[str, Any]) -> ArgumentPool:
                     array=True, comment="Expected output (golden)"),
     ]
     output = context["output_dims"]
+    if packed:
+        # The entry takes no context: the stream is a provider's buffer, not the case's scratch.
+        return ArgumentPool(
+            name=n, values=values, header=header, source=source, providers=(fc_packed_provider(context),),
+            output_count=f"({output['n']} * {output['h']} * {output['w']} * {output['c']})", benchmark=False,
+            scratch_buffer=False, extra_checks=fc_packed_checks(context), includes=('"arm_nnsupportfunctions.h"',),
+        )
     return ArgumentPool(
         name=n, values=values, header=header, source=source,
         output_count=f"({output['n']} * {output['h']} * {output['w']} * {output['c']})", benchmark=False,
@@ -292,6 +395,7 @@ class OpFullyConnected(OperationBase):
 
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
         """Convert Keras model to TFLite with quantization."""
+        self.round_float16_weights(model)
         weight_dtype = str(self.desc.get("weight_dtype", "S8")).upper()
         if weight_dtype == "S4":
             from helia_core_tester.generation.utils.litert_builder import build_fully_connected_s4_op
@@ -439,14 +543,15 @@ class OpFullyConnected(OperationBase):
         else:  # int8
             default_min, default_max = -128, 127
         
+        # Real zero sits at the output zero point.
         if activation_str == 'RELU':
-            activation_min = max(0, default_min)
+            activation_min = max(output_zp, default_min)
             activation_max = default_max
         elif activation_str == 'RELU6':
             # RELU6: clamp to [0, 6] in float, then quantize
             relu6_max_float = 6.0
             relu6_max_quantized = int(np.round(relu6_max_float / output_scale + output_zp))
-            activation_min = max(0, default_min)
+            activation_min = max(output_zp, default_min)
             activation_max = min(relu6_max_quantized, default_max)
         else:  # NONE, TANH, SIGMOID, etc.
             activation_min = default_min
@@ -851,6 +956,7 @@ class OpFullyConnected(OperationBase):
             entry_scratch_bytes = kernel_info.get("entry_scratch_bytes")
             if entry_scratch_bytes is not None:
                 buffer_size_max = max(buffer_size_max, int(entry_scratch_bytes))
+            self.reject_autovectorize_declines()
             context = {
                 'name': name,
                 'input_dims': input_dims,
@@ -878,6 +984,7 @@ class OpFullyConnected(OperationBase):
                 'kernel_layout': kernel_info.get("layout", "ARM_NN_LAYOUT_NHWC"),
                 'entry_family': kernel_info.get("entry_family"),
                 'entry_scratch_bytes': entry_scratch_bytes,
+                'entry_extra_sizers': kernel_info.get("entry_extra_sizers"),
                 'fc_activation_min_literal': builder.format_float_literal(fc_params['activation_min']),
                 'fc_activation_max_literal': builder.format_float_literal(fc_params['activation_max']),
                 'validation_mode': 'float',
@@ -1187,6 +1294,7 @@ class OpFullyConnected(OperationBase):
             'name': name,
             'entry_family': kernel_info.get("entry_family"),
             'entry_scratch_bytes': entry_scratch_bytes,
+            'entry_extra_sizers': kernel_info.get("entry_extra_sizers"),
             'input_dims': input_dims,
             'filter_dims': filter_dims,
             'output_dims': output_dims,
@@ -1207,6 +1315,10 @@ class OpFullyConnected(OperationBase):
             'buffer_size_max': buffer_size_max,
             'weight_sum_array': weight_sum_array_str,
             'has_weight_sum': has_weight_sum,
+            'expected_status': self.expected_status(),
+            # The entry lives only on ns-cmsis-nn's MVE paths, so it declines on a build without them.
+            'autovectorize_declines': bool(self.desc.get("autovectorize_declines", False)),
+            'autovectorize_declines_if': autovectorize_declines_if(kernel_info["input_c_type"]),
         }
         self._render_fully_connected(output_dir, context)
 

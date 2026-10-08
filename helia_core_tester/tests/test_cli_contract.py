@@ -7,6 +7,7 @@ import pytest
 from typer.testing import CliRunner
 
 from helia_core_tester.cli import app
+from helia_core_tester.hardware.boards import board_ids
 
 
 runner = CliRunner()
@@ -97,11 +98,12 @@ def test_boards_lists_table() -> None:
     assert result.exit_code == 0
     text = _result_text(result)
     assert "apollo510_evb" in text and "cortex-m55" in text and "AP510NFA-CBR" in text and "4000" in text
+    assert "core_clock" in text and "48 MHz" in text
 
 
 def test_unknown_board_lists_known_ids() -> None:
     result = runner.invoke(app, ["hardware", "build", "--board", "nope_evb"])
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     text = _result_text(result)
     assert "Unknown board 'nope_evb'" in text and "apollo510_evb" in text
 
@@ -120,17 +122,17 @@ def test_probes_match_fails_without_probes(monkeypatch) -> None:
     monkeypatch.setattr(hardware_cli, "resolve_serial", lambda explicit=None, **_: (_ for _ in ()).throw(
         hardware_cli.ProbeResolutionError("No connected J-Link probes detected.")))
     result = runner.invoke(app, ["probes", "match"])
-    assert result.exit_code == 1
+    assert result.exit_code == 5
     assert "No connected J-Link probes" in _result_text(result)
 
 
 def test_stream_precision_rules_are_enforced_before_hardware(monkeypatch) -> None:
     monkeypatch.setenv("HPX_JLINK_SERIAL", "1")
     result = runner.invoke(app, ["hardware", "stream", "--precision", "fp16", "--suite", "both"])
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     assert "--precision cannot be combined with --suite both" in _result_text(result)
     result = runner.invoke(app, ["hardware", "run", "--precision", "fp32", "--test-name", "x", "--skip-generate", "--skip-flash"])
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     assert "--precision and --test-name cannot be combined" in _result_text(result)
 
 
@@ -154,14 +156,14 @@ def test_option_validation_runs_before_probe_resolution(monkeypatch) -> None:
         (["hardware", "run", "--fvp-gate", "maybe"], "--fvp-gate must be one of"),
     ):
         result = runner.invoke(app, args)
-        assert result.exit_code == 1, args
+        assert result.exit_code == 2, args
         text = _result_text(result)
         assert expected in text and "No connected J-Link probes" not in text, (args, text)
     assert enumerated == []
 
     # Valid options: now the probe is resolved, and its error is what the user sees.
     result = runner.invoke(app, ["hardware", "stream", "--precision", "fp16"])
-    assert result.exit_code == 1 and "No connected J-Link probes" in _result_text(result)
+    assert result.exit_code == 5 and "No connected J-Link probes" in _result_text(result)
     assert enumerated == ["probe"]
 
 
@@ -191,7 +193,7 @@ def test_pipeline_failures_print_one_line_and_hide_the_traceback_unless_verbose(
     for args in (["hardware", "run", "--skip-generate"], ["hardware", "stream"]):
         result = runner.invoke(app, args)
         text = _result_text(result)
-        assert result.exit_code == 1, (args, text)
+        assert result.exit_code == 5, (args, text)
         assert expected_line in text and "Traceback" not in text, (args, text)
 
         verbose = _result_text(runner.invoke(app, args + ["-v", "1"]))
@@ -211,7 +213,9 @@ def test_unexpected_exceptions_keep_their_traceback(monkeypatch) -> None:
     monkeypatch.setenv("HPX_JLINK_SERIAL", "1")
     monkeypatch.setattr(hardware_pipeline, "stream_generated_tests", _bug)
     result = runner.invoke(app, ["hardware", "stream"])
-    assert result.exit_code != 0 and isinstance(result.exception, KeyError)
+    text = _result_text(result)
+    # Bugs exit 5, never correctness's 1.
+    assert result.exit_code == 5 and "Traceback" in text and "KeyError: 'case_id'" in text, text
 
 
 def test_run_precision_reaches_the_generate_step(monkeypatch) -> None:
@@ -237,7 +241,7 @@ def test_run_rejects_skip_flash_with_force_flash(monkeypatch) -> None:
     monkeypatch.setattr(hardware_cli, "resolve_serial", lambda explicit=None, **_: (_ for _ in ()).throw(
         AssertionError("probes must not be resolved before option validation")))
     result = runner.invoke(app, ["hardware", "run", "--skip-flash", "--force-flash"])
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     assert "--skip-flash and --force-flash cannot be combined" in _result_text(result)
 
 
@@ -251,7 +255,7 @@ def test_doctor_reports_hardware_section_without_failing_on_missing_tools(monkey
     assert "Hardware (helia_core_tester hardware ...)" in text
     assert "J-Link library (pylink): missing" in text
     assert "⚠ JLinkExe (flash target): not found: set $JLINK_PATH" in text
-    assert "Board table" in text and "1 board(s)" in text
+    assert "Board table" in text and f"{len(board_ids())} board(s)" in text
 
 
 def test_doctor_reports_jlinkexe_path_and_source_and_missing_hpx_jlink_dll(monkeypatch, tmp_path) -> None:
@@ -273,14 +277,14 @@ def test_precision_refuses_suite_both_in_any_spelling(monkeypatch) -> None:
     for spelling in ("BOTH", "Both", " both "):
         for command in (["hardware", "stream"], ["hardware", "run", "--skip-generate"]):
             result = runner.invoke(app, [*command, "--precision", "fp16", "--suite", spelling])
-            assert result.exit_code == 1, (command, spelling)
+            assert result.exit_code == 2, (command, spelling)
             assert "--precision cannot be combined with --suite both" in _result_text(result), (command, spelling)
 
 
 def test_memory_report_missing_elf_is_a_one_line_error(tmp_path) -> None:
     result = runner.invoke(app, ["hardware", "memory-report", "--build-dir", str(tmp_path / "never-built")])
     text = _result_text(result)
-    assert result.exit_code == 1 and isinstance(result.exception, SystemExit), text
+    assert result.exit_code == 5 and isinstance(result.exception, SystemExit), text
     assert "✗ Built firmware ELF not found" in text and "hardware build" in text and "Traceback" not in text
 
 
@@ -293,7 +297,7 @@ def test_stream_requires_the_build_id_stamp_unless_allowed(monkeypatch, tmp_path
     (unstamped / "hardware" / "hct_benchmark_server.elf").write_bytes(b"legacy")
     result = runner.invoke(app, ["hardware", "stream", "--build-dir", str(unstamped)])
     text = _result_text(result)
-    assert result.exit_code == 1 and "hct_build_id.txt not found" in text and "--allow-unverified-firmware" in text, text
+    assert result.exit_code == 3 and "hct_build_id.txt not found" in text and "--allow-unverified-firmware" in text, text
     assert "Traceback" not in text
 
     seen: dict = {}
@@ -315,7 +319,7 @@ def test_stream_requires_the_build_id_stamp_unless_allowed(monkeypatch, tmp_path
 
 @pytest.mark.parametrize("command", ["build", "flash", "run"])
 def test_inline_asm_flag_is_tri_state(monkeypatch, tmp_path, command) -> None:
-    """Unset reuses the build dir's saved setting."""
+    """Unset builds the default, not the saved setting."""
     from helia_core_tester.hardware import firmware_build, hardware_pipeline, nsx_app
 
     monkeypatch.setenv("HPX_JLINK_SERIAL", "1")
@@ -333,7 +337,7 @@ def test_inline_asm_flag_is_tri_state(monkeypatch, tmp_path, command) -> None:
     built = nsx_app.AppOptions(cmsis_nn_ref="v9", cmsis_nn_ref_explicit=True, requantize_inline_asm=False)
     nsx_app.save_options(app_dir, built)
     base = ["hardware", command, "--build-dir", str(tmp_path)]
-    for flags, inline_asm in (([], False), (["--inline-asm"], True), (["--no-inline-asm"], False)):
+    for flags, inline_asm in (([], True), (["--inline-asm"], True), (["--no-inline-asm"], False)):
         runner.invoke(app, base + flags)
         assert seen["options"] == dataclasses.replace(built, requantize_inline_asm=inline_asm), flags
 
@@ -355,6 +359,21 @@ def test_stream_only_run_skips_option_resolution(monkeypatch, tmp_path) -> None:
     nsx_app.save_options(app_dir, nsx_app.AppOptions(cmsis_nn_root=tmp_path / "moved", requantize_inline_asm=False))
     result = runner.invoke(app, ["hardware", "run", "--build-dir", str(tmp_path), "--skip-generate", "--skip-flash"])
     assert seen["app_options"] is None and "inline asm off" in _result_text(result)
+
+
+@pytest.mark.parametrize(("flag", "refused"), [("--no-inline-asm", False), ("--inline-asm", True)])
+def test_stream_only_checks_flags_without_the_checkout(monkeypatch, tmp_path, flag, refused) -> None:
+    """A moved checkout cannot block streaming."""
+    from helia_core_tester.hardware import firmware_build, nsx_app
+
+    seen: dict = {}
+    _capture_run(monkeypatch, seen)
+    app_dir = firmware_build.nsx_app_dir(tmp_path)
+    app_dir.mkdir(parents=True)
+    nsx_app.save_options(app_dir, nsx_app.AppOptions(cmsis_nn_root=tmp_path / "moved", requantize_inline_asm=False))
+    args = ["hardware", "run", "--build-dir", str(tmp_path), "--skip-generate", "--skip-flash", flag]
+    text = _result_text(runner.invoke(app, args))
+    assert ("--skip-flash keeps the built kernels" in text) is refused and bool(seen) is not refused, text
 
 
 def _capture_run(monkeypatch, seen: dict) -> None:
@@ -387,7 +406,9 @@ def test_skip_flash_generates_from_the_built_kernels(monkeypatch, tmp_path) -> N
     assert seen["app_options"] == built
 
 
-@pytest.mark.parametrize("flags", [["--cmsis-nn-ref", "v10"], ["--inline-asm"]])
+@pytest.mark.parametrize("flags", [
+    ["--cmsis-nn-ref", "v10"], ["--inline-asm"], ["--skip-generate", "--inline-asm"], ["--skip-generate", "--cmsis-nn-ref", "v10"],
+])
 def test_skip_flash_refuses_new_kernel_flags(monkeypatch, tmp_path, flags) -> None:
     """New flags would not reach the firmware."""
     from helia_core_tester.hardware import firmware_build, nsx_app
@@ -419,6 +440,63 @@ def test_skip_flash_refusal_is_one_line(monkeypatch, tmp_path) -> None:
     app_dir.mkdir(parents=True)
     nsx_app.save_options(app_dir, nsx_app.AppOptions(cmsis_nn_ref="v9"))
     result = runner.invoke(app, ["hardware", "run", "--build-dir", str(tmp_path), "--skip-flash"])
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert "Kernels changed since the build; rebuild first." in _result_text(result)
     assert "Traceback" not in _result_text(result)
+
+
+def test_golden_refusal_exits_refused(monkeypatch) -> None:
+    """Refusals exit 3, not the correctness 1."""
+    from helia_core_tester.hardware import hardware_pipeline
+    from helia_core_tester.hardware.errors import RunRefused
+
+    def _refuse(*args, **kwargs):
+        raise RunRefused("Golden run failed these cases: c")
+
+    monkeypatch.setenv("HPX_JLINK_SERIAL", "1")
+    monkeypatch.setattr(hardware_pipeline, "run_hardware_pipeline", _refuse)
+    result = runner.invoke(app, ["hardware", "run", "--skip-generate"])
+    assert result.exit_code == 3 and "Golden run failed these cases" in _result_text(result)
+
+
+def test_correctness_failure_exits_one(monkeypatch, tmp_path) -> None:
+    """Exit 1 means a case failed."""
+    from helia_core_tester.hardware import hardware_pipeline, run_summary
+
+    outcome = hardware_pipeline.HardwareRunOutcome(session_id="s", result=None, bundle=tmp_path, skipped=[])
+    monkeypatch.setenv("HPX_JLINK_SERIAL", "1")
+    monkeypatch.setattr(hardware_pipeline, "run_hardware_pipeline", lambda *a, **k: outcome)
+    monkeypatch.setattr(run_summary, "print_run_report", lambda *a, **k: True)
+    result = runner.invoke(app, ["hardware", "run", "--skip-generate"])
+    assert result.exit_code == 1 and "failed correctness" in _result_text(result)
+
+
+@pytest.mark.parametrize("where", ["preflight", "report"])
+def test_bugs_outside_the_pipeline_exit_five(monkeypatch, tmp_path, where) -> None:
+    """Exit 1 stays correctness only."""
+    from helia_core_tester.hardware import cli as hardware_cli, hardware_pipeline, run_summary
+
+    def _bug(*args, **kwargs):
+        raise KeyError("bug")
+
+    monkeypatch.setenv("HPX_JLINK_SERIAL", "1")
+    outcome = hardware_pipeline.HardwareRunOutcome(session_id="s", result=None, bundle=tmp_path, skipped=[])
+    monkeypatch.setattr(hardware_pipeline, "run_hardware_pipeline", lambda *a, **k: outcome)
+    target = (hardware_cli, "_stream_options") if where == "preflight" else (run_summary, "print_run_report")
+    monkeypatch.setattr(*target, _bug)
+    result = runner.invoke(app, ["hardware", "run", "--skip-generate"])
+    text = _result_text(result)
+    assert result.exit_code == 5 and "KeyError: 'bug'" in text, text
+
+
+@pytest.mark.parametrize(("error", "code"), [(KeyboardInterrupt, 130), (__import__("click").exceptions.Abort, 5)])
+def test_cancel_never_exits_one(monkeypatch, error, code) -> None:
+    """Cancelling is not a correctness failure."""
+    from helia_core_tester.hardware import hardware_pipeline
+
+    def _stop(*args, **kwargs):
+        raise error()
+
+    monkeypatch.setenv("HPX_JLINK_SERIAL", "1")
+    monkeypatch.setattr(hardware_pipeline, "run_hardware_pipeline", _stop)
+    assert runner.invoke(app, ["hardware", "run", "--skip-generate"]).exit_code == code

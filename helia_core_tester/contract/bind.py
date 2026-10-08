@@ -38,6 +38,8 @@ ROLE_GROUPS: dict[str, tuple[str, ...]] = {
     "output": _GROUP_OF["output_data"],
     "filter": _GROUP_OF["filter_data"],
     "bias": _GROUP_OF["bias_data"],
+    "input_1": _GROUP_OF["input_1_data"],
+    "input_2": _GROUP_OF["input_2_data"],
 }
 
 DTYPE_C_TYPES: dict[str, frozenset[str]] = {
@@ -46,6 +48,7 @@ DTYPE_C_TYPES: dict[str, frozenset[str]] = {
     "S16": frozenset({"int16_t"}),
     "S32": frozenset({"int32_t"}),
     "S64": frozenset({"int64_t"}),
+    "U16": frozenset({"uint16_t"}),  # binary16 bit patterns
     "FP32": frozenset({"float32_t", "float"}),
     "FP16": frozenset({"float16_t"}),
     "BOOL": frozenset({"bool", "uint8_t"}),

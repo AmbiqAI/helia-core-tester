@@ -34,7 +34,8 @@ import typer
 from .boards import BoardSpec
 from .boards import repo_root as tester_repo_root
 from .jlink_library import JLinkLibraryError, find_jlink_exe
-from .toolchain import DOWNLOADS_DIR, add_toolchain_to_path
+from .phase_log import mark
+from .toolchain import DOWNLOADS_DIR, GCC_NAME, add_toolchain_to_path, gcc_version
 
 if TYPE_CHECKING:
     from .nsx_app import AppOptions
@@ -125,6 +126,17 @@ def _configured_for(build_dir: Path, app_dir: Path, board: BoardSpec) -> bool:
     )
 
 
+def _built_compiler(build_dir: Path) -> Optional[str]:
+    """The C compiler CMake configured."""
+    # Newest probe wins after CMake upgrades.
+    probes = sorted(build_dir.glob("CMakeFiles/*/CMakeCCompiler.cmake"), key=lambda path: path.stat().st_mtime)
+    if not probes:
+        return None
+    text = probes[-1].read_text(encoding="utf-8", errors="ignore")
+    match = re.search(r'^set\(CMAKE_C_COMPILER "([^"]+)"\)', text, re.MULTILINE)
+    return match.group(1) if match else None
+
+
 def _drop_foreign_cache(build_dir: Path, app_dir: Path) -> None:
     """Remove a cache another source tree wrote."""
     cache = build_dir / "CMakeCache.txt"
@@ -203,6 +215,8 @@ def decide_flash(build_dir: Path, serial_no: int, *, force: bool = False) -> Fla
     if not stamp.exists():
         return FlashDecision(True, digest, f"no flash stamp for serial {serial_no} yet", build_id)
     previous = stamp.read_text(encoding="utf-8").strip()
+    if previous == digest and flashed_other(build_dir, serial_no, digest):
+        return FlashDecision(True, digest, f"serial {serial_no} last flashed another ELF", build_id)
     if previous == digest:
         return FlashDecision(
             False, digest, f"ELF sha256 unchanged since last flash to serial {serial_no} (stamp {stamp})", build_id
@@ -274,9 +288,23 @@ def confirm_board_build_id(
     return FlashDecision(False, decision.digest, f"{decision.reason}; board confirmed build id {expected}", expected, actual)
 
 
+def probe_stamp_path(build_dir: Path, serial_no: int) -> Path:
+    """Probe-wide stamp shared by sibling dirs."""
+    return build_dir.parent / f".probe-{serial_no}.sha256"
+
+
+def flashed_other(build_dir: Path, serial_no: int, digest: str) -> bool:
+    """The probe's last flash was another ELF."""
+    try:
+        return probe_stamp_path(build_dir, serial_no).read_text(encoding="utf-8").strip() != digest
+    except OSError:
+        return False
+
+
 def record_flash(build_dir: Path, serial_no: int, digest: str) -> Path:
     stamp = flash_stamp_path(build_dir, serial_no)
     stamp.write_text(digest + "\n", encoding="utf-8")
+    probe_stamp_path(build_dir, serial_no).write_text(digest + "\n", encoding="utf-8")
     return stamp
 
 
@@ -287,7 +315,7 @@ def record_flash(build_dir: Path, serial_no: int, digest: str) -> Path:
 SYNC_STAMP = ".hct-sync"
 # Last good build: lock, kernel tree.
 BUILT_LOCK = ".hct-built-lock"
-# Last good build: NSX version, checkout.
+# Last good build: NSX, GCC, checkout.
 BUILT_INFO = ".hct-built-info"
 
 
@@ -366,7 +394,7 @@ def build_firmware(
     nsx_cli.build_app(app_dir, board=board.nsx_board, build_dir=build_dir, jobs=_jobs(jobs), frozen=True)
     # Record only what actually built.
     save_options(app_dir, options or AppOptions())
-    _record_built(app_dir, options or AppOptions())
+    _record_built(build_dir, options or AppOptions())
     return elf_path(build_dir)
 
 
@@ -382,19 +410,21 @@ def _built_record(app_dir: Path, options: "AppOptions") -> dict[str, str]:
     }
 
 
-def _checkout_state(root: Optional[Path]) -> dict[str, Any]:
-    """Kernel checkout HEAD and dirty flag."""
+def _checkout_state(root: Optional[Path], base_ref: Optional[str] = None) -> dict[str, Any]:
+    """Kernel checkout HEAD, dirty flag, base."""
     from ..generation.reuse import _git_output, _is_git_toplevel
     from .nsx_app import KERNEL_TREES
 
     if root is None or not _is_git_toplevel(root):
-        return {"root_head": None, "root_dirty": None}
+        return {"root_head": None, "root_dirty": None, "base_commit": None}
     head = _git_output(root, "rev-parse", "HEAD")
     # Only the copied trees matter.
     status = _git_output(root, "status", "--porcelain", "--", *KERNEL_TREES, "nsx")
+    base = _git_output(root, "rev-parse", "--verify", "-q", f"{base_ref}^{{commit}}") if base_ref else None
     return {
         "root_head": head.strip() if head else None,
         "root_dirty": None if status is None else bool(status.strip()),
+        "base_commit": base.strip() if base else None,
     }
 
 
@@ -405,12 +435,23 @@ def _replace_json(path: Path, data: dict[str, Any]) -> None:
     os.replace(tmp, path)
 
 
-def _record_built(app_dir: Path, options: "AppOptions") -> None:
+def _record_built(build_dir: Path, options: "AppOptions") -> None:
     """Record what the build used."""
     from . import nsx_cli
+    from .harness_lock import firmware_record
 
+    app_dir = nsx_app_dir(build_dir)
     _replace_json(app_dir / BUILT_LOCK, _built_record(app_dir, options))
-    info = {"nsx_version": nsx_cli.nsx_version(), **_checkout_state(options.cmsis_nn_root)}
+    version = gcc_version(_built_compiler(build_dir))
+    toolchain = {"name": GCC_NAME, "version": version} if version else None
+    nsx_version = nsx_cli.nsx_version()
+    info = {
+        "nsx_version": nsx_version,
+        "toolchain": toolchain,
+        **_checkout_state(options.cmsis_nn_root, options.cmsis_nn_ref),
+        # Measurement inputs, minus kernels.
+        "harness": firmware_record(tester_repo_root(), build_dir, options, toolchain, nsx_version),
+    }
     _replace_json(app_dir / BUILT_INFO, info)
 
 
@@ -431,6 +472,7 @@ def built_record(app_dir: Path) -> dict[str, Any]:
 def built_kernels(board: BoardSpec, build_dir: Path, options: "AppOptions") -> Path:
     """Kernels the last build used, unchanged."""
     from . import nsx_cli
+    from .errors import RunRefused
     from .nsx_app import kernel_dir, kernels_match
 
     app_dir = nsx_app_dir(build_dir)
@@ -441,13 +483,29 @@ def built_kernels(board: BoardSpec, build_dir: Path, options: "AppOptions") -> P
         or built != _built_record(app_dir, options)
         or not nsx_cli.lock_is_current(app_dir, board.nsx_board)
     ):
-        raise nsx_cli.HardwareBuildError("Kernels changed since the build; rebuild first.")
+        raise RunRefused("Kernels changed since the build; rebuild first.")
     module = kernel_dir(app_dir, options)
     if options.cmsis_nn_root is None:
         return module
     if not kernels_match(options.cmsis_nn_root, module):
-        raise nsx_cli.HardwareBuildError("Kernel checkout edited since the build; rebuild first.")
+        raise RunRefused("Kernel checkout edited since the build; rebuild first.")
     return options.cmsis_nn_root
+
+
+# Pipe fd an eval waits on.
+BUILT_FD_ENV = "HCT_BUILT_FD"
+
+
+def signal_built() -> None:
+    """Tell a waiting eval the build is done."""
+    fd = os.environ.pop(BUILT_FD_ENV, None)
+    if fd is None:
+        return
+    try:
+        os.write(int(fd), b"1")
+        os.close(int(fd))
+    except (OSError, ValueError):
+        pass
 
 
 def flash_firmware(
@@ -473,6 +531,8 @@ def flash_firmware(
         options=options, update_dependencies=update_dependencies,
     )
     build_seconds = time.monotonic() - build_started
+    mark("build_done")
+    signal_built()
     decision = decide_flash(build_dir, serial_no, force=force)
     if not decision.needed:
         typer.echo(f"[hardware] Stamp says {decision.reason}; asking the board which build it runs...")
@@ -488,4 +548,5 @@ def flash_firmware(
             target=SERVER_TARGET, probe_serial=serial_no, jobs=_jobs(jobs),
         )
     record_flash(build_dir, serial_no, decision.digest)
+    mark("flash_done")
     return replace(decision, build_seconds=build_seconds, flash_seconds=time.monotonic() - flash_started)

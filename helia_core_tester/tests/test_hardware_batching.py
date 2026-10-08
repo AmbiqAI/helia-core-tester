@@ -17,14 +17,18 @@ TARGET_INFO and stub the RTT session factory and result-bundle writer.
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from helia_core_tester.hardware import measurement, session, session_runner
+from helia_core_tester.hardware import measurement, nsx_app, session, session_runner
 from helia_core_tester.hardware.boards import resolve_board
-from helia_core_tester.hardware.case_bundle import build_abs_s8_case_bundle, load_case_bundle
+from helia_core_tester.hardware.case_bundle import (
+    EMPTY_CALL_KERNEL_ID, FLOOR_CASE_ID, build_abs_s8_case_bundle, load_case_bundle,
+)
+from helia_core_tester.hardware.comparison import ComparisonResult
 from helia_core_tester.hardware.fake_target import FakeTargetTransport
 from helia_core_tester.hardware.hctp import HEADER_SIZE
 from helia_core_tester.hardware.measurement import (
@@ -33,13 +37,14 @@ from helia_core_tester.hardware.measurement import (
     OutboxOverflowError,
     RawCounterValue,
     RawSample,
+    SampleStatistics,
     case_tail_bytes,
     check_outbox_fits,
     counter_passes_for_selection,
     sample_frame_bytes,
 )
 from helia_core_tester.hardware.pmu_catalog import CPU_CYCLES_EVENT_ID, counter_by_name
-from helia_core_tester.hardware.session import HostSession, SessionResult, TargetLimits
+from helia_core_tester.hardware.session import CaseRunResult, HostSession, SessionResult, TargetLimits
 from helia_core_tester.hardware.wire import (
     CAP_PMU_ARMV8M,
     CaseComplete,
@@ -93,6 +98,15 @@ def test_host_constants_match_the_firmware_header() -> None:
     assert (info._max_cases_per_session, info._max_passes) == (measurement.MAX_CASES_PER_PLAN, measurement.MAX_PASSES_PER_PLAN)
 
 
+def test_blob_chunk_fits_down_ring() -> None:
+    # The ring keeps one slot free.
+    header = (PROJECT_ROOT / "cmake" / "hardware" / "benchmark_server_session.h").read_text()
+    chunk = int(re.search(r"#define HCT_SERVER_BLOB_CHUNK_BYTES (\d+)u", header).group(1))
+    frame = HEADER_SIZE + 8 + chunk  # u32 blob_id, u32 offset, data
+    assert frame <= nsx_app.RTT_BUFFER_SIZE_DOWN - 1
+    assert frame <= int(re.search(r"#define HCT_SERVER_RX_BUFFER_BYTES (\d+)u", header).group(1))
+
+
 def test_run_case_bundles_refuses_more_passes_than_the_firmware_runs_before_opening_the_probe(tmp_path: Path, monkeypatch) -> None:
     # One pass over HCT_SERVER_MAX_PASSES: the runner must refuse before symbol
     # lookup / J-Link, naming the passes and the limit.
@@ -139,8 +153,9 @@ class _FakeSession:
         self._fail = fail
         self.target_info: TargetInfo | None = None
         self.expected_build_id: str | None = None
+        self.kernel_ids: frozenset[int] = frozenset()
 
-    def handshake(self, *, expected_build_id: str | None = None) -> TargetInfo:
+    def handshake(self, *, expected_build_id: str | None = None, expected_clock_hz: int | None = None) -> TargetInfo:
         if self._fail is not None:
             raise self._fail
         self.expected_build_id = expected_build_id
@@ -253,14 +268,14 @@ def test_session_refuses_more_cases_than_the_target_takes(tmp_path: Path) -> Non
 
 # None: --allow-unverified-firmware.
 @pytest.mark.parametrize("expected", ["fake", None])
-def test_run_case_bundles_batches_from_each_sessions_target_info(tmp_path: Path, monkeypatch, expected) -> None:
+def test_run_case_bundles_batches_over_one_session(tmp_path: Path, monkeypatch, expected) -> None:
     bundles = [_DummyCaseBundle(f"case_{i}") for i in range(70)]
     calls: list[list[Any]] = []
     transports: list[_FakeTransport] = []
     announced = {"info": _target_info()}
     sessions: list[_FakeSession] = []
 
-    def _open(board, serial_no, *, build_dir, counter_passes):
+    def _open(board, serial_no, *, build_dir, counter_passes, reset=True):
         assert (board.id, serial_no, build_dir) == ("apollo510_evb", 1160002276, tmp_path)
         transport = _FakeTransport()
         transports.append(transport)
@@ -270,13 +285,21 @@ def test_run_case_bundles_batches_from_each_sessions_target_info(tmp_path: Path,
 
     written: dict[str, Any] = {}
 
-    def _fake_write_result_bundle(result, *, session_id, output_root, memory_report, kernel_catalog, target_info, host_log_text, target_log_text, build_dir):
+    def _fake_write_result_bundle(result, *, session_id, output_root, memory_report, kernel_catalog, target_info, host_log_text, target_log_text, build_dir, timing_floor, compare):
         written.update(result=result, session_id=session_id, target_info=target_info, host_log=host_log_text, build_dir=build_dir)
         return output_root / "artifacts" / "reports" / "hardware" / session_id
 
     monkeypatch.setattr(session_runner, "open_rtt_session", _open)
     monkeypatch.setattr(session_runner, "write_result_bundle", _fake_write_result_bundle)
-    monkeypatch.setattr(session_runner, "generate_memory_report", lambda board, project_root=None, build_dir=None: tmp_path / "memory_report.json")
+    # Placeholder results skip classification.
+    monkeypatch.setattr(session_runner, "apply_floor", lambda cases: (None, list(cases)))
+    report_roots: list[Path] = []
+
+    def _fake_memory_report(board, *, project_root, build_dir, output_root):
+        report_roots.append(output_root)
+        return tmp_path / "memory_report.json"
+
+    monkeypatch.setattr(session_runner, "generate_memory_report", _fake_memory_report)
     (tmp_path / "memory_report.json").write_text("{}", encoding="utf-8")
     (tmp_path / "cmake" / "hardware").mkdir(parents=True, exist_ok=True)
     (tmp_path / "cmake" / "hardware" / "kernel_catalog.json").write_text("[]", encoding="utf-8")
@@ -292,12 +315,14 @@ def test_run_case_bundles_batches_from_each_sessions_target_info(tmp_path: Path,
         expected_build_id=expected,
     )
 
-    # The target advertised 32 cases per plan: ceil(70/32) = 3 sessions of 32, 32, 6,
-    # each over its own transport, closed afterwards.
+    # The target advertised 32 cases per plan: ceil(70/32) = 3 plans of 32, 32, 6,
+    # over one transport, closed afterwards.
     assert [len(call) for call in calls] == [32, 32, 6]
+    # Concurrent boards keep separate reports.
+    assert report_roots == [tmp_path / "artifacts" / "hardware" / "benchmark_server" / "apollo510_evb"]
     assert [b.case_id for b in calls[0]] == [f"case_{i}" for i in range(0, 32)]
     assert [b.case_id for b in calls[2]] == [f"case_{i}" for i in range(64, 70)]
-    assert [t.closed for t in transports] == [1, 1, 1]
+    assert [t.closed for t in transports] == [1]
 
     # All per-batch case results are merged into one SessionResult, in order.
     assert merged.cases == tuple(f"result-for-case_{i}" for i in range(70))
@@ -306,8 +331,8 @@ def test_run_case_bundles_batches_from_each_sessions_target_info(tmp_path: Path,
     assert merged.target_info == announced["info"]
     # The bundle writer seeds its counter columns from the passes the plan asked for.
     assert merged.counter_passes == DEFAULT_PASSES
-    # The build dir's id is checked at every session's handshake and reported once.
-    assert [s.expected_build_id for s in sessions] == [expected] * 3
+    # One handshake checks the build dir's id.
+    assert [s.expected_build_id for s in sessions] == [expected]
     assert merged.build_id == "fake"
     assert all(entry.startswith("batch") for entry in merged.protocol_trace) and len(merged.protocol_trace) == 3
 
@@ -334,7 +359,7 @@ def test_run_case_bundles_batches_from_each_sessions_target_info(tmp_path: Path,
 
 
 def test_run_case_bundles_names_the_batch_when_a_session_fails(tmp_path: Path, monkeypatch) -> None:
-    def _open(board, serial_no, *, build_dir, counter_passes):
+    def _open(board, serial_no, *, build_dir, counter_passes, reset=True):
         return _FakeSession(_target_info(), [], fail=RuntimeError("Transport stalled")), _FakeTransport(), 0
 
     monkeypatch.setattr(session_runner, "open_rtt_session", _open)
@@ -345,24 +370,100 @@ def test_run_case_bundles_names_the_batch_when_a_session_fails(tmp_path: Path, m
         )
 
 
-def test_run_case_bundles_refuses_to_merge_sessions_from_different_firmware(tmp_path: Path, monkeypatch) -> None:
-    # A board reflashed mid-run (or a second host on the probe) announces a different
-    # TARGET_INFO on a later batch; the runner must fail fast instead of merging results
-    # from two firmware builds into one bundle.
-    bundles = [_DummyCaseBundle(f"case_{i}") for i in range(40)]
-    calls: list[list[Any]] = []
-    infos = iter([_target_info(build_id="hct-first"), _target_info(build_id="hct-second", max_passes=8)])
+class _HaltableTransport(_FakeTransport):
+    """Reports a target parked in its fault handler."""
 
-    def _open(board, serial_no, *, build_dir, counter_passes):
-        return _FakeSession(next(infos), calls), _FakeTransport(), 0
+    def __init__(self, state: dict[str, int] | Exception) -> None:
+        super().__init__()
+        self._state = state
+
+    def target_state(self) -> dict[str, int]:
+        if isinstance(self._state, Exception):
+            raise self._state
+        return self._state
+
+
+_SYMBOLS = [
+    (0x00410798, "T", "main"), (0x004967E0, "W", "BusFault_Handler"), (0x004967E0, "W", "HardFault_Handler"),
+    (0x20000020, "b", "g_pui32Stack"),
+]
+
+
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    [
+        (
+            dict(pc=0x004967E0, lr=0xFFFFFFF9, sp=0x20003F00, cfsr=0x00100000, hfsr=0x40000000, rtt_size=8192, rtt_write=10, rtt_read=10),
+            "Target faulted; decode CFSR/HFSR. PC=0x004967e0 (BusFault_Handler/HardFault_Handler), LR=0xfffffff9, "
+            "SP=0x20003f00, CFSR=0x00100000 HFSR=0x40000000, RTT up write=10 read=10 size=8192.",
+        ),
+        (
+            dict(pc=0x004107A1, lr=0x00410799, sp=0x20003F00, cfsr=0, hfsr=0, rtt_size=8192, rtt_write=99, rtt_read=100),
+            "Target blocked on a full RTT buffer. PC=0x004107a1 (main+0x8), LR=0x00410799, SP=0x20003f00, "
+            "CFSR=0x00000000 HFSR=0x00000000, RTT up write=99 read=100 size=8192.",
+        ),
+        (
+            dict(pc=0x004107A1, lr=0x00410799, sp=0x20003F00, cfsr=0, hfsr=0, rtt_size=8192, rtt_write=7, rtt_read=7),
+            "No fault; target sent all queued RTT bytes. PC=0x004107a1 (main+0x8), LR=0x00410799, SP=0x20003f00, "
+            "CFSR=0x00000000 HFSR=0x00000000, RTT up write=7 read=7 size=8192.",
+        ),
+        (
+            dict(pc=0x004107A1, lr=0x00410799, sp=0x20003F00, cfsr=0, hfsr=0),
+            "Target running; no fault latched. PC=0x004107a1 (main+0x8), LR=0x00410799, SP=0x20003f00, "
+            "CFSR=0x00000000 HFSR=0x00000000.",
+        ),
+    ],
+    ids=["faulted", "rtt-full", "drained", "running"],
+)
+def test_stall_names_the_target_state(tmp_path: Path, monkeypatch, state, expected) -> None:
+    def _open(board, serial_no, *, build_dir, counter_passes, reset=True):
+        return _FakeSession(_target_info(), [], fail=session.TransportStall("Transport stalled")), _HaltableTransport(state), 0
 
     monkeypatch.setattr(session_runner, "open_rtt_session", _open)
-    with pytest.raises(RuntimeError, match=r"TARGET_INFO of batch 1 differs from the first session's.*build_id: 'hct-first' -> 'hct-second'.*max_passes: 32 -> 8"):
+    monkeypatch.setattr(session_runner, "elf_symbols", lambda elf: _SYMBOLS)
+    with pytest.raises(RuntimeError) as raised:
         session_runner.run_case_bundles(
-            tmp_path, bundles, board=resolve_board("apollo510_evb"), serial_no=1160002276,  # type: ignore[arg-type]
-            counter_passes=DEFAULT_PASSES, session_id="s", build_dir=tmp_path,
+            tmp_path, [_DummyCaseBundle("case_0")],  # type: ignore[arg-type]
+            board=resolve_board("apollo510_evb"), serial_no=1, counter_passes=DEFAULT_PASSES, build_dir=tmp_path,
         )
-    assert [len(call) for call in calls] == [32]  # the first batch ran; the second never did
+    assert str(raised.value) == f"Transport stalled {expected} (batch 0, candidate case_ids=['case_0'])"
+
+
+def test_stall_survives_an_unreadable_target(tmp_path: Path, monkeypatch) -> None:
+    def _open(board, serial_no, *, build_dir, counter_passes, reset=True):
+        stall = session.TransportStall("Transport stalled")
+        return _FakeSession(_target_info(), [], fail=stall), _HaltableTransport(OSError("probe gone")), 0
+
+    monkeypatch.setattr(session_runner, "open_rtt_session", _open)
+    with pytest.raises(RuntimeError, match=r"^Transport stalled Target state unreadable: probe gone\. \(batch 0, "):
+        session_runner.run_case_bundles(
+            tmp_path, [_DummyCaseBundle("case_0")],  # type: ignore[arg-type]
+            board=resolve_board("apollo510_evb"), serial_no=1, counter_passes=DEFAULT_PASSES, build_dir=tmp_path,
+        )
+
+
+def test_boot_failure_skips_batch_context(tmp_path: Path, monkeypatch) -> None:
+    def _open(board, serial_no, *, build_dir, counter_passes, reset=True):
+        return HostSession(FakeTargetTransport(boot_status=7, core_clock_hz=96_000_000)), _FakeTransport(), 0
+
+    monkeypatch.setattr(session_runner, "open_rtt_session", _open)
+    with pytest.raises(RuntimeError, match=r"^Board init failed: nsx_system_init status 7, core 96 MHz\.$"):
+        session_runner.run_case_bundles(
+            tmp_path, [_DummyCaseBundle("case_0")],  # type: ignore[arg-type]
+            board=resolve_board("apollo510_evb"), serial_no=1, counter_passes=DEFAULT_PASSES, build_dir=tmp_path,
+        )
+
+
+def test_runner_checks_board_row_clock(tmp_path: Path, monkeypatch) -> None:
+    def _open(board, serial_no, *, build_dir, counter_passes, reset=True):
+        return HostSession(FakeTargetTransport(core_clock_hz=250_000_000)), _FakeTransport(), 0
+
+    monkeypatch.setattr(session_runner, "open_rtt_session", _open)
+    with pytest.raises(RuntimeError, match=r"^Board core clock 250 MHz, expected 48 MHz\.$"):
+        session_runner.run_case_bundles(
+            tmp_path, [_DummyCaseBundle("case_0")],  # type: ignore[arg-type]
+            board=resolve_board("apollo3p_evb"), serial_no=1, counter_passes=DEFAULT_PASSES, build_dir=tmp_path,
+        )
 
 
 def test_run_case_bundles_wraps_a_case_that_cannot_fit_the_advertised_plan_size(tmp_path: Path, monkeypatch) -> None:
@@ -371,7 +472,7 @@ def test_run_case_bundles_wraps_a_case_that_cannot_fit_the_advertised_plan_size(
     calls: list[list[Any]] = []
     tiny = _target_info(max_rx_payload=40)
 
-    def _open(board, serial_no, *, build_dir, counter_passes):
+    def _open(board, serial_no, *, build_dir, counter_passes, reset=True):
         return _FakeSession(tiny, calls), _FakeTransport(), 0
 
     monkeypatch.setattr(session_runner, "open_rtt_session", _open)
@@ -381,27 +482,6 @@ def test_run_case_bundles_wraps_a_case_that_cannot_fit_the_advertised_plan_size(
             serial_no=1160002276, counter_passes=DEFAULT_PASSES, session_id="s", build_dir=tmp_path,
         )
     assert calls == []
-
-
-def test_run_case_bundles_refuses_a_later_session_with_different_capabilities(tmp_path: Path, monkeypatch) -> None:
-    # A cycles-only plan never trips the PMU validation, so a later session that
-    # advertises different capability_flags (PMU gone, or appeared) must still be refused
-    # rather than merged under the first session's target metadata.
-    calls: list[list[Any]] = []
-    first = _target_info()
-    infos = iter([first, _target_info(capability_flags=first.capability_flags ^ 0x40)])
-
-    def _open(board, serial_no, *, build_dir, counter_passes):
-        return _FakeSession(next(infos), calls), _FakeTransport(), 0
-
-    monkeypatch.setattr(session_runner, "open_rtt_session", _open)
-    cycles_only = (CounterPass("cpu", 0, (), chained=True),)
-    with pytest.raises(RuntimeError, match=r"TARGET_INFO of batch 1 differs.*capability_flags: "):
-        session_runner.run_case_bundles(
-            tmp_path, [_DummyCaseBundle(f"case_{i}") for i in range(40)], board=resolve_board("apollo510_evb"),  # type: ignore[arg-type]
-            serial_no=1160002276, counter_passes=cycles_only, session_id="s", build_dir=tmp_path,
-        )
-    assert [len(call) for call in calls] == [32]
 
 
 def test_non_positive_target_limits_are_refused_before_batching() -> None:
@@ -423,7 +503,7 @@ def test_non_positive_target_limits_are_refused_before_batching() -> None:
 def test_duplicate_case_ids_are_refused_before_the_probe_opens(tmp_path: Path, monkeypatch) -> None:
     opened: list[int] = []
 
-    def _open(board, serial_no, *, build_dir, counter_passes):
+    def _open(board, serial_no, *, build_dir, counter_passes, reset=True):
         opened.append(1)
         raise AssertionError("must not open a session")
 
@@ -435,3 +515,91 @@ def test_duplicate_case_ids_are_refused_before_the_probe_opens(tmp_path: Path, m
             counter_passes=DEFAULT_PASSES, session_id="s", build_dir=tmp_path,
         )
     assert opened == []
+
+
+class _FloorSession(_FakeSession):
+    """Advertises the floor kernel; returns timed results."""
+
+    def __init__(self, info: TargetInfo, calls: list[list[Any]], kernel_ids: frozenset[int]) -> None:
+        super().__init__(info, calls)
+        self.kernel_ids = kernel_ids
+
+    def run_many(self, case_bundles, *, on_case_complete=None) -> SessionResult:
+        self._calls.append(list(case_bundles))
+        results = []
+        for bundle in case_bundles:
+            median = 40.0 if bundle.case_id == FLOOR_CASE_ID else 1000.0
+            stats = SampleStatistics(5, median, median, median, median, 1.0, True, False, ())
+            result = CaseRunResult(bundle, ComparisonResult(True, 0, 0.0, "exact_int"), b"", (), (), stats)
+            if on_case_complete is not None:
+                on_case_complete(result)
+            results.append(result)
+        return SessionResult(cases=tuple(results), protocol_trace=("t",), session_complete_cases=len(results))
+
+
+@pytest.mark.parametrize("kernel_ids", [frozenset({EMPTY_CALL_KERNEL_ID}), frozenset()])
+def test_runner_runs_and_hides_floor(tmp_path: Path, monkeypatch, kernel_ids) -> None:
+    bundles = [
+        build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id=f"abs_{i}", input_shape=(1, 4, 4, 2))
+        for i in range(3)
+    ]
+    calls: list[list[Any]] = []
+    written: dict[str, Any] = {}
+    monkeypatch.setattr(
+        session_runner, "open_rtt_session",
+        lambda *a, **k: (_FloorSession(_target_info(max_cases_per_session=2), calls, kernel_ids), _FakeTransport(), 0),
+    )
+    monkeypatch.setattr(session_runner, "write_result_bundle", lambda result, **kw: written.update(kw) or tmp_path)
+    monkeypatch.setattr(session_runner, "generate_memory_report", lambda *a, **k: tmp_path / "memory_report.json")
+    (tmp_path / "memory_report.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "cmake" / "hardware").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "cmake" / "hardware" / "kernel_catalog.json").write_text("[]", encoding="utf-8")
+    reported: list[str] = []
+
+    merged, _ = session_runner.run_case_bundles(
+        tmp_path, bundles, board=resolve_board("apollo3p_evb"), serial_no=1,
+        counter_passes=DEFAULT_PASSES, build_dir=tmp_path,
+        on_case_complete=lambda case: reported.append(case.case_bundle.case_id),
+    )
+
+    ran = [[b.case_id for b in call] for call in calls]
+    kernel_ids_run = ["abs_0", "abs_1", "abs_2"]
+    assert reported == kernel_ids_run
+    assert [c.case_bundle.case_id for c in merged.cases] == kernel_ids_run
+    assert merged.session_complete_cases == 3
+    assert [c.statistics.timing_status for c in merged.cases] == ["valid"] * 3
+    if kernel_ids:
+        # Floor leads the first batch.
+        assert ran == [[FLOOR_CASE_ID, "abs_0"], ["abs_1", "abs_2"]]
+        assert calls[0][0].manifest["target_cpu"] == "cortex-m4"
+        assert written["timing_floor"]["median_cycles"] == 40.0
+    else:
+        assert ran == [["abs_0", "abs_1"], ["abs_2"]]
+        assert written["timing_floor"] is None
+
+
+@pytest.mark.parametrize("fresh_boot", [True, False])
+def test_fresh_boot_skips_open_reset(tmp_path: Path, monkeypatch, fresh_boot: bool) -> None:
+    """A flash just reset the board."""
+    seen = {}
+
+    class Stop(Exception):
+        pass
+
+    def _open(*args, **kwargs):
+        seen.update(kwargs)
+        raise Stop
+
+    monkeypatch.setattr(session_runner, "open_rtt_session", _open)
+    with pytest.raises(Stop):
+        session_runner.run_case_bundles(tmp_path, [_DummyCaseBundle("case_0")], board=resolve_board("apollo510_evb"), serial_no=1,
+                                        counter_passes=(), fresh_boot=fresh_boot)
+    assert seen["reset"] is (not fresh_boot)
+
+
+def test_open_passes_reset(tmp_path: Path, monkeypatch) -> None:
+    made = {}
+    monkeypatch.setattr(session_runner, "symbol_address_from_elf", lambda *a: 0x20000000)
+    monkeypatch.setattr(session_runner, "JLinkRttTransport", lambda **kw: made.update(kw) or object())
+    session_runner.open_rtt_session(resolve_board("apollo510_evb"), 1, build_dir=tmp_path, counter_passes=(), reset=False)
+    assert made["reset_on_open"] is False

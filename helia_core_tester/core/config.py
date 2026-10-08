@@ -26,6 +26,8 @@ from helia_core_tester.core.path_layout import (
 )
 
 ENV_PREFIX = "HELIA_CORE_TESTER_"
+# 32-bit seeds keep case ids short.
+MAX_SHAPE_SEED = 2**32 - 1
 TRUE_VALUES = {"1", "true", "yes", "on"}
 FALSE_VALUES = {"0", "false", "no", "off"}
 VALID_SUITE_MODES = {"int", "float", "both"}
@@ -54,6 +56,8 @@ PATH_KEYS = frozenset(
         "generated_tests_root",
         "reports_root",
         "cmsis_nn_root",
+        "hidden_dir",
+        "hidden_seed_file",
     }
 )
 
@@ -100,6 +104,16 @@ class Config:
     seed: Optional[int] = 500
 
     force_generate: bool = False
+    # Shared trees: keep other runs' cases.
+    keep_unselected: bool = False
+    # Held-out shapes: N per op, seeded.
+    random_shapes: Optional[int] = None
+    # None until precedence settles; then 0.
+    shape_seed: Optional[int] = None
+    # Secret-seeded shapes go here.
+    hidden_dir: Optional[Path] = None
+    # Else the secret comes from HCT_HIDDEN_SEED.
+    hidden_seed_file: Optional[Path] = None
     skip_generation: bool = False
     skip_build: bool = False
     skip_run: bool = False
@@ -203,6 +217,10 @@ class Config:
 
         if self.cmsis_nn_root is not None:
             self.cmsis_nn_root = Path(self.cmsis_nn_root).resolve()
+        if self.hidden_dir is not None:
+            self.hidden_dir = Path(self.hidden_dir).resolve()
+        if self.hidden_seed_file is not None:
+            self.hidden_seed_file = Path(self.hidden_seed_file).resolve()
 
     def _parse_bool(self, key: str, value: str) -> bool:
         normalized = value.strip().lower()
@@ -218,7 +236,7 @@ class Config:
     def _parse_env_value(self, key: str, value: str) -> Any:
         if key in PATH_KEYS:
             return Path(value)
-        if key in {"jobs", "run_jobs", "limit", "seed", "verbosity"}:
+        if key in {"jobs", "run_jobs", "limit", "seed", "verbosity", "random_shapes", "shape_seed"}:
             return int(value)
         if key == "timeout":
             return float(value)
@@ -230,6 +248,7 @@ class Config:
             "dry_run",
             "plan",
             "force_generate",
+            "keep_unselected",
             "skip_generation",
             "skip_build",
             "skip_run",
@@ -279,6 +298,7 @@ class Config:
 
         if not 0 <= self.verbosity <= 3:
             raise ValueError(f"verbosity must be between 0 and 3, got {self.verbosity}")
+        self._validate_random_shapes()
 
         if self.jobs is None:
             self.jobs = os.cpu_count() or 4
@@ -293,6 +313,57 @@ class Config:
         self.downloads_dir.parent.mkdir(parents=True, exist_ok=True)
         self.generated_tests_root.mkdir(parents=True, exist_ok=True)
         self.reports_root.mkdir(parents=True, exist_ok=True)
+
+    def _validate_random_shapes(self) -> None:
+        # Any seed would be silently ignored.
+        if self.hidden_dir is not None and self.shape_seed is not None:
+            raise ConfigurationError("hidden_dir takes a secret, not shape_seed")
+        if self.shape_seed is None:
+            self.shape_seed = 0
+        # Seed sits in hardware case ids.
+        if not 0 <= self.shape_seed <= MAX_SHAPE_SEED:
+            raise ConfigurationError(f"shape_seed must be in 0..{MAX_SHAPE_SEED}, got {self.shape_seed}")
+        self._validate_hidden()
+        if self.random_shapes is None:
+            if self.hidden_dir is not None:
+                raise ConfigurationError("hidden_dir needs random_shapes")
+            return
+        if self.random_shapes < 1:
+            raise ConfigurationError(f"random_shapes must be >= 1, got {self.random_shapes}")
+        if "int" not in self.suites:
+            raise ConfigurationError("random_shapes needs the int suite")
+        from helia_core_tester.generation.random_shapes import select_ops
+
+        try:
+            select_ops(self.op_filter, self.dtype_filter)
+        except ValueError as exc:
+            raise ConfigurationError(str(exc)) from exc
+
+    def _validate_hidden(self) -> None:
+        if self.hidden_dir is None:
+            if self.hidden_seed_file is not None:
+                raise ConfigurationError("hidden_seed_file needs hidden_dir")
+            return
+        # Hidden outputs all derive from DIR.
+        moved = [
+            name for name, default in (
+                ("generated_tests_root", generated_tests_root(self.project_root)),
+                ("reports_root", reports_root(self.project_root)),
+            ) if getattr(self, name) != default
+        ]
+        if moved:
+            raise ConfigurationError(f"hidden_dir takes no {', '.join(moved)} override")
+        # The agent may read the tree; generation wipes DIR.
+        seed = self.hidden_seed_file
+        if seed is not None and (seed.is_relative_to(self.project_root) or seed.is_relative_to(self.hidden_dir)):
+            raise ConfigurationError(f"{seed} must sit outside the tester tree and hidden_dir")
+        from helia_core_tester.generation.random_shapes import check_hidden_paths
+
+        try:
+            for cpu in self.cpus:
+                check_hidden_paths(self.hidden_dir, self.project_root, cpu)
+        except ValueError as exc:
+            raise ConfigurationError(str(exc)) from exc
 
     def _normalize_suite_mode(self, suite: str) -> str:
         normalized = str(suite).strip().lower()
@@ -486,6 +557,10 @@ class Config:
             "limit": self.limit,
             "seed": self.seed,
             "force_generate": self.force_generate,
+            "keep_unselected": self.keep_unselected,
+            "random_shapes": self.random_shapes,
+            "shape_seed": self.shape_seed,
+            "hidden_dir": str(self.hidden_dir) if self.hidden_dir else None,
             "skip_generation": self.skip_generation,
             "skip_build": self.skip_build,
             "skip_run": self.skip_run,

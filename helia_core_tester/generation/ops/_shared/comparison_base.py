@@ -4,6 +4,7 @@ from typing import Dict
 import numpy as np
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.utils.tflite_utils import simulate_compare
 
 
 _OP_MAP = {
@@ -19,6 +20,33 @@ _DTYPE_INFO = {
     "S8": ("int8", "int8_t", np.int8, -128, 127, "s8"),
     "S16": ("int16", "int16_t", np.int16, -32768, 32767, "s16"),
 }
+
+
+def _near_step(params: Dict[str, int]) -> int:
+    """Smallest input gap the rescale keeps."""
+    gains = [
+        params[f"input_{i}_mult"] * 2.0 ** (params[f"input_{i}_shift"] + params["left_shift"] - 31)
+        for i in (1, 2)
+    ]
+    return max(1, int(np.ceil(1.0 / min(gains))))
+
+
+def _pin_near(rng, source, target, output_shape, qmin, qmax, gap) -> None:
+    """Tie or nudge target to source."""
+    src_ids = np.broadcast_to(np.arange(source.size).reshape(source.shape), output_shape).reshape(-1)
+    dst_ids = np.broadcast_to(np.arange(target.size).reshape(target.shape), output_shape).reshape(-1)
+    # One output per target element.
+    order = np.argsort(dst_ids, kind="stable")
+    counts = np.bincount(dst_ids, minlength=target.size)
+    starts = np.concatenate(([0], np.cumsum(counts)[:-1]))
+    picks = order[starts + np.arange(target.size) % counts]
+    src = source.reshape(-1)[src_ids[picks]]
+    flat = target.reshape(-1)
+    flat[::3] = src[::3]
+    step = gap * rng.choice([-1, 1], size=flat[1::3].size)
+    near = src[1::3] + step
+    # Step inward at the dtype bounds.
+    flat[1::3] = np.where((near < qmin) | (near > qmax), src[1::3] - step, near)
 
 
 class ComparisonFamilyBase(OperationBase):
@@ -55,52 +83,29 @@ class ComparisonFamilyBase(OperationBase):
         )
         self._write_tflite_bytes(out_path, model_bytes)
 
-    @staticmethod
-    def _requantize_np(values: np.ndarray, multiplier: int, shift: int) -> np.ndarray:
-        left_shift = shift if shift > 0 else 0
-        right_shift = -shift if shift < 0 else 0
-        prod = values.astype(np.int64) * (1 << left_shift)
-        mult = (1 << 30) + (prod * int(multiplier))
-        res = (mult >> 31).astype(np.int64)
-        if right_shift == 0:
-            return res.astype(np.int32)
-        remainder_mask = (1 << right_shift) - 1
-        remainder = res & remainder_mask
-        result = res >> right_shift
-        threshold = remainder_mask >> 1
-        threshold = threshold + (result < 0)
-        result = result + (remainder > threshold)
-        return result.astype(np.int32)
+    def _quant_params(self, tflite_path: Path) -> Dict[str, int]:
+        """Read operand scales from the model."""
+        from helia_core_tester.generation.utils.tflite_utils import comparison_quant_params, scalar_scale_zp
 
-    def _simulate_compare(self, input1_q: np.ndarray, input2_q: np.ndarray, operation: str) -> np.ndarray:
-        input_1_offset = int(self.desc.get("input_1_offset", 0))
-        input_2_offset = int(self.desc.get("input_2_offset", 0))
-        input_1_mult = int(self.desc.get("input_1_mult", 1))
-        input_2_mult = int(self.desc.get("input_2_mult", 1))
-        input_1_shift = int(self.desc.get("input_1_shift", 0))
-        input_2_shift = int(self.desc.get("input_2_shift", 0))
-        left_shift = int(self.desc.get("left_shift", 0))
+        inputs = self.load_primary_operator_tensors(str(tflite_path))["inputs"]
+        (scale_1, zp_1), (scale_2, zp_2) = (scalar_scale_zp(t["quantization"]) for t in inputs[:2])
+        return comparison_quant_params(scale_1, zp_1, scale_2, zp_2)
 
-        a = (input1_q.astype(np.int32) + input_1_offset) << left_shift
-        b = (input2_q.astype(np.int32) + input_2_offset) << left_shift
-        a = self._requantize_np(a, input_1_mult, input_1_shift)
-        b = self._requantize_np(b, input_2_mult, input_2_shift)
-
-        if operation == "ARM_COMPARE_EQUAL":
-            out = a == b
-        elif operation == "ARM_COMPARE_NOT_EQUAL":
-            out = a != b
-        elif operation == "ARM_COMPARE_GREATER":
-            out = a > b
-        elif operation == "ARM_COMPARE_GREATER_EQUAL":
-            out = a >= b
-        elif operation == "ARM_COMPARE_LESS":
-            out = a < b
-        elif operation == "ARM_COMPARE_LESS_EQUAL":
-            out = a <= b
+    def _sample_operands(self, rng, shape_1, shape_2, output_shape, qmin, qmax, np_dtype, gap):
+        """Draw spread operands with forced ties."""
+        input_1 = rng.integers(qmin, qmax + 1, size=shape_1, dtype=np.int32)
+        input_2 = rng.integers(qmin, qmax + 1, size=shape_2, dtype=np.int32)
+        # A scalar at the median splits outputs.
+        if input_1.size == 1:
+            input_1[...] = np.median(input_2)
+        elif input_2.size == 1:
+            input_2[...] = np.median(input_1)
+        # Per three outputs: tie, near, free.
+        if input_2.size >= input_1.size:
+            _pin_near(rng, input_1, input_2, output_shape, qmin, qmax, gap)
         else:
-            raise ValueError(f"Unsupported operation: {operation}")
-        return out.astype(np.uint8)
+            _pin_near(rng, input_2, input_1, output_shape, qmin, qmax, gap)
+        return input_1.astype(np_dtype), input_2.astype(np_dtype)
 
     def generate_c_files(self, output_dir) -> None:
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
@@ -132,18 +137,16 @@ class ComparisonFamilyBase(OperationBase):
         input_2_dims = builder.nhwc_to_cmsis_dims(input_shape_2)
         output_dims = builder.nhwc_to_cmsis_dims(output_shape)
 
-        # Default quantization: LiteRT builder uses scale 0.125 (s8) or 1/32768 (s16), zero point 0.
-        input_zp_1 = 0
-        input_zp_2 = 0
-
-        input_1_f, input_2_f = self._sample_dual_uniform_inputs(input_shape_1, input_shape_2)
-
-        input_1_q = np.round(input_1_f).astype(np.int32)
-        input_1_q = np.clip(input_1_q, qmin, qmax).astype(np_in_dtype)
-        input_2_q = np.round(input_2_f).astype(np.int32)
-        input_2_q = np.clip(input_2_q, qmin, qmax).astype(np_in_dtype)
-
-        expected = self._simulate_compare(input_1_q, input_2_q, op_enum)
+        params = self._quant_params(tflite_path)
+        rng = self._seeded_rng()
+        # Redraw until the output mixes.
+        for _ in range(16):
+            input_1_q, input_2_q = self._sample_operands(
+                rng, input_shape_1, input_shape_2, output_shape, qmin, qmax, np_in_dtype, _near_step(params)
+            )
+            expected = simulate_compare(input_1_q, input_2_q, operation=op_enum, **params)
+            if np.unique(expected).size > 1:
+                break
 
         context = {
             "name": name,
@@ -156,13 +159,7 @@ class ComparisonFamilyBase(OperationBase):
             "input_dtype": c_type,
             "kernel_fn": kernel_fn,
             "output_size": int(np.prod(output_shape)),
-            "input_1_offset": int(-input_zp_1),
-            "input_1_mult": 1,
-            "input_1_shift": 0,
-            "input_2_offset": int(-input_zp_2),
-            "input_2_mult": 1,
-            "input_2_shift": 0,
-            "left_shift": 0,
+            **params,
         }
 
         cmake_context = {

@@ -8,7 +8,7 @@ import pytest
 
 from helia_core_tester.contract.ir import STATUS_ABSENT, STATUS_PRESENT, ContractSet, FunctionDecl, ParamDecl
 from helia_core_tester.generation import entry as entry_module
-from helia_core_tester.generation.entry import EntryError, entry_scratch_bytes, resolve_entry
+from helia_core_tester.generation.entry import SCRATCHLESS_OPERATORS, EntryError, entry_scratch_bytes, resolve_entry
 from helia_core_tester.generation.io.descriptors import load_all_descriptors
 from helia_core_tester.generation.test_ops import _required_kernel_symbols
 
@@ -55,16 +55,24 @@ def test_every_shipped_entry_resolves_from_the_contract_with_its_declared_scratc
     assert len(entries) >= 50
     for desc in entries:
         entry, sizer = desc["entry"], desc.get("entry_sizer")
+        scratchless = desc["operator"] in SCRATCHLESS_OPERATORS
         own = contracts.sizer_for(entry, "cortex-m55")
-        assert own is not None or sizer is not None or desc.get("entry_scratch") is not None, (
+        assert scratchless or own is not None or sizer is not None or desc.get("entry_scratch") is not None, (
             f"{desc['name']}: {entry} has no sizer of its own and declares none")
         if contracts.find(entry) is None:
             continue  # gated on the checkout, which the pure-Python fixture may not carry
-        got = resolve_entry(desc["operator"], entry, activation_dtype=desc.get("activation_dtype", "S8"),
-                            weight_dtype=desc.get("weight_dtype", "S8"), cpu="cortex-m55", desc=desc,
-                            contracts=contracts)
+        dtype, roles = desc.get("activation_dtype", "S8"), {}
+        if desc["operator"] == "Dequantize":
+            # Binary16 storage in, float32 out (see OpDequantize._select_cmsis_dequantize_kernel).
+            dtype, roles = "U16", {"output": "FP32"}
+        got = resolve_entry(desc["operator"], entry, activation_dtype=dtype, weight_dtype=desc.get("weight_dtype", dtype),
+                            cpu="cortex-m55", desc=desc, contracts=contracts, extra_roles=roles)
         assert got["kernel_fn"] == entry and got["entry_family"] == "contract"
-        if sizer is not None:
+        if scratchless:
+            assert got["kernel_get_buffer_size_fn"] is None and got["entry_scratch_bytes"] == 0
+        elif isinstance(sizer, list):
+            assert got["kernel_get_buffer_size_fn"] == sizer[0] and got["entry_extra_sizers"] == sizer[1:]
+        elif sizer is not None:
             assert got["kernel_get_buffer_size_fn"] == sizer
 
 

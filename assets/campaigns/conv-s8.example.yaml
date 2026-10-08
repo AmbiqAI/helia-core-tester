@@ -1,0 +1,28 @@
+# Campaign for `helia_core_tester agent-loop init`.
+name: conv-s8
+board: apollo510_evb
+# bench-agent board id; defaults to board.
+bench_id: apollo510_evb
+legs: [tcm, mram]
+target:
+  op: Convolve
+  dtype: S8
+  # Optional: only these case ids.
+  case_ids: []
+kernels:
+  repo: ~/ns-cmsis-nn
+  ref: v7.40.0
+# Charged board evals for the agent.
+evals: 12
+# Claude --max-budget-usd.
+cost_usd: 25
+model: claude-opus-5-5
+# Random target-op shapes, 0 for none.
+hidden_shapes: 12
+repeats: 3
+# Outside the workspace; init makes it 0700.
+secrets_dir: ~/hct-secrets/conv-s8
+# Optional: seed the agent tree from a ledger diff.
+# start_patch: ~/campaigns/conv-s8-run1/ledger/009.diff
+# start_notes: |
+#   - What the previous run changed and what is left.

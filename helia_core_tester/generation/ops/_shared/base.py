@@ -120,6 +120,14 @@ class OperationBase(ABC):
         self._tflite_path = None
         self._input_mode_consumed = False
         self._nonfinite_policy_applied = False
+        declared = {**(desc.get("tensor_dtypes") or {})}
+        declared.update({key: desc[key] for key in ("activation_dtype", "weight_dtype") if key in desc})
+        storage_only = [role for role, dtype in declared.items() if str(dtype).upper() == "U16"]
+        if storage_only and not (desc.get("operator") == "Dequantize" and desc.get("entry")):
+            raise ValueError(
+                f"{desc.get('name')!r}: U16 ({', '.join(storage_only)}) is binary16 storage for the "
+                "Dequantize bit-pattern entry only"
+            )
 
     @abstractmethod
     def build_keras_model(self):
@@ -130,6 +138,17 @@ class OperationBase(ABC):
             Keras model ready for TFLite conversion
         """
         pass
+
+    def round_float16_weights(self, model) -> None:
+        """Round an FP16 case's Keras weights and biases to float16 before conversion.
+
+        The kernel receives float16 weights and bias, so the golden output is computed from those
+        same rounded values rather than the float32 draw.
+        """
+        if model is None or str(self.desc.get("activation_dtype", "")).upper() != "FP16":
+            return
+        for layer in model.layers:
+            layer.set_weights([w.astype(np.float16).astype(np.float32) for w in layer.get_weights()])
 
     def needs_keras_model(self) -> bool:
         """Return True if build_keras_model should be called for conversion."""
@@ -242,7 +261,17 @@ class OperationBase(ABC):
                 f"Unsupported expected_status {status!r} for descriptor {self.desc.get('name')!r}; "
                 f"known values are {list(self.EXPECTED_STATUS_VALUES)}"
             )
+        if status != "ARM_CMSIS_NN_SUCCESS" and self.desc.get("autovectorize_declines"):
+            raise ValueError(
+                f"{self.desc.get('name')!r}: autovectorize_declines expects the full result where the entry runs; "
+                f"it cannot be combined with expected_status {status}"
+            )
         return status
+
+    def reject_autovectorize_declines(self) -> None:
+        """Reject `autovectorize_declines` on a path whose template does not render it."""
+        if self.desc.get("autovectorize_declines"):
+            raise ValueError(f"{self.desc.get('name')!r}: autovectorize_declines is not supported for this case")
 
     def fault_context(self) -> Dict[str, Any]:
         """Return the template context keys of the `fault:` mechanism (empty without a fault)."""
@@ -1099,6 +1128,11 @@ class OperationBase(ABC):
             Input data as numpy array
         """
         input_shape = self.desc.get('input_shape', [1, 1, 1, 1])
+        if self.desc.get('input_range'):
+            from helia_core_tester.generation.ops._shared.quant_knobs import value_range
+
+            lo, hi = value_range(self.desc, 'input_range', ())
+            return self._seeded_rng().uniform(lo, hi, size=input_shape).astype(np.float32)
         return self._seeded_rng().integers(-32, 32, size=input_shape).astype(np.float32)
     
     HARNESS_HEADER = "common/harness/harness.h.j2"
@@ -1127,6 +1161,7 @@ class OperationBase(ABC):
         from helia_core_tester.contract import render as contract_render
         from helia_core_tester.generation.harness import HarnessError
         from helia_core_tester.generation.harness import plan_harness, render_declaration
+        from helia_core_tester.generation.kernel_dispatch import autovectorize_declines_if
 
         name = context["name"]
         env = template_environment(str(find_tester_templates_dir()))
@@ -1138,6 +1173,7 @@ class OperationBase(ABC):
             sizer_fn=sizer,
             scratch_bytes=None if sizer else int(context.get("entry_scratch_bytes") or 0),
             contracts=contract_render.load_current_contracts(),
+            extra_sizer_fns=tuple(context.get("entry_extra_sizers") or ()),
         )
         expected = str(context.get("expected_status", "ARM_CMSIS_NN_SUCCESS"))
         if plan.void_return and expected != "ARM_CMSIS_NN_SUCCESS":
@@ -1152,6 +1188,9 @@ class OperationBase(ABC):
                 raise HarnessError(f"{context['name']}: output slots validate every slice, so expected_status "
                                    f"{expected} is not supported")
         render_context = TemplateContextBuilder.build_validation_context(validation_key, dict(context), self.desc)
+        # The build condition under which an `autovectorize_declines` entry declines (by precision).
+        render_context.setdefault("autovectorize_declines_if",
+                                  autovectorize_declines_if(str(context.get("input_dtype", ""))))
         rendered_pool = _render_pool_snippets(env, pool, render_context)
         includes_dir = output_dir / "includes"
         includes_dir.mkdir(parents=True, exist_ok=True)

@@ -19,6 +19,33 @@ def _cpu_buffer_api(base: str, cpu: str) -> str:
 
 
 DEPTHWISE_CONV_S8_PLANAR_RULE = "arm_depthwise_conv_s8_opt_planar_supported"
+DEPTHWISE_CONV_S8_3X3_SIZER = "arm_depthwise_conv_s8_opt_3x3_get_buffer_size"
+
+
+def depthwise_3x3_scratch_bytes(sizers: object, input_dims: Dict[str, int]) -> int:
+    """Mirror the 3x3 depthwise entries' own scratch query when a descriptor lists it beside the
+    family's (`entry_sizer: [<family query>, <entry query>]`); zero for every other entry."""
+    listed = [sizers] if isinstance(sizers, str) else list(sizers or ())
+    if DEPTHWISE_CONV_S8_3X3_SIZER not in listed:
+        return 0
+    # 16 groups x (3 x 52 + 32), pad row, align.
+    return 16 * (3 * 52 + 32) + int(input_dims["w"]) * int(input_dims["c"]) + 16
+
+
+def autovectorize_declines_if(input_c_type: str) -> str:
+    """The preprocessor condition under which an `autovectorize_declines` entry declines.
+
+    Integer entries live on ns-cmsis-nn's MVE integer paths, which an integer coverage build compiles
+    out. Float entries live on its MVE float paths, absent without MVE float and compiled out by a
+    coverage build that gives the float sources ARM_MATH_AUTOVECTORIZE. CMakeLists.txt sets the
+    HELIA_CMSIS_NN_*_AUTOVECTORIZE flags.
+    """
+    if input_c_type == "float16_t":
+        return "!defined(ARM_MATH_MVE_FLOAT16) || defined(HELIA_CMSIS_NN_FLOAT_AUTOVECTORIZE)"
+    if input_c_type == "float":
+        return "!defined(ARM_MATH_MVEF) || defined(HELIA_CMSIS_NN_FLOAT_AUTOVECTORIZE)"
+    return "defined(HELIA_CMSIS_NN_INT_AUTOVECTORIZE)"
+
 
 def resolve_convolve_kernel(activation_dtype: str, weight_dtype: str, cpu: str) -> Dict[str, str]:
     act = str(activation_dtype).upper()

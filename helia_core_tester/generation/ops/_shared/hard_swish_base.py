@@ -416,11 +416,10 @@ class HardSwishFamilyBase(OperationBase):
         relu_q3 = tflite_round(3.0 / float(input_scale))
         relu_q6 = tflite_round(6.0 / float(input_scale))
         
-        # Determine prescale to avoid overflow in the precise variant
+        # Keep x * relu6 inside int32.
         prescale = 0
         prod_max = 32767 * int(relu_q6)
-        dtype_max = np.iinfo(np_in_dtype).max
-        while prod_max > dtype_max:
+        while prod_max > np.iinfo(np.int32).max:
             prescale += 1
             prod_max >>= 1
         
@@ -433,7 +432,9 @@ class HardSwishFamilyBase(OperationBase):
         output_mult, output_shift = calculate_multiplier_shift(real_multiplier_adj)
         
         # Generate input data and quantize
-        input_data = self._sample_uniform(input_shape, low=-8.0, high=8.0)
+        # Stay inside the representable input range.
+        bound = min(8.0, min(qmax - int(input_zp), int(input_zp) - qmin) * float(input_scale))
+        input_data = self._sample_uniform(input_shape, low=-bound, high=bound)
         
         # Quantize inputs
         input_q = np.round(input_data / float(input_scale) + float(input_zp)).astype(np.int32)

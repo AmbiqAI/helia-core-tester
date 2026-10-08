@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "am_mcu_apollo.h"
 #include "arm_nnfunctions.h"
 #include "benchmark_server_adapter.h"
 #include "benchmark_server_catalog.h"
@@ -25,7 +26,6 @@ static const hct_symbol_ref_t g_hct_symbol_refs[] = {
 
 volatile uintptr_t g_hct_symbol_registry_anchor;
 volatile size_t g_hct_symbol_registry_count;
-volatile uint32_t g_hct_server_boot_status;
 volatile uint32_t g_hct_last_target_info_status;
 volatile uint32_t g_hct_last_catalog_status;
 volatile uint32_t g_hct_last_transport_init_status;
@@ -131,6 +131,56 @@ static uintptr_t hct_anchor_all_symbols(void)
     return checksum;
 }
 
+/* HAL-reported core clock; 0 when unknown. */
+static uint32_t hct_core_clock_hz(void)
+{
+#if defined(AM_PART_APOLLO510) || defined(AM_PART_APOLLO510L) || defined(AM_PART_APOLLO330P) || \
+    defined(AM_PART_APOLLO4P) || defined(AM_PART_APOLLO4L)
+    am_hal_pwrctrl_mcu_mode_e mode;
+    if (am_hal_pwrctrl_mcu_mode_status(&mode) != AM_HAL_STATUS_SUCCESS) return 0u;
+    switch (mode)
+    {
+    case AM_HAL_PWRCTRL_MCU_MODE_LOW_POWER: return 96000000u;
+#if defined(AM_PART_APOLLO510L) || defined(AM_PART_APOLLO330P)
+    case AM_HAL_PWRCTRL_MCU_MODE_HIGH_PERFORMANCE1: return 192000000u;
+    case AM_HAL_PWRCTRL_MCU_MODE_HIGH_PERFORMANCE2: return 250000000u;
+#elif defined(AM_PART_APOLLO510)
+    case AM_HAL_PWRCTRL_MCU_MODE_HIGH_PERFORMANCE: return 250000000u;
+#else
+    case AM_HAL_PWRCTRL_MCU_MODE_HIGH_PERFORMANCE: return 192000000u;
+#endif
+    default: return 0u;
+    }
+#elif defined(AM_PART_APOLLO3) || defined(AM_PART_APOLLO3P)
+    return am_hal_burst_mode_status() == AM_HAL_BURST_MODE ? 96000000u : 48000000u;
+#else
+    return 0u;
+#endif
+}
+
+/* AHP, DN, FZ, RMode, FZ16; wire.fp_mode matches. */
+#define HCT_FPSCR_CONTROL_MASK ((1u << 26) | (1u << 25) | (1u << 24) | (3u << 22) | (1u << 19))
+/* LTPSIZE; M4 keeps these zero. */
+#define HCT_FPSCR_LTPSIZE_MASK (7u << 16)
+
+/* Pin FP mode; return boot FPSCR. */
+static uint32_t hct_pin_fpscr(uint32_t *pinned)
+{
+#if defined(__FPU_PRESENT) && (__FPU_PRESENT == 1U) && defined(__FPU_USED) && (__FPU_USED == 1U)
+    const uint32_t boot = __get_FPSCR();
+    /* Reset FPDSCR: IEEE, round to nearest. */
+    FPU->FPDSCR &= ~HCT_FPSCR_CONTROL_MASK;
+    /* Clear flags too, so readback is stable. */
+    __set_FPSCR(boot & HCT_FPSCR_LTPSIZE_MASK);
+    __ISB();
+    *pinned = __get_FPSCR();
+    return boot;
+#else
+    *pinned = 0u;
+    return 0u;
+#endif
+}
+
 int main(void)
 {
     const nsx_system_config_t system_cfg = {
@@ -145,7 +195,10 @@ int main(void)
     const hct_transport_vtable_t *transport = hct_transport_rtt();
     size_t count = 0u;
 
-    g_hct_server_boot_status = nsx_system_init(&system_cfg);
+    hct_boot_info_t boot;
+    boot.boot_status = (int32_t)nsx_system_init(&system_cfg);
+    boot.core_clock_hz = hct_core_clock_hz();
+    boot.fpscr_boot = hct_pin_fpscr(&boot.fpscr);
     (void)hct_anchor_all_symbols();
     (void)hct_benchmark_server_catalog(&count);
     g_hct_catalog_entry_count = (uint32_t)count;
@@ -157,7 +210,8 @@ int main(void)
                             0xC0DE1234u,
                             256u,
                             g_hct_workspace,
-                            (uint32_t)sizeof(g_hct_workspace));
+                            (uint32_t)sizeof(g_hct_workspace),
+                            &boot);
     g_hct_last_target_info_status = HCTP_STATUS_OK;
     g_hct_last_catalog_status = HCTP_STATUS_OK;
     hct_flush_outbound(&g_hct_session, transport);
