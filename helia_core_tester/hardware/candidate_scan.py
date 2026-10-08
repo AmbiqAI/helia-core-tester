@@ -183,7 +183,8 @@ def _preprocess(
     markers = list(_MARKER.finditer(stdout))
     for marker, after in zip(markers, [*markers[1:], None]):
         name = marker.group(1)
-        if not name.startswith("<"):
+        # -g adds a "cwd//" marker.
+        if not name.startswith("<") and not name.endswith("/"):
             names.add(name)
         # System headers and builtins drop out.
         if name.startswith(("/", "<")):
@@ -246,9 +247,12 @@ def _file_digest(root: Path, name: str, seen: dict) -> Optional[str]:
             fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
         except OSError:
             return None
+        # fdopen refuses directories.
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            os.close(fd)
+            return None
         with os.fdopen(fd, "rb") as handle:
-            if stat.S_ISREG(os.fstat(fd).st_mode):
-                seen[path] = hashlib.file_digest(handle, "sha256").hexdigest()
+            seen[path] = hashlib.file_digest(handle, "sha256").hexdigest()
     return seen[path]
 
 
