@@ -543,12 +543,41 @@ uv run helia_core_tester agent-loop stop -w ~/campaigns/conv-s8
   its own stream log under `W/logs/`; `W/agent-run.json` holds the real
   claude pid, the session id and the logs.
 - `launch --resume` continues that session with the same flags and caps
-  it at `cost_usd` minus the cost of the finished runs. A run killed
-  before its `result` event counts as $0, so set the cap with margin.
+  it at `cost_usd` minus the spend so far (see cost accounting below).
 - `status` prints the ledger, whether the pid is alive, recent tool calls
   from the newest log, its cost and turns once it has a `result` event,
-  and the cost of all finished runs.
-- `stop` sends SIGTERM to the agent's process group.
+  the spend so far with its estimated and assumed parts, and the last
+  operator note.
+- `stop` sends SIGINT to claude and waits 20 s, so claude ends the turn
+  and writes its `result` event; then SIGTERM and SIGKILL to the process
+  group.
+
+To steer the agent, stop it and resume with a note:
+
+```bash
+uv run helia_core_tester agent-loop stop -w ~/campaigns/conv-s8
+uv run helia_core_tester agent-loop launch -w ~/campaigns/conv-s8 --resume --note note.md
+# or: --note-text "Try a 4x4 output tile."
+```
+
+The note (up to 8000 characters) goes to the agent as the resume prompt
+after an `Operator note:` line. `W/agent-run.json` records its path and
+sha256. Without a note, resume sends "Continue the work plan from where
+you stopped."
+
+Cost accounting: a finished run counts its `result` event's own `usage`
+priced by the table in `agent.py`. On `--resume`, `total_cost_usd`
+includes earlier finished runs of the session, so it is not summed; for a
+model missing from the table, the run counts the rise in
+`total_cost_usd`. A stopped run's `result` says $0 (SIGINT gives
+`error_during_execution`, SIGTERM gives no event), so its cost is
+estimated from the per-message `usage` blocks. Input and cache tokens are
+exact; streamed usage under-reports output, so output counts as the larger
+of the reported tokens and visible characters / 2. Hidden thinking is not
+visible, so keep margin on `cost_usd`. A stopped run with a model missing
+from the table, or a message without usage, blocks resume until you pass
+`--assume-spent USD`; the value is recorded in `W/agent-run.json` and
+counts toward the cap on every later resume.
 
 ### What the agent sees
 

@@ -526,6 +526,174 @@ def test_launch_records_real_pid(ws: Workspace) -> None:
     assert agent.status(ws, tail=0)["cost"] == {"finished": False} and agent.status(ws, tail=0)["spent_usd"] == 10.0
 
 
+FIXTURES = Path(__file__).parent / "fixtures" / "agent_loop"
+
+
+def _usage_line(model: str, mid: str = "m1", **usage) -> str:
+    msg = {"id": mid, "model": model, "content": [{"type": "text", "text": ""}], "usage": usage}
+    return json.dumps({"type": "assistant", "message": msg})
+
+
+def _popen(seen: dict):
+    class Proc:
+        pid = 1  # not a claude process
+
+    def popen(args, **kwargs):
+        seen["args"] = args
+        return Proc()
+    return popen
+
+
+def _stopped_run(ws: Workspace, lines: list[str]) -> dict:
+    """Launch, then a log with these lines."""
+    ws.prompt.write_text("go")
+    meta = agent.launch(ws, popen=_popen({}))
+    Path(meta["log"]).write_text("\n".join(lines) + "\n")
+    return meta
+
+
+def _spend(*names: str) -> dict:
+    return agent.spend_summary({"logs": [str(FIXTURES / n) for n in names]})
+
+
+def test_sigint_log_is_estimated() -> None:
+    # Live haiku run killed by SIGINT: result says $0.
+    events = agent.stream_events(FIXTURES / "haiku-sigint.jsonl")
+    assert agent.run_cost(events)["cost_usd"] == 0
+    (run,) = _spend("haiku-sigint.jsonl")["runs"]
+    # Usage says 4 out; streamed text says more.
+    text = sum(len(b.get("text", "")) for e in events if e["type"] == "assistant" for b in e["message"]["content"])
+    out = -(-text // 2)
+    assert out > 4
+    assert run["estimated"] and run["cost_usd"] == pytest.approx((10 * 1 + out * 5 + 22383 * 0.1 + 8658 * 2) / 1e6)
+
+
+def test_finished_log_prices_result() -> None:
+    (run,) = _spend("haiku-finished.jsonl")["runs"]
+    assert not run["estimated"] and run["cost_usd"] == pytest.approx(0.0222912)
+    # Estimate stays close to the real cost.
+    estimate = agent.usage_cost(agent.stream_events(FIXTURES / "haiku-finished.jsonl"))
+    assert 0.8 * 0.0222912 < estimate < 1.2 * 0.0222912
+
+
+def test_resumed_result_is_cumulative() -> None:
+    # Live resume: total_cost_usd includes the first run.
+    spend = _spend("haiku-finished.jsonl", "haiku-resumed.jsonl")
+    assert [r["cost_usd"] for r in spend["runs"]] == pytest.approx([0.0222912, 0.0043105])
+    assert spend["usd"] == pytest.approx(0.0266, abs=1e-4)
+
+
+def test_unpriced_result_uses_delta(tmp_path: Path) -> None:
+    logs = []
+    for n, total in enumerate((2.0, 5.0)):
+        logs.append(tmp_path / f"{n}.jsonl")
+        logs[-1].write_text(json.dumps({"type": "result", "total_cost_usd": total, "modelUsage": {"x-model": {}},
+                                        "usage": {"input_tokens": 1}}) + "\n")
+    spend = agent.spend_summary({"logs": [str(p) for p in logs]})
+    assert [r["cost_usd"] for r in spend["runs"]] == [2.0, 3.0] and spend["usd"] == 5.0
+
+
+def test_usage_cost_dedups_and_prices() -> None:
+    line = _usage_line("claude-opus-5-5", input_tokens=1000, output_tokens=2000, cache_read_input_tokens=10_000,
+                       cache_creation_input_tokens=300, cache_creation={"ephemeral_5m_input_tokens": 100})
+    events = [json.loads(line), json.loads(line)]
+    assert agent.usage_cost(events) == pytest.approx((1000 * 4 + 2000 * 20 + 10_000 * 0.2 + 100 * 5 + 200 * 8) / 1e6)
+    assert agent.usage_cost([json.loads(_usage_line("claude-mystery-9", input_tokens=1))]) is None
+    assert agent.usage_cost([{"type": "assistant", "message": {"id": "x", "model": "claude-opus-5-5"}}]) is None
+
+
+def test_resume_caps_with_estimate(ws: Workspace) -> None:
+    _stopped_run(ws, [_usage_line("claude-opus-5-5", input_tokens=2_000_000)])
+    status = agent.status(ws, tail=0)
+    assert status["spend"]["usd"] == 8.0 and status["spend"]["estimated_usd"] == 8.0
+    seen = {}
+    agent.launch(ws, popen=_popen(seen), resume=True)
+    assert seen["args"][seen["args"].index("--max-budget-usd") + 1] == "17.00"
+
+
+def test_resume_refuses_spent_estimate(ws: Workspace) -> None:
+    _stopped_run(ws, [_usage_line("claude-opus-5-5", input_tokens=7_000_000)])
+    with pytest.raises(RuntimeError, match="Cost cap spent"):
+        agent.launch(ws, popen=_popen({}), resume=True)
+
+
+def test_unknown_model_needs_assumed_spend(ws: Workspace) -> None:
+    meta = _stopped_run(ws, [_usage_line("claude-mystery-9", input_tokens=5)])
+    with pytest.raises(RuntimeError, match="--assume-spent"):
+        agent.launch(ws, popen=_popen({}), resume=True)
+    seen = {}
+    resumed = agent.launch(ws, popen=_popen(seen), resume=True, assume_spent=5.0)
+    assert seen["args"][seen["args"].index("--max-budget-usd") + 1] == "20.00"
+    assert resumed["assumed"] == [{"usd": 5.0, "logs": [meta["log"]]}]
+    # The assumption carries; repeating it is refused.
+    agent.launch(ws, popen=_popen(seen), resume=True)
+    assert seen["args"][seen["args"].index("--max-budget-usd") + 1] == "20.00"
+    with pytest.raises(RuntimeError, match="drop --assume-spent"):
+        agent.launch(ws, popen=_popen({}), resume=True, assume_spent=5.0)
+
+
+def test_resume_note_prompt(ws: Workspace, tmp_path: Path) -> None:
+    _stopped_run(ws, [])
+    seen = {}
+    meta = agent.launch(ws, popen=_popen(seen), resume=True, note="  Try the 4x4 tile.\n", note_path=tmp_path / "n.md")
+    prompt = seen["args"][seen["args"].index("-p") + 1]
+    assert prompt == "Operator note:\nTry the 4x4 tile."
+    assert meta["note"]["path"] == str(tmp_path / "n.md") and len(meta["note"]["sha256"]) == 64
+    for flag in ("--settings", "--tools", "--strict-mcp-config", "--max-budget-usd", "--resume"):
+        assert flag in seen["args"]
+    assert agent.status(ws, tail=0)["note"] == meta["note"]
+    agent.launch(ws, popen=_popen(seen), resume=True)
+    assert seen["args"][seen["args"].index("-p") + 1] == agent.RESUME_PROMPT
+
+
+@pytest.mark.parametrize("text,message", [("  ", "empty"), ("x" * (agent.NOTE_MAX_CHARS + 1), "exceeds")])
+def test_note_rejects(text: str, message: str) -> None:
+    with pytest.raises(RuntimeError, match=message):
+        agent.note_prompt(text)
+
+
+def test_note_needs_resume(ws: Workspace) -> None:
+    ws.prompt.write_text("go")
+    with pytest.raises(RuntimeError, match="need --resume"):
+        agent.launch(ws, popen=_popen({}), note="hi")
+
+
+def test_cli_note_flags(ws: Workspace, tmp_path: Path, monkeypatch) -> None:
+    from typer.testing import CliRunner
+
+    from helia_core_tester.agent_loop.cli import agent_loop_app
+
+    ws.save(*ws.load()[:1], {**ws.load()[1], "ready": True})
+    seen = {}
+    monkeypatch.setattr(agent, "launch", lambda w, **kw: seen.update(kw) or {"pid": 1})
+    note = tmp_path / "note.md"
+    note.write_text("Use SMLAD.")
+    res = CliRunner().invoke(agent_loop_app, ["launch", "-w", str(ws.root), "--resume", "--note", str(note)])
+    assert res.exit_code == 0 and seen["note"] == "Use SMLAD." and seen["note_path"] == note
+    res = CliRunner().invoke(agent_loop_app, ["launch", "-w", str(ws.root), "--resume", "--note", str(note),
+                                              "--note-text", "x"])
+    assert res.exit_code == 2
+
+
+@pytest.mark.parametrize("exit_after,sent", [
+    ("SIGINT", ["kill SIGINT", "killpg SIGTERM"]),
+    ("SIGTERM", ["kill SIGINT", "killpg SIGTERM"]),
+    (None, ["kill SIGINT", "killpg SIGTERM", "killpg SIGKILL"]),
+])
+def test_stop_escalates_from_sigint(ws: Workspace, monkeypatch, exit_after, sent) -> None:
+    ws.run_meta.write_text(json.dumps({"pid": 77}))
+    calls = []
+    monkeypatch.setattr(agent, "pid_alive", lambda pid: not calls or calls[-1].split()[1] != exit_after)
+    monkeypatch.setattr(agent.os, "getpgid", lambda pid: 77)
+    monkeypatch.setattr(agent.os, "kill", lambda pid, sig: calls.append(f"kill {sig.name}"))
+    monkeypatch.setattr(agent.os, "killpg", lambda pid, sig: calls.append(f"killpg {sig.name}"))
+    monkeypatch.setattr(agent.time, "sleep", lambda s: None)
+    monkeypatch.setattr(agent, "STOP_WAITS", tuple((sig, 0.0) for sig, _ in agent.STOP_WAITS))
+    out = agent.stop(ws)
+    assert calls == sent
+    assert ("still alive" in out) == (exit_after is None)
+
+
 def test_commands_need_finished_init(ws: Workspace) -> None:
     from typer.testing import CliRunner
 
