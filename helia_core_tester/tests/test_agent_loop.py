@@ -97,6 +97,13 @@ def test_config_dw_s16_hidden() -> None:
     assert (c.op, c.dtype, c.hidden_shapes) == ("DepthwiseConv", "S16", 6)
 
 
+def test_config_tc16_hidden() -> None:
+    c = _campaign(op="TransposeConv", dtype="S16", hidden_shapes=6, legs=["tcm"])
+    assert (c.op, c.dtype, c.hidden_shapes, c.legs) == ("TransposeConv", "S16", 6, ("tcm",))
+    with pytest.raises(ConfigError, match="hidden_shapes: No random shapes"):
+        _campaign(op="TransposeConv", dtype="S8", hidden_shapes=6)
+
+
 def test_config_fc_without_hidden() -> None:
     c = _campaign(op="FullyConnected", hidden_shapes=0, legs=["tcm"])
     assert c.op == "FullyConnected" and c.legs == ("tcm",)
@@ -495,6 +502,13 @@ def test_prompt_convolve_has_no_depthwise() -> None:
     assert "ceiling 0.125" in text and "leg `mram`" not in text and "you have 8 evaluations" in text
     assert "`Source/ConvolutionFunctions/arm_convolve_s8.c`" in text and "- 1x1 path vectorized." in text
     assert "previous attempt is already applied" in text
+
+
+def test_prompt_transpose_conv() -> None:
+    rows = [{"case_id": "a", "timed_symbol": "arm_transpose_conv_s16", "inner_symbol": "", "cycles_per_mac": "9.0"}]
+    text = render_prompt(_campaign(op="TransposeConv", dtype="S16", legs=["tcm"]), rows, PATHS)
+    assert "s16 transpose convolution faster" in text and "`arm_transpose_conv_s16`: 1 case" in text
+    assert "depthwise" not in text.lower()
 
 
 # --- selftest and status ----------------------------------------------------------------
