@@ -111,19 +111,20 @@ jobs:
         board: ${{ fromJSON(needs.plan.outputs.boards) }}
     # Board label picks its owning runner.
     runs-on: [self-hosted, hpx-hardware, "${{ matrix.board }}"]
-    # Lock wait plus three legs.
-    timeout-minutes: 150
+    # Lock wait plus four legs.
+    timeout-minutes: 195
     env:
       HCT_NIGHTLY_BOARD: ${{ matrix.board }}
       HCT_RUN_JSON: ${{ github.workspace }}/artifacts/reports/hardware-nightly-run.json
       HCT_MRAM_RUN_JSON: ${{ github.workspace }}/artifacts/reports/hardware-nightly-mram-run.json
       HCT_KERNEL_RUN_JSON: ${{ github.workspace }}/artifacts/reports/hardware-nightly-kernel-run.json
+      HCT_ATFE_RUN_JSON: ${{ github.workspace }}/artifacts/reports/hardware-nightly-atfe-run.json
       HCT_KERNEL_LEG: ${{ needs.plan.outputs.kernel_leg }}
     steps:
       # Every attempt replaces its artifact.
       - name: Stage a no-result marker
         run: |
-          for upload in hct-upload hct-mram-upload hct-kernel-upload; do
+          for upload in hct-upload hct-mram-upload hct-kernel-upload hct-atfe-upload; do
             mkdir -p "${RUNNER_TEMP}/${upload}"
             echo "no result" > "${RUNNER_TEMP}/${upload}/NO_RESULT"
           done
@@ -146,6 +147,7 @@ jobs:
             echo "HCT_SESSION_ID=nightly-${GITHUB_RUN_ID}-${HPX_BOARD}"
             echo "HCT_MRAM_SESSION_ID=nightly-mram-${GITHUB_RUN_ID}-${HPX_BOARD}"
             echo "HCT_KERNEL_SESSION_ID=nightly-${HCT_KERNEL_LEG}-${GITHUB_RUN_ID}-${HPX_BOARD}"
+            echo "HCT_ATFE_SESSION_ID=nightly-atfe-${GITHUB_RUN_ID}-${HPX_BOARD}"
           } >> "${GITHUB_ENV}"
 
       # hpx's bench lock; ttl frees it.
@@ -161,7 +163,7 @@ jobs:
               --holder ci \
               --reason "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
               --timeout 1800 \
-              --ttl 10800 2>&1)"; then
+              --ttl 12600 2>&1)"; then
             echo "::error::${held}" >&2
             exit 1
           fi
@@ -224,6 +226,21 @@ jobs:
           scripts/nightly_leg.sh "${HCT_KERNEL_SESSION_ID}" "${HCT_CACHE_DIR}/hardware/${HPX_BOARD}-${HCT_KERNEL_LEG}" \
             "${HCT_KERNEL_RUN_JSON}" --placement tcm --skip-generate --cmsis-nn-ref "${KERNEL_SHA}"
 
+      # Non-gating: atfe speed and size series.
+      - name: Run the atfe leg
+        id: atfe
+        if: ${{ !cancelled() && (steps.suite.outcome == 'success' || steps.suite.outcome == 'failure') }}
+        continue-on-error: true
+        timeout-minutes: 45
+        run: |
+          # Runner units export ATFE_ROOT; annotate early.
+          if [[ -z "${ATFE_ROOT:-}" || ! -x "${ATFE_ROOT}/bin/clang" ]]; then
+            echo "::error::runner has no ATfE clang under ATFE_ROOT='${ATFE_ROOT:-}'" >&2
+            exit 2
+          fi
+          scripts/nightly_leg.sh "${HCT_ATFE_SESSION_ID}" "${HCT_CACHE_DIR}/hardware/${HPX_BOARD}-atfe" "${HCT_ATFE_RUN_JSON}" \
+            --placement tcm --skip-generate --toolchain atfe
+
       - name: Release the board lock
         if: always() && steps.lock.outcome == 'success'
         run: |
@@ -241,7 +258,8 @@ jobs:
         run: |
           # One leg's session per artifact.
           for leg in "${HCT_SESSION_ID}:${HCT_RUN_JSON}:hct-upload" "${HCT_MRAM_SESSION_ID}:${HCT_MRAM_RUN_JSON}:hct-mram-upload" \
-              "${HCT_KERNEL_SESSION_ID}:${HCT_KERNEL_RUN_JSON}:hct-kernel-upload"; do
+              "${HCT_KERNEL_SESSION_ID}:${HCT_KERNEL_RUN_JSON}:hct-kernel-upload" \
+              "${HCT_ATFE_SESSION_ID}:${HCT_ATFE_RUN_JSON}:hct-atfe-upload"; do
             IFS=: read -r session run_json upload <<< "${leg}"
             if [[ -d "artifacts/reports/hardware/${session}" ]]; then
               mkdir -p "${RUNNER_TEMP}/${upload}/hardware"
@@ -288,6 +306,17 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
 
+      # Same layout as hct-hardware-*.
+      - name: Upload the atfe-leg bundle
+        if: always() && steps.atfe.outcome != 'skipped'
+        uses: actions/upload-artifact@v4
+        with:
+          name: hct-atfe-${{ matrix.board }}-${{ needs.plan.outputs.date }}-${{ github.run_id }}
+          overwrite: true
+          path: ${{ runner.temp }}/hct-atfe-upload/
+          include-hidden-files: true
+          if-no-files-found: warn
+
   # Minimal per-board table; board-matrix may replace it.
   summary:
     needs: [plan, run]
@@ -328,7 +357,7 @@ jobs:
             echo "|---|---|---|---|---|---|---|---|---|---|"
             for board in $(jq -r '.[]' <<< "${BOARDS}"); do
               # Leg name, then its artifact prefix.
-              for leg in tcm:hct-hardware mram:hct-mram "${KERNEL_LEG}:hct-${KERNEL_LEG}"; do
+              for leg in tcm:hct-hardware mram:hct-mram "${KERNEL_LEG}:hct-${KERNEL_LEG}" atfe:hct-atfe; do
                 IFS=: read -r name prefix <<< "${leg}"
                 [[ -n "${name}" ]] || continue
                 dir="bundles/${prefix}-${board}-${RUN_TAG}"

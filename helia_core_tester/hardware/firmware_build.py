@@ -35,7 +35,7 @@ from .boards import BoardSpec
 from .boards import repo_root as tester_repo_root
 from .jlink_library import JLinkLibraryError, find_jlink_exe
 from .phase_log import mark
-from .toolchain import DOWNLOADS_DIR, GCC_NAME, add_toolchain_to_path, gcc_version
+from .toolchain import DOWNLOADS_DIR, add_toolchain_to_path, toolchain_spec
 
 if TYPE_CHECKING:
     from .nsx_app import AppOptions
@@ -55,10 +55,12 @@ def ensure_build_tools(repo_root: Path) -> None:
     add_toolchain_to_path(repo_root)
 
 
-def resolve_build_dir(repo_root: Path, board: BoardSpec, override: Optional[Path] = None) -> Path:
-    """`--build-dir` if given (relative paths are repo-rooted), else the board-keyed default."""
+def resolve_build_dir(
+    repo_root: Path, board: BoardSpec, override: Optional[Path] = None, toolchain: Optional[str] = None,
+) -> Path:
+    """`--build-dir` if given (relative paths are repo-rooted), else the board- and toolchain-keyed default."""
     if override is None:
-        return board.build_dir(repo_root)
+        return toolchain_spec(toolchain).build_dir(board.build_dir(repo_root))
     return override if override.is_absolute() else repo_root / override
 
 
@@ -137,6 +139,21 @@ def _built_compiler(build_dir: Path) -> Optional[str]:
     return match.group(1) if match else None
 
 
+def _drop_cache(build_dir: Path) -> None:
+    """Remove the CMake cache and probes."""
+    (build_dir / "CMakeCache.txt").unlink(missing_ok=True)
+    shutil.rmtree(build_dir / "CMakeFiles", ignore_errors=True)
+
+
+def _drop_other_compiler(build_dir: Path, toolchain: Optional[str]) -> None:
+    """Remove a cache another compiler configured."""
+    compiler = _built_compiler(build_dir)
+    if toolchain_spec(toolchain).matches(compiler):
+        return
+    typer.echo(f"[hardware] Dropping CMake cache built by {compiler}.")
+    _drop_cache(build_dir)
+
+
 def _drop_foreign_cache(build_dir: Path, app_dir: Path) -> None:
     """Remove a cache another source tree wrote."""
     cache = build_dir / "CMakeCache.txt"
@@ -144,8 +161,7 @@ def _drop_foreign_cache(build_dir: Path, app_dir: Path) -> None:
     if not cache.is_file() or home == str(app_dir.resolve()):
         return
     typer.echo(f"[hardware] Dropping CMake cache from {home}.")
-    cache.unlink()
-    shutil.rmtree(build_dir / "CMakeFiles", ignore_errors=True)
+    _drop_cache(build_dir)
 
 
 @contextmanager
@@ -378,12 +394,16 @@ def build_firmware(
     from . import nsx_cli
     from .nsx_app import AppOptions, save_options
 
+    options = options or AppOptions()
     ensure_build_tools(tester_repo_root())
+    # Host binutils stay GNU for both.
+    toolchain_spec(options.toolchain).require()
     stage_kernels(
         board, build_dir=build_dir, options=options, force_sync=force_reconfigure,
         update_dependencies=update_dependencies,
     )
     app_dir = nsx_app_dir(build_dir)
+    _drop_other_compiler(build_dir, options.toolchain)
     if not _configured_for(build_dir, app_dir, board):
         _drop_foreign_cache(build_dir, app_dir)
         with _jlink_path():
@@ -393,8 +413,8 @@ def build_firmware(
     # Ninja's default, not NSX's fixed 8.
     nsx_cli.build_app(app_dir, board=board.nsx_board, build_dir=build_dir, jobs=_jobs(jobs), frozen=True)
     # Record only what actually built.
-    save_options(app_dir, options or AppOptions())
-    _record_built(build_dir, options or AppOptions())
+    save_options(app_dir, options)
+    _record_built(build_dir, options)
     return elf_path(build_dir)
 
 
@@ -442,8 +462,7 @@ def _record_built(build_dir: Path, options: "AppOptions") -> None:
 
     app_dir = nsx_app_dir(build_dir)
     _replace_json(app_dir / BUILT_LOCK, _built_record(app_dir, options))
-    version = gcc_version(_built_compiler(build_dir))
-    toolchain = {"name": GCC_NAME, "version": version} if version else None
+    toolchain = toolchain_spec(options.toolchain).record(_built_compiler(build_dir))
     nsx_version = nsx_cli.nsx_version()
     info = {
         "nsx_version": nsx_version,

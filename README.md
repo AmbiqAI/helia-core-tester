@@ -150,7 +150,14 @@ differs from the saved build rebuilds and prints one line naming the change.
 `--skip-flash` keeps the flashed build's options and refuses a different flag. A
 saved ref you did not pass with `--cmsis-nn-ref` follows the pinned release, so
 a pin bump rebuilds those build dirs the same way. Every build, flash, run and
-stream prints the kernel source, inline asm setting and placement.
+stream prints the kernel source, inline asm setting, placement and toolchain.
+
+`--toolchain atfe` builds with Arm Toolchain for Embedded clang (from
+`$ATFE_ROOT/bin`) instead of `gcc`, the default. Like placement it is a switch.
+Each toolchain has its own default build dir (`build/hardware/<board>-atfe` for
+atfe), and a build dir whose CMake cache holds the other compiler drops that
+cache and reconfigures. The bundle records the compiler in
+`session_manifest.json` `build.toolchain`.
 
 `--placement` picks where operands live. `tcm` (the default) keeps every operand
 in one workspace: DTCM on Apollo510 and Apollo330P, and SRAM (`RWMEM`) on
@@ -264,7 +271,10 @@ boards; `hct-mram-<board>-...`) and a kernel leg built from ns-cmsis-nn `main`,
 resolved to one SHA at plan time (`hct-main-<board>-...`, session
 `nightly-main-<run>-<board>`). `-f cmsis_nn_ref=<branch, tag or full SHA>` swaps the
 ref; any ref but `main` uploads as `hct-ref-<board>-...`. The kernel leg does not
-gate the run: its failures show only in the summary table.
+gate the run: its failures show only in the summary table. A last leg builds
+the TCM suite with `--toolchain atfe` (pinned kernels, `$ATFE_ROOT` from the
+runner) and uploads `hct-atfe-<board>-...` in the `hct-hardware-*` layout; it
+does not gate the run either.
 `gh workflow run hardware-nightly.yml -f boards=apollo510_evb -f limit=2` runs
 it by hand.
 

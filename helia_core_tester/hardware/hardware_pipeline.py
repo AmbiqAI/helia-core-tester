@@ -607,7 +607,8 @@ def run_hardware_pipeline(
     """stage kernels -> generate (board cpu) -> build -> flash unless the board already runs this build -> stream -> bundle."""
     if skip_flash and force_flash:
         raise ValueError("--skip-flash and --force-flash cannot be combined.")
-    resolved_build_dir = resolve_build_dir(repo_root, board, build_dir)
+    # Default dirs differ per toolchain.
+    resolved_build_dir = resolve_build_dir(repo_root, board, build_dir, getattr(app_options, "toolchain", None))
     if app_options is None and not (skip_generate and skip_flash):
         from .nsx_app import resolve_options
 

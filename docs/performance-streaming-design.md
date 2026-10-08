@@ -432,9 +432,11 @@ Key files:
 
 `session_manifest.json` (`hct.hardware.session_manifest`) records the build in
 `build`: kernel source, NSX version, `nsx.lock` digest, every locked module
-(`modules`: name, project, kind, revision, tag, commit, url) and the ARM GCC that
-built the image (`toolchain`). `hardware run --json` prints
-`hct.hardware.nightly_run`: totals and cases plus `generated_at`, the
+(`modules`: name, project, kind, revision, tag, commit, url) and the compiler that
+built the image (`toolchain`: `name` is `arm-none-eabi-gcc` or `atfe`, `version` its
+`-dumpversion`). `hardware run --json` prints
+`hct.hardware.nightly_run`: totals and cases plus `generated_at`, the build's
+`toolchain` (same shape, null when unknown), the
 `selection` the run used and the `github` run (null outside Actions); the nightly
 saves it as `hardware-nightly-run.json` beside the bundle. `selection` records
 values after defaults and board fitting: `precision` is the float precision

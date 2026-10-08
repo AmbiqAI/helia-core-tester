@@ -197,6 +197,11 @@ _PLACEMENT_HELP = (
 _JOBS_HELP = "Parallel build jobs (default: CPU count + 2, like ninja)."
 _UPDATE_DEPS_HELP = "Re-resolve NSX modules and rewrite nsx.lock before building."
 _INLINE_ASM_HELP = "Build requantize with or without inline assembly (default: on)."
+_TOOLCHAIN_HELP = (
+    "Firmware compiler: gcc (arm-none-eabi-gcc) or atfe (Arm Toolchain for Embedded clang; "
+    "needs ATFE_ROOT). Default: gcc. Each has its own default build dir."
+)
+_TOOLCHAIN_DIR_HELP = "gcc or atfe: picks that toolchain's default build dir."
 
 
 def _check_placement(placement, spec: BoardSpec) -> None:
@@ -206,6 +211,13 @@ def _check_placement(placement, spec: BoardSpec) -> None:
         _fail(f"--placement must be one of: {', '.join(PLACEMENTS)}.")
     if placement == "mram" and not spec.has_mram:
         _fail(f"{spec.id} has no cached MRAM; use tcm.")
+
+
+def _check_toolchain(toolchain) -> None:
+    from .toolchain import TOOLCHAINS
+
+    if toolchain is not None and toolchain not in TOOLCHAINS:
+        _fail(f"--toolchain must be one of: {', '.join(TOOLCHAINS)}.")
 
 
 def _check_tester_clean(allow: bool, echo) -> None:
@@ -220,7 +232,7 @@ def _check_tester_clean(allow: bool, echo) -> None:
     echo("[hardware] WARNING: tester is dirty; bundle marks tester_dirty.")
 
 
-def _app_options(build_dir: Path, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement=None):
+def _app_options(build_dir: Path, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement=None, toolchain=None):
     """Kernel flags over the build dir's saved options."""
     from .firmware_build import nsx_app_dir
     from .nsx_app import AppRenderError, resolve_options, saved_options
@@ -231,7 +243,7 @@ def _app_options(build_dir: Path, cmsis_nn_ref, cmsis_nn_root, inline_asm, place
     try:
         options = resolve_options(
             app_dir, repo_root(), cmsis_nn_ref=cmsis_nn_ref, cmsis_nn_root=cmsis_nn_root, inline_asm=inline_asm,
-            placement=placement,
+            placement=placement, toolchain=toolchain,
         )
     except AppRenderError as exc:
         _fail(f"{exc}; pass --cmsis-nn-root or --cmsis-nn-ref.", EXIT_REFUSED)
@@ -245,7 +257,9 @@ def _app_options(build_dir: Path, cmsis_nn_ref, cmsis_nn_root, inline_asm, place
     return options
 
 
-def _built_options(build_dir: Path, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement=None, stream_only=False):
+def _built_options(
+    build_dir: Path, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement=None, toolchain=None, stream_only=False,
+):
     """The flashed build's options, unchanged."""
     from .firmware_build import nsx_app_dir
     from .nsx_app import AppRenderError, resolve_options, saved_options
@@ -259,13 +273,13 @@ def _built_options(build_dir: Path, cmsis_nn_ref, cmsis_nn_root, inline_asm, pla
     try:
         wanted = resolve_options(
             app_dir, repo_root(), cmsis_nn_ref=cmsis_nn_ref, cmsis_nn_root=cmsis_nn_root, inline_asm=inline_asm,
-            placement=placement, follow_pin=False,
+            placement=placement, toolchain=toolchain, follow_pin=False,
         )
     except AppRenderError as exc:
         if not stream_only:
             _fail(f"{exc}; pass --skip-generate to stream only.", EXIT_REFUSED)
         # Streaming never reads the checkout.
-        passed = {"requantize_inline_asm": inline_asm, "placement": placement}
+        passed = {"requantize_inline_asm": inline_asm, "placement": placement, "toolchain": toolchain}
         wanted = dataclasses.replace(saved, **{k: v for k, v in passed.items() if v is not None})
     # Generation must match the flashed firmware.
     changes = wanted.changes_from(saved)
@@ -377,6 +391,7 @@ def build(
     cmsis_nn_root: Optional[Path] = typer.Option(None, "--cmsis-nn-root", help=_CMSIS_NN_ROOT_HELP),
     inline_asm: Optional[bool] = typer.Option(None, "--inline-asm/--no-inline-asm", help=_INLINE_ASM_HELP),
     placement: Optional[str] = typer.Option(None, "--placement", help=_PLACEMENT_HELP),
+    toolchain: Optional[str] = typer.Option(None, "--toolchain", help=_TOOLCHAIN_HELP),
     update_dependencies: bool = typer.Option(False, "--update-dependencies", help=_UPDATE_DEPS_HELP),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help=_VERBOSITY_HELP),
 ) -> None:
@@ -385,8 +400,9 @@ def build(
 
     spec = _board(board)
     _check_placement(placement, spec)
-    build_dir = resolve_build_dir(repo_root(), spec, build_dir)
-    app_options = _app_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement)
+    _check_toolchain(toolchain)
+    build_dir = resolve_build_dir(repo_root(), spec, build_dir, toolchain)
+    app_options = _app_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement, toolchain)
     with _pipeline_errors(_verbosity(verbosity)):
         elf = build_firmware(
             spec, build_dir=build_dir, jobs=jobs,
@@ -408,6 +424,7 @@ def flash(
     cmsis_nn_root: Optional[Path] = typer.Option(None, "--cmsis-nn-root", help=_CMSIS_NN_ROOT_HELP),
     inline_asm: Optional[bool] = typer.Option(None, "--inline-asm/--no-inline-asm", help=_INLINE_ASM_HELP),
     placement: Optional[str] = typer.Option(None, "--placement", help=_PLACEMENT_HELP),
+    toolchain: Optional[str] = typer.Option(None, "--toolchain", help=_TOOLCHAIN_HELP),
     update_dependencies: bool = typer.Option(False, "--update-dependencies", help=_UPDATE_DEPS_HELP),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help=_VERBOSITY_HELP),
 ) -> None:
@@ -418,8 +435,9 @@ def flash(
 
     spec = _board(board)
     _check_placement(placement, spec)
-    build_dir = resolve_build_dir(repo_root(), spec, build_dir)
-    app_options = _app_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement)
+    _check_toolchain(toolchain)
+    build_dir = resolve_build_dir(repo_root(), spec, build_dir, toolchain)
+    app_options = _app_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement, toolchain)
     serial = _serial(serial_no)
     with _pipeline_errors(_verbosity(verbosity)):
         decision = flash_firmware(
@@ -438,6 +456,7 @@ def flash(
 def memory_report(
     board: Optional[str] = typer.Option(None, "--board", help=_BOARD_HELP),
     build_dir: Optional[Path] = typer.Option(None, "--build-dir", help=_BUILD_DIR_HELP),
+    toolchain: Optional[str] = typer.Option(None, "--toolchain", help=_TOOLCHAIN_DIR_HELP),
     output_root: Optional[Path] = typer.Option(None, "--output-root", help="Directory to write memory_report.json into."),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help=_VERBOSITY_HELP),
 ) -> None:
@@ -445,11 +464,13 @@ def memory_report(
     from .firmware_build import resolve_build_dir
 
     spec = _board(board)
+    _check_toolchain(toolchain)
     # Same one-line failures as the other hardware commands: a missing ELF is a
     # FileNotFoundError, a missing/failing arm-none-eabi-* tool a FileNotFoundError
     # or CalledProcessError.
     with _pipeline_errors(_verbosity(verbosity)):
-        path = generate_memory_report(spec, build_dir=resolve_build_dir(repo_root(), spec, build_dir), output_root=output_root)
+        build_dir = resolve_build_dir(repo_root(), spec, build_dir, toolchain)
+        path = generate_memory_report(spec, build_dir=build_dir, output_root=output_root)
     typer.echo(json.dumps(json.loads(path.read_text()), indent=2))
     typer.echo(f"\n✓ Memory report written to {path}")
 
@@ -628,6 +649,7 @@ def stream(
     golden_allow_failed: bool = typer.Option(False, "--golden-allow-failed", help=_GOLDEN_ALLOW_HELP),
     session_id: Optional[str] = typer.Option(None, "--session-id", help="Session ID; also the result-bundle directory name (default: <board>-<UTC timestamp>)."),
     build_dir: Optional[Path] = typer.Option(None, "--build-dir", help=_BUILD_DIR_HELP + " Must hold the flashed firmware's ELF."),
+    toolchain: Optional[str] = typer.Option(None, "--toolchain", help=_TOOLCHAIN_DIR_HELP),
     allow_unverified_firmware: bool = typer.Option(False, "--allow-unverified-firmware", help=_ALLOW_UNVERIFIED_HELP),
     as_json: bool = typer.Option(False, "--json", help="Print one JSON summary document on stdout (human output goes to stderr)."),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help=_VERBOSITY_HELP),
@@ -649,6 +671,7 @@ def stream(
     # Options first, probe last: a bad flag combination must fail with its own
     # message, not with whatever probe enumeration happens to hit.
     spec = _board(board)
+    _check_toolchain(toolchain)
     options = _stream_options(
         spec, suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id,
         op, dtype, case_id, cases_from, strict_compare, golden_from, golden_allow_failed,
@@ -660,7 +683,7 @@ def stream(
             prepared = prepare_bundles(repo_root(), spec, options)
     serial = _serial(serial_no)
     echo = lambda msg: typer.echo(msg, err=as_json)  # noqa: E731
-    build_dir = resolve_build_dir(repo_root(), spec, build_dir)
+    build_dir = resolve_build_dir(repo_root(), spec, build_dir, toolchain)
     _saved_kernels(build_dir, echo)
     with _pipeline_errors(_verbosity(verbosity)), _quiet_stdout(as_json):
         outcome = stream_generated_tests(
@@ -710,6 +733,7 @@ def run(
     cmsis_nn_root: Optional[Path] = typer.Option(None, "--cmsis-nn-root", help=_CMSIS_NN_ROOT_HELP),
     inline_asm: Optional[bool] = typer.Option(None, "--inline-asm/--no-inline-asm", help=_INLINE_ASM_HELP),
     placement: Optional[str] = typer.Option(None, "--placement", help=_PLACEMENT_HELP),
+    toolchain: Optional[str] = typer.Option(None, "--toolchain", help=_TOOLCHAIN_HELP),
     update_dependencies: bool = typer.Option(False, "--update-dependencies", help=_UPDATE_DEPS_HELP),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help=_VERBOSITY_HELP),
     allow_dirty_tester: bool = typer.Option(False, "--allow-dirty-tester", help=_DIRTY_TESTER_HELP),
@@ -724,22 +748,23 @@ def run(
         _fail("--skip-flash and --force-flash cannot be combined.")
     spec = _board(board)
     _check_placement(placement, spec)
+    _check_toolchain(toolchain)
     options = _stream_options(
         spec, suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id,
         op, dtype, case_id, cases_from, strict_compare, golden_from, golden_allow_failed, hidden_set,
     )
-    build_dir = resolve_build_dir(repo_root(), spec, build_dir)
+    build_dir = resolve_build_dir(repo_root(), spec, build_dir, toolchain)
     # Neither builds nor generates: nothing to resolve.
     streams_only = skip_generate and skip_flash
     if streams_only:
         # Passed build flags must match it.
-        if any(flag is not None for flag in (cmsis_nn_ref, cmsis_nn_root, inline_asm, placement)):
-            _built_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement, stream_only=True)
+        if any(flag is not None for flag in (cmsis_nn_ref, cmsis_nn_root, inline_asm, placement, toolchain)):
+            _built_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement, toolchain, stream_only=True)
         app_options = None
     elif skip_flash:
-        app_options = _built_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement)
+        app_options = _built_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement, toolchain)
     else:
-        app_options = _app_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement)
+        app_options = _app_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement, toolchain)
     echo = lambda msg: typer.echo(msg, err=as_json)  # noqa: E731
     # Refuse before probing the board.
     if cmsis_nn_root is not None:

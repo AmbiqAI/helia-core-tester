@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -66,8 +67,67 @@ def add_toolchain_to_path(repo_root: Optional[Path] = None) -> bool:
 GCC_NAME = "arm-none-eabi-gcc"
 
 
-def gcc_version(compiler: Optional[str]) -> Optional[str]:
-    """A GCC's version, or None."""
+@dataclass(frozen=True)
+class ToolchainSpec:
+    """One firmware compiler and its names."""
+
+    key: str
+    # nsx.yml and provenance name.
+    name: str
+    # Compiler basename CMake configures.
+    compiler: str
+    # Default build dir suffix.
+    dir_suffix: str
+
+    def build_dir(self, base: Path) -> Path:
+        """Default build dir for this toolchain."""
+        return base.with_name(base.name + self.dir_suffix)
+
+    def record(self, compiler: Optional[str]) -> Optional[dict[str, str]]:
+        """Provenance for a configured compiler."""
+        version = compiler_version(compiler)
+        return {"name": self.name, "version": version} if version else None
+
+    def require(self) -> None:
+        """Fail fast without ATfE clang."""
+        clang = atfe_clang()
+        if self.key == "atfe" and not (clang and clang.is_file() and os.access(clang, os.X_OK)):
+            raise FileNotFoundError(f"ATFE_ROOT has no bin/clang: {os.environ.get('ATFE_ROOT') or 'unset'}")
+
+    def matches(self, compiler: Optional[str]) -> bool:
+        """The configured compiler is this toolchain's."""
+        if compiler is None:
+            return True
+        clang = atfe_clang()
+        # A new ATFE_ROOT means a new clang.
+        if self.key == "atfe" and clang:
+            return Path(compiler).resolve() == clang.resolve()
+        return Path(compiler).stem == self.compiler
+
+
+def atfe_clang() -> Optional[Path]:
+    """$ATFE_ROOT/bin/clang, or None."""
+    root = os.environ.get("ATFE_ROOT")
+    return Path(root) / "bin" / "clang" if root else None
+
+
+DEFAULT_TOOLCHAIN = "gcc"
+TOOLCHAINS = {
+    "gcc": ToolchainSpec("gcc", GCC_NAME, GCC_NAME, ""),
+    "atfe": ToolchainSpec("atfe", "atfe", "clang", "-atfe"),
+}
+
+
+def toolchain_spec(key: Optional[str] = None) -> ToolchainSpec:
+    """Spec for key; None means gcc."""
+    try:
+        return TOOLCHAINS[key or DEFAULT_TOOLCHAIN]
+    except KeyError:
+        raise ValueError(f"toolchain must be one of: {', '.join(TOOLCHAINS)}") from None
+
+
+def compiler_version(compiler: Optional[str]) -> Optional[str]:
+    """A compiler's -dumpversion, or None."""
     if compiler is None:
         return None
     try:
