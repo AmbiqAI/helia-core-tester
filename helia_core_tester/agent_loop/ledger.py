@@ -21,12 +21,26 @@ CASE_COLUMNS = ["case_id", "baseline_cycles", "candidate_cycles", "speedup", "ba
 TOP_HINTS = 10
 
 
+class LockBusy(Exception):
+    """The lock stayed held past the deadline."""
+
+
+LOCK_POLL_S = 0.5
+
+
 @contextmanager
-def file_lock(path: Path) -> Iterator[None]:
+def file_lock(path: Path, deadline: Optional[float] = None) -> Iterator[None]:
     """Hold an exclusive flock on path."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a") as handle:
-        fcntl.flock(handle, fcntl.LOCK_EX)
+        while True:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | (fcntl.LOCK_NB if deadline is not None else 0))
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise LockBusy(str(path)) from None
+                time.sleep(LOCK_POLL_S)
         try:
             yield
         finally:

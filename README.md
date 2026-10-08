@@ -461,8 +461,8 @@ secrets_dir: ~/hct-secrets/conv-s8   # outside the workspace
 
 Optional: `min_score` (passed to `candidate eval`), `lock_timeout_s`
 (board lock wait, default 600), `eval_timeout_s` (per leg, default 300),
-`submit_deadline_s` (whole submit, default 540, under the agent's 10 minute
-Bash limit), `retries` (per leg, default 1) and `max_infra_errors` (busy or
+`submit_deadline_s` (whole submit, default 540, at most 570, under the
+agent's 10 minute Bash limit), `retries` (per leg, default 1) and `max_infra_errors` (busy or
 failing board results in a row, default 5). Hidden shapes exist for
 `Convolve` and `DepthwiseConv` S8 only; set `hidden_shapes: 0` for other
 targets. The hidden set always holds both ops, so a campaign for one op
@@ -556,6 +556,8 @@ uv run helia_core_tester agent-loop stop -w ~/campaigns/conv-s8
   and `timeout`, both cut to fit `submit_deadline_s`. A later leg runs
   only when the earlier legs reached stage `score`. The overall verdict is
   the worst leg, and `pass` needs every leg.
+  - A submit that cannot take the submit lock in time (another submit is
+    running) returns a free `error` and a ledger row without an id.
   - No verdict at all (board busy past the lock wait, bench-agent or
     tester failure, `refused` at stage `tester` or `baseline`) is retried,
     then recorded with `infra: true`. It costs no eval, and the view hides

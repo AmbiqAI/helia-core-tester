@@ -17,7 +17,7 @@ from helia_core_tester.hardware.candidate_eval import SNAPSHOT_TREES, VERDICT_EX
 from helia_core_tester.hardware.candidate_scan import run_binutil
 
 from .config import Campaign
-from .ledger import EXIT_BUDGET, Ledger, agent_view, file_lock, is_infra, ledger_row, merge_legs, scored
+from .ledger import EXIT_BUDGET, Ledger, LockBusy, agent_view, file_lock, is_infra, ledger_row, merge_legs, scored
 from .workspace import Workspace, kernel_lib
 
 EDIT_TREES = ("Source", "Include")
@@ -266,7 +266,21 @@ def submit(ws: Workspace, runner=subprocess.run, checker=run_check) -> int:
     campaign, facts = ws.load()
     deadline = time.monotonic() + campaign.submit_deadline_s
     ledger = Ledger(ws.ledger)
-    with file_lock(ws.root / ".submit.lock"):
+    try:
+        return _submit_locked(ws, campaign, facts, ledger, deadline, runner, checker)
+    except LockBusy:
+        # Another submit holds the lock.
+        ledger.append({"eval": None, "time": time.strftime("%Y-%m-%dT%H:%M:%S"), "verdict": "error",
+                       "charged": False, "infra": True, "note": "submit lock busy"})
+        print(json.dumps({"verdict": "error", "exit_code": VERDICT_EXITS["error"],
+                          "evals_left": campaign.evals - ledger.charged(),
+                          "note": "Another submit is running; not charged."}))
+        return VERDICT_EXITS["error"]
+
+
+def _submit_locked(ws: Workspace, campaign: Campaign, facts: dict, ledger: Ledger, deadline: float, runner,
+                   checker) -> int:
+    with file_lock(ws.root / ".submit.lock", deadline - MIN_EVAL_S):
         if ledger.charged() >= campaign.evals:
             print(json.dumps({"verdict": "budget_spent", "exit_code": EXIT_BUDGET, "evals_left": 0}))
             return EXIT_BUDGET

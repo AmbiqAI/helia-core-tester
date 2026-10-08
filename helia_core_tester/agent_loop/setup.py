@@ -84,10 +84,24 @@ def pin_tester(ws: Workspace, sha: str | None) -> str:
     return sha
 
 
+def tree_at(dest: Path, sha: str, tag: bool) -> bool:
+    """Clean checkout at sha, tagged if asked."""
+    try:
+        head = _git("rev-parse", "HEAD", cwd=dest)
+        tagged = not tag or _git("rev-parse", "base^{commit}", cwd=dest) == sha
+        clean = not _git("status", "--porcelain", cwd=dest)
+    except InitError:
+        return False
+    return head == sha and tagged and clean
+
+
 def shallow_tree(repo: Path, sha: str, dest: Path, tag: bool = False) -> None:
     """Standalone one-commit clone, no remote."""
     if dest.exists():
-        return
+        if tree_at(dest, sha, tag):
+            return
+        # Interrupted earlier; start over.
+        shutil.rmtree(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     _git("init", "-q", str(dest), cwd=dest.parent)
     _git("fetch", "-q", "--depth", "1", f"file://{repo}", sha, cwd=dest)
@@ -183,7 +197,10 @@ def init_workspace(ws: Workspace, campaign: Campaign, echo: Echo = print) -> dic
     facts["base_commit"] = base
     ws.save(campaign, facts)
     shallow_tree(campaign.kernels_repo, base, ws.base)
-    start_diff = campaign.start_patch.read_bytes() if campaign.start_patch else None
+    try:
+        start_diff = campaign.start_patch.read_bytes() if campaign.start_patch else None
+    except OSError as exc:
+        raise InitError(f"Cannot read start_patch {campaign.start_patch}: {exc.strerror}") from exc
     if not ws.agent.exists():
         # Patched aside, then moved in.
         staging = ws.root / "agent.tmp"

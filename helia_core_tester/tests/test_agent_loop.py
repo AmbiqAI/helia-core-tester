@@ -44,6 +44,8 @@ def test_config_defaults_and_paths() -> None:
     ({"board": "nope"}, "board"),
     ({"legs": ["tcm", "tcm"]}, "legs"),
     ({"legs": ["sram"]}, "legs"),
+    ({"legs": [{}]}, "legs"),
+    ({"submit_deadline_s": 600}, "at most 570"),
     ({"board": "apollo3p_evb", "legs": ["mram"]}, "no cached MRAM"),
     ({"evals": 0}, "evals"),
     ({"evals": True}, "wrong type"),
@@ -271,6 +273,21 @@ def test_submit_budget_spent(ws: Workspace, capsys) -> None:
     assert not board.calls and len(ledger.Ledger(ws.ledger).rows()) == 2
 
 
+def test_submit_lock_busy_is_free(ws: Workspace, capsys, monkeypatch) -> None:
+    import fcntl
+
+    monkeypatch.setattr(judge, "MIN_EVAL_S", 120)
+    campaign, facts = ws.load()
+    ws.save(Campaign(**{**campaign.__dict__, "submit_deadline_s": 121}), facts)
+    with (ws.root / ".submit.lock").open("a") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        board = FakeBoard([])
+        rc, view = _submit(ws, board, capsys)
+    assert rc == 5 and "not charged" in view["note"] and view["evals_left"] == 2 and not board.calls
+    row = ledger.Ledger(ws.ledger).rows()[-1]
+    assert row["infra"] and not row["charged"] and row["eval"] is None
+
+
 def test_submit_stops_after_infra_streak(ws: Workspace, capsys) -> None:
     led = ledger.Ledger(ws.ledger)
     for n in range(3):
@@ -488,3 +505,43 @@ def test_commands_need_finished_init(ws: Workspace) -> None:
     campaign, facts = ws.load()
     ws.save(campaign, {**facts, "ready": True})
     assert CliRunner().invoke(app, ["agent-loop", "status", "-w", str(ws.root)]).exit_code == 0
+
+
+# --- init helpers -----------------------------------------------------------------------
+
+
+def test_shallow_tree_rebuilds_partial(tmp_path: Path) -> None:
+    from helia_core_tester.agent_loop import setup
+    from helia_core_tester.tests.test_harness_lock import _git as git, _repo
+
+    repo = _repo(tmp_path / "nn", {"Source/a.c": "int a;\n"})
+    sha = git(repo, "rev-parse", "HEAD").strip()
+    dest = tmp_path / "agent"
+    dest.mkdir()
+    (dest / "junk").write_text("half done")
+    setup.shallow_tree(repo, sha, dest, tag=True)
+    assert setup.tree_at(dest, sha, tag=True) and not (dest / "junk").exists()
+    (dest / "Source" / "a.c").write_text("edited\n")
+    assert not setup.tree_at(dest, sha, tag=True)
+
+
+def test_unreadable_start_patch(tmp_path: Path, monkeypatch) -> None:
+    from helia_core_tester.agent_loop import setup
+
+    camp = _campaign(start_patch=str(tmp_path / "missing.diff"), secrets_dir=str(tmp_path / "s"))
+    ws = Workspace(tmp_path / "ws")
+    monkeypatch.setattr(setup, "pin_tester", lambda ws, sha: "c" * 40)
+    monkeypatch.setattr(setup, "shallow_tree", lambda *a, **k: None)
+    monkeypatch.setattr(setup, "_git", lambda *a, **k: "b" * 40)
+    monkeypatch.setattr(setup, "check_paths", lambda ws, c: None)
+    with pytest.raises(setup.InitError, match="Cannot read start_patch"):
+        setup.init_workspace(ws, camp, echo=lambda _: None)
+
+
+def test_selftest_probes_are_unique(ws: Workspace) -> None:
+    campaign, _ = ws.load()
+    first = agent.probes(ws, campaign, "aaaa")
+    second = agent.probes(ws, campaign, "bbbb")
+    writes = [p["arg"] for p in first if p["tool"] == "Write"]
+    assert all("aaaa" in w for w in writes)
+    assert not set(writes) & {p["arg"] for p in second}

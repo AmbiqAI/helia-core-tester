@@ -21,6 +21,10 @@ HIDDEN_OPS = ("Convolve", "DepthwiseConv")
 HIDDEN_DTYPES = ("S8",)
 
 
+# Agent Bash cap 600 s, less margin.
+MAX_DEADLINE_S = 570
+
+
 class ConfigError(ValueError):
     """The campaign file is unusable."""
 
@@ -116,6 +120,8 @@ def parse_campaign(data: Any, base: Path) -> Campaign:
     except UnknownBoardError as exc:
         raise ConfigError(f"board: {exc}") from exc
     legs = tuple(top.get("legs") or (("tcm", "mram") if board.has_mram else ("tcm",)))
+    if not all(isinstance(leg, str) for leg in legs):
+        raise ConfigError(f"legs: unique values from {', '.join(PLACEMENTS)}")
     if not legs or len(set(legs)) != len(legs) or any(leg not in PLACEMENTS for leg in legs):
         raise ConfigError(f"legs: unique values from {', '.join(PLACEMENTS)}")
     if "mram" in legs and not board.has_mram:
@@ -126,6 +132,8 @@ def parse_campaign(data: Any, base: Path) -> Campaign:
     case_ids = tuple(target.get("case_ids") or ())
     if not all(isinstance(c, str) and CASE_RE.fullmatch(c) for c in case_ids):
         raise ConfigError("target.case_ids: plain case ids")
+    if top.get("submit_deadline_s", 0) > MAX_DEADLINE_S:
+        raise ConfigError(f"submit_deadline_s: at most {MAX_DEADLINE_S}")
     for key, low in (("evals", 1), ("hidden_shapes", 0), ("repeats", 1), ("lock_timeout_s", 1),
                      ("eval_timeout_s", 60), ("submit_deadline_s", 120), ("retries", 0), ("max_infra_errors", 1)):
         _at_least(top, key, low)
