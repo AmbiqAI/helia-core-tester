@@ -9,55 +9,6 @@ from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.ops._shared.quant_knobs import clamp_golden, kernel_init, value_range
 from pathlib import Path
 
-def _patch_requant(tflite_path: str, desc: Dict[str, Any], seed: int) -> None:
-    """Push requant to its edges, in place.
-
-    `wide_bias: [lo, hi]` rewrites each channel's int64 bias to a
-    random-sign magnitude in [lo, hi] accumulator steps, which the
-    converter never emits, and widens the output scale so no output
-    can saturate. `min_effective_scale` then shrinks the output scale
-    until the smallest in * weight / out scale equals it, so one
-    accumulator step moves an output step.
-    """
-    import flatbuffers
-    from ai_edge_litert import schema_py_generated as litert
-    from helia_core_tester.generation.utils.litert_utils import get_tensor_data_from_litert, load_litert_model
-
-    model, subgraph = load_litert_model(str(tflite_path))
-    ops = [op for op in subgraph.operators
-           if model.operatorCodes[op.opcodeIndex].builtinCode == litert.BuiltinOperator.TRANSPOSE_CONV]
-    if len(ops) != 1:
-        raise ValueError(f"expected one TRANSPOSE_CONV, found {len(ops)}")
-    op = ops[0]
-    # Inputs: output shape, weights, data, bias.
-    weights, data = subgraph.tensors[int(op.inputs[1])], subgraph.tensors[int(op.inputs[2])]
-    out = subgraph.tensors[int(op.outputs[0])]
-    in_scale = float(data.quantization.scale[0])
-    weight_scales = np.asarray(weights.quantization.scale, dtype=np.float64)
-    if desc.get('wide_bias'):
-        if len(op.inputs) < 4 or int(op.inputs[3]) < 0:
-            raise ValueError("wide_bias needs a bias input")
-        bias = subgraph.tensors[int(op.inputs[3])]
-        lo, hi = (float(v) for v in desc['wide_bias'])
-        rng = np.random.default_rng(seed)
-        values = np.round(rng.uniform(lo, hi, weight_scales.size)) * rng.choice([-1, 1], weight_scales.size)
-        values = values.astype(np.int64)
-        # Own buffer: constants may share one.
-        buffer = litert.BufferT()
-        buffer.data = np.frombuffer(values.tobytes(), dtype=np.uint8)
-        model.buffers.append(buffer)
-        bias.buffer = len(model.buffers) - 1
-        # Largest accumulator any output can reach.
-        filters = np.abs(get_tensor_data_from_litert(weights, model).astype(np.int64))
-        reach = 32768 * filters.reshape(filters.shape[0], -1).sum(axis=1) + np.abs(values)
-        out.quantization.scale = [float(np.max(reach * in_scale * weight_scales)) / 32767.0]
-    if desc.get('min_effective_scale'):
-        out.quantization.scale = [in_scale * float(np.min(weight_scales)) / float(desc['min_effective_scale'])]
-    builder = flatbuffers.Builder(1024)
-    builder.Finish(model.Pack(builder), getattr(litert.Model, "FileIdentifier", lambda: b"TFL3")())
-    Path(tflite_path).write_bytes(bytes(builder.Output()))
-
-
 class OpTransposeConv(OperationBase):
     """
     TransposeConv operation.
@@ -195,7 +146,9 @@ class OpTransposeConv(OperationBase):
         with open(out_path, 'wb') as f:
             f.write(tflite_model)
         if self.desc.get('wide_bias') or self.desc.get('min_effective_scale'):
-            _patch_requant(out_path, self.desc, self.seed)
+            from helia_core_tester.generation.ops._shared.bias_init import patch_requant
+
+            patch_requant(out_path, self.desc, self.seed)
     
     def _select_cmsis_transpose_conv_kernel(self) -> Dict[str, str]:
         """

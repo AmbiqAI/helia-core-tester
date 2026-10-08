@@ -44,10 +44,6 @@ DW16_ROUTES = ("arm_depthwise_conv_fast_s16", "arm_depthwise_conv_s16")
 # Direct entry; no wrapper.
 TC16_ROUTE = "arm_transpose_conv_s16"
 TC16_SYMBOLS = [TC16_ROUTE, "arm_transpose_conv_s16_get_buffer_size"]
-# Edge categories, highest priority first.
-TC16_EDGES = (
-    "requant", "int64", "clamp", "batch2", "fastenhancer", "gaps", "overlap", "odd_tail", "unit_tail",
-)
 SECRET_ENV = "HCT_HIDDEN_SEED"
 # Short secrets fall to brute force.
 MIN_SECRET = 16
@@ -246,9 +242,10 @@ def _odd_channels(rng: np.random.Generator, lo: int, hi: int) -> int:
 def tc16_edge_count(n: int) -> int:
     """Edge slots in an n-case tc16 draw.
 
-    max(ceil(n/3), min(categories, floor(2n/3))): at least a third,
-    more so every category fits once n >= 14, never past two thirds.
-    Slots take TC16_EDGES in order; each shape is still drawn.
+    max(ceil(n/3), min(categories, floor(2n/3))): at least a third
+    (so one case is all edge), more so every category fits once
+    n >= 14, else at most two thirds. Slots take TC16_EDGES in
+    order; each shape is still drawn.
     """
     return max(-(-n // 3), min(len(TC16_EDGES), 2 * n // 3))
 
@@ -306,45 +303,60 @@ def _tc16_clamp(rng: np.random.Generator) -> Layer:
     return layer
 
 
-def _tc16_edge(rng: np.random.Generator, edge: str) -> Layer:
-    """One draw from an edge category."""
-    if edge == "requant":
-        return _tc16_requant(rng)
-    if edge == "int64":
-        return _tc16_int64(rng)
-    if edge == "clamp":
-        return _tc16_clamp(rng)
-    pad = _padding(rng)
-    if edge == "batch2":
-        layer = _tc16_mixed(rng)
-        layer.n = 2
-        return layer
-    if edge == "fastenhancer":
-        cin, cout = _odd_channels(rng, 9, 40), int(rng.integers(1, 5))
-        return Layer(1, _size(rng, 32, 80), cin, cout, 1, int(rng.integers(4, 9)), 1, 4, transpose=True)
-    if edge == "gaps":
-        # Stride beyond kernel: bias-only outputs.
-        sh, sw = int(rng.integers(1, 5)), int(rng.integers(2, 5))
-        kh = int(rng.integers(1, sh)) if sh > 1 and rng.random() < 0.5 else 1
-        h = 1 if kh == 1 and sh == 1 else _size(rng, 2, 8)
-        return Layer(h, _size(rng, 4, 24), _odd_channels(rng, 1, 32), _odd_channels(rng, 1, 16), kh,
-                     int(rng.integers(1, sw)), sh, sw, padding=pad, transpose=True)
-    if edge == "overlap":
-        kh, kw = int(rng.integers(5, 9)), int(rng.integers(5, 9))
-        return Layer(_size(rng, 2, 8), _size(rng, 2, 10), _odd_channels(rng, 1, 24), _odd_channels(rng, 1, 16),
-                     kh, kw, int(rng.integers(1, 3)), int(rng.integers(1, 3)), padding=pad, transpose=True)
-    if edge == "odd_tail":
-        layer = _tc16_mixed(rng)
-        layer.cin, layer.cout = int(rng.choice(np.arange(3, 48, 2))), int(rng.choice(np.arange(3, 32, 2)))
-        return layer
-    # unit_tail
+def _tc16_batch2(rng: np.random.Generator) -> Layer:
+    """Two images in one call."""
+    layer = _tc16_mixed(rng)
+    layer.n = 2
+    return layer
+
+
+def _tc16_fastenhancer(rng: np.random.Generator) -> Layer:
+    """FastEnhancer's 1xK, stride 4, VALID."""
+    cin, cout = _odd_channels(rng, 9, 40), int(rng.integers(1, 5))
+    return Layer(1, _size(rng, 32, 80), cin, cout, 1, int(rng.integers(4, 9)), 1, 4, transpose=True)
+
+
+def _tc16_gaps(rng: np.random.Generator) -> Layer:
+    """Stride beyond kernel: bias-only outputs."""
+    sh, sw = int(rng.integers(1, 5)), int(rng.integers(2, 5))
+    kh = int(rng.integers(1, sh)) if sh > 1 and rng.random() < 0.5 else 1
+    h = 1 if kh == 1 and sh == 1 else _size(rng, 2, 8)
+    return Layer(h, _size(rng, 4, 24), _odd_channels(rng, 1, 32), _odd_channels(rng, 1, 16), kh,
+                 int(rng.integers(1, sw)), sh, sw, padding=_padding(rng), transpose=True)
+
+
+def _tc16_overlap(rng: np.random.Generator) -> Layer:
+    """Kernel well beyond stride."""
+    kh, kw = int(rng.integers(5, 9)), int(rng.integers(5, 9))
+    return Layer(_size(rng, 2, 8), _size(rng, 2, 10), _odd_channels(rng, 1, 24), _odd_channels(rng, 1, 16),
+                 kh, kw, int(rng.integers(1, 3)), int(rng.integers(1, 3)), padding=_padding(rng), transpose=True)
+
+
+def _tc16_odd_tail(rng: np.random.Generator) -> Layer:
+    """Odd Cin and Cout."""
+    layer = _tc16_mixed(rng)
+    layer.cin, layer.cout = int(rng.choice(np.arange(3, 48, 2))), int(rng.choice(np.arange(3, 32, 2)))
+    return layer
+
+
+def _tc16_unit_tail(rng: np.random.Generator) -> Layer:
+    """One input, one output channel."""
     return Layer(_size(rng, 1, 12), _size(rng, 4, 48), 1, 1, int(rng.integers(1, 9)), int(rng.integers(1, 9)),
-                 int(rng.integers(1, 5)), int(rng.integers(1, 5)), padding=pad, transpose=True)
+                 int(rng.integers(1, 5)), int(rng.integers(1, 5)), padding=_padding(rng), transpose=True)
+
+
+# Edge categories, highest priority first.
+TC16_DRAWS: dict[str, Callable[[np.random.Generator], Layer]] = {
+    "requant": _tc16_requant, "int64": _tc16_int64, "clamp": _tc16_clamp, "batch2": _tc16_batch2,
+    "fastenhancer": _tc16_fastenhancer, "gaps": _tc16_gaps, "overlap": _tc16_overlap,
+    "odd_tail": _tc16_odd_tail, "unit_tail": _tc16_unit_tail,
+}
+TC16_EDGES = tuple(TC16_DRAWS)
 
 
 def _tc16_layer(rng: np.random.Generator, target: str) -> Layer:
     """An s16 transpose conv layer."""
-    return _tc16_mixed(rng) if target == TC16_ROUTE else _tc16_edge(rng, target)
+    return TC16_DRAWS.get(target, _tc16_mixed)(rng)
 
 
 def _tc16_mixed(rng: np.random.Generator) -> Layer:

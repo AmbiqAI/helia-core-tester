@@ -29,7 +29,8 @@ def _layer(case: dict) -> rs.Layer:
     if case["operator"] == "TransposeConv":
         # Filter is [kh, kw, cout, cin].
         cout = cin
-        return rs.Layer(*case["input_shape"][1:], cout, kh, kw, *case["strides"], padding=case["padding"], transpose=True)
+        n, h, w, c = case["input_shape"]
+        return rs.Layer(h, w, c, cout, kh, kw, *case["strides"], padding=case["padding"], transpose=True, n=n)
     return rs.Layer(
         case["input_shape"][1], case["input_shape"][2], cin, cin * last if dw else last, kh, kw,
         *case["strides"], *case["dilation"], padding=case["padding"], mult=last if dw else 1,

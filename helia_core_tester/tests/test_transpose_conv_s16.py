@@ -111,22 +111,19 @@ def _bridged(tmp_path: Path, name: str) -> tuple:
 
 
 def test_fastenhancer_case_bridges_bit_exact(tmp_path: Path) -> None:
-    cases = discover_or_skip(PROJECT_ROOT, family="ConvolutionFunctions", name_filter=FASTENHANCER)
-    bundle = _build_transpose_conv_case(PROJECT_ROOT, cases[0], output_root=tmp_path)
+    bundle, header, expected = _bridged(tmp_path, FASTENHANCER)
     manifest = bundle.manifest
     assert manifest["kernel_id"] == 186 and manifest["required_target_capabilities"] == ["arm_transpose_conv_s16"]
     assert manifest["tensor_dtypes"] == {"input": "S16", "weights": "S8", "bias": "S64", "output": "S16"}
     assert manifest["correctness_comparison"] == {"mode": "exact_int"}
-    assert {b.role: b.dimensions for b in bundle.blobs}["expected_output"] == (1, 1, 260, 2)
+    assert expected.shape == (1, 1, 260, 2)
     assert set(manifest["serialized_scalar_parameters"]) <= set(
         generated_test_bridge_scalar_fields("run_transpose_conv_s16_once")
     )
     # Whole output in int64 bounds scratch.
     assert manifest["scratch_buffer"]["bytes"] >= 260 * 2 * 8
     assert case_work(bundle)["macs"] == 64 * 24 * 2 * 8
-    header = _find_header_file(cases[0].directory).read_text()
-    expected = np.frombuffer(bundle.expected_output.path.read_bytes(), np.int16).reshape(1, 1, 260, 2)
-    assert np.array_equal(_reference(header, cases[0].name, manifest)[0], expected)
+    assert np.array_equal(_reference(header, FASTENHANCER, manifest)[0], expected)
 
 
 @pytest.mark.parametrize(("name", "edge"), [
