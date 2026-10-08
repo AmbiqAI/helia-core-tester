@@ -651,14 +651,16 @@ def test_hidden_set_targets_campaign_op(tmp_path: Path, monkeypatch) -> None:
     calls = []
     monkeypatch.setattr(setup, "resolve_board", lambda _: type("B", (), {"cpu": "cortex-m55"}))
 
-    def fake_run(cmd, log, **_):
-        calls.append(cmd)
+    def fake_run(cmd, log, env=None, **_):
+        calls.append((cmd, env))
         ws.hidden_dir(camp).mkdir(parents=True)
 
     monkeypatch.setattr(setup, "_run", fake_run)
     setup.make_hidden(ws, camp, {})
-    cmd = calls[0]
+    cmd, env = calls[0]
     assert cmd[cmd.index("--op") + 1] == "DepthwiseConv" and cmd[cmd.index("--dtype") + 1] == "S8"
+    # The symbol probe reads the base tree.
+    assert env == {"CMSIS_NN_ROOT": str(ws.base)}
 
 
 def test_secrets_dir_needs_ownership(tmp_path: Path) -> None:

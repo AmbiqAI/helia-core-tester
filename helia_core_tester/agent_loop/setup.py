@@ -33,11 +33,12 @@ class InitError(RuntimeError):
     """A step of init failed."""
 
 
-def _run(cmd: list[str], log: Path, cwd: Path | None = None) -> None:
+def _run(cmd: list[str], log: Path, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
     """Run; stdout and stderr to log."""
     log.parent.mkdir(parents=True, exist_ok=True)
     with log.open("w", encoding="utf-8") as handle:
-        rc = subprocess.run(cmd, cwd=cwd, stdout=handle, stderr=subprocess.STDOUT).returncode
+        rc = subprocess.run(cmd, cwd=cwd, stdout=handle, stderr=subprocess.STDOUT,
+                            env=None if env is None else {**os.environ, **env}).returncode
     if rc != 0:
         raise InitError(f"{cmd[0]} {' '.join(cmd[1:4])} ... exited {rc}; see {log}")
 
@@ -142,7 +143,9 @@ def make_hidden(ws: Workspace, campaign: Campaign, facts: dict) -> None:
     cpu = resolve_board(campaign.board).cpu
     _run([*ws.tester_cmd(), "generate", "--cpu", cpu, "--random-shapes", str(campaign.hidden_shapes),
           "--hidden-dir", str(hidden), "--hidden-seed-file", str(seed), "--op", campaign.op,
-          "--dtype", campaign.dtype], ws.logs / "hidden.log")
+          "--dtype", campaign.dtype], ws.logs / "hidden.log",
+         # Probe the base tree's kernels.
+         env={"CMSIS_NN_ROOT": str(ws.base)})
     hidden.chmod(0o700)
     (hidden / "done").write_text("", encoding="utf-8")
 
