@@ -577,3 +577,11 @@ def test_unreadable_candidate_objects_gate_all(tmp_path, kernels, monkeypatch) -
     monkeypatch.setattr(candidate_eval, "kernel_graph", broken)
     result = _eval(kernels, out, FakeRun(tmp_path / "reports", cases=CONV4))
     assert result["case_gate"]["scope"] == "all" and "unreadable" in result["case_gate"]["reason"]
+
+
+def test_placements_get_own_build_dirs(tmp_path, kernels) -> None:
+    """No tcm/mram flip rebuilds."""
+    dirs = {placement: candidate_eval.run_args(candidate_eval.RunSpec("apollo510_evb", kernels, placement), "s")
+            for placement in ("tcm", "mram")}
+    found = {p: Path(a[a.index("--build-dir") + 1]) for p, a in dirs.items()}
+    assert found["tcm"] != found["mram"] and found["tcm"].name == "apollo510_evb-eval-tcm"

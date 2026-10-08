@@ -583,3 +583,29 @@ def test_build_records_the_lock_and_kernels(tmp_path: Path, nsx: list[tuple], mo
     firmware_build.build_firmware(BOARD, build_dir=tmp_path)
     stamp = app_dir / firmware_build.BUILT_LOCK
     assert json.loads(stamp.read_text(encoding="utf-8")) == {"lock": "abc123", "kernels": "tree456"}
+
+
+@pytest.mark.parametrize("other", [True, False])
+def test_probe_stamp_skips_useless_confirm(tmp_path: Path, monkeypatch, other: bool) -> None:
+    """Another ELF on the probe: flash, no asking."""
+    monkeypatch.setattr(firmware_build, "build_firmware", lambda board, **kwargs: None)
+    flashed = []
+    monkeypatch.setattr(nsx_cli, "flash_app", lambda app_dir, **kwargs: flashed.append(app_dir))
+    _use_jlink(monkeypatch, "/opt/a/JLinkExe")
+    tcm, mram = tmp_path / "b-eval-tcm", tmp_path / "b-eval-mram"
+    for build_dir, image in ((tcm, b"tcm"), (mram, b"mram")):
+        elf = firmware_build.elf_path(build_dir)
+        elf.parent.mkdir(parents=True)
+        elf.write_bytes(image)
+        firmware_build.build_id_path(build_dir).write_text(image.decode())
+    firmware_build.record_flash(tcm, SERIAL, firmware_build.elf_sha256(firmware_build.elf_path(tcm)))
+    if other:
+        firmware_build.record_flash(mram, SERIAL, firmware_build.elf_sha256(firmware_build.elf_path(mram)))
+    asked = []
+
+    def reader(board, serial, build_dir):
+        asked.append(build_dir)
+        return "tcm"
+
+    decision = firmware_build.flash_firmware(BOARD, SERIAL, build_dir=tcm, board_build_id_reader=reader)
+    assert (decision.needed, bool(asked), bool(flashed)) == ((True, False, True) if other else (False, True, False))

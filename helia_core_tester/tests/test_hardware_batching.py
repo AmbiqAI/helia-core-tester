@@ -275,7 +275,7 @@ def test_run_case_bundles_batches_over_one_session(tmp_path: Path, monkeypatch, 
     announced = {"info": _target_info()}
     sessions: list[_FakeSession] = []
 
-    def _open(board, serial_no, *, build_dir, counter_passes):
+    def _open(board, serial_no, *, build_dir, counter_passes, reset=True):
         assert (board.id, serial_no, build_dir) == ("apollo510_evb", 1160002276, tmp_path)
         transport = _FakeTransport()
         transports.append(transport)
@@ -359,7 +359,7 @@ def test_run_case_bundles_batches_over_one_session(tmp_path: Path, monkeypatch, 
 
 
 def test_run_case_bundles_names_the_batch_when_a_session_fails(tmp_path: Path, monkeypatch) -> None:
-    def _open(board, serial_no, *, build_dir, counter_passes):
+    def _open(board, serial_no, *, build_dir, counter_passes, reset=True):
         return _FakeSession(_target_info(), [], fail=RuntimeError("Transport stalled")), _FakeTransport(), 0
 
     monkeypatch.setattr(session_runner, "open_rtt_session", _open)
@@ -416,7 +416,7 @@ _SYMBOLS = [
     ids=["faulted", "rtt-full", "drained", "running"],
 )
 def test_stall_names_the_target_state(tmp_path: Path, monkeypatch, state, expected) -> None:
-    def _open(board, serial_no, *, build_dir, counter_passes):
+    def _open(board, serial_no, *, build_dir, counter_passes, reset=True):
         return _FakeSession(_target_info(), [], fail=session.TransportStall("Transport stalled")), _HaltableTransport(state), 0
 
     monkeypatch.setattr(session_runner, "open_rtt_session", _open)
@@ -430,7 +430,7 @@ def test_stall_names_the_target_state(tmp_path: Path, monkeypatch, state, expect
 
 
 def test_stall_survives_an_unreadable_target(tmp_path: Path, monkeypatch) -> None:
-    def _open(board, serial_no, *, build_dir, counter_passes):
+    def _open(board, serial_no, *, build_dir, counter_passes, reset=True):
         stall = session.TransportStall("Transport stalled")
         return _FakeSession(_target_info(), [], fail=stall), _HaltableTransport(OSError("probe gone")), 0
 
@@ -443,7 +443,7 @@ def test_stall_survives_an_unreadable_target(tmp_path: Path, monkeypatch) -> Non
 
 
 def test_boot_failure_skips_batch_context(tmp_path: Path, monkeypatch) -> None:
-    def _open(board, serial_no, *, build_dir, counter_passes):
+    def _open(board, serial_no, *, build_dir, counter_passes, reset=True):
         return HostSession(FakeTargetTransport(boot_status=7, core_clock_hz=96_000_000)), _FakeTransport(), 0
 
     monkeypatch.setattr(session_runner, "open_rtt_session", _open)
@@ -455,7 +455,7 @@ def test_boot_failure_skips_batch_context(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_runner_checks_board_row_clock(tmp_path: Path, monkeypatch) -> None:
-    def _open(board, serial_no, *, build_dir, counter_passes):
+    def _open(board, serial_no, *, build_dir, counter_passes, reset=True):
         return HostSession(FakeTargetTransport(core_clock_hz=250_000_000)), _FakeTransport(), 0
 
     monkeypatch.setattr(session_runner, "open_rtt_session", _open)
@@ -472,7 +472,7 @@ def test_run_case_bundles_wraps_a_case_that_cannot_fit_the_advertised_plan_size(
     calls: list[list[Any]] = []
     tiny = _target_info(max_rx_payload=40)
 
-    def _open(board, serial_no, *, build_dir, counter_passes):
+    def _open(board, serial_no, *, build_dir, counter_passes, reset=True):
         return _FakeSession(tiny, calls), _FakeTransport(), 0
 
     monkeypatch.setattr(session_runner, "open_rtt_session", _open)
@@ -503,7 +503,7 @@ def test_non_positive_target_limits_are_refused_before_batching() -> None:
 def test_duplicate_case_ids_are_refused_before_the_probe_opens(tmp_path: Path, monkeypatch) -> None:
     opened: list[int] = []
 
-    def _open(board, serial_no, *, build_dir, counter_passes):
+    def _open(board, serial_no, *, build_dir, counter_passes, reset=True):
         opened.append(1)
         raise AssertionError("must not open a session")
 
@@ -576,3 +576,30 @@ def test_runner_runs_and_hides_floor(tmp_path: Path, monkeypatch, kernel_ids) ->
     else:
         assert ran == [["abs_0", "abs_1"], ["abs_2"]]
         assert written["timing_floor"] is None
+
+
+@pytest.mark.parametrize("fresh_boot", [True, False])
+def test_fresh_boot_skips_open_reset(tmp_path: Path, monkeypatch, fresh_boot: bool) -> None:
+    """A flash just reset the board."""
+    seen = {}
+
+    class Stop(Exception):
+        pass
+
+    def _open(*args, **kwargs):
+        seen.update(kwargs)
+        raise Stop
+
+    monkeypatch.setattr(session_runner, "open_rtt_session", _open)
+    with pytest.raises(Stop):
+        session_runner.run_case_bundles(tmp_path, [_DummyCaseBundle("case_0")], board=resolve_board("apollo510_evb"), serial_no=1,
+                                        counter_passes=(), fresh_boot=fresh_boot)
+    assert seen["reset"] is (not fresh_boot)
+
+
+def test_open_passes_reset(tmp_path: Path, monkeypatch) -> None:
+    made = {}
+    monkeypatch.setattr(session_runner, "symbol_address_from_elf", lambda *a: 0x20000000)
+    monkeypatch.setattr(session_runner, "JLinkRttTransport", lambda **kw: made.update(kw) or object())
+    session_runner.open_rtt_session(resolve_board("apollo510_evb"), 1, build_dir=tmp_path, counter_passes=(), reset=False)
+    assert made["reset_on_open"] is False

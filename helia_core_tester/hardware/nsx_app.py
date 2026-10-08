@@ -395,6 +395,29 @@ def write_kernels(root: Path, module_dir: Path) -> None:
         _vendor(root, module_dir)
 
 
+def _keep_mtimes(fresh: Path, old: Path) -> None:
+    """Same bytes keep the old mtime.
+
+    Snapshots are fresh clones; ninja then skips unchanged units.
+    Only when no path was added: a new header can shadow an
+    old one without touching any depfile.
+    """
+    import filecmp
+
+    if old.is_symlink() or not old.is_dir():
+        return
+    paths = sorted(path.relative_to(fresh) for path in fresh.rglob("*"))
+    if not set(paths) <= {path.relative_to(old) for path in old.rglob("*")}:
+        return
+    for rel in paths:
+        path, prior = fresh / rel, old / rel
+        if path.is_symlink() or prior.is_symlink() or not (path.is_file() and prior.is_file()):
+            continue
+        if filecmp.cmp(prior, path, shallow=False):
+            info = prior.stat()
+            os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns))
+
+
 def _vendor(root: Path, module_dir: Path) -> None:
     """Build fresh, then swap in."""
     import tempfile
@@ -417,6 +440,7 @@ def _vendor(root: Path, module_dir: Path) -> None:
         for name in KERNEL_TREES:
             if (root / name).is_dir():
                 shutil.copytree(root / name, fresh / name)
+        _keep_mtimes(fresh, module_dir)
         _swap_in(fresh, module_dir)
     except BaseException:
         _remove(fresh)

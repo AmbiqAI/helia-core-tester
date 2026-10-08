@@ -486,6 +486,7 @@ def stream_generated_tests(
     progress_to_stderr: bool = False,
     allow_unverified_firmware: bool = False,
     prepared: Optional[tuple[list, list]] = None,
+    fresh_boot: bool = False,
 ) -> HardwareRunOutcome:
     """Stream the generated suite to already-flashed firmware and write the bundle.
 
@@ -551,6 +552,7 @@ def stream_generated_tests(
         on_case_complete=on_case_complete,
         expected_build_id=expected_build_id,
         compare=options.compare_record(),
+        fresh_boot=fresh_boot,
     )
     merge_summary(bundle, "selection", resolved_selection(repo_root, board, options))
     timing = {
@@ -656,7 +658,7 @@ def run_hardware_pipeline(
     outcome = stream_generated_tests(
         repo_root, board, serial_no, build_dir=resolved_build_dir, options=options,
         echo=echo, progress_to_stderr=progress_to_stderr, allow_unverified_firmware=allow_unverified_firmware,
-        prepared=prepared,
+        prepared=prepared, fresh_boot=flash is not None and flash.needed,
     )
     mark("stream_done")
     outcome.flash = flash
