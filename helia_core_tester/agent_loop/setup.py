@@ -225,6 +225,8 @@ def init_workspace(ws: Workspace, campaign: Campaign, echo: Echo = print) -> dic
         if saved != campaign:
             raise InitError(f"{ws.root} holds a different campaign")
         echo("Resuming init.")
+        # Ready again only after every step.
+        facts.pop("ready", None)
     elif ws.root.exists() and any(ws.root.iterdir()):
         raise InitError(f"{ws.root} is not empty")
     ws.root.mkdir(parents=True, exist_ok=True)

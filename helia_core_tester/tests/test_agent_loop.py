@@ -572,6 +572,24 @@ def test_unreadable_start_patch(tmp_path: Path, monkeypatch) -> None:
         setup.init_workspace(ws, camp, echo=lambda _: None)
 
 
+def test_rerun_init_clears_ready(tmp_path: Path, monkeypatch) -> None:
+    from helia_core_tester.agent_loop import setup
+
+    camp = _campaign(secrets_dir=str(tmp_path / "s"))
+    ws = Workspace(tmp_path / "ws")
+    ws.root.mkdir()
+    ws.save(camp, {"ready": True, "tester_commit": "c" * 40})
+    monkeypatch.setattr(setup, "check_paths", lambda ws, c: None)
+
+    def broken(ws, sha):
+        raise setup.InitError("pin failed")
+
+    monkeypatch.setattr(setup, "pin_tester", broken)
+    with pytest.raises(setup.InitError, match="pin failed"):
+        setup.init_workspace(ws, camp, echo=lambda _: None)
+    assert "ready" not in ws.load()[1]
+
+
 def test_selftest_probes_are_unique(ws: Workspace) -> None:
     campaign, _ = ws.load()
     first = agent.probes(ws, campaign, "aaaa")
