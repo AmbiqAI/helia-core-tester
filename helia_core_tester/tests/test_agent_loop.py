@@ -54,7 +54,7 @@ def test_config_defaults_and_paths() -> None:
     ({"evals": True}, "wrong type"),
     ({"cost_usd": -1}, "cost_usd"),
     ({"op": "FullyConnected"}, "hidden_shapes: No random shapes"),
-    ({"dtype": "S16"}, "or set 0"),
+    ({"op": "Convolve", "dtype": "S16"}, "or set 0"),
     ({"op": "Conv 2d"}, "one word"),
     ({"case_ids": ["ok", "a b"]}, "case_ids"),
 ])
@@ -67,6 +67,11 @@ def test_config_missing_key() -> None:
     data = {k: v for k, v in BASE.items() if k != "secrets_dir"}
     with pytest.raises(ConfigError, match="secrets_dir"):
         parse_campaign(data, Path("/cfg"))
+
+
+def test_config_dw_s16_hidden() -> None:
+    c = _campaign(dtype="S16", hidden_shapes=6)
+    assert (c.op, c.dtype, c.hidden_shapes) == ("DepthwiseConv", "S16", 6)
 
 
 def test_config_fc_without_hidden() -> None:
