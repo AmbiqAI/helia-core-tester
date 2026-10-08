@@ -180,6 +180,13 @@ def changed_nodes(base: dict[str, dict], cand: dict[str, dict]) -> set[str]:
     return {name for name in base.keys() | cand.keys() if (base.get(name) or {}).get("digest") != (cand.get(name) or {}).get("digest")}
 
 
+def case_touched(
+    timed: str, inners: set, base: dict, cand: dict, changed: set[str], routes: frozenset[str] = frozenset(),
+) -> bool:
+    """Any route of the case changed."""
+    return any(is_touched(timed, inner, base, cand, changed, routes) for inner in inners)
+
+
 def is_touched(
     timed: str, inner: Optional[str], base: dict, cand: dict, changed: set[str], routes: frozenset[str] = frozenset(),
 ) -> bool:

@@ -98,6 +98,29 @@ def split_case_bundles_into_batches(
     return batches
 
 
+def light_plan(case_ids: Sequence[str], light_ids: frozenset[str]) -> frozenset[str]:
+    """Light ids whose next case is light too.
+
+    The case before a full case runs full, so the full case
+    starts from the same board state as an all-full run.
+    """
+    return frozenset(
+        case_id for index, case_id in enumerate(case_ids)
+        if case_id in light_ids and (index + 1 == len(case_ids) or case_ids[index + 1] in light_ids)
+    )
+
+
+def same_plan(bundles: Sequence[CaseBundle], light_ids: frozenset[str]) -> list[CaseBundle]:
+    """The leading run of one plan."""
+    light = bundles[0].case_id in light_ids
+    out = []
+    for bundle in bundles:
+        if (bundle.case_id in light_ids) != light:
+            break
+        out.append(bundle)
+    return out
+
+
 # --- sessions --------------------------------------------------------------------------
 
 
@@ -187,6 +210,7 @@ def run_case_bundles(
     expected_build_id: str | None = None,
     compare: dict | None = None,
     fresh_boot: bool = False,
+    light_ids: frozenset[str] = frozenset(),
 ) -> tuple[SessionResult, Path]:
     """Stream `case_bundles` to the board in as many SESSION_PLANs as the target's
     limits require, merge every case into one SessionResult, and write its result bundle.
@@ -204,6 +228,9 @@ def run_case_bundles(
     at every handshake.
 
     `fresh_boot`: a flash just reset the board, so the open skips its reset.
+
+    `light_ids` run the light timing plan (narrow them with `light_plan`
+    first); case order stays, and batches split where the plan changes.
     """
     build_dir = build_dir or board.build_dir(project_root)
     sid = session_id or default_session_id(board)
@@ -246,9 +273,10 @@ def run_case_bundles(
                     # Floor case leads, when firmware has it.
                     if EMPTY_CALL_KERNEL_ID in session.kernel_ids:
                         remaining.insert(0, build_floor_bundle(project_root, board_id=board.id, cpu=board.cpu))
-                batch = take_batch(remaining, counter_passes, limits)
+                light = remaining[0].case_id in light_ids
+                batch = take_batch(same_plan(remaining, light_ids), counter_passes, limits)
                 # Later batches reuse this session.
-                result = session.run_many(batch, on_case_complete=report_case)
+                result = session.run_many(batch, on_case_complete=report_case, light=light)
             except BootFailure:
                 raise  # board-wide, not batch-specific
             except (RuntimeError, ValueError) as exc:

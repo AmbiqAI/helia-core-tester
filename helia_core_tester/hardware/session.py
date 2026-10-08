@@ -257,10 +257,19 @@ def default_counter_passes() -> tuple[CounterPass, ...]:
     return counter_passes_for_selection({"cpu": "default"})
 
 
-def session_plan_for_bundles(case_bundles: Sequence[CaseBundle], counter_passes: Sequence[CounterPass]) -> SessionPlan:
+# Light timing: one sample, no warmup.
+LIGHT_TIMING = {"warmups": 0, "samples": 1, "iterations_per_sample": 1}
+
+
+def session_plan_for_bundles(
+    case_bundles: Sequence[CaseBundle], counter_passes: Sequence[CounterPass], light: bool = False,
+) -> SessionPlan:
     """The SESSION_PLAN for these bundles. The timing block is taken from the first
-    bundle -- every generated case carries the same fixed timing plan."""
+    bundle -- every generated case carries the same fixed timing plan. A light plan
+    keeps every pass and check but times one sample."""
     timing = case_bundles[0].manifest["timing"]
+    if light:
+        timing = {**timing, **LIGHT_TIMING}
     return SessionPlan(
         warmups=int(timing["warmups"]),
         samples=int(timing["samples"]),
@@ -377,6 +386,7 @@ class HostSession:
         *,
         on_case_complete: Callable[[CaseRunResult], None] | None = None,
         expected_build_id: str | None = None,
+        light: bool = False,
     ) -> SessionResult:
         """Run every case in case_bundles over one SESSION_PLAN (after `handshake()`,
         which is performed here if the caller has not already done so).
@@ -427,7 +437,7 @@ class HostSession:
                 f"takes at most {limits.max_cases} per SESSION_PLAN (TARGET_INFO max_cases_per_session). "
                 "Split into batches first."
             )
-        plan = encode_session_plan(session_plan_for_bundles(case_bundles, self._counter_passes))
+        plan = encode_session_plan(session_plan_for_bundles(case_bundles, self._counter_passes, light))
         if len(plan) > limits.max_plan_bytes:
             raise RuntimeError(
                 f"SESSION_PLAN for {len(case_bundles)} case(s) and {len(self._counter_passes)} PMU pass(es) "

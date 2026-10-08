@@ -166,9 +166,10 @@ class _FakeSession:
     def limits(self) -> TargetLimits:
         return TargetLimits.from_target_info(self._info)
 
-    def run_many(self, case_bundles, *, on_case_complete=None) -> SessionResult:
+    def run_many(self, case_bundles, *, on_case_complete=None, light=False) -> SessionResult:
         assert len(case_bundles) <= self.limits.max_cases
         self._calls.append(list(case_bundles))
+        self.lights = [*getattr(self, "lights", []), light]
         return SessionResult(
             cases=tuple(f"result-for-{b.case_id}" for b in case_bundles),  # type: ignore[arg-type]
             protocol_trace=(f"TX:TARGET_INFO_ACK-{case_bundles[0].case_id}",),
@@ -524,7 +525,7 @@ class _FloorSession(_FakeSession):
         super().__init__(info, calls)
         self.kernel_ids = kernel_ids
 
-    def run_many(self, case_bundles, *, on_case_complete=None) -> SessionResult:
+    def run_many(self, case_bundles, *, on_case_complete=None, light=False) -> SessionResult:
         self._calls.append(list(case_bundles))
         results = []
         for bundle in case_bundles:
@@ -603,3 +604,28 @@ def test_open_passes_reset(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(session_runner, "JLinkRttTransport", lambda **kw: made.update(kw) or object())
     session_runner.open_rtt_session(resolve_board("apollo510_evb"), 1, build_dir=tmp_path, counter_passes=(), reset=False)
     assert made["reset_on_open"] is False
+
+
+def test_light_cases_keep_order_in_plan_runs(tmp_path: Path, monkeypatch) -> None:
+    """Order kept; batches split at plan changes."""
+    bundles = [_DummyCaseBundle(f"case_{i}") for i in range(6)]
+    calls: list[list[Any]] = []
+    sessions: list[_FakeSession] = []
+
+    def _open(board, serial_no, *, build_dir, counter_passes, reset=True):
+        sessions.append(_FakeSession(_target_info(), calls))
+        return sessions[-1], _FakeTransport(), 0
+
+    monkeypatch.setattr(session_runner, "open_rtt_session", _open)
+    monkeypatch.setattr(session_runner, "write_result_bundle", lambda *a, **k: tmp_path)
+    monkeypatch.setattr(session_runner, "apply_floor", lambda cases: (None, list(cases)))
+    monkeypatch.setattr(session_runner, "generate_memory_report", lambda *a, **k: tmp_path / "memory_report.json")
+    (tmp_path / "memory_report.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "cmake" / "hardware").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "cmake" / "hardware" / "kernel_catalog.json").write_text("[]", encoding="utf-8")
+    # case_3 is touched: case_2 runs full.
+    light = session_runner.light_plan([b.case_id for b in bundles], frozenset({"case_0", "case_1", "case_2", "case_4", "case_5"}))
+    session_runner.run_case_bundles(tmp_path, bundles, board=resolve_board("apollo510_evb"), serial_no=1,  # type: ignore[arg-type]
+                                    counter_passes=DEFAULT_PASSES, build_dir=tmp_path, light_ids=light)
+    assert [[b.case_id for b in call] for call in calls] == [["case_0", "case_1"], ["case_2", "case_3"], ["case_4", "case_5"]]
+    assert sessions[0].lights == [True, False, True]

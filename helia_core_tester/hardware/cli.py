@@ -713,6 +713,10 @@ def run(
     update_dependencies: bool = typer.Option(False, "--update-dependencies", help=_UPDATE_DEPS_HELP),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help=_VERBOSITY_HELP),
     allow_dirty_tester: bool = typer.Option(False, "--allow-dirty-tester", help=_DIRTY_TESTER_HELP),
+    light_graph: Optional[Path] = typer.Option(
+        None, "--light-graph", exists=True, dir_okay=False, resolve_path=True, hidden=True,
+        help="Golden run's code graph; untouched cases time lightly.",
+    ),
 ) -> None:
     """The whole hardware pipeline: generate tests for the board's CPU, build the
     firmware, flash it unless the board already runs this exact build, stream the
@@ -728,6 +732,10 @@ def run(
         spec, suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id,
         op, dtype, case_id, cases_from, strict_compare, golden_from, golden_allow_failed, hidden_set,
     )
+    if light_graph is not None:
+        if golden_from is None:
+            _fail("--light-graph needs --golden-from.")
+        options = dataclasses.replace(options, light_graph=light_graph)
     build_dir = resolve_build_dir(repo_root(), spec, build_dir)
     # Neither builds nor generates: nothing to resolve.
     streams_only = skip_generate and skip_flash

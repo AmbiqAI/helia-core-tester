@@ -25,7 +25,7 @@ def clean_tester(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(candidate_eval, "scan_cache_dir", lambda: tmp_path / "scan_cache")
     # Fake runs build no objects.
     monkeypatch.setattr(candidate_eval, "object_check", lambda *args: None)
-    monkeypatch.setattr(candidate_eval, "kernel_graph", lambda board: None)
+    monkeypatch.setattr(candidate_eval, "kernel_graph", lambda build_dir: None)
 
 
 @pytest.fixture
@@ -585,3 +585,32 @@ def test_placements_get_own_build_dirs(tmp_path, kernels) -> None:
             for placement in ("tcm", "mram")}
     found = {p: Path(a[a.index("--build-dir") + 1]) for p, a in dirs.items()}
     assert found["tcm"] != found["mram"] and found["tcm"].name == "apollo510_evb-eval-tcm"
+
+
+def test_light_graph_passed_with_baseline_graph(tmp_path, kernels) -> None:
+    out, _ = _baseline(tmp_path, kernels)
+    run = FakeRun(tmp_path / "reports")
+    _eval(kernels, out, run)
+    assert "--light-graph" not in run.calls[-1]
+    (out / candidate_eval.GRAPH_FILE).write_text("{}")
+    run = FakeRun(tmp_path / "reports2")
+    _eval(kernels, out, run)
+    assert run.calls[-1][run.calls[-1].index("--light-graph") + 1] == str(out / candidate_eval.GRAPH_FILE)
+
+
+@pytest.mark.parametrize(("touched", "verdict"), [(frozenset({"other"}), "pass"), (frozenset({"c0"}), "error"), (None, "error")])
+def test_light_touched_case_is_error(tmp_path, kernels, monkeypatch, touched, verdict) -> None:
+    """Light timing never reaches a gate."""
+    from helia_core_tester.hardware.hardware_pipeline import LIGHT_CASES_FILE
+
+    out, _ = _baseline(tmp_path, kernels)
+    monkeypatch.setattr(candidate_eval, "case_gate", lambda *a: (touched, None if touched is not None else "no graph"))
+
+    class Light(FakeRun):
+        def __call__(self, args, log, on_built=None):
+            rc, summary = super().__call__(args, log, on_built)
+            (Path(summary["bundle"]) / LIGHT_CASES_FILE).write_text('["c0"]')
+            return rc, summary
+
+    result = _eval(kernels, out, Light(tmp_path / "reports"))
+    assert (result["verdict"] == "error") is (verdict == "error")

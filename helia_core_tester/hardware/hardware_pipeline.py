@@ -353,6 +353,8 @@ class StreamOptions:
     """Accept golden cases the past run failed."""
     hidden_set: Optional[Path] = None
     """Root from `generate --hidden-dir`; its cases join the run."""
+    light_graph: Optional[Path] = None
+    """The golden run's code graph: untouched cases time lightly."""
 
     def selection(self) -> CaseSelection:
         """The op, dtype and id filters."""
@@ -475,6 +477,46 @@ def _refuse(reason: str, case_ids: list[str]) -> None:
         raise RunRefused(f"{reason}: {', '.join(case_ids)}")
 
 
+# Light timing: every check, one sample.
+LIGHT_CASES_FILE = "light_cases.json"
+
+
+def light_cases(build_dir: Path, options: StreamOptions, bundles: list) -> frozenset[str]:
+    """Cases whose kernel code is unchanged.
+
+    Mirrors candidate eval's touched test, but stays wider: the
+    candidate route is computed from the build, and only golden
+    routes stop the walk. Any doubt runs the full plan.
+    """
+    if options.light_graph is None or options.golden_from is None:
+        return frozenset()
+    from .code_graph import case_touched, changed_nodes, code_graph, read_graph
+    from .score import load_bundle
+    from .wrapper_route import build_gate, inner_symbol
+
+    try:
+        base = read_graph(json.loads(options.light_graph.read_text(encoding="utf-8")))
+        cand = read_graph(code_graph(build_dir))
+        golden = load_bundle(options.golden_from)
+        gate = build_gate(build_dir)
+    except Exception:  # noqa: BLE001 -- doubt runs full
+        return frozenset()
+    if base is None or cand is None:
+        return frozenset()
+    changed = changed_nodes(base, cand)
+    routes = frozenset(row.get("inner_symbol") for row in golden.rows.values() if row.get("inner_symbol"))
+    light = set()
+    for bundle in bundles:
+        row = golden.rows.get(bundle.case_id)
+        if row is None:
+            continue
+        timed = golden.symbol(bundle.case_id)
+        inners = {row.get("inner_symbol") or None, inner_symbol(timed, bundle.manifest, gate)}
+        if not case_touched(timed, inners, base, cand, changed, routes):
+            light.add(bundle.case_id)
+    return frozenset(light)
+
+
 def stream_generated_tests(
     repo_root: Path,
     board: BoardSpec,
@@ -541,9 +583,14 @@ def stream_generated_tests(
         last_case_done = now
         progress(case)
 
+    from .session_runner import light_plan
+
+    light = light_plan([bundle.case_id for bundle in bundles], light_cases(build_dir, options, bundles))
+    mark(f"light:{len(light)}/{len(bundles)}")
     result, bundle = run_case_bundles(
         repo_root,
         bundles,
+        light_ids=light,
         board=board,
         serial_no=serial_no,
         counter_passes=counter_passes,
@@ -555,6 +602,8 @@ def stream_generated_tests(
         fresh_boot=fresh_boot,
     )
     merge_summary(bundle, "selection", resolved_selection(repo_root, board, options))
+    if options.light_graph is not None:
+        (bundle / LIGHT_CASES_FILE).write_text(json.dumps(sorted(light)) + "\n", encoding="utf-8")
     timing = {
         "stream_s": round(time.monotonic() - stream_started, 4),
         "batch_count": int(getattr(result, "batch_count", 1)),
