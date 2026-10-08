@@ -1071,6 +1071,7 @@ static hctp_status_t handle_session_plan(hct_server_session_t *session, const ui
         return HCTP_STATUS_TRUNCATED_FRAME;
     }
 
+    session->current_case_index = 0u;
     strcpy(session->current_case_id, session->planned_case_ids[0]);
     session->expected_kernel_id = session->planned_kernel_ids[0];
     session->state = HCT_SERVER_STATE_WAIT_CASE_META;
@@ -1706,7 +1707,8 @@ hctp_status_t hct_server_session_accept_frame(hct_server_session_t *session,
             }
             return HCTP_STATUS_OK;
         case HCTP_MSG_SESSION_PLAN:
-            if (session->state != HCT_SERVER_STATE_WAIT_PLAN)
+            /* A finished session takes the next batch. */
+            if (session->state != HCT_SERVER_STATE_WAIT_PLAN && session->state != HCT_SERVER_STATE_COMPLETE)
             {
                 queue_error_frame(session, frame.header.message_type, HCTP_STATUS_INVALID_ARGUMENT);
                 return HCTP_STATUS_INVALID_ARGUMENT;

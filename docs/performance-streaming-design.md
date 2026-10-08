@@ -110,10 +110,11 @@ The protocol is target-driven after plan load:
 14. target streams raw sample results
 15. target sends `CASE_COMPLETE`
 16. loop until `SESSION_COMPLETE`
+17. host sends the next batch's `SESSION_PLAN`, or closes
 
-### Messages (HCTP v4)
+### Messages (HCTP v5)
 
-Protocol version 4 (`hctp.SUPPORTED_VERSION` / `HCTP_SUPPORTED_VERSION`); a peer on
+Protocol version 5 (`hctp.SUPPORTED_VERSION` / `HCTP_SUPPORTED_VERSION`); a peer on
 another version is refused at the header. Message ids are compact and in protocol
 order; every payload is encoded and decoded on the host by exactly one pair of
 functions in `helia_core_tester/hardware/wire.py`, which the host session and the
@@ -195,7 +196,7 @@ built for a core whose device header declares `__PMU_PRESENT == 1`;
 hold (`HCT_SERVER_RX_BUFFER_BYTES - HCTP_HEADER_SIZE`, 2016 today);
 `max_cases_per_session` and `max_passes` are the firmware's `HCT_SERVER_MAX_CASES`
 (32) and `HCT_SERVER_MAX_PASSES` (32). After the handshake the advertised values are
-authoritative: the host derives its batching (`session.TargetLimits`) from every
+authoritative: the host derives its batching (`session.TargetLimits`) from the
 session's `TARGET_INFO`, cuts each batch so the plan stays within all three, checks
 its chained-pair planning rule (four counters per pass) against `pmu_counter_slots / 2`,
 and refuses any later outbound payload (`CASE_META` included) larger than
@@ -533,7 +534,7 @@ the fake-target tests; it is no longer a CLI command.
   host session and the fake target.
 - `session.py`: `HostSession` (handshake, plan, per-case streaming) and `TargetLimits`,
   the batching limits derived from `TARGET_INFO`.
-- `session_runner.py`: one RTT session per batch on a `BoardSpec`, case discovery
+- `session_runner.py`: one RTT session for every batch on a `BoardSpec`, case discovery
   from the generated-test tree, result-bundle writing.
 - `hardware_pipeline.py`: generate -> build -> flash -> stream orchestration behind
   `hardware run` / `hardware stream`.

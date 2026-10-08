@@ -316,6 +316,8 @@ class HostSession:
         self._incoming_validator: SessionFrameValidator | None = None
         self._outgoing_sequence_id = 0
         self._trace: list[str] = []
+        # Trace not yet in a result.
+        self._trace_start = 0
         self._frames: list[Frame] = []
         self._counter_passes: tuple[CounterPass, ...] = (
             tuple(counter_passes) if counter_passes is not None else default_counter_passes()
@@ -558,12 +560,18 @@ class HostSession:
         ordered = tuple(results[bundle.case_id] for bundle in case_bundles)
         return SessionResult(
             cases=ordered,
-            protocol_trace=tuple(self._trace),
+            protocol_trace=self._take_trace(),
             session_complete_cases=session_complete_cases,
             build_id=target_info.build_id,
             target_info=self._target_info,
             counter_passes=self._counter_passes,
         )
+
+    def _take_trace(self) -> tuple[str, ...]:
+        """Trace since the last result."""
+        trace = tuple(self._trace[self._trace_start:])
+        self._trace_start = len(self._trace)
+        return trace
 
     def _recv_catalog(self, expected_hash: bytes) -> tuple[CatalogEntry, ...]:
         """Accumulate one or more paginated KERNEL_CATALOG chunks (each chunk carries

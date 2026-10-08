@@ -488,7 +488,7 @@ def stream_generated_tests(
 ) -> HardwareRunOutcome:
     """Stream the generated suite to already-flashed firmware and write the bundle.
 
-    Preflight: the build dir must carry `hct_build_id.txt` so every session's TARGET_INFO
+    Preflight: the build dir must carry `hct_build_id.txt` so the session's TARGET_INFO
     can be checked against it; a missing stamp is an error unless
     `allow_unverified_firmware` says the caller knowingly streams to legacy firmware.
     """
@@ -526,8 +526,8 @@ def stream_generated_tests(
     )
     progress = make_live_progress_printer(len(bundles), id_width=id_width, err=progress_to_stderr)
 
-    # Per-case wall clock: the gap between consecutive CASE_COMPLETEs (the first case of
-    # every batch also absorbs that batch's target reset and TARGET_INFO/catalog exchange).
+    # Per-case wall clock: the gap between consecutive CASE_COMPLETEs (the first case
+    # also absorbs the target reset and TARGET_INFO/catalog exchange).
     case_seconds: Dict[str, float] = {}
     stream_started = time.monotonic()
     last_case_done = stream_started
