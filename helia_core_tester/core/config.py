@@ -332,6 +332,12 @@ class Config:
             raise ConfigurationError(f"random_shapes must be >= 1, got {self.random_shapes}")
         if "int" not in self.suites:
             raise ConfigurationError("random_shapes needs the int suite")
+        from helia_core_tester.generation.random_shapes import select_ops
+
+        try:
+            select_ops(self.op_filter, self.dtype_filter)
+        except ValueError as exc:
+            raise ConfigurationError(str(exc)) from exc
 
     def _validate_hidden(self) -> None:
         if self.hidden_dir is None:

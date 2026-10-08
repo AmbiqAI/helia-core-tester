@@ -64,12 +64,20 @@ with `--suite int` or `float`, `--op`/`--dtype`/`--case-id` also narrow generati
 
 Held-out shapes: `generate --random-shapes N --shape-seed S` draws N s8
 Convolve and N s8 DepthwiseConv cases (`rs<S>_conv_*`, `rs<S>_dw_*`) instead of
-the `assets/` descriptors, cycling through every wrapper route and sized to fit
-the smallest board workspace. The descriptors and a per-route count land in
+the `assets/` descriptors. `--op`/`--dtype` limit the draw to matching ops
+(e.g. `--op Convolve` draws only `rs<S>_conv_*`, the same cases as an
+unfiltered draw). Every `--op` token must name a registered op by operator,
+descriptor stem or path; case-name prefixes such as `rs7_conv` are refused,
+since drawn names (and hidden ids) cannot be filtered. Each op draws
+from its own seeded stream, cycling through every wrapper route and sized to fit
+the smallest board workspace. The descriptors, the drawn ops (`ops`) and a per-route count land in
 `artifacts/random_shapes/s<S>/<cpu>/`; the cases join the generated tree beside
 the fixed ones. Run them with
 `hardware run --skip-generate --test-name rs<S>_`. A draw with a flat golden is
-dropped and counted as `skipped_degenerate`.
+dropped and counted as `skipped_degenerate`. To add an op, register its route
+list and layer sampler in `GENERATORS` (`generation/random_shapes.py`) with a
+new stream id, and teach the op-specific helpers (`layer_route`, `footprint`,
+`layer_macs`, `_relu6_gain`, `_descriptor`) its layout.
 
 Hidden shapes: `generate --random-shapes N --hidden-dir DIR` draws the same
 kind of cases from a secret seed instead (env `HCT_HIDDEN_SEED`, or
@@ -451,7 +459,7 @@ kernels:
 evals: 12                      # charged board evals
 cost_usd: 25                   # claude --max-budget-usd
 model: claude-opus-5-5
-hidden_shapes: 12              # random s8 shapes per op; 0 for none
+hidden_shapes: 12              # random target-op shapes; 0 for none
 repeats: 3                     # baseline runs per leg
 secrets_dir: ~/hct-secrets/conv-s8   # outside the workspace
 # start_patch: ~/campaigns/conv-s8-1/ledger/007.diff
@@ -463,10 +471,9 @@ Optional: `min_score` (passed to `candidate eval`), `lock_timeout_s`
 (board lock wait, default 600), `eval_timeout_s` (per leg, default 300),
 `submit_deadline_s` (whole submit, default 540, at most 570, under the
 agent's 10 minute Bash limit), `retries` (per leg, default 1) and `max_infra_errors` (busy or
-failing board results in a row, default 5). Hidden shapes exist for
-`Convolve` and `DepthwiseConv` S8 only; set `hidden_shapes: 0` for other
-targets. The hidden set always holds both ops, so a campaign for one op
-also runs the other op's hidden cases.
+failing board results in a row, default 5). The hidden set holds only the
+target op and dtype. Hidden shapes exist for `Convolve` and `DepthwiseConv`
+S8 only; set `hidden_shapes: 0` for other targets.
 `agent-loop validate FILE` checks a file without side effects.
 
 ### 2. Initialize the workspace

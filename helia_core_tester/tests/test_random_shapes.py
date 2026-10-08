@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 from pathlib import Path
@@ -38,6 +39,58 @@ def test_same_seed_same_cases() -> None:
 def test_ops_draw_independently() -> None:
     both = rs.sample_cases(10, 3)
     assert [c for c in both if c["operator"] == "Convolve"] == rs.sample_cases(10, 3, ops=("Convolve",))
+
+
+@pytest.mark.parametrize(("op", "dtype", "picked"), [
+    (None, None, ("Convolve", "DepthwiseConv")),
+    ("Convolve", None, ("Convolve",)),
+    ("DepthwiseConv", "s8", ("DepthwiseConv",)),
+    ("depthwise_conv", None, ("DepthwiseConv",)),
+    (None, "S8", ("Convolve", "DepthwiseConv")),
+])
+def test_select_ops_matches_filters(op, dtype, picked) -> None:
+    assert rs.select_ops(op, dtype) == picked
+
+
+@pytest.mark.parametrize(("op", "dtype"), [
+    ("FullyConnected", None), ("Convolve", "S16"), (None, "S4"), ("rs", None),
+    # A typo fails even beside a match.
+    ("Convolve,Softmax", "S8"),
+    # Drawn names cannot be filtered.
+    ("rs7_conv", None),
+])
+def test_select_ops_refuses_unknown(op, dtype) -> None:
+    with pytest.raises(ValueError, match="have Convolve S8, DepthwiseConv S8"):
+        rs.select_ops(op, dtype)
+
+
+def test_case_pattern_follows_registry(monkeypatch) -> None:
+    assert rs.random_case_pattern().fullmatch("rs7_dw_3")
+    assert not rs.random_case_pattern().fullmatch("rs7_fc_3")
+    monkeypatch.setitem(rs.GENERATORS, "FullyConnected", dataclasses.replace(rs.GENERATORS["Convolve"], tag="fc"))
+    assert rs.random_case_pattern().fullmatch("rs7_fc_3")
+
+
+def test_one_op_draw_is_a_subset() -> None:
+    both = rs.hidden_cases(4, SECRET.encode(), "cortex-m55")
+    for op in rs.OPS:
+        alone = rs.hidden_cases(4, SECRET.encode(), "cortex-m55", (op,))
+        assert alone == [c for c in both if c["operator"] == op]
+
+
+def test_summary_records_ops(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(rs.SECRET_ENV, SECRET)
+    descriptors = rs.prepare_hidden(tmp_path, 3, "cortex-m55", ("DepthwiseConv",))
+    summary = json.loads((descriptors.parent / "summary.json").read_text())
+    assert summary["ops"] == {"DepthwiseConv": "S8"} and list(summary["routes"]) == ["DepthwiseConv"]
+    assert [p.name for p in descriptors.rglob("*.yaml")] == ["depthwise_conv.yaml"]
+
+
+def test_random_filter_refused_early() -> None:
+    from helia_core_tester.core.errors import ConfigurationError
+
+    with pytest.raises(ConfigurationError, match="No random shapes"):
+        Config(project_root=Path.cwd(), random_shapes=2, op_filter="Softmax")
 
 
 @pytest.mark.parametrize("cpu", ["cortex-m55", "cortex-m4"])
@@ -188,7 +241,7 @@ def test_largest_seed_case_id_fits_firmware() -> None:
     from helia_core_tester.core.config import MAX_SHAPE_SEED
     from helia_core_tester.hardware.session import MAX_CASE_ID_BYTES
 
-    longest = f"rs{MAX_SHAPE_SEED}_{max(rs.TAGS.values(), key=len)}_9999{HW_CASE_SUFFIX}"
+    longest = f"rs{MAX_SHAPE_SEED}_{max((g.tag for g in rs.GENERATORS.values()), key=len)}_9999{HW_CASE_SUFFIX}"
     assert len(longest.encode()) <= MAX_CASE_ID_BYTES
 
 

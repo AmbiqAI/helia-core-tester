@@ -32,10 +32,6 @@ from helia_core_tester.generation.reuse import (
 from helia_core_tester.generation.utils.temp_sizer_probe import kernel_source_exists, missing_header_symbols
 
 
-# Random-shape case names.
-RANDOM_CASE = re.compile(r"rs\d+_(conv|dw)_\d+")
-
-
 def default_seed_for_case(name: str) -> int:
     """Deterministic per-case seed, independent of PYTHONHASHSEED."""
     return int.from_bytes(hashlib.sha256(name.encode("utf-8")).digest()[:4], "little")
@@ -418,18 +414,22 @@ def test_generation(test_filters):
     # Load all descriptors using discovery
     random_shapes = test_filters.get("random_shapes")
     hidden_dir = test_filters.get("hidden_dir")
+    if random_shapes:
+        from helia_core_tester.generation.random_shapes import select_ops
+
+        shape_ops = select_ops(test_filters.get("op"), test_filters.get("dtype"))
     if random_shapes and hidden_dir:
         from helia_core_tester.generation.random_shapes import prepare_hidden
 
         descriptors_dir = prepare_hidden(
-            Path(hidden_dir), random_shapes, normalize_cpu(test_filters.get("cpu") or "cortex-m55"),
+            Path(hidden_dir), random_shapes, normalize_cpu(test_filters.get("cpu") or "cortex-m55"), shape_ops,
         )
     elif random_shapes:
         from helia_core_tester.generation.random_shapes import prepare_shapes
 
         descriptors_dir = prepare_shapes(
             find_repo_root(), random_shapes, int(test_filters.get("shape_seed") or 0),
-            normalize_cpu(test_filters.get("cpu") or "cortex-m55"),
+            normalize_cpu(test_filters.get("cpu") or "cortex-m55"), shape_ops,
         )
     else:
         descriptors_dir = find_descriptors_dir()
@@ -634,10 +634,13 @@ def test_generation(test_filters):
             if test_dir.is_dir() and str(test_dir.relative_to(top_generated)) not in produced_dirs
         ]
         if random_shapes:
+            from helia_core_tester.generation.random_shapes import random_case_pattern
+
             # Drop earlier random draws.
+            drawn = random_case_pattern()
             stale += [
                 d for d in Path(top_generated).glob("*/rs*")
-                if RANDOM_CASE.fullmatch(d.name) and str(d.relative_to(top_generated)) not in produced_dirs
+                if drawn.fullmatch(d.name) and str(d.relative_to(top_generated)) not in produced_dirs
             ]
         for test_dir in stale:
             reset_case_dir(test_dir)

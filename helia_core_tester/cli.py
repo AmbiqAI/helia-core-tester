@@ -137,7 +137,7 @@ def generate(
     suite: str = typer.Option("int", "--suite", help="Test suite selection: int, float, or both"),
     float_precision: str = typer.Option("both", "--float-precision", help="Float precision filter: f16, f32, or both"),
     force_generate: bool = typer.Option(False, "--force-generate", help="Regenerate every case even when its reuse stamp still matches"),
-    random_shapes: Optional[int] = typer.Option(None, "--random-shapes", help="Draw N random s8 conv shapes per op"),
+    random_shapes: Optional[int] = typer.Option(None, "--random-shapes", help="Draw N random shapes per matching op"),
     shape_seed: Optional[int] = typer.Option(None, "--shape-seed", help="Seed for --random-shapes, 0 to 2**32-1 (default 0)"),
     hidden_dir: Optional[Path] = typer.Option(None, "--hidden-dir", help="Write secret-seeded shapes here, outside the tree"),
     hidden_seed_file: Optional[Path] = typer.Option(None, "--hidden-seed-file", help="Secret seed file; else HCT_HIDDEN_SEED"),
