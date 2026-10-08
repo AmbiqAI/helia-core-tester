@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import time
 from pathlib import Path
 
 import pytest
@@ -121,8 +122,9 @@ def test_local_kernels_are_written_as_hpx_writes_them(tmp_path: Path) -> None:
     }
     assert (module / "CMakeLists.txt").read_text(encoding="utf-8") == nsx_app.KERNEL_SHIM
     assert (module / "nsx-module.yaml").read_bytes() == (checkout / "nsx" / "nsx-module.yaml").read_bytes()
-    # Mtimes survive; the shim is kept.
-    os.utime(checkout / "Source" / "arm_add.c", (1, 1))
+    # Same bytes keep the module mtime; the shim is kept.
+    os.utime(checkout / "Source" / "arm_add.c", (3, 3))
+    os.utime(module / "Source" / "arm_add.c", (1, 1))
     os.utime(module / "CMakeLists.txt", (2, 2))
     (checkout / "Source" / "sub" / "arm_sub.c").unlink()
     _render(tmp_path, cmsis_nn_root=checkout)
@@ -492,3 +494,94 @@ def test_placement_is_a_saved_option(tmp_path: Path) -> None:
     assert nsx_app.resolve_options(app_dir, tmp_path).placement == "tcm"
     assert nsx_app.resolve_options(app_dir, tmp_path, placement="mram").placement == "mram"
     assert nsx_app.resolve_options(app_dir, tmp_path, follow_pin=False).placement == "mram"
+
+
+def test_vendor_keeps_mtimes_of_same_bytes(tmp_path: Path) -> None:
+    """Fresh clones rebuild only edits."""
+    checkout = make_checkout(tmp_path / "ns-cmsis-nn")
+    module = tmp_path / "module"
+    nsx_app.write_kernels(checkout, module)
+    old = 1_000_000_000_000_000_000
+    for path in module.rglob("*"):
+        if path.is_file():
+            os.utime(path, ns=(old, old))
+    # A fresh clone: every mtime is new.
+    edited = next(p for p in checkout.joinpath("Source").rglob("*") if p.is_file())
+    edited.write_text(edited.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+    nsx_app.write_kernels(checkout, module)
+    rel = edited.relative_to(checkout)
+    times = {p.relative_to(module): p.stat().st_mtime_ns for p in module.rglob("*") if p.is_file()}
+    assert times.pop(rel) != old
+    assert set(times.values()) == {old}
+
+
+def test_new_file_rebuilds_everything(tmp_path: Path) -> None:
+    """A new header may shadow; no mtime kept."""
+    checkout = make_checkout(tmp_path / "ns-cmsis-nn")
+    module = tmp_path / "module"
+    nsx_app.write_kernels(checkout, module)
+    old = 1_000_000_000_000_000_000
+    for path in module.rglob("*"):
+        if path.is_file():
+            os.utime(path, ns=(old, old))
+    (checkout / "Source" / "shadow.h").write_text("\n", encoding="utf-8")
+    nsx_app.write_kernels(checkout, module)
+    assert all(p.stat().st_mtime_ns != old for p in module.joinpath("Source").rglob("*") if p.is_file())
+
+
+def test_old_source_mtime_still_rebuilds(tmp_path: Path) -> None:
+    """Changed bytes get a fresh mtime."""
+    checkout = make_checkout(tmp_path / "ns-cmsis-nn")
+    module = tmp_path / "module"
+    nsx_app.write_kernels(checkout, module)
+    source = checkout / "Source" / "arm_add.c"
+    source.write_text("int changed;\n", encoding="utf-8")
+    os.utime(source, ns=(1_000_000_000, 1_000_000_000))
+    before = time.time_ns() - 1_000_000_000
+    nsx_app.write_kernels(checkout, module)
+    assert (module / "Source" / "arm_add.c").stat().st_mtime_ns > before
+
+
+def test_unstamped_module_keeps_no_mtime(tmp_path: Path) -> None:
+    """Old mtimes need a fresh-vendor stamp."""
+    checkout = make_checkout(tmp_path / "ns-cmsis-nn")
+    module = tmp_path / "module"
+    nsx_app.write_kernels(checkout, module)
+    old = 1_000_000_000
+    for path in module.rglob("*"):
+        if path.is_file():
+            os.utime(path, ns=(old, old))
+    module.with_name("module.fresh").unlink()
+    nsx_app.write_kernels(checkout, module)
+    assert all(p.stat().st_mtime_ns != old for p in module.joinpath("Source").rglob("*") if p.is_file())
+
+
+def test_in_place_edit_drops_old_mtime(tmp_path: Path) -> None:
+    """An overwrite with an old mtime rebuilds."""
+    checkout = make_checkout(tmp_path / "ns-cmsis-nn")
+    module = tmp_path / "module"
+    nsx_app.write_kernels(checkout, module)
+    old = 1_000_000_000
+    # Edited bytes copied in with an old mtime.
+    edited = tmp_path / "edited.c"
+    edited.write_text("int edited;\n", encoding="utf-8")
+    os.utime(edited, ns=(old, old))
+    shutil.copy2(edited, module / "Source" / "arm_add.c")
+    shutil.copy2(edited, checkout / "Source" / "arm_add.c")
+    before = time.time_ns() - 1_000_000_000
+    nsx_app.write_kernels(checkout, module)
+    assert (module / "Source" / "arm_add.c").stat().st_mtime_ns > before
+
+
+def test_old_inode_stamp_keeps_no_mtime(tmp_path: Path) -> None:
+    """A pre-hash stamp is not trusted."""
+    checkout = make_checkout(tmp_path / "ns-cmsis-nn")
+    module = tmp_path / "module"
+    nsx_app.write_kernels(checkout, module)
+    old = 1_000_000_000
+    for path in module.rglob("*"):
+        if path.is_file():
+            os.utime(path, ns=(old, old))
+    module.with_name("module.fresh").write_text(f"{module.stat().st_ino}\n", encoding="utf-8")
+    nsx_app.write_kernels(checkout, module)
+    assert all(p.stat().st_mtime_ns != old for p in module.joinpath("Source").rglob("*") if p.is_file())

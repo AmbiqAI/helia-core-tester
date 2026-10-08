@@ -660,8 +660,9 @@ def test_run_hardware_pipeline_generates_flashes_then_streams(tmp_path: Path, mo
         order.append(f"flash:{serial}:{build_dir.relative_to(tmp_path)}:force={force}")
         return firmware_build.FlashDecision(True, "abc", "test")
 
-    def _stream(repo_root, spec, serial, *, build_dir, options, echo, progress_to_stderr, allow_unverified_firmware, prepared):
-        order.append(f"stream:{options.suite}:{options.test_name}:unverified={allow_unverified_firmware}")
+    def _stream(repo_root, spec, serial, *, build_dir, options, echo, progress_to_stderr, allow_unverified_firmware, prepared,
+                fresh_boot):
+        order.append(f"stream:{options.suite}:{options.test_name}:unverified={allow_unverified_firmware}:fresh={fresh_boot}")
         return hardware_pipeline.HardwareRunOutcome(session_id="s", result=None, bundle=tmp_path, skipped=[])
 
     monkeypatch.setattr(hardware_pipeline, "generate_tests_for_board", _generate)
@@ -674,7 +675,7 @@ def test_run_hardware_pipeline_generates_flashes_then_streams(tmp_path: Path, mo
     )
     assert order == [
         "stage:build/hardware/apollo510_evb", "generate:cortex-m55:float:f16:/kernels", "flash:42:build/hardware/apollo510_evb:force=False",
-        "stream:float:_f16:unverified=False",
+        "stream:float:_f16:unverified=False:fresh=True",
     ]
     assert outcome.flash is not None and outcome.flash.needed
 
@@ -683,13 +684,13 @@ def test_run_hardware_pipeline_generates_flashes_then_streams(tmp_path: Path, mo
         tmp_path, board, 42, options=StreamOptions(), skip_generate=True, skip_flash=True, echo=lambda _msg: None,
         allow_unverified_firmware=True,
     )
-    assert order == ["stream:int:None:unverified=True"]
+    assert order == ["stream:int:None:unverified=True:fresh=False"]
 
     order.clear()
     run_hardware_pipeline(
         tmp_path, board, 42, options=StreamOptions(), skip_generate=True, force_flash=True, echo=lambda _msg: None,
     )
-    assert order == ["flash:42:build/hardware/apollo510_evb:force=True", "stream:int:None:unverified=False"]
+    assert order == ["flash:42:build/hardware/apollo510_evb:force=True", "stream:int:None:unverified=False:fresh=True"]
 
     with pytest.raises(ValueError, match="--skip-flash and --force-flash"):
         run_hardware_pipeline(

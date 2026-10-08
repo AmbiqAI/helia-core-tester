@@ -34,6 +34,7 @@ import typer
 from .boards import BoardSpec
 from .boards import repo_root as tester_repo_root
 from .jlink_library import JLinkLibraryError, find_jlink_exe
+from .phase_log import mark
 from .toolchain import DOWNLOADS_DIR, GCC_NAME, add_toolchain_to_path, gcc_version
 
 if TYPE_CHECKING:
@@ -214,6 +215,8 @@ def decide_flash(build_dir: Path, serial_no: int, *, force: bool = False) -> Fla
     if not stamp.exists():
         return FlashDecision(True, digest, f"no flash stamp for serial {serial_no} yet", build_id)
     previous = stamp.read_text(encoding="utf-8").strip()
+    if previous == digest and flashed_other(build_dir, serial_no, digest):
+        return FlashDecision(True, digest, f"serial {serial_no} last flashed another ELF", build_id)
     if previous == digest:
         return FlashDecision(
             False, digest, f"ELF sha256 unchanged since last flash to serial {serial_no} (stamp {stamp})", build_id
@@ -285,9 +288,23 @@ def confirm_board_build_id(
     return FlashDecision(False, decision.digest, f"{decision.reason}; board confirmed build id {expected}", expected, actual)
 
 
+def probe_stamp_path(build_dir: Path, serial_no: int) -> Path:
+    """Probe-wide stamp shared by sibling dirs."""
+    return build_dir.parent / f".probe-{serial_no}.sha256"
+
+
+def flashed_other(build_dir: Path, serial_no: int, digest: str) -> bool:
+    """The probe's last flash was another ELF."""
+    try:
+        return probe_stamp_path(build_dir, serial_no).read_text(encoding="utf-8").strip() != digest
+    except OSError:
+        return False
+
+
 def record_flash(build_dir: Path, serial_no: int, digest: str) -> Path:
     stamp = flash_stamp_path(build_dir, serial_no)
     stamp.write_text(digest + "\n", encoding="utf-8")
+    probe_stamp_path(build_dir, serial_no).write_text(digest + "\n", encoding="utf-8")
     return stamp
 
 
@@ -475,6 +492,22 @@ def built_kernels(board: BoardSpec, build_dir: Path, options: "AppOptions") -> P
     return options.cmsis_nn_root
 
 
+# Pipe fd an eval waits on.
+BUILT_FD_ENV = "HCT_BUILT_FD"
+
+
+def signal_built() -> None:
+    """Tell a waiting eval the build is done."""
+    fd = os.environ.pop(BUILT_FD_ENV, None)
+    if fd is None:
+        return
+    try:
+        os.write(int(fd), b"1")
+        os.close(int(fd))
+    except (OSError, ValueError):
+        pass
+
+
 def flash_firmware(
     board: BoardSpec,
     serial_no: int,
@@ -498,6 +531,8 @@ def flash_firmware(
         options=options, update_dependencies=update_dependencies,
     )
     build_seconds = time.monotonic() - build_started
+    mark("build_done")
+    signal_built()
     decision = decide_flash(build_dir, serial_no, force=force)
     if not decision.needed:
         typer.echo(f"[hardware] Stamp says {decision.reason}; asking the board which build it runs...")
@@ -513,4 +548,5 @@ def flash_firmware(
             target=SERVER_TARGET, probe_serial=serial_no, jobs=_jobs(jobs),
         )
     record_flash(build_dir, serial_no, decision.digest)
+    mark("flash_done")
     return replace(decision, build_seconds=build_seconds, flash_seconds=time.monotonic() - flash_started)

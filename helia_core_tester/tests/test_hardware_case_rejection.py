@@ -87,7 +87,7 @@ def test_runner_writes_the_bundle_with_the_rejected_case(tmp_path: Path, monkeyp
     transport = FakeTargetTransport(rejections={"conv_b": ("correctness", ARG_ERROR)})
     monkeypatch.setattr(
         session_runner, "open_rtt_session",
-        lambda board, serial_no, *, build_dir, counter_passes: (HostSession(transport, counter_passes=counter_passes), transport, 0),
+        lambda board, serial_no, *, build_dir, counter_passes, reset=True: (HostSession(transport, counter_passes=counter_passes), transport, 0),
     )
     monkeypatch.setattr(session_runner, "generate_memory_report", lambda board, **_: tmp_path / "memory_report.json")
     (tmp_path / "memory_report.json").write_text("{}", encoding="utf-8")
@@ -151,7 +151,7 @@ class _SilentSampling(FakeTargetTransport):
 def test_broken_session_still_fails_without_a_bundle(tmp_path: Path, monkeypatch, transport, passes, message) -> None:
     monkeypatch.setattr(
         session_runner, "open_rtt_session",
-        lambda board, serial_no, *, build_dir, counter_passes: (HostSession(transport, counter_passes=counter_passes), transport, 0),
+        lambda board, serial_no, *, build_dir, counter_passes, reset=True: (HostSession(transport, counter_passes=counter_passes), transport, 0),
     )
     monkeypatch.setattr(session_runner, "write_result_bundle", lambda *a, **k: pytest.fail("bundle written"))
 

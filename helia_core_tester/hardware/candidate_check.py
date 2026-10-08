@@ -558,8 +558,12 @@ def hidden_entries(tree: Path) -> list[str]:
 
 def check_candidate(
     tree: Path, base: str, *, build_dir: Optional[Path] = None, scan_deadline: float = SCAN_DEADLINE_S,
+    scan_cache: Optional[Path] = None,
 ) -> dict:
-    """The JSON report for one candidate."""
+    """The JSON report for one candidate.
+
+    scan_cache: trusted dir for base gcc -E scans.
+    """
     tree = tree.resolve()
     unsafe = unsafe_config(tree)
     if unsafe:
@@ -619,7 +623,7 @@ def check_candidate(
     if any(path.startswith(ALLOWED_DIRS) for path in changes):
         tops = sorted({path.split("/", 1)[0] + "/" for path in base_blobs if path.startswith(ALLOWED_DIRS)})
         archive = _git(tree, "archive", commit, "--", *tops) if tops else _EMPTY_TAR
-        findings += preprocess_findings(tree, archive, rule_counts, configs, scan_deadline)
+        findings += preprocess_findings(tree, archive, rule_counts, configs, scan_deadline, scan_cache)
     return {
         "schema": "hct.candidate_check",
         "schema_version": 2,
