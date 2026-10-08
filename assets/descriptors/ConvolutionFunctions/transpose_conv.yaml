@@ -519,3 +519,50 @@ use_bias: true
 weight_gain: 8.0
 calibration_range: [-16.0, 16.0]
 input_range: [-40.0, 40.0]
+---
+# Batch 2 runs both images in one call.
+operator: TransposeConv
+name: transpose_conv_batch2_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+required_kernel_symbols: [arm_transpose_conv_s16, arm_transpose_conv_s16_get_buffer_size]
+input_shape: [2, 3, 5, 7]
+filter_shape: [3, 3, 5, 7]
+strides: [2, 2]
+padding: SAME
+use_bias: true
+---
+# Requant scale near 1: one accumulator step moves an output step.
+operator: TransposeConv
+name: transpose_conv_requant_sensitive_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+required_kernel_symbols: [arm_transpose_conv_s16, arm_transpose_conv_s16_get_buffer_size]
+input_shape: [1, 2, 12, 5]
+filter_shape: [2, 3, 3, 5]
+strides: [1, 2]
+padding: VALID
+use_bias: true
+calibration_range: [-8.0, 8.0]
+input_range: [-0.01, 0.01]
+bias_range: [-0.002, 0.002]
+min_effective_scale: 1.0
+---
+# Bias and accumulators beyond int32.
+operator: TransposeConv
+name: transpose_conv_int64_bias_and_acc_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+required_kernel_symbols: [arm_transpose_conv_s16, arm_transpose_conv_s16_get_buffer_size]
+input_shape: [1, 7, 7, 47]
+filter_shape: [6, 6, 3, 47]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+calibration_range: [0.0, 1.0]
+input_range: [0.85, 1.0]
+positive_weights: true
+wide_bias: [2147483648.0, 17179869184.0]

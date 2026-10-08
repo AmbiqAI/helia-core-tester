@@ -2091,7 +2091,7 @@ static arm_cmsis_nn_status run_transpose_conv_s16_once(hct_server_session_t *ses
     output_dims.h = session->output_h;
     output_dims.w = session->output_w;
     output_dims.c = session->output_c;
-    if (input_dims.n != 1 || output_dims.n != 1 || output_dims.h <= 0 || output_dims.w <= 0 || output_dims.c <= 0)
+    if (input_dims.n < 1 || output_dims.n != input_dims.n || output_dims.h <= 0 || output_dims.w <= 0 || output_dims.c <= 0)
     {
         return ARM_CMSIS_NN_ARG_ERROR;
     }

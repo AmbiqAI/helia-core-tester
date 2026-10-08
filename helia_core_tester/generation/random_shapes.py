@@ -9,9 +9,9 @@ import os
 import re
 import shutil
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 import numpy as np
 import yaml
@@ -44,6 +44,10 @@ DW16_ROUTES = ("arm_depthwise_conv_fast_s16", "arm_depthwise_conv_s16")
 # Direct entry; no wrapper.
 TC16_ROUTE = "arm_transpose_conv_s16"
 TC16_SYMBOLS = [TC16_ROUTE, "arm_transpose_conv_s16_get_buffer_size"]
+# Edge categories, highest priority first.
+TC16_EDGES = (
+    "requant", "int64", "clamp", "batch2", "fastenhancer", "gaps", "overlap", "odd_tail", "unit_tail",
+)
 SECRET_ENV = "HCT_HIDDEN_SEED"
 # Short secrets fall to brute force.
 MIN_SECRET = 16
@@ -60,6 +64,8 @@ class Generator:
     stream: int
     routes: Callable[[bool], list[str]]
     draw: Callable
+    # Per-index targets; overrides route cycling.
+    plan: Optional[Callable[[int], list[str]]] = None
 
 
 @dataclass
@@ -79,6 +85,9 @@ class Layer:
     padding: str = "VALID"
     mult: int = 1
     transpose: bool = False
+    n: int = 1
+    # Knobs that replace the drawn ones.
+    knobs: dict = field(default_factory=dict)
 
     def out_hw(self) -> tuple[int, int]:
         """Output height and width."""
@@ -234,8 +243,112 @@ def _odd_channels(rng: np.random.Generator, lo: int, hi: int) -> int:
     return int(rng.integers(lo, hi + 1))
 
 
-def _tc16_layer(rng: np.random.Generator, route: str) -> Layer:
+def tc16_edge_count(n: int) -> int:
+    """Edge slots in an n-case tc16 draw.
+
+    max(ceil(n/3), min(categories, floor(2n/3))): at least a third,
+    more so every category fits once n >= 14, never past two thirds.
+    Slots take TC16_EDGES in order; each shape is still drawn.
+    """
+    return max(-(-n // 3), min(len(TC16_EDGES), 2 * n // 3))
+
+
+def _tc16_plan(n: int) -> list[str]:
+    """Mixed draws, then edge categories."""
+    edges = tc16_edge_count(n)
+    return [TC16_ROUTE] * (n - edges) + [TC16_EDGES[i % len(TC16_EDGES)] for i in range(edges)]
+
+
+def _glorot_limit(layer: Layer) -> float:
+    """Keras Glorot uniform weight bound."""
+    return float(np.sqrt(6.0 / (layer.kh * layer.kw * (layer.cin + layer.cout))))
+
+
+def _tc16_requant(rng: np.random.Generator) -> Layer:
+    """Large multipliers: one LSB flips outputs."""
+    layer = Layer(_size(rng, 1, 6), _size(rng, 4, 24), _odd_channels(rng, 1, 15), int(rng.integers(1, 9)),
+                  int(rng.integers(1, 5)), int(rng.integers(1, 5)), int(rng.integers(1, 4)), int(rng.integers(1, 4)),
+                  padding=_padding(rng), transpose=True)
+    scale = float(rng.uniform(0.5, 2.0))
+    taps = layer.cin * -(-layer.kh // layer.sh) * -(-layer.kw // layer.sw)
+    # Accumulators near 6000 output steps.
+    amplitude = float(max(np.sqrt(3.0) * 6000.0 / (scale * 73.0 * np.sqrt(taps)), 2.0)) / 32767.0
+    calib = float(rng.uniform(2.0, 16.0))
+    # Bias near 3000 output steps.
+    bias = 3000.0 / scale * (calib / 32767.0) * (_glorot_limit(layer) / 127.0)
+    layer.knobs = {"activation": "NONE", "use_bias": True, "calibration_range": [-calib, calib],
+                   "input_range": [-calib * amplitude, calib * amplitude], "bias_range": [-2 * bias, 2 * bias],
+                   "min_effective_scale": scale}
+    return layer
+
+
+def _tc16_int64(rng: np.random.Generator) -> Layer:
+    """Bias and accumulators beyond int32."""
+    kh, kw = int(rng.integers(6, 9)), int(rng.integers(6, 9))
+    # Inputs cover the kernel: full-tap outputs.
+    h, w = kh + int(rng.integers(0, 3)), kw + int(rng.integers(0, 3))
+    layer = Layer(h, w, _odd_channels(rng, 45, 63), int(rng.integers(2, 4)), kh, kw, padding=_padding(rng),
+                  transpose=True)
+    # Positive data: ~2e6 per tap, 1600+ taps.
+    layer.knobs = {"activation": "NONE", "use_bias": True, "calibration_range": [0.0, 1.0],
+                   "input_range": [0.85, 1.0], "positive_weights": True,
+                   "wide_bias": [2.0**31, float(2 ** int(rng.integers(32, 37)))]}
+    return layer
+
+
+def _tc16_clamp(rng: np.random.Generator) -> Layer:
+    """Clamps hit on both sides."""
+    layer = _tc16_mixed(rng)
+    calib = float(rng.uniform(1.0, 32.0))
+    layer.knobs = {"activation": "NONE", "use_bias": bool(rng.random() < 0.7),
+                   "calibration_range": [-calib, calib], "input_range": [-calib, calib],
+                   "activation_min": -int(rng.integers(500, 5000)), "activation_max": int(rng.integers(500, 5000))}
+    return layer
+
+
+def _tc16_edge(rng: np.random.Generator, edge: str) -> Layer:
+    """One draw from an edge category."""
+    if edge == "requant":
+        return _tc16_requant(rng)
+    if edge == "int64":
+        return _tc16_int64(rng)
+    if edge == "clamp":
+        return _tc16_clamp(rng)
+    pad = _padding(rng)
+    if edge == "batch2":
+        layer = _tc16_mixed(rng)
+        layer.n = 2
+        return layer
+    if edge == "fastenhancer":
+        cin, cout = _odd_channels(rng, 9, 40), int(rng.integers(1, 5))
+        return Layer(1, _size(rng, 32, 80), cin, cout, 1, int(rng.integers(4, 9)), 1, 4, transpose=True)
+    if edge == "gaps":
+        # Stride beyond kernel: bias-only outputs.
+        sh, sw = int(rng.integers(1, 5)), int(rng.integers(2, 5))
+        kh = int(rng.integers(1, sh)) if sh > 1 and rng.random() < 0.5 else 1
+        h = 1 if kh == 1 and sh == 1 else _size(rng, 2, 8)
+        return Layer(h, _size(rng, 4, 24), _odd_channels(rng, 1, 32), _odd_channels(rng, 1, 16), kh,
+                     int(rng.integers(1, sw)), sh, sw, padding=pad, transpose=True)
+    if edge == "overlap":
+        kh, kw = int(rng.integers(5, 9)), int(rng.integers(5, 9))
+        return Layer(_size(rng, 2, 8), _size(rng, 2, 10), _odd_channels(rng, 1, 24), _odd_channels(rng, 1, 16),
+                     kh, kw, int(rng.integers(1, 3)), int(rng.integers(1, 3)), padding=pad, transpose=True)
+    if edge == "odd_tail":
+        layer = _tc16_mixed(rng)
+        layer.cin, layer.cout = int(rng.choice(np.arange(3, 48, 2))), int(rng.choice(np.arange(3, 32, 2)))
+        return layer
+    # unit_tail
+    return Layer(_size(rng, 1, 12), _size(rng, 4, 48), 1, 1, int(rng.integers(1, 9)), int(rng.integers(1, 9)),
+                 int(rng.integers(1, 5)), int(rng.integers(1, 5)), padding=pad, transpose=True)
+
+
+def _tc16_layer(rng: np.random.Generator, target: str) -> Layer:
     """An s16 transpose conv layer."""
+    return _tc16_mixed(rng) if target == TC16_ROUTE else _tc16_edge(rng, target)
+
+
+def _tc16_mixed(rng: np.random.Generator) -> Layer:
+    """The normal mix."""
     pad, roll = _padding(rng), rng.random()
     if roll < 0.25:
         # Near FastEnhancer's 1x8, stride 4.
@@ -274,7 +387,9 @@ GENERATORS: dict[tuple[str, str], Generator] = {
     ("Convolve", "S8"): Generator("conv", "ConvolutionFunctions/convolve.yaml", 0, _conv_routes, _conv_layer),
     ("DepthwiseConv", "S8"): Generator("dw", "ConvolutionFunctions/depthwise_conv.yaml", 1, _dw_routes, _dw_layer),
     ("DepthwiseConv", "S16"): Generator("dw16", "ConvolutionFunctions/depthwise_conv.yaml", 2, _dw16_routes, _dw16_layer),
-    ("TransposeConv", "S16"): Generator("tc16", "ConvolutionFunctions/transpose_conv.yaml", 3, _tc16_routes, _tc16_layer),
+    ("TransposeConv", "S16"): Generator(
+        "tc16", "ConvolutionFunctions/transpose_conv.yaml", 3, _tc16_routes, _tc16_layer, _tc16_plan,
+    ),
 }
 # (op, dtype) keys, in draw order.
 OPS = tuple(GENERATORS)
@@ -360,18 +475,18 @@ def footprint(op: str, layer: Layer, dtype: str = "S8") -> int:
         weights = layer.kh * layer.kw * layer.cout
     used = 0
     # input, weights, bias, multiplier, shift
-    blobs = ((item * layer.h * layer.w * layer.cin, item), (weights, 1), (bias * layer.cout, bias),
+    blobs = ((item * layer.n * layer.h * layer.w * layer.cin, item), (weights, 1), (bias * layer.cout, bias),
              *[(4 * layer.cout, 4)] * 2)
     for size, align in blobs:
         used = _align_up(used, align) + size
     used = _align_up(used, 16) + scratch
-    return _align_up(used, 16) + item * oh * ow * layer.cout
+    return _align_up(used, 16) + item * layer.n * oh * ow * layer.cout
 
 
 def layer_macs(op: str, layer: Layer) -> int:
     if op == "TransposeConv":
         # Each input scatters one kernel.
-        return layer.h * layer.w * layer.cin * layer.cout * layer.kh * layer.kw
+        return layer.n * layer.h * layer.w * layer.cin * layer.cout * layer.kh * layer.kw
     oh, ow = layer.out_hw()
     depth = layer.cin if op == "Convolve" else 1
     return oh * ow * layer.cout * layer.kh * layer.kw * depth
@@ -438,7 +553,7 @@ def _descriptor(
         "name": name,
         "activation_dtype": dtype,
         "weight_dtype": "S8",
-        "input_shape": [1, layer.h, layer.w, layer.cin],
+        "input_shape": [layer.n, layer.h, layer.w, layer.cin],
         "strides": [layer.sh, layer.sw],
         "padding": layer.padding,
         "dilation": [layer.dh, layer.dw],
@@ -462,7 +577,8 @@ def sample_op(key: tuple[str, str], n: int, seed: int, cpu: str, workspace: int)
     """N descriptors for one generator, cycling routes."""
     mve = get_cpu_profile(cpu).has_mve
     gen, (op, dtype) = GENERATORS[key], key
-    targets, draw = gen.routes(mve), gen.draw
+    routes, draw = gen.routes(mve), gen.draw
+    targets = gen.plan(n) if gen.plan else routes
     # One stream per op keeps ops independent.
     rng = np.random.default_rng([seed, gen.stream])
     cases = []
@@ -474,13 +590,19 @@ def sample_op(key: tuple[str, str], n: int, seed: int, cpu: str, workspace: int)
             if oh < 1 or ow < 1:
                 continue
             route = layer_route(op, layer, mve, dtype)
-            hit = route == target or (target == DW_AS_CONV and route in CONV_ROUTES)
+            # Planned edges keep the op's one route.
+            hit = route == target or (target == DW_AS_CONV and route in CONV_ROUTES) or (
+                gen.plan is not None and route in routes)
             if hit and layer_macs(op, layer) <= MAX_MACS and footprint(op, layer, dtype) <= workspace:
                 break
         else:
             raise RuntimeError(f"No {op} {dtype} shape for route {target}")
         name = f"rs{seed}_{gen.tag}_{index:03d}"
-        cases.append(_descriptor(op, dtype, name, layer, _quant(rng, op, layer, dtype), seed, route))
+        knobs = layer.knobs or _quant(rng, op, layer, dtype)
+        case = _descriptor(op, dtype, name, layer, knobs, seed, route)
+        if target not in routes:
+            case["edge"] = target
+        cases.append(case)
     return cases
 
 
