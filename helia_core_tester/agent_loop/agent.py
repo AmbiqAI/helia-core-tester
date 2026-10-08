@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Iterable, Optional
 
 from .config import Campaign
-from .ledger import Ledger
+from .ledger import Ledger, passing_evals
 from .workspace import Workspace
 
 TOOLS = "Read,Edit,Write,Glob,Grep,Bash"
@@ -194,10 +194,15 @@ def status(ws: Workspace, tail: int = 10) -> dict[str, Any]:
     ledger = Ledger(ws.ledger)
     meta = read_meta(ws)
     events = stream_events(Path(meta["log"])) if meta.get("log") else []
+    saved = ledger.rows()
     rows = [{"eval": r["eval"], "verdict": r["verdict"], "charged": r.get("charged"),
              "geomean": {leg: v.get("geomean") for leg, v in (r.get("legs") or {}).items()},
-             "size_delta": r.get("size_delta"), "toolchains": r.get("toolchains")} for r in ledger.rows()]
+             "size_delta": r.get("size_delta"), "toolchains": r.get("toolchains")} for r in saved]
+    passes = passing_evals(saved, campaign.runs)
+    for pick in passes:
+        pick["diff"] = str(ws.ledger / f"{pick['eval']}.diff")
     return {"campaign": campaign.name, "evals_used": ledger.charged(), "evals": campaign.evals, "rows": rows,
+            "passes": passes,
             "pid": meta.get("pid"), "running": pid_alive(meta.get("pid")), "session_id": meta.get("session_id"),
             "cost": run_cost(events), "spent_usd": round(spent_usd(meta), 2), "recent": readable(events)[-tail:] if tail else []}
 

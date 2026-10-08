@@ -87,6 +87,9 @@ may Read if the printed output was cut:
   rejected, refused, no_gain, error.
 - `evals_left`: you have {{ evals }} evaluations in total. Use them carefully.
 - `note`: present when the eval was not charged, and why.
+- `next`: on a pass only, the size phase target: code bytes added and
+  speedup of the fastest and the smallest passes so far{% if toolchains %}, with bytes
+  and speedup per compiler{% endif %}.
 - `code_size`: kernel library code bytes vs base, total and per changed
   object file, or an error when nothing was built.
 {%- if toolchains %}
@@ -121,7 +124,9 @@ may Read if the printed output was cut:
 Besides speed, weigh these, where they apply:
 - Code size. Flash is scarce on these chips. Prefer the smallest change that
   gets the gain: no per-shape copies of a kernel, no unrolling beyond what
-  pays off, share helpers. Report bytes added per % speedup.
+  pays off, share helpers. Report bytes added per % speedup{% if toolchains %} for each
+  compiler{% endif %}. Size never fails an eval; after your first pass it is
+  your main target (see below).
 - Memory and caching. Think about where each operand lives and how often it
   is read: reuse each loaded weight across several output pixels and each
   loaded input across several channels, keep loads contiguous, and avoid
@@ -154,8 +159,26 @@ Work plan:
    useful), reason about correctness (rounding, saturation, tails, odd
    channel counts, padding) before submitting.
 4. If a change fails or gives no gain, undo it or fix it before stacking more.
-5. Stop when further gains look small, or when evals run out.
+5. After your first pass, follow "After your first pass" below. Stop when
+   evals run out or no plausible size cut remains.
 
-When you stop, leave the best passing version in the tree (or the starting tree if
-nothing passed) and write a short summary: what you changed, why,
-the verdicts you got per eval, and the final speedups.
+After your first pass:
+- Keep the fastest pass as your reference. Note what it changed, so you
+  can restore it when a cut fails.
+- Spend the remaining evals cutting code size while every leg still
+  passes: share helpers, merge specialized loops, unroll less, drop dead or
+  duplicated paths, and delete functions nothing calls any more. A change
+  that is both smaller and faster is welcome.
+- Run `check` on each cut and compare `code_size`{% if toolchains %} per compiler
+  ({{ toolchains|join(" and ") }}); a cut that shrinks one compiler may grow the other{% endif %}.
+- With each candidate, state the bytes saved{% if toolchains %} per compiler{% endif %} and the
+  speed lost per leg, both vs the reference.
+- Never trade correctness for size.
+- Do not stop early while evals remain and a plausible size cut remains.
+  The user picks among your passing evals by speed and size, so each
+  smaller pass is a real option even when it is a bit slower.
+
+When you stop, leave the passing version you recommend in the tree (or the
+starting tree if nothing passed) and write a short summary: what you
+changed, why, the verdicts you got per eval, and for each passing eval its
+speedup and bytes added{% if toolchains %} per compiler{% endif %}.

@@ -186,12 +186,79 @@ def ledger_row(eid: str, overall: str, legs: dict, *, charged: bool, infra: bool
     return row
 
 
+def row_gains(row: dict, runs: tuple[Leg, ...]) -> dict[str, dict]:
+    """Geomean and bytes per toolchain."""
+    if row.get("toolchains"):
+        return row["toolchains"]
+    means = [g for v in (row.get("legs") or {}).values() for g in (v.get("geomean") or {}).values() if g]
+    return {toolchain_names(runs)[0]: {"geomean": round(statistics.geometric_mean(means), 4) if means else None,
+                                       "size_delta": row.get("size_delta")}}
+
+
+def _known(pick: dict) -> bool:
+    return all(g.get("geomean") is not None and isinstance(g.get("size_delta"), int)
+               for g in pick["toolchains"].values())
+
+
+def _speed(pick: dict) -> float:
+    return statistics.geometric_mean([g["geomean"] for g in pick["toolchains"].values()])
+
+
+def _bytes(pick: dict) -> int:
+    return sum(g["size_delta"] for g in pick["toolchains"].values())
+
+
+def _dominates(a: dict, b: dict) -> bool:
+    """a is no worse anywhere, better somewhere."""
+    pairs = [(a["toolchains"][t], b["toolchains"][t]) for t in b["toolchains"]]
+    if not all(x["geomean"] >= y["geomean"] and x["size_delta"] <= y["size_delta"] for x, y in pairs):
+        return False
+    return any(x["geomean"] > y["geomean"] or x["size_delta"] < y["size_delta"] for x, y in pairs)
+
+
+def passing_evals(rows: list[dict], runs: tuple[Leg, ...]) -> list[dict[str, Any]]:
+    """Passing evals marked fastest, smallest, pareto."""
+    picks = [{"eval": r["eval"], "toolchains": row_gains(r, runs)} for r in rows if r.get("verdict") == "pass"]
+    known = [p for p in picks if _known(p)]
+    timed = [p for p in picks if all(g.get("geomean") is not None for g in p["toolchains"].values())]
+    # Ties go to the earlier eval.
+    fastest = max(timed, key=_speed, default=None)
+    smallest = min(known, key=_bytes, default=None)
+    for pick in picks:
+        pick["fastest"], pick["smallest"] = pick is fastest, pick is smallest
+        pick["pareto"] = pick in known and not any(_dominates(q, pick) for q in known)
+    return picks
+
+
+def pick_text(pick: dict) -> str:
+    """+3,088 B gcc / +2,154 B atfe at 2.78x / 3.42x"""
+    gains = pick["toolchains"]
+    sizes = " / ".join((f"{g['size_delta']:+,}" if isinstance(g.get("size_delta"), int) else "?") + f" B {name}"
+                       for name, g in gains.items())
+    speeds = " / ".join(f"{g['geomean']:.2f}x" for g in gains.values())
+    return f"{sizes} at {speeds}"
+
+
+def size_note(picks: list[dict]) -> Optional[str]:
+    """Point a pass at the size phase."""
+    fastest = next((p for p in picks if p["fastest"]), None)
+    smallest = next((p for p in picks if p["smallest"]), None)
+    if fastest is None:
+        return None
+    if smallest is None or fastest is smallest:
+        return f"next: shrink code; best pass {fastest['eval']} {pick_text(fastest)}"
+    return (f"next: shrink code; fastest pass {fastest['eval']} {pick_text(fastest)}; "
+            f"smallest pass {smallest['eval']} {pick_text(smallest)}")
+
+
 def agent_view(overall: str, legs: dict, *, evals_left: int, size: dict, runs: tuple[Leg, ...],
-               note: Optional[str] = None) -> dict[str, Any]:
+               note: Optional[str] = None, next_step: Optional[str] = None) -> dict[str, Any]:
     """What submit prints for the agent."""
     out: dict[str, Any] = {"verdict": overall, "exit_code": VERDICT_EXITS.get(overall, EXIT_ERROR), "evals_left": evals_left}
     if note:
         out["note"] = note
+    if next_step:
+        out["next"] = next_step
     out["code_size"] = size
     gains = toolchain_gains(legs, runs, size)
     if gains:

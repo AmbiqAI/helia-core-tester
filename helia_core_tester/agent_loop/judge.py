@@ -19,7 +19,8 @@ from helia_core_tester.hardware.candidate_scan import run_binutil
 from helia_core_tester.hardware.toolchain import toolchain_spec
 
 from .config import Campaign
-from .ledger import EXIT_BUDGET, Ledger, LockBusy, agent_view, file_lock, is_infra, ledger_row, merge_legs, scored
+from .ledger import (EXIT_BUDGET, Ledger, LockBusy, agent_view, file_lock, is_infra, ledger_row, merge_legs,
+                     passing_evals, scored, size_note)
 from .workspace import Workspace, kernel_lib
 
 EDIT_TREES = ("Source", "Include")
@@ -355,8 +356,9 @@ def _submit_locked(ws: Workspace, campaign: Campaign, facts: dict, ledger: Ledge
             note = "Board busy or failing; not charged. Submit again."
         elif overall == "error":
             note = "The board run failed; check for faults or hangs."
+        next_step = size_note(passing_evals(ledger.rows(), campaign.runs)) if overall == "pass" else None
         view = agent_view(overall, legs, evals_left=campaign.evals - ledger.charged(), size=size,
-                          runs=campaign.runs, note=note)
+                          runs=campaign.runs, note=note, next_step=next_step)
         return _emit(ws, eid, view)
 
 
