@@ -395,16 +395,29 @@ def write_kernels(root: Path, module_dir: Path) -> None:
         _vendor(root, module_dir)
 
 
+def _stamp_path(module_dir: Path) -> Path:
+    """Marks a module vendored with fresh mtimes."""
+    return module_dir.with_name(module_dir.name + ".fresh")
+
+
+def _fresh_module(module_dir: Path) -> bool:
+    """This code vendored the current module."""
+    try:
+        stamp = _stamp_path(module_dir).read_text(encoding="utf-8").strip()
+        return stamp == str(module_dir.stat().st_ino)
+    except OSError:
+        return False
+
+
 def _keep_mtimes(fresh: Path, old: Path) -> None:
     """Same bytes keep the old mtime.
 
-    Snapshots are fresh clones; ninja then skips unchanged units.
-    Only when no path was added: a new header can shadow an
-    old one without touching any depfile.
+    Old mtimes are trusted only from a fresh vendor.
+    Added paths keep none: headers may shadow.
     """
     import filecmp
 
-    if old.is_symlink() or not old.is_dir():
+    if old.is_symlink() or not old.is_dir() or not _fresh_module(old):
         return
     paths = sorted(path.relative_to(fresh) for path in fresh.rglob("*"))
     if not set(paths) <= {path.relative_to(old) for path in old.rglob("*")}:
@@ -426,8 +439,8 @@ def _vendor(root: Path, module_dir: Path) -> None:
     try:
         (fresh / "nsx").mkdir()
         # Native manifest at the module root.
-        shutil.copy2(root / "nsx" / "nsx-module.yaml", fresh / "nsx-module.yaml")
-        shutil.copy2(root / "nsx" / "CMakeLists.txt", fresh / "nsx" / "CMakeLists.txt")
+        shutil.copy(root / "nsx" / "nsx-module.yaml", fresh / "nsx-module.yaml")
+        shutil.copy(root / "nsx" / "CMakeLists.txt", fresh / "nsx" / "CMakeLists.txt")
         # Keep the shim's mtime: CMake reruns otherwise.
         shim = module_dir / "CMakeLists.txt"
         if not module_dir.is_symlink() and shim.is_file() and not shim.is_symlink() and shim.read_text(
@@ -436,12 +449,14 @@ def _vendor(root: Path, module_dir: Path) -> None:
             shutil.copy2(shim, fresh / "CMakeLists.txt")
         else:
             (fresh / "CMakeLists.txt").write_text(KERNEL_SHIM, encoding="utf-8")
-        # copytree keeps mtimes: ninja skips unchanged.
+        # Fresh mtimes; same bytes get old ones.
         for name in KERNEL_TREES:
             if (root / name).is_dir():
-                shutil.copytree(root / name, fresh / name)
+                shutil.copytree(root / name, fresh / name, copy_function=shutil.copy)
         _keep_mtimes(fresh, module_dir)
+        _stamp_path(module_dir).unlink(missing_ok=True)
         _swap_in(fresh, module_dir)
+        _stamp_path(module_dir).write_text(f"{module_dir.stat().st_ino}\n", encoding="utf-8")
     except BaseException:
         _remove(fresh)
         raise

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import time
 from pathlib import Path
 
 import pytest
@@ -524,5 +525,32 @@ def test_new_file_rebuilds_everything(tmp_path: Path) -> None:
         if path.is_file():
             os.utime(path, ns=(old, old))
     (checkout / "Source" / "shadow.h").write_text("\n", encoding="utf-8")
+    nsx_app.write_kernels(checkout, module)
+    assert all(p.stat().st_mtime_ns != old for p in module.joinpath("Source").rglob("*") if p.is_file())
+
+
+def test_old_source_mtime_still_rebuilds(tmp_path: Path) -> None:
+    """Changed bytes get a fresh mtime."""
+    checkout = make_checkout(tmp_path / "ns-cmsis-nn")
+    module = tmp_path / "module"
+    nsx_app.write_kernels(checkout, module)
+    source = checkout / "Source" / "arm_add.c"
+    source.write_text("int changed;\n", encoding="utf-8")
+    os.utime(source, ns=(1_000_000_000, 1_000_000_000))
+    before = time.time_ns() - 1_000_000_000
+    nsx_app.write_kernels(checkout, module)
+    assert (module / "Source" / "arm_add.c").stat().st_mtime_ns > before
+
+
+def test_unstamped_module_keeps_no_mtime(tmp_path: Path) -> None:
+    """Old mtimes need a fresh-vendor stamp."""
+    checkout = make_checkout(tmp_path / "ns-cmsis-nn")
+    module = tmp_path / "module"
+    nsx_app.write_kernels(checkout, module)
+    old = 1_000_000_000
+    for path in module.rglob("*"):
+        if path.is_file():
+            os.utime(path, ns=(old, old))
+    module.with_name("module.fresh").unlink()
     nsx_app.write_kernels(checkout, module)
     assert all(p.stat().st_mtime_ns != old for p in module.joinpath("Source").rglob("*") if p.is_file())
