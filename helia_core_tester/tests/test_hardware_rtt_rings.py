@@ -79,9 +79,8 @@ def test_put_keeps_one_slot_free_and_wraps() -> None:
     memory = _target(down_size=8)
     _set_ring(memory, 3, DOWN_BUFFER, 8, write=6, read=3)
     rings = RttRings(memory, BLOCK)
-    # Two bytes reach the wrap point, then 0..1 (slot 2 stays free).
-    assert rings.put(b"abcdef") == 2
-    assert rings.put(b"cdef") == 2
+    # Two bytes to the wrap, two from 0; slot 2 stays free.
+    assert rings.put(b"abcdef") == 4
     assert rings.put(b"ef") == 0
     assert bytes(memory.memory_read(DOWN_BUFFER, 8))[:2] == b"cd"
     assert bytes(memory.memory_read(DOWN_BUFFER + 6, 2)) == b"ab"

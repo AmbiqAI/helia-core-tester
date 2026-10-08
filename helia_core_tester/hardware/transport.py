@@ -99,10 +99,14 @@ class RttRings:
         if ring is None:
             return 0
         buffer, size, write, read = ring
-        # Keep one slot free; stop at wrap.
-        length = min(len(payload), (read - write - 1) % size, size - write)
+        # Keep one slot free.
+        length = min(len(payload), (read - write - 1) % size)
+        # Copy to the wrap, then from 0.
+        head = min(length, size - write)
         if length > 0:
-            self._write(buffer + write, payload[:length])
+            self._write(buffer + write, payload[:head])
+            if length > head:
+                self._write(buffer, payload[head:length])
             self._commit(self._down + 12, (write + length) % size)
         return length
 
