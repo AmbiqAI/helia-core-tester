@@ -47,7 +47,12 @@ A later leg runs only when the earlier legs got as far as scoring.
 {%- if toolchains %}
 Each placement runs once per compiler: {{ toolchains|join(" and ") }} (atfe is Arm
 Toolchain for Embedded, clang). Pass needs every leg on every compiler, so
-write C that both compile well. Clang ignores gcc-only attributes such as
+write C that both compile well.
+{%- elif has_atfe %}
+Every leg builds with atfe (Arm Toolchain for Embedded, clang).
+{%- endif %}
+{%- if has_atfe %}
+Clang ignores gcc-only attributes such as
 `__attribute__((optimize(...)))`; `#pragma GCC unroll N` works in both.
 {%- endif %}
 Submit judges a copy of the tree taken when it starts; later edits wait
@@ -71,6 +76,8 @@ evaluator uses). Costs no eval. Use it to confirm the compiler emits the
 Add `--toolchain {{ toolchains|join("|") }}` to pick the build (default {{ toolchains[0] }}),
 e.g. `{{ disasm }} <function_name> --toolchain atfe`; clang code
 prints in llvm-objdump syntax.
+{%- elif has_atfe %}
+The build is clang, so it prints in llvm-objdump syntax.
 {%- endif %}
 
 `submit` prints one JSON verdict and saves the same text to

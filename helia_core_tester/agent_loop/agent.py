@@ -58,7 +58,9 @@ def wrapper_text(ws: Workspace, name: str) -> str:
     return (f"#!/bin/sh\n# Agent bridge to the trusted judge.\n"
             f'[ $# -le 1 ] || {{ [ $# -eq 3 ] && [ "$2" = --toolchain ]; }} || '
             f'{{ echo "usage: disasm <function_name> [--toolchain gcc|atfe]"; exit 2; }}\n'
-            f'exec {cmd} --toolchain "${{3:-}}" -- "$1"\n')
+            f'[ $# -eq 3 ] && exec {cmd} --toolchain "$3" -- "$1"\n'
+            # Older pinned testers lack --toolchain.
+            f'exec {cmd} -- "$1"\n')
 
 
 def write_wrappers(ws: Workspace) -> None:

@@ -730,9 +730,9 @@ def test_disasm_wrapper_args(ws: Workspace, tmp_path: Path) -> None:
         proc = subprocess.run([str(script), *args], capture_output=True, text=True)
         return proc.returncode, proc.stdout.strip()
 
-    assert run("fn") == (0, "--toolchain  -- fn")
+    assert run("fn") == (0, "-- fn")
     assert run("fn", "--toolchain", "atfe") == (0, "--toolchain atfe -- fn")
-    assert run("--workspace=/x") == (0, "--toolchain  -- --workspace=/x")
+    assert run("--workspace=/x") == (0, "-- --workspace=/x")
     assert run("fn", "--workspace", "/x")[0] == 2
 
 
@@ -836,3 +836,9 @@ def test_prompt_names_both_toolchains(atfe_root: Path) -> None:
     assert "--toolchain atfe" in text
     plain = render_prompt(_campaign(), DW_ROWS, PATHS)
     assert "atfe" not in plain and "Built with" not in plain
+
+
+def test_prompt_atfe_only(atfe_root: Path) -> None:
+    text = render_prompt(_campaign(toolchains=["atfe"], legs=["tcm"]), DW_ROWS, PATHS)
+    assert "Every leg builds with atfe" in text and "optimize(...)" in text and "Built with ATfE clang." in text
+    assert "llvm-objdump syntax" in text and "--toolchain" not in text and "keyed by compiler" not in text
