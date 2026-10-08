@@ -12,6 +12,7 @@ from helia_core_tester.agent_loop import agent, judge, ledger
 from helia_core_tester.agent_loop.config import Campaign, ConfigError, from_json, parse_campaign
 from helia_core_tester.agent_loop.prompt import render_prompt, route_facts
 from helia_core_tester.agent_loop.workspace import Workspace
+from helia_core_tester.hardware.toolchain import toolchain_spec
 
 BASE = {
     "name": "dw-s8", "board": "apollo330mP_evb", "target": {"op": "DepthwiseConv", "dtype": "S8"},
@@ -645,6 +646,26 @@ def test_toolchains_default_keeps_gcc_files() -> None:
     # Saved as before toolchains existed.
     assert c.toolchains == ("gcc",) and c.leg_names == ("tcm", "mram") and "toolchains" not in c.to_json()
     assert from_json(c.to_json()) == c
+
+
+def test_saved_campaign_keeps_gcc(ws: Workspace) -> None:
+    # Only the drift facts are new.
+    ws.save(_campaign(), {"toolchains": {"gcc": None}})
+    saved = json.loads(ws.state.read_text())
+    assert "toolchains" not in saved["campaign"] and saved["toolchains"] == {"gcc": None}
+
+
+def test_atfe_needs_atfe_root(tmp_path: Path, monkeypatch) -> None:
+    clang = tmp_path / "clang"
+    clang.write_text("#!/bin/sh\necho 18.0.0\n")
+    clang.chmod(0o755)
+    monkeypatch.delenv("ATFE_ROOT", raising=False)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    spec = toolchain_spec("atfe")
+    # PATH clang is not ATfE.
+    assert spec.installed() is None
+    with pytest.raises(FileNotFoundError, match="ATFE_ROOT"):
+        spec.objdump()
 
 
 def test_toolchains_expand_legs(atfe_root: Path) -> None:
