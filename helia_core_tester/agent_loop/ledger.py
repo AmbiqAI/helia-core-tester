@@ -220,8 +220,9 @@ def passing_evals(rows: list[dict], runs: tuple[Leg, ...]) -> list[dict[str, Any
     """Passing evals marked fastest, smallest, pareto."""
     picks = [{"eval": r["eval"], "toolchains": row_gains(r, runs)} for r in rows if r.get("verdict") == "pass"]
     known = [p for p in picks if _known(p)]
+    timed = [p for p in picks if all(g.get("geomean") is not None for g in p["toolchains"].values())]
     # Ties go to the earlier eval.
-    fastest = max(known, key=_speed, default=None)
+    fastest = max(timed, key=_speed, default=None)
     smallest = min(known, key=_bytes, default=None)
     for pick in picks:
         pick["fastest"], pick["smallest"] = pick is fastest, pick is smallest
@@ -232,7 +233,8 @@ def passing_evals(rows: list[dict], runs: tuple[Leg, ...]) -> list[dict[str, Any
 def pick_text(pick: dict) -> str:
     """+3,088 B gcc / +2,154 B atfe at 2.78x / 3.42x"""
     gains = pick["toolchains"]
-    sizes = " / ".join(f"{g['size_delta']:+,} B {name}" for name, g in gains.items())
+    sizes = " / ".join((f"{g['size_delta']:+,}" if isinstance(g.get("size_delta"), int) else "?") + f" B {name}"
+                       for name, g in gains.items())
     speeds = " / ".join(f"{g['geomean']:.2f}x" for g in gains.values())
     return f"{sizes} at {speeds}"
 
@@ -241,9 +243,9 @@ def size_note(picks: list[dict]) -> Optional[str]:
     """Point a pass at the size phase."""
     fastest = next((p for p in picks if p["fastest"]), None)
     smallest = next((p for p in picks if p["smallest"]), None)
-    if fastest is None or smallest is None:
+    if fastest is None:
         return None
-    if fastest is smallest:
+    if smallest is None or fastest is smallest:
         return f"next: shrink code; best pass {fastest['eval']} {pick_text(fastest)}"
     return (f"next: shrink code; fastest pass {fastest['eval']} {pick_text(fastest)}; "
             f"smallest pass {smallest['eval']} {pick_text(smallest)}")

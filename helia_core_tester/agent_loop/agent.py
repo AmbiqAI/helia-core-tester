@@ -194,10 +194,11 @@ def status(ws: Workspace, tail: int = 10) -> dict[str, Any]:
     ledger = Ledger(ws.ledger)
     meta = read_meta(ws)
     events = stream_events(Path(meta["log"])) if meta.get("log") else []
+    saved = ledger.rows()
     rows = [{"eval": r["eval"], "verdict": r["verdict"], "charged": r.get("charged"),
              "geomean": {leg: v.get("geomean") for leg, v in (r.get("legs") or {}).items()},
-             "size_delta": r.get("size_delta"), "toolchains": r.get("toolchains")} for r in ledger.rows()]
-    passes = passing_evals(ledger.rows(), campaign.runs)
+             "size_delta": r.get("size_delta"), "toolchains": r.get("toolchains")} for r in saved]
+    passes = passing_evals(saved, campaign.runs)
     for pick in passes:
         pick["diff"] = str(ws.ledger / f"{pick['eval']}.diff")
     return {"campaign": campaign.name, "evals_used": ledger.charged(), "evals": campaign.evals, "rows": rows,

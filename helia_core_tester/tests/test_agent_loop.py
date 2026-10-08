@@ -871,23 +871,14 @@ def test_prompt_atfe_only(atfe_root: Path) -> None:
 # --- size phase -------------------------------------------------------------------------
 
 FIXTURES = Path(__file__).parent / "fixtures" / "agent_loop"
-# dw-s16 as an older tester saved it.
-DW_S16_SAVED = {
-    "name": "dw-s16", "board": "apollo510_evb", "op": "DepthwiseConv", "dtype": "S16", "kernels_repo": "/nn",
-    "base_ref": "945affd9", "secrets_dir": "/secret/dw-s16", "legs": ["tcm", "mram"], "case_ids": [],
-    "bench_id": "apollo510_evb", "evals": 12, "cost_usd": 25.0, "model": "claude-opus-5-5", "hidden_shapes": 12,
-    "repeats": 3, "start_patch": None, "start_notes": "", "min_score": None, "lock_timeout_s": 600,
-    "eval_timeout_s": 300, "submit_deadline_s": 540, "retries": 1, "max_infra_errors": 5,
-    "toolchains": ["gcc", "atfe"],
-}
 
 
-def _fixture_ws(tmp_path: Path, name: str, campaign: dict) -> Workspace:
+def _fixture_ws(tmp_path: Path, name: str, campaign: Campaign) -> Workspace:
+    """Workspace holding a real campaign ledger."""
     w = Workspace(tmp_path / name)
     w.ledger.mkdir(parents=True)
     shutil.copy(FIXTURES / f"{name}-ledger.jsonl", w.ledger / "ledger.jsonl")
-    w.state.write_text(json.dumps({"schema": "hct.agent_loop", "schema_version": 1, "campaign": campaign,
-                                   "base_commit": "b" * 40, "ready": True}))
+    w.save(campaign, {"base_commit": "b" * 40, "ready": True})
     return w
 
 
@@ -903,7 +894,7 @@ def _status_cli(w: Workspace, *extra: str) -> str:
 
 def test_prompt_size_phase(atfe_root: Path) -> None:
     text = render_prompt(_campaign(toolchains=["gcc", "atfe"]), DW_ROWS, PATHS)
-    assert "After your first pass:" in text and "Keep the best pass as your reference" in text
+    assert "After your first pass:" in text and "Keep the fastest pass as your reference" in text
     assert "`code_size` per compiler\n  (gcc and atfe)" in text and "bytes saved per compiler" in text
     assert "Do not stop early while evals remain" in text and "Never trade correctness" in text
     assert "Size never fails an eval" in text and "`next`: on a pass only" in text
@@ -920,7 +911,7 @@ def test_pass_points_at_size_phase(ws: Workspace, capsys) -> None:
     assert rc == 1 and "next" not in view
 
 
-def test_free_evals_have_no_note(ws: Workspace, capsys, monkeypatch) -> None:
+def test_free_evals_have_no_next(ws: Workspace, capsys, monkeypatch) -> None:
     monkeypatch.setattr(judge, "RETRY_PAUSE_S", 0)
     rejected = lambda *a, **k: (False, {"check": {"ok": False}})  # noqa: E731
     rc, view = _submit(ws, FakeBoard([]), capsys, checker=rejected)
@@ -940,8 +931,8 @@ def test_pass_note_names_fastest_and_smallest(ws: Workspace, atfe_root: Path, ca
                             "smallest pass 002 -8 B gcc / +16 B atfe at 1.50x / 1.50x")
 
 
-def test_status_tradeoff_two_toolchains(tmp_path: Path) -> None:
-    w = _fixture_ws(tmp_path, "dw-s16", DW_S16_SAVED)
+def test_status_tradeoff_two_toolchains(tmp_path: Path, atfe_root: Path) -> None:
+    w = _fixture_ws(tmp_path, "dw-s16", _campaign(toolchains=["gcc", "atfe"]))
     passes = agent.status(w, tail=0)["passes"]
     assert [(p["eval"], p["fastest"], p["smallest"], p["pareto"]) for p in passes] == [
         ("002", False, False, True), ("006", True, True, True)]
@@ -957,9 +948,7 @@ def test_status_tradeoff_two_toolchains(tmp_path: Path) -> None:
 
 
 def test_status_tradeoff_one_toolchain(tmp_path: Path) -> None:
-    saved = {**DW_S16_SAVED, "name": "conv-s8", "op": "Convolve", "dtype": "S8"}
-    del saved["toolchains"]
-    w = _fixture_ws(tmp_path, "conv-s8", saved)
+    w = _fixture_ws(tmp_path, "conv-s8", _campaign(op="Convolve"))
     assert agent.status(w, tail=0)["passes"] == [] and "passing evals" not in _status_cli(w)
     rows = [json.loads(line) for line in (w.ledger / "ledger.jsonl").read_text().splitlines()]
     # Pretend 004 and 007 passed.
@@ -979,5 +968,8 @@ def test_dominated_pass_is_marked() -> None:
     rows = [{"eval": e, "verdict": "pass", "size_delta": size, "legs": {"tcm": {"geomean": {"f": gain}}}}
             for e, size, gain in (("001", 100, 1.5), ("002", 200, 1.2), ("003", None, 2.0))]
     picks = ledger.passing_evals(rows, runs)
+    # Unknown size still ranks on speed.
     assert [(p["fastest"], p["smallest"], p["pareto"]) for p in picks] == [
-        (True, True, True), (False, False, False), (False, False, False)]
+        (False, True, True), (False, False, False), (True, False, False)]
+    assert ledger.size_note(picks) == ("next: shrink code; fastest pass 003 ? B gcc at 2.00x; "
+                                       "smallest pass 001 +100 B gcc at 1.50x")
