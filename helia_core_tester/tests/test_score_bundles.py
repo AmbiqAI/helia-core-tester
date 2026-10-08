@@ -622,3 +622,22 @@ def test_untouched_cases_keep_correctness(tmp_path, rows, digests, kind):
     scoring = load_scoring("apollo510_evb") | {"min_score": -math.inf}
     report = score_bundles([load_bundle(base)], [load_bundle(cand)], scoring, touched=frozenset({"conv_a"}))
     assert (kind, "conv_b") in _pairs(report) and report["verdict"] == "fail"
+
+
+@pytest.mark.parametrize(("touched", "cycles", "prepare", "cause"), [
+    (frozenset(), 1400.0, 1600, None),  # layout gain, layout growth
+    (frozenset(), 2000.0, 2100, None),
+    (frozenset(), 2000.0, "", "missing"),
+    (frozenset({"dw_a"}), 1400.0, 1600, "pays_for_gain"),
+    (frozenset({"dw_a"}), 2000.0, 2100, "blowup"),
+    (None, 1400.0, 1600, "pays_for_gain"),
+])
+def test_prepare_gate_skips_untouched(tmp_path, touched, cycles, prepare, cause):
+    base = _bundle(tmp_path, "a", rows={"dw_a": {"prepare_cycles": 1000}})
+    cand = _bundle(tmp_path, "b", cycles={"dw_a": cycles}, rows={"dw_a": {"prepare_cycles": prepare}})
+    scoring = load_scoring("apollo510_evb") | {"min_score": -math.inf}
+    report = score_bundles([load_bundle(base)], [load_bundle(cand)], scoring, touched=touched)
+    case = next(c for c in report["cases"] if c["case_id"] == "dw_a")
+    assert case["prepare"]["cause"] == cause
+    assert case["prepare"]["candidate"] == (float(prepare) if prepare else None)
+    assert (("prepare_regression", "dw_a") in _pairs(report)) == bool(cause)
