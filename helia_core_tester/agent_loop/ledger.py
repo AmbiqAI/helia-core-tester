@@ -5,12 +5,15 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
+import statistics
 import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
 from helia_core_tester.hardware.candidate_eval import EXIT_ERROR, VERDICT_EXITS
+
+from .config import Leg
 
 # Worst first; unknown counts as error.
 ORDER = ("error", "rejected", "refused", "not_comparable", "fail", "no_gain", "pass")
@@ -144,25 +147,55 @@ def diff_digest(diff: bytes) -> dict[str, Any]:
     return {"diff_sha": hashlib.sha256(diff).hexdigest()[:12], "diff_lines": diff.count(b"\n")}
 
 
+def toolchain_names(runs: tuple[Leg, ...]) -> list[str]:
+    return list(dict.fromkeys(leg.toolchain for leg in runs))
+
+
+def size_deltas(size: dict, runs: tuple[Leg, ...]) -> Any:
+    """Delta bytes; keyed when several toolchains."""
+    if len(toolchain_names(runs)) < 2:
+        return size.get("delta_bytes")
+    return {name: (size.get(name) or {}).get("delta_bytes") for name in toolchain_names(runs)}
+
+
+def toolchain_gains(legs: dict, runs: tuple[Leg, ...], size: dict) -> Optional[dict[str, Any]]:
+    """Geomean and code bytes per toolchain."""
+    if len(toolchain_names(runs)) < 2:
+        return None
+    deltas, out = size_deltas(size, runs), {}
+    for name in toolchain_names(runs):
+        means = [g for leg in runs if leg.toolchain == name for g in family_geomeans(legs.get(leg.name)).values() if g]
+        out[name] = {"geomean": round(statistics.geometric_mean(means), 4) if means else None,
+                     "size_delta": deltas[name]}
+    return out
+
+
 def ledger_row(eid: str, overall: str, legs: dict, *, charged: bool, infra: bool, size: dict, diff: bytes,
-               attempts: dict[str, int]) -> dict[str, Any]:
+               attempts: dict[str, int], runs: tuple[Leg, ...] = ()) -> dict[str, Any]:
     """One JSONL row per submit."""
-    return {
+    row = {
         "eval": eid, "time": time.strftime("%Y-%m-%dT%H:%M:%S"), "verdict": overall, "charged": charged,
         "infra": infra, "attempts": attempts,
         "legs": {k: {"verdict": v.get("verdict"), "stage": v.get("stage"), "score": v.get("score"),
                      "geomean": family_geomeans(v), "hidden": v.get("hidden")} for k, v in legs.items() if v},
-        "size_delta": size.get("delta_bytes"), **diff_digest(diff),
+        "size_delta": size_deltas(size, runs), **diff_digest(diff),
     }
+    gains = toolchain_gains(legs, runs, size)
+    if gains:
+        row["toolchains"] = gains
+    return row
 
 
-def agent_view(overall: str, legs: dict, *, evals_left: int, size: dict, first_leg: str,
+def agent_view(overall: str, legs: dict, *, evals_left: int, size: dict, runs: tuple[Leg, ...],
                note: Optional[str] = None) -> dict[str, Any]:
     """What submit prints for the agent."""
     out: dict[str, Any] = {"verdict": overall, "exit_code": VERDICT_EXITS.get(overall, EXIT_ERROR), "evals_left": evals_left}
     if note:
         out["note"] = note
     out["code_size"] = size
+    gains = toolchain_gains(legs, runs, size)
+    if gains:
+        out["toolchains"] = gains
     out["cases_columns"] = CASE_COLUMNS
-    out["legs"] = {k: leg_view(v, hints=(k == first_leg)) for k, v in legs.items() if v}
+    out["legs"] = {k: leg_view(v, hints=(k == runs[0].name)) for k, v in legs.items() if v}
     return out

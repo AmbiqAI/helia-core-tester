@@ -9,15 +9,18 @@ import shutil
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Optional
 
 from helia_core_tester.hardware.boards import repo_root, resolve_board
 from helia_core_tester.hardware.candidate_check import CheckError
 from helia_core_tester.hardware.candidate_check import _git as check_git
+from helia_core_tester.hardware.candidate_eval import read_baseline
 from helia_core_tester.hardware.harness_lock import tester_state
+from helia_core_tester.hardware.run_summary import bundle_toolchain
+from helia_core_tester.hardware.toolchain import DEFAULT_TOOLCHAIN, toolchain_spec
 
 from .agent import WRAPPERS, agent_settings, write_wrappers
-from .config import Campaign, ConfigError
+from .config import Campaign, ConfigError, Leg
 from .judge import apply_patch, object_sizes
 from .prompt import baseline_rows, render_prompt
 from .workspace import Workspace, kernel_lib
@@ -144,37 +147,66 @@ def make_hidden(ws: Workspace, campaign: Campaign, facts: dict) -> None:
     (hidden / "done").write_text("", encoding="utf-8")
 
 
-def make_baseline(ws: Workspace, campaign: Campaign, leg: str) -> None:
+def recorded_toolchain(out: Path) -> Optional[dict]:
+    """Compiler of the baseline's first run."""
+    try:
+        first = read_baseline(out)["sessions"][0]
+    except ValueError:
+        return None
+    return bundle_toolchain(out / "bundles" / first)
+
+
+def baseline_stale(out: Path, leg: Leg) -> bool:
+    """Missing, or built by another compiler."""
+    if not (out / "baseline.json").is_file():
+        return True
+    # Unknown on either side keeps it.
+    old, now = recorded_toolchain(out), toolchain_spec(leg.toolchain).installed()
+    return bool(old and now and old != now)
+
+
+def make_baseline(ws: Workspace, campaign: Campaign, leg: Leg, echo: Echo = print) -> None:
     """candidate baseline under the board lock."""
-    out = ws.baseline(leg)
-    if (out / "baseline.json").is_file():
+    out = ws.baseline(leg.name)
+    if not baseline_stale(out, leg):
         return
+    if (out / "baseline.json").is_file():
+        echo(f"Compiler changed; re-recording the {leg.name} baseline.")
+        # Its size ref is stale too.
+        ws.size_ref_of(leg.toolchain).unlink(missing_ok=True)
     shutil.rmtree(out, ignore_errors=True)
     out.parent.mkdir(parents=True, exist_ok=True)
-    cmd = ["bench-agent", "run", campaign.bench_id, "--reason", f"agent-loop {campaign.name} baseline {leg}",
+    cmd = ["bench-agent", "run", campaign.bench_id, "--reason", f"agent-loop {campaign.name} baseline {leg.name}",
            "--timeout", str(campaign.lock_timeout_s), "--", *ws.tester_cmd(), "candidate", "baseline",
            "--kernels", str(ws.base), "--board", campaign.board, "--out", str(out), "--repeats", str(campaign.repeats),
-           "--placement", leg, "--op", campaign.op, "--dtype", campaign.dtype]
+           "--placement", leg.placement, *toolchain_args(leg.toolchain), "--op", campaign.op, "--dtype", campaign.dtype]
     for case_id in campaign.case_ids:
         cmd += ["--case-id", case_id]
     if campaign.hidden_shapes:
         cmd += ["--hidden-set", str(ws.hidden_dir(campaign))]
-    _run(cmd, ws.logs / f"baseline-{leg}.log", cwd=ws.tester)
+    _run(cmd, ws.logs / f"baseline-{leg.name}.log", cwd=ws.tester)
 
 
-def make_size_ref(ws: Workspace, campaign: Campaign) -> None:
+def toolchain_args(toolchain: str) -> list[str]:
+    """No flag for gcc: older testers lack it."""
+    return [] if toolchain == DEFAULT_TOOLCHAIN else ["--toolchain", toolchain]
+
+
+def make_size_ref(ws: Workspace, campaign: Campaign, toolchain: str) -> None:
     """Base kernel code bytes per object."""
-    if ws.size_ref.is_file():
+    ref, build = ws.size_ref_of(toolchain), ws.size_build_of(toolchain)
+    if ref.is_file():
         return
+    suffix = toolchain_spec(toolchain).dir_suffix
     _run([*ws.tester_cmd(), "hardware", "build", "--board", campaign.board, "--cmsis-nn-root", str(ws.base),
-          "--build-dir", str(ws.size_build)], ws.logs / "size-ref.log")
-    sizes = object_sizes(kernel_lib(ws.size_build))
-    ws.size_ref.write_text(json.dumps(sizes, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+          *toolchain_args(toolchain), "--build-dir", str(build)], ws.logs / f"size-ref{suffix}.log")
+    sizes = object_sizes(kernel_lib(build))
+    ref.write_text(json.dumps(sizes, indent=1, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def write_agent_files(ws: Workspace, campaign: Campaign, start_diff: bytes | None) -> None:
     """Prompt, settings and wrappers."""
-    rows = baseline_rows(ws.baseline(campaign.legs[0]))
+    rows = baseline_rows(ws.baseline(campaign.runs[0].name))
     paths = {name: ws.bin / name for name in WRAPPERS} | {"results": ws.results}
     ws.prompt.write_text(render_prompt(campaign, rows, paths, start_diff), encoding="utf-8")
     settings = agent_settings(ws, campaign, extra_denies=[repo_root()])
@@ -193,6 +225,8 @@ def init_workspace(ws: Workspace, campaign: Campaign, echo: Echo = print) -> dic
         if saved != campaign:
             raise InitError(f"{ws.root} holds a different campaign")
         echo("Resuming init.")
+        # Ready again only after every step.
+        facts.pop("ready", None)
     elif ws.root.exists() and any(ws.root.iterdir()):
         raise InitError(f"{ws.root} is not empty")
     ws.root.mkdir(parents=True, exist_ok=True)
@@ -224,11 +258,18 @@ def init_workspace(ws: Workspace, campaign: Campaign, echo: Echo = print) -> dic
     if campaign.hidden_shapes:
         echo("Generating the hidden set...")
         make_hidden(ws, campaign, facts)
-    for leg in campaign.legs:
-        echo(f"Recording the {leg} baseline on {campaign.bench_id}...")
-        make_baseline(ws, campaign, leg)
-    echo("Building the size reference...")
-    make_size_ref(ws, campaign)
+    for leg in campaign.runs:
+        echo(f"Recording the {leg.name} baseline on {campaign.bench_id}...")
+        make_baseline(ws, campaign, leg, echo)
+    # Submit refuses if these change.
+    firsts: dict[str, str] = {}
+    for leg in campaign.runs:
+        firsts.setdefault(leg.toolchain, leg.name)
+    facts["toolchains"] = {t: recorded_toolchain(ws.baseline(name)) for t, name in firsts.items()}
+    ws.save(campaign, facts)
+    for toolchain in campaign.toolchains:
+        echo(f"Building the {toolchain} size reference...")
+        make_size_ref(ws, campaign, toolchain)
     write_agent_files(ws, campaign, start_diff)
     # Other commands require this.
     facts["ready"] = True

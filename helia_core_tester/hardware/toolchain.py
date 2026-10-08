@@ -88,6 +88,21 @@ class ToolchainSpec:
         version = compiler_version(compiler)
         return {"name": self.name, "version": version} if version else None
 
+    def installed(self) -> Optional[dict[str, str]]:
+        """Provenance of the compiler on hand."""
+        if self.key != "atfe":
+            return self.record(arm_tool(self.compiler))
+        # Only ATFE_ROOT clang counts.
+        clang = atfe_clang()
+        return self.record(str(clang)) if clang and clang.is_file() else None
+
+    def objdump(self) -> str:
+        """llvm-objdump for atfe, else GNU."""
+        if self.key != "atfe":
+            return "arm-none-eabi-objdump"
+        self.require()
+        return str(atfe_clang().with_name("llvm-objdump"))
+
     def require(self) -> None:
         """Fail fast without ATfE clang."""
         clang = atfe_clang()

@@ -12,6 +12,7 @@ import yaml
 
 from helia_core_tester.hardware.boards import UnknownBoardError, resolve_board
 from helia_core_tester.hardware.nsx_app import PLACEMENTS
+from helia_core_tester.hardware.toolchain import DEFAULT_TOOLCHAIN, TOOLCHAINS, toolchain_spec
 
 NAME_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,47}")
 WORD_RE = re.compile(r"[A-Za-z0-9_]+")
@@ -24,6 +25,15 @@ MAX_DEADLINE_S = 570
 
 class ConfigError(ValueError):
     """The campaign file is unusable."""
+
+
+@dataclass(frozen=True)
+class Leg:
+    """One eval leg: placement and toolchain."""
+
+    name: str
+    placement: str
+    toolchain: str
 
 
 @dataclass(frozen=True)
@@ -54,9 +64,22 @@ class Campaign:
     submit_deadline_s: int = 540
     retries: int = 1
     max_infra_errors: int = 5
+    toolchains: tuple[str, ...] = (DEFAULT_TOOLCHAIN,)
+
+    @property
+    def runs(self) -> tuple[Leg, ...]:
+        """Every leg; gcc keeps bare names."""
+        return tuple(Leg(p + toolchain_spec(t).dir_suffix, p, t) for t in self.toolchains for p in self.legs)
+
+    @property
+    def leg_names(self) -> tuple[str, ...]:
+        return tuple(leg.name for leg in self.runs)
 
     def to_json(self) -> dict[str, Any]:
         out = asdict(self)
+        # gcc-only files stay unchanged.
+        if self.toolchains == (DEFAULT_TOOLCHAIN,):
+            del out["toolchains"]
         return {k: str(v) if isinstance(v, Path) else list(v) if isinstance(v, tuple) else v for k, v in out.items()}
 
 
@@ -67,6 +90,7 @@ DEFAULTS = Campaign.__dataclass_fields__
 # YAML key -> (type, required).
 _TOP = {
     "name": (str, True), "board": (str, True), "bench_id": (str, False), "legs": (list, False),
+    "toolchains": (list, False),
     "target": (dict, True), "kernels": (dict, True), "evals": (int, False), "cost_usd": ((int, float), False),
     "model": (str, False), "hidden_shapes": (int, False), "repeats": (int, False), "start_patch": (str, False),
     "start_notes": (str, False), "secrets_dir": (str, True), "min_score": ((int, float), False),
@@ -123,6 +147,15 @@ def parse_campaign(data: Any, base: Path) -> Campaign:
         raise ConfigError(f"legs: unique values from {', '.join(PLACEMENTS)}")
     if "mram" in legs and not board.has_mram:
         raise ConfigError(f"legs: {board.id} has no cached MRAM")
+    toolchains = tuple(top.get("toolchains") or (DEFAULT_TOOLCHAIN,))
+    if (not all(isinstance(t, str) for t in toolchains) or len(set(toolchains)) != len(toolchains)
+            or any(t not in TOOLCHAINS for t in toolchains)):
+        raise ConfigError(f"toolchains: unique values from {', '.join(TOOLCHAINS)}")
+    for key in toolchains:
+        try:
+            toolchain_spec(key).require()
+        except FileNotFoundError as exc:
+            raise ConfigError(f"toolchains: {exc}") from exc
     for key in ("op", "dtype"):
         if not WORD_RE.fullmatch(target[key]):
             raise ConfigError(f"target.{key}: one word")
@@ -154,7 +187,7 @@ def parse_campaign(data: Any, base: Path) -> Campaign:
     return Campaign(
         name=top["name"], board=board.id, op=target["op"], dtype=target["dtype"],
         kernels_repo=_path(kernels["repo"], base), base_ref=kernels["ref"], secrets_dir=_path(top["secrets_dir"], base),
-        legs=legs, case_ids=case_ids, cost_usd=cost,
+        legs=legs, toolchains=toolchains, case_ids=case_ids, cost_usd=cost,
         start_patch=_path(top["start_patch"], base) if top.get("start_patch") else None,
         start_notes=top.get("start_notes", "").strip(), min_score=None if min_score is None else float(min_score),
         **{key: top[key] for key in _PLAIN if key in top},
@@ -175,4 +208,5 @@ def from_json(data: dict) -> Campaign:
     paths = ("kernels_repo", "secrets_dir", "start_patch")
     fixed = {k: (Path(v) if k in paths and v else v) for k, v in data.items()}
     fixed["legs"], fixed["case_ids"] = tuple(fixed["legs"]), tuple(fixed["case_ids"])
+    fixed["toolchains"] = tuple(fixed.get("toolchains") or (DEFAULT_TOOLCHAIN,))
     return Campaign(**fixed)

@@ -58,6 +58,7 @@ from .phase_log import mark
 from . import nsx_cli
 from .nsx_app import KERNEL_TREES, AppRenderError, write_kernels
 from .pmu_explain import AGENT_PMU_SELECTION, explain_bundle
+from .toolchain import DEFAULT_TOOLCHAIN, toolchain_spec
 from .score import DEFAULT_MIN_SCORE, EXIT_REFUSED, EXITS, load_bundle, load_scoring, score_bundles
 
 SCHEMA = "hct.candidate_eval"
@@ -92,6 +93,7 @@ class RunSpec:
     case_ids: tuple[str, ...] = ()
     hidden_set: Optional[Path] = None
     pmu: tuple[str, ...] = ()
+    toolchain: str = DEFAULT_TOOLCHAIN
 
     def to_json(self) -> dict[str, Any]:
         return {key: str(value) if isinstance(value, Path) else value for key, value in asdict(self).items()}
@@ -111,9 +113,9 @@ def agent_pmu(board: str) -> tuple[str, ...]:
 
 
 def build_dir_for(spec: RunSpec) -> Path:
-    """One build dir per placement: no flip rebuilds."""
+    """One build dir per placement and toolchain."""
     base = resolve_board(spec.board).build_dir(repo_root())
-    return base.with_name(f"{base.name}-eval-{spec.placement}")
+    return toolchain_spec(spec.toolchain).build_dir(base.with_name(f"{base.name}-eval-{spec.placement}"))
 
 
 def run_args(
@@ -122,7 +124,7 @@ def run_args(
     """`hardware run` flags with every option pinned."""
     args = [
         "hardware", "run", "--board", spec.board, "--cmsis-nn-root", str(spec.kernels),
-        "--placement", spec.placement, "--inline-asm" if spec.inline_asm else "--no-inline-asm",
+        "--placement", spec.placement, "--toolchain", spec.toolchain, "--inline-asm" if spec.inline_asm else "--no-inline-asm",
         "--fvp-gate", "off", "--session-id", session_id, "--json", "--build-dir", str(build_dir_for(spec)),
     ]
     for flag, values in (("--pmu-counters", spec.pmu), ("--op", spec.ops), ("--dtype", spec.dtypes), ("--case-id", spec.case_ids)):
@@ -563,6 +565,7 @@ def baseline_command(
     out: Path = typer.Option(..., "--out", file_okay=False, resolve_path=True, help="New directory for bundles and baseline.json."),
     repeats: int = typer.Option(3, "--repeats", min=1, help="Runs to pool for the noise band."),
     placement: str = typer.Option("tcm", "--placement", help="tcm or mram."),
+    toolchain: str = typer.Option(DEFAULT_TOOLCHAIN, "--toolchain", help="gcc or atfe."),
     inline_asm: bool = typer.Option(True, "--inline-asm/--no-inline-asm", help="Requantize inline asm."),
     op: Optional[list[str]] = typer.Option(None, "--op", help="Only these operators (repeatable)."),
     dtype: Optional[list[str]] = typer.Option(None, "--dtype", help="Only these dtypes (repeatable)."),
@@ -579,9 +582,12 @@ def baseline_command(
         raise typer.BadParameter(f"{out} is not empty", param_hint="--out")
     try:
         spec = RunSpec(board, kernels, placement, inline_asm, tuple(op or ()), tuple(dtype or ()), tuple(case_id or ()),
-                       hidden_set, agent_pmu(board))
+                       hidden_set, agent_pmu(board), toolchain)
+        toolchain_spec(toolchain).require()
     except UnknownBoardError as exc:
         raise typer.BadParameter(str(exc), param_hint="--board") from exc
+    except (ValueError, FileNotFoundError) as exc:
+        raise typer.BadParameter(str(exc), param_hint="--toolchain") from exc
     # Same rules as hardware run.
     _check_placement(placement, resolve_board(board))
     out.mkdir(parents=True, exist_ok=True)

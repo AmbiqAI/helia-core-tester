@@ -589,3 +589,15 @@ def test_placements_get_own_build_dirs(tmp_path, kernels) -> None:
             for placement in ("tcm", "mram")}
     found = {p: Path(a[a.index("--build-dir") + 1]) for p, a in dirs.items()}
     assert found["tcm"] != found["mram"] and found["tcm"].name == "apollo510_evb-eval-tcm"
+
+
+def test_toolchains_get_own_build_dirs(tmp_path, kernels) -> None:
+    """atfe builds beside gcc, never over it."""
+    args = {t: candidate_eval.run_args(candidate_eval.RunSpec("apollo510_evb", kernels, "tcm", toolchain=t), "s")
+            for t in ("gcc", "atfe")}
+    names = {t: Path(a[a.index("--build-dir") + 1]).name for t, a in args.items()}
+    assert names == {"gcc": "apollo510_evb-eval-tcm", "atfe": "apollo510_evb-eval-tcm-atfe"}
+    assert args["atfe"][args["atfe"].index("--toolchain") + 1] == "atfe"
+    # Old baselines carry no toolchain.
+    old = {k: v for k, v in candidate_eval.RunSpec("apollo510_evb", kernels).to_json().items() if k != "toolchain"}
+    assert candidate_eval.RunSpec.from_json(old, kernels).toolchain == "gcc"

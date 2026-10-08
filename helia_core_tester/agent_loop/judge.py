@@ -16,6 +16,8 @@ from helia_core_tester.hardware.candidate_check import _git
 from helia_core_tester.hardware.candidate_eval import SNAPSHOT_TREES, VERDICT_EXITS, CopyBudget, TooLarge, copy_tree
 from helia_core_tester.hardware.candidate_scan import run_binutil
 
+from helia_core_tester.hardware.toolchain import toolchain_spec
+
 from .config import Campaign
 from .ledger import EXIT_BUDGET, Ledger, LockBusy, agent_view, file_lock, is_infra, ledger_row, merge_legs, scored
 from .workspace import Workspace, kernel_lib
@@ -78,8 +80,8 @@ def stage_tree(ws: Workspace, base_sha: str, area: Path) -> Path:
     return tree
 
 
-def _trim(lines: list[str], ws: Workspace, area: Path) -> list[str]:
-    prefixes = (f"{area / 'build'}/nsx_app/modules/nsx-cmsis-nn/", f"{area / 'tree'}/", f"{ws.root}/")
+def _trim(lines: list[str], ws: Workspace, area: Path, build_dir: Path) -> list[str]:
+    prefixes = (f"{build_dir}/nsx_app/modules/nsx-cmsis-nn/", f"{area / 'tree'}/", f"{ws.root}/")
     for prefix in prefixes:
         lines = [line.replace(prefix, "") for line in lines]
     return lines
@@ -131,30 +133,44 @@ def _check_steps(ws: Workspace, campaign: Campaign, base_sha: str, area: Path, d
             report = json.loads(proc.stdout)
             out["check"] = {k: report.get(k) for k in ("ok", "findings", "error") if k in report}
         except ValueError:
-            tail = _trim(proc.stderr.splitlines()[-20:], ws, area)
+            tail = _trim(proc.stderr.splitlines()[-20:], ws, area, area / "build")
             out["check"] = {"ok": False, "error": "\n".join(tail)[-1500:]}
         if proc.returncode != 0 or not out["check"].get("ok"):
             out["check"]["ok"] = False
             out["build"] = "skipped: check failed"
             return False, out
-        log = area / "build.log"
-        with log.open("w", encoding="utf-8") as handle:
-            build = run_bounded(
-                [*ws.tester_cmd(), "hardware", "build", "--board", campaign.board, "--cmsis-nn-root", str(tree),
-                 "--build-dir", str(area / "build")], deadline, stdout=handle, stderr=subprocess.STDOUT,
-            )
-        if build.returncode != 0:
-            lines = [line for line in log.read_text(encoding="utf-8", errors="replace").splitlines()
-                     if re.search(r"error|warning", line)]
-            out["build"] = {"ok": False, "errors": _trim(lines[:BUILD_ERRORS], ws, area)}
-            return False, out
-        out["build"] = "ok"
-        try:
-            ref = json.loads(ws.size_ref.read_text(encoding="utf-8"))
-            out["code_size"] = size_delta(ref, object_sizes(kernel_lib(area / "build")))
-        except (OSError, ValueError) as exc:
-            out["code_size"] = {"error": str(exc)}
-    return True, out
+        builds, sizes = {}, {}
+        for toolchain in campaign.toolchains:
+            builds[toolchain], sizes[toolchain] = _build_one(ws, campaign, tree, area, toolchain, deadline)
+        # One toolchain keeps the flat shape.
+        keyed = len(campaign.toolchains) > 1
+        out["build"] = builds if keyed else builds[campaign.toolchains[0]]
+        if all(b == "ok" for b in builds.values()):
+            out["code_size"] = sizes if keyed else sizes[campaign.toolchains[0]]
+            return True, out
+    return False, out
+
+
+def _build_one(ws: Workspace, campaign: Campaign, tree: Path, area: Path, toolchain: str, deadline: float
+               ) -> tuple[Any, dict]:
+    """Build with one toolchain; size vs its ref."""
+    spec = toolchain_spec(toolchain)
+    build_dir = spec.build_dir(area / "build")
+    log = area / f"build{spec.dir_suffix}.log"
+    with log.open("w", encoding="utf-8") as handle:
+        build = run_bounded(
+            [*ws.tester_cmd(), "hardware", "build", "--board", campaign.board, "--cmsis-nn-root", str(tree),
+             "--toolchain", toolchain, "--build-dir", str(build_dir)], deadline, stdout=handle, stderr=subprocess.STDOUT,
+        )
+    if build.returncode != 0:
+        lines = [line for line in log.read_text(encoding="utf-8", errors="replace").splitlines()
+                 if re.search(r"error|warning", line)]
+        return {"ok": False, "errors": _trim(lines[:BUILD_ERRORS], ws, area, build_dir)}, {}
+    try:
+        ref = json.loads(ws.size_ref_of(toolchain).read_text(encoding="utf-8"))
+        return "ok", size_delta(ref, object_sizes(kernel_lib(build_dir)))
+    except (OSError, ValueError) as exc:
+        return "ok", {"error": str(exc)}
 
 
 def check(ws: Workspace) -> int:
@@ -166,14 +182,16 @@ def check(ws: Workspace) -> int:
     return 0 if ok else 1
 
 
-def disasm(ws: Workspace, name: str) -> int:
+def disasm(ws: Workspace, name: str, toolchain: str = "") -> int:
     """One function from the check build."""
-    if not FN_RE.fullmatch(name or ""):
-        print("usage: disasm <function_name>   (run check first)")
+    campaign, _ = ws.load()
+    toolchain = toolchain or campaign.toolchains[0]
+    if not FN_RE.fullmatch(name or "") or toolchain not in campaign.toolchains:
+        print(f"usage: disasm <function_name> [--toolchain {'|'.join(campaign.toolchains)}]   (run check first)")
         return 2
     try:
-        lib = kernel_lib(ws.check_dir / "build")
-        text = run_binutil("arm-none-eabi-objdump", ["-d", "--no-show-raw-insn", str(lib)])
+        lib = kernel_lib(toolchain_spec(toolchain).build_dir(ws.check_dir / "build"))
+        text = run_binutil(toolchain_spec(toolchain).objdump(), ["-d", "--no-show-raw-insn", str(lib)])
     except FileNotFoundError:
         print("no build yet: run check first")
         return 2
@@ -195,6 +213,15 @@ def disasm(ws: Workspace, name: str) -> int:
     if len(lines) > DISASM_LINES:
         print(f"... truncated: {len(lines)} lines total")
     return 0
+
+
+def toolchain_drift(campaign: Campaign, facts: dict) -> bool:
+    """A compiler differs from the baselines'."""
+    for toolchain in campaign.toolchains:
+        old, now = facts["toolchains"].get(toolchain), toolchain_spec(toolchain).installed()
+        if old and now and old != now:
+            return True
+    return False
 
 
 def leg_command(ws: Workspace, campaign: Campaign, eid: str, leg: str, lock_s: int, eval_s: int) -> list[str]:
@@ -288,6 +315,12 @@ def _submit_locked(ws: Workspace, campaign: Campaign, facts: dict, ledger: Ledge
             print(json.dumps({"verdict": "error", "exit_code": VERDICT_EXITS["error"],
                               "note": "The board keeps failing. Stop and write your summary."}))
             return VERDICT_EXITS["error"]
+        if facts.get("toolchains") and toolchain_drift(campaign, facts):
+            ledger.append({"eval": None, "time": time.strftime("%Y-%m-%dT%H:%M:%S"), "verdict": "error",
+                           "charged": False, "infra": True, "note": "toolchain changed"})
+            print(json.dumps({"verdict": "error", "exit_code": VERDICT_EXITS["error"],
+                              "note": "Compiler changed since init; not charged. Stop."}))
+            return VERDICT_EXITS["error"]
         eid = ledger.next_id()
         # Legs judge this frozen copy.
         ok, checked = checker(ws, campaign, facts["base_commit"], ws.submit_dir, deadline)
@@ -295,7 +328,8 @@ def _submit_locked(ws: Workspace, campaign: Campaign, facts: dict, ledger: Ledge
         (ws.ledger / f"{eid}.diff").write_bytes(diff)
         size = checked.get("code_size") or {"error": "no build"}
         if not ok:
-            ledger.append(ledger_row(eid, "rejected", {}, charged=False, infra=False, size=size, diff=diff, attempts={}))
+            ledger.append(ledger_row(eid, "rejected", {}, charged=False, infra=False, size=size, diff=diff, attempts={},
+                                     runs=campaign.runs))
             view = {"verdict": "rejected", "exit_code": VERDICT_EXITS["rejected"],
                     "evals_left": campaign.evals - ledger.charged(),
                     "note": "Failed check before the board; not charged.", **checked}
@@ -303,7 +337,7 @@ def _submit_locked(ws: Workspace, campaign: Campaign, facts: dict, ledger: Ledge
         legs: dict[str, Optional[dict]] = {}
         attempts: dict[str, int] = {}
         infra = False
-        for leg in campaign.legs:
+        for leg in campaign.leg_names:
             # Later legs need a scored leg.
             if legs and not all(scored(v) for v in legs.values()):
                 break
@@ -311,9 +345,9 @@ def _submit_locked(ws: Workspace, campaign: Campaign, facts: dict, ledger: Ledge
             if is_infra(legs[leg]) or legs[leg].get("stage") == "board":
                 infra = True
                 break
-        overall = "error" if infra else merge_legs(legs, campaign.legs)
+        overall = "error" if infra else merge_legs(legs, campaign.leg_names)
         ledger.append(ledger_row(eid, overall, legs, charged=not infra, infra=infra, size=size, diff=diff,
-                                 attempts=attempts))
+                                 attempts=attempts, runs=campaign.runs))
         note = None
         if infra:
             # No free scores from earlier legs.
@@ -322,7 +356,7 @@ def _submit_locked(ws: Workspace, campaign: Campaign, facts: dict, ledger: Ledge
         elif overall == "error":
             note = "The board run failed; check for faults or hangs."
         view = agent_view(overall, legs, evals_left=campaign.evals - ledger.charged(), size=size,
-                          first_leg=campaign.legs[0], note=note)
+                          runs=campaign.runs, note=note)
         return _emit(ws, eid, view)
 
 
