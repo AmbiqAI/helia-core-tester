@@ -187,7 +187,7 @@ def test_cli_json_and_exit_codes(tmp_path, change, code, verdict):
     result = CliRunner().invoke(app, ["score", str(base), "--candidate", str(cand), "--no-check", "--json"])
     assert result.exit_code == code, result.output
     report = json.loads(result.output)
-    assert (report["schema"], report["schema_version"], report["verdict"]) == ("hct.score", 2, verdict)
+    assert (report["schema"], report["schema_version"], report["verdict"]) == ("hct.score", 3, verdict)
     table = CliRunner().invoke(app, ["score", str(base), "--candidate", str(cand), "--no-check"])
     assert f"== {verdict.upper()}" in table.output
 
@@ -572,5 +572,53 @@ def test_case_gate_covers_touched_cases(tmp_path, touched, pairs):
     assert report["settings"]["case_gate"] == ("all" if touched is None else "touched")
     conv = next(c for c in report["cases"] if c["case_id"] == "conv_a")
     assert conv["touched"] == (None if touched is None else "conv_a" in touched)
-    # Untouched slowdowns still count.
-    assert report["families"]["conv"]["geomean_speedup"] < 1.0
+    conv_family = report["families"]["conv"]
+    # Untouched drift shows, never scores.
+    if touched == frozenset():
+        assert (conv_family["cases"], conv_family["geomean_speedup"], conv_family["gates"]) == (0, None, [])
+        assert conv_family["untouched_cases"] == 1 and conv_family["untouched_geomean"] < 1.0
+    else:
+        assert conv_family["geomean_speedup"] < 1.0 and conv_family["untouched_geomean"] is None
+
+
+CONV4 = {f"conv_{i}": ("arm_convolve_wrapper_s8", 1000.0) for i in "abcd"}
+# Inside case band, past family band.
+SLOW4 = {case_id: 1020.0 for case_id in CONV4}
+
+
+@pytest.mark.parametrize("touched, pairs", [
+    (None, [("family_regression", None)]),
+    (frozenset(), []),
+    (frozenset({"conv_a"}), []),
+    (frozenset(CONV4), [("family_regression", None)]),
+])
+def test_family_gate_skips_untouched(tmp_path, touched, pairs):
+    base, cand = _bundle(tmp_path, "a", cases=CONV4), _bundle(tmp_path, "b", cases=CONV4, cycles=SLOW4)
+    scoring = load_scoring("apollo510_evb") | {"min_score": -math.inf}
+    report = score_bundles([load_bundle(base)], [load_bundle(cand)], scoring, touched=touched)
+    assert _pairs(report) == pairs
+    conv = report["families"]["conv"]
+    gated = 4 if touched is None else len(touched)
+    assert (conv["cases"], conv["untouched_cases"]) == (gated, 4 - gated)
+    assert report["score"] == pytest.approx(math.log(1 / 1.02) * conv["weight"] if gated else 0.0)
+
+
+def test_focus_gate_skips_untouched(tmp_path):
+    base, cand = _bundle(tmp_path, "a", cases=CONV4), _bundle(tmp_path, "b", cases=CONV4, cycles=SLOW4)
+    scoring = load_scoring("apollo510_evb") | {"min_score": -math.inf}
+    focus = parse_focus(["arm_convolve_wrapper_s8"])
+    report = score_bundles([load_bundle(base)], [load_bundle(cand)], scoring, focus=focus, touched=frozenset())
+    assert not report["failures"] and report["families"]["conv"]["gates"] == []
+
+
+@pytest.mark.parametrize("rows, digests, kind", [
+    ({"conv_b": {"comparison_passed": "false"}}, None, "comparison_failed"),
+    (None, {"conv_b": "sha256:other"}, "input_digest"),
+    ({"conv_b": {"timing_status": "overflow"}}, None, "timing_lost"),
+])
+def test_untouched_cases_keep_correctness(tmp_path, rows, digests, kind):
+    base = _bundle(tmp_path, "a", cases=CONV4)
+    cand = _bundle(tmp_path, "b", cases=CONV4, rows=rows, digests=digests)
+    scoring = load_scoring("apollo510_evb") | {"min_score": -math.inf}
+    report = score_bundles([load_bundle(base)], [load_bundle(cand)], scoring, touched=frozenset({"conv_a"}))
+    assert (kind, "conv_b") in _pairs(report) and report["verdict"] == "fail"

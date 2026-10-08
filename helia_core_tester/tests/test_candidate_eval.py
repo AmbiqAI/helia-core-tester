@@ -154,6 +154,26 @@ def test_hidden_ids_never_print(tmp_path, kernels, monkeypatch) -> None:
     verdict = _eval(kernels, out, run)
     assert verdict["verdict"] == "fail" and verdict["hidden"]["failures"] == {"comparison_failed": 1}
     assert verdict["hidden"]["cases"] == 1 and "dw_a" not in json.dumps(verdict)
+    assert verdict["hidden"]["failed"] == [{"kind": "comparison_failed", "symbol": "arm_depthwise_conv_wrapper_s8",
+                                            "via": None, "touched": None, "count": 1}]
+
+
+def test_hidden_failures_name_kernels_only() -> None:
+    def case(case_id, inner, touched):
+        return {"case_id": case_id, "timed_symbol": "arm_depthwise_conv_wrapper_s8", "inner_symbol": inner, "touched": touched}
+
+    cases = [case("h_1x7x7", "arm_convolve_s8", True), case("h_2x9x9", "arm_convolve_s8", True),
+             case("h_3x5x5", None, False), case("pub", "arm_convolve_s8", True)]
+    failures = [{"kind": "regression", "case_id": c, "reason": "+1.24% slower than band 1.00%"} for c in ("h_1x7x7", "h_2x9x9", "pub")]
+    failures += [{"kind": "comparison_failed", "case_id": "h_3x5x5", "reason": "s: output mismatch"},
+                 {"kind": "family_regression", "case_id": None, "reason": "conv all"}]
+    failed = candidate_eval.hidden_failures({"cases": cases, "failures": failures}, {"h_1x7x7", "h_2x9x9", "h_3x5x5"})
+    assert failed == [
+        {"kind": "regression", "symbol": "arm_convolve_s8", "via": "arm_depthwise_conv_wrapper_s8", "touched": True, "count": 2},
+        {"kind": "comparison_failed", "symbol": "arm_depthwise_conv_wrapper_s8", "via": None, "touched": False, "count": 1},
+    ]
+    text = json.dumps(failed)
+    assert "h_" not in text and "%" not in text and "x7" not in text
 
 
 def _cli_eval(kernels: Path, out: Path, *extra: str):
