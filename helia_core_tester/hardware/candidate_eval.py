@@ -50,7 +50,7 @@ import typer
 
 from .boards import UnknownBoardError, repo_root, resolve_board
 from .candidate_check import CheckError, _git, candidate_app, check_candidate
-from .code_graph import case_touched, changed_nodes, code_graph, read_graph
+from .code_graph import code_graph, read_graph, touched_ids
 from .cli import _check_placement
 from .errors import RunRefused
 from .firmware_build import BUILT_FD_ENV
@@ -403,16 +403,10 @@ def stored_graph(baseline: Path) -> Optional[dict]:
 
 def touched_cases(baselines: list, candidate, base: dict, cand: dict) -> frozenset[str]:
     """Cases whose kernel code changed."""
-    changed, out = changed_nodes(base, cand), set()
     rows = [*baselines[0].rows.values(), *candidate.rows.values()]
     routes = frozenset(row.get("inner_symbol") for row in rows if row.get("inner_symbol"))
-    for case_id, row in baselines[0].rows.items():
-        timed = baselines[0].symbol(case_id)
-        # The candidate may route elsewhere.
-        inners = {row.get("inner_symbol") or None, (candidate.rows.get(case_id) or {}).get("inner_symbol") or None}
-        if case_touched(timed, inners, base, cand, changed, routes):
-            out.add(case_id)
-    return frozenset(out)
+    inners = {case_id: row.get("inner_symbol") or None for case_id, row in candidate.rows.items()}
+    return touched_ids(baselines[0], inners, base, cand, routes)
 
 
 def case_gate(baseline: Path, build_dir: Path, baselines: list, candidate) -> tuple[Optional[frozenset[str]], Optional[str]]:

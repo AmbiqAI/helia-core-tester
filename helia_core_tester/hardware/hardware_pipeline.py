@@ -490,7 +490,7 @@ def light_cases(build_dir: Path, options: StreamOptions, bundles: list) -> froze
     """
     if options.light_graph is None or options.golden_from is None:
         return frozenset()
-    from .code_graph import case_touched, changed_nodes, code_graph, read_graph
+    from .code_graph import code_graph, read_graph, touched_ids
     from .score import load_bundle
     from .wrapper_route import build_gate, inner_symbol
 
@@ -503,18 +503,10 @@ def light_cases(build_dir: Path, options: StreamOptions, bundles: list) -> froze
         return frozenset()
     if base is None or cand is None:
         return frozenset()
-    changed = changed_nodes(base, cand)
     routes = frozenset(row.get("inner_symbol") for row in golden.rows.values() if row.get("inner_symbol"))
-    light = set()
-    for bundle in bundles:
-        row = golden.rows.get(bundle.case_id)
-        if row is None:
-            continue
-        timed = golden.symbol(bundle.case_id)
-        inners = {row.get("inner_symbol") or None, inner_symbol(timed, bundle.manifest, gate)}
-        if not case_touched(timed, inners, base, cand, changed, routes):
-            light.add(bundle.case_id)
-    return frozenset(light)
+    inners = {b.case_id: inner_symbol(golden.symbol(b.case_id), b.manifest, gate) for b in bundles if b.case_id in golden.rows}
+    touched = touched_ids(golden, inners, base, cand, routes)
+    return frozenset(case_id for case_id in inners if case_id not in touched)
 
 
 def stream_generated_tests(

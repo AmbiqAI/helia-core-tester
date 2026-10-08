@@ -187,6 +187,19 @@ def case_touched(
     return any(is_touched(timed, inner, base, cand, changed, routes) for inner in inners)
 
 
+def touched_ids(
+    golden, cand_inners: dict, base: dict, cand: dict, routes: frozenset[str],
+) -> frozenset[str]:
+    """Golden cases whose code changed."""
+    changed, out = changed_nodes(base, cand), set()
+    for case_id, row in golden.rows.items():
+        # The candidate may route elsewhere.
+        inners = {row.get("inner_symbol") or None, cand_inners.get(case_id)}
+        if case_touched(golden.symbol(case_id), inners, base, cand, changed, routes):
+            out.add(case_id)
+    return frozenset(out)
+
+
 def is_touched(
     timed: str, inner: Optional[str], base: dict, cand: dict, changed: set[str], routes: frozenset[str] = frozenset(),
 ) -> bool:
