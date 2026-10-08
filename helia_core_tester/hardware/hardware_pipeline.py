@@ -28,6 +28,7 @@ from .firmware_build import (
     stage_kernels,
 )
 from .errors import RunRefused
+from .phase_log import mark
 from .measurement import (
     TooManyPassesError,
     UnsupportedCounterError,
@@ -642,6 +643,7 @@ def run_hardware_pipeline(
     # Check goldens and hidden cases before touching the board.
     checked = options.golden_from is not None or options.hidden_set is not None
     prepared = prepare_bundles(repo_root, board, options, hidden) if checked else None
+    mark("prepare_done")
     flash: Optional[FlashDecision] = None
     if skip_flash:
         echo("[hardware] --skip-flash set; reusing firmware already running on the board.")
@@ -656,6 +658,7 @@ def run_hardware_pipeline(
         echo=echo, progress_to_stderr=progress_to_stderr, allow_unverified_firmware=allow_unverified_firmware,
         prepared=prepared,
     )
+    mark("stream_done")
     outcome.flash = flash
     if outcome.result is not None:
         finalize_timing(outcome, generate_s=generate_s, echo=echo)

@@ -385,8 +385,8 @@ def test_first_failure_stops_scan(kernels: Path) -> None:
 def test_worker_returns_counts(tmp_path: Path, monkeypatch) -> None:
     # 4 MiB of kernel text, one hit.
     gcc = _fake_gcc(tmp_path, 'echo \'# 1 "Source/u.c"\'; echo "_Pragma(1)"; head -c 4194304 /dev/zero | tr "\\0" x; echo')
-    found = candidate_scan._unit_counts(gcc, tmp_path, "Source/u.c", (), time.monotonic() + 30, "", rule_counts)
-    assert set(found) == {"Source/u.c"}
+    found, deps = candidate_scan._unit_counts(gcc, tmp_path, "Source/u.c", (), time.monotonic() + 30, "", rule_counts)
+    assert set(found) == {"Source/u.c"} and deps is None
     assert isinstance(found["Source/u.c"], Counter) and found["Source/u.c"]["pragma"] == 1
 
 
@@ -440,3 +440,116 @@ def test_object_scan_deadline(tmp_path: Path, monkeypatch) -> None:
     findings, _, _ = candidate_scan.object_findings(build, deadline_s=1.0)
     assert time.monotonic() - start < 8
     assert [f["rule"] for f in findings] == ["scan_error"]
+
+
+# --- scan cache ---------------------------------------------------------------------
+
+
+@pytest.fixture
+def scans(tmp_path: Path, monkeypatch):
+    """Thread pool; counts gcc runs."""
+    monkeypatch.setattr(candidate_scan, "_SCANS", {})
+    monkeypatch.setattr(candidate_scan, "ProcessPoolExecutor", ThreadPoolExecutor)
+    root = tmp_path / "tree"
+    for rel, text in {"Source/u.c": "int u;\n", "Source/v.c": "int v;\n", "Include/h.h": "_Pragma(1)\n"}.items():
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(text, encoding="utf-8")
+    log = tmp_path / "ran"
+    # Marker per file read, like gcc.
+    gcc = _fake_gcc(tmp_path, f'for u; do :; done; echo "$u" >> {log}; echo "# 1 \\"$u\\""; cat "$u"; '
+                              'echo \'# 1 "Include/h.h"\'; cat Include/h.h')
+
+    def scan(configs=None, rules=rule_counts, **kw):
+        log.unlink(missing_ok=True)
+        counts, failed = candidate_scan._tree_counts(gcc, root, rules, configs or {"c": ("-DX",)},
+                                                     time.monotonic() + 30, str(tmp_path / "abort"), **kw)
+        ran = sorted(log.read_text().split()) if log.exists() else []
+        return counts, ran
+
+    return root, scan
+
+
+def test_scan_memo_skips_gcc(scans) -> None:
+    root, scan = scans
+    first, ran = scan()
+    assert ran == ["Source/u.c", "Source/v.c"] and first[("c", "Include/h.h")]["pragma"] == 1
+    again, ran = scan()
+    assert ran == [] and again == first
+
+
+@pytest.mark.parametrize("change", ["unit", "header", "new_file", "flags", "flag_file", "env", "rules"])
+def test_scan_key_misses_on_change(scans, monkeypatch, change) -> None:
+    """Any gcc -E input change rescans."""
+    root, scan = scans
+    configs = {"c": ("-DX", "-include", "Source/f.h")}
+    (root / "Source/f.h").write_text("\n")
+    scan(configs)
+    rules = rule_counts
+    if change == "unit":
+        (root / "Source/u.c").write_text("int u2;\n")
+    elif change == "header":
+        (root / "Include/h.h").write_text("_Pragma(2)\n")
+    elif change == "new_file":
+        (root / "Include/shadow.h").write_text("\n")
+    elif change == "flags":
+        configs = {"c": ("-DY", "-include", "Source/f.h")}
+    elif change == "flag_file":
+        # Not a marker: the key holds it.
+        (root / "Source/f.h").write_text("#define Z\n")
+    elif change == "env":
+        monkeypatch.setenv("CPATH", "/elsewhere")
+        candidate_scan._compiler_id.cache_clear()
+    else:
+        def rules(text):
+            return rule_counts(text)
+    _, ran = scan(configs, rules=rules)
+    candidate_scan._compiler_id.cache_clear()
+    assert ran == (["Source/u.c"] if change == "unit" else ["Source/u.c", "Source/v.c"])
+
+
+def test_scan_cache_keeps_base_only(scans, tmp_path) -> None:
+    root, scan = scans
+    cache = tmp_path / "cache"
+    scan(cache=cache)
+    assert not cache.exists()
+    candidate_scan._SCANS.clear()
+    scan(cache=cache, store=True)
+    stored = sorted(cache.glob("*.json"))
+    assert len(stored) == 2
+    # A fresh process reads them back.
+    candidate_scan._SCANS.clear()
+    _, ran = scan(cache=cache)
+    assert ran == []
+
+
+def test_scan_cache_drops_failed_units(scans, tmp_path) -> None:
+    root, scan = scans
+    cache = tmp_path / "cache"
+    # cat fails: gcc exits nonzero.
+    (root / "Include/h.h").unlink()
+    scan(cache=cache, store=True)
+    assert not cache.exists() and not candidate_scan._SCANS
+
+
+@needs_gcc
+def test_cached_base_still_finds_header_edit(kernels: Path, tmp_path: Path, monkeypatch) -> None:
+    """Warm base cache; header edit still found."""
+    monkeypatch.setattr(candidate_scan, "_SCANS", {})
+    head = _git(kernels, "rev-parse", "HEAD").strip()
+    cache = tmp_path / "cache"
+    (kernels / "Source/Conv/b.c").write_text('#include "arm_nn_types.h"\nint b2;\n')
+    assert check_candidate(kernels, head, scan_cache=cache)["ok"] and list(cache.glob("*.json"))
+    (kernels / "Include/k.h").write_text(PASTE + '#define KATTR CAT(_Pra, gma)("GCC optimize(\\"O3\\")")\n')
+    candidate_scan._SCANS.clear()
+    report = check_candidate(kernels, head, scan_cache=cache)
+    assert ("pragma", "Source/Conv/a.c") in {(f["rule"], f["path"]) for f in report["findings"]}
+
+
+def test_marker_naming_fifo_does_not_hang(tmp_path: Path) -> None:
+    """Non-regular deps: no read, no cache."""
+    os.mkfifo(tmp_path / "pipe")
+    (tmp_path / "Source").mkdir()
+    (tmp_path / "Source/u.c").write_text("int u;\n")
+    gcc = _fake_gcc(tmp_path, f'echo \'# 1 "Source/u.c"\'; echo \'# 1 "{tmp_path}/pipe" 1\'')
+    found, deps = candidate_scan._unit_counts(gcc, tmp_path, "Source/u.c", (), time.monotonic() + 30, "", rule_counts)
+    assert "Source/u.c" in found and deps is None

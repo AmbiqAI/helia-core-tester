@@ -12,6 +12,11 @@ that hits either is a scan_error. The whole scan has a deadline and a
 unit limit: past either, or at the first new failure, outstanding
 runs are killed and one scan_error names the cause.
 
+Clean unit scans are memoized by every input gcc -E reads: compiler
+binaries and env, flags, flag files, the Source/ and Include/ listing,
+and each file its line markers name, checked by content on reuse. A
+cache dir also keeps base tree scans across runs.
+
 With a build dir, `gcc -E` also runs with that build's own compile
 args (board and SoC macros, include paths), and each kernel object
 from its compile_commands.json must hold code in .text only, standard
@@ -22,6 +27,7 @@ built at run time stay out of reach.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import io
 import json
@@ -32,6 +38,7 @@ import re
 import shlex
 import selectors
 import signal
+import stat
 import struct
 import subprocess
 import tarfile
@@ -62,6 +69,8 @@ MAX_UNITS = 2000
 # Object size caps, checked before reading.
 OBJECT_CAP = 16 << 20
 OBJECTS_TOTAL_CAP = 128 << 20
+# Dep variants kept per cache key.
+CACHE_VARIANTS = 8
 # Abort-file poll interval.
 _POLL_S = 0.25
 _MARKER = re.compile(r'^#\s*\d+\s+"([^"]*)".*$', re.MULTILINE)
@@ -160,8 +169,8 @@ def scan_workers() -> int:
 
 def _preprocess(
     gcc: str, root: Path, unit: str, flags: tuple[str, ...], deadline: float, abort: str,
-) -> Optional[dict[str, str]]:
-    """Kernel text of one unit, by origin."""
+) -> Optional[tuple[dict[str, str], set[str]]]:
+    """Kernel text by origin, plus every file read."""
     timeout = min(TIMEOUT_S, deadline - time.monotonic())
     if timeout <= 0:
         return None
@@ -170,15 +179,18 @@ def _preprocess(
         return None
     stdout = out.decode(errors="replace")
     by_file: dict[str, list[str]] = {}
+    names: set[str] = set()
     markers = list(_MARKER.finditer(stdout))
     for marker, after in zip(markers, [*markers[1:], None]):
         name = marker.group(1)
+        if not name.startswith("<"):
+            names.add(name)
         # System headers and builtins drop out.
         if name.startswith(("/", "<")):
             continue
         end = after.start() if after else len(stdout)
         by_file.setdefault(Path(name).as_posix(), []).append(stdout[marker.end():end])
-    return {origin: "".join(chunks) for origin, chunks in by_file.items()}
+    return {origin: "".join(chunks) for origin, chunks in by_file.items()}, names
 
 
 def _unit_flags(config: tuple | dict, unit: str) -> tuple[str, ...]:
@@ -192,14 +204,16 @@ _MEMO: dict[bytes, Counter] = {}
 def _unit_counts(
     gcc: str, root: Path, unit: str, flags: tuple[str, ...], deadline: float, abort: str,
     rule_counts: Callable[[str], Counter],
-) -> Optional[dict[str, Counter]]:
-    """Rule counts of one unit, by origin.
+) -> Optional[tuple[dict[str, Counter], Optional[dict[str, str]]]]:
+    """Rule counts of one unit by origin, plus deps.
 
-    Runs in the worker, so only counts reach the parent.
+    Runs in the worker, so only counts reach the parent. Deps map
+    each file gcc read to its digest; None means do not cache.
     """
-    by_file = _preprocess(gcc, root, unit, flags, deadline, abort)
-    if by_file is None:
+    found = _preprocess(gcc, root, unit, flags, deadline, abort)
+    if found is None:
         return None
+    by_file, names = found
     counts = {}
     for origin, text in by_file.items():
         # Headers repeat across units.
@@ -207,22 +221,148 @@ def _unit_counts(
         if key not in _MEMO:
             _MEMO[key] = rule_counts(text)
         counts[origin] = _MEMO[key]
-    return counts
+    deps = {name: _file_digest(root, name, {}) for name in names}
+    # Markers must name the unit itself.
+    cacheable = unit in deps and all(deps.values())
+    return counts, deps if cacheable else None
+
+
+# --- scan cache -----------------------------------------------------------------------
+
+# Clean unit scans, by input key.
+_SCANS: dict[str, list[dict]] = {}
+# Env vars gcc -E reads.
+_GCC_ENV = ("CPATH", "C_INCLUDE_PATH", "CPLUS_INCLUDE_PATH", "OBJC_INCLUDE_PATH", "GCC_EXEC_PREFIX",
+            "COMPILER_PATH", "SOURCE_DATE_EPOCH", "DEPENDENCIES_OUTPUT", "SUNPRO_DEPENDENCIES")
+
+
+def _file_digest(root: Path, name: str, seen: dict) -> Optional[str]:
+    """sha256 of root/name, or None."""
+    path = os.path.join(root, name)
+    if path not in seen:
+        seen[path] = None
+        try:
+            # Devices and FIFOs never block.
+            fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        except OSError:
+            return None
+        with os.fdopen(fd, "rb") as handle:
+            if stat.S_ISREG(os.fstat(fd).st_mode):
+                seen[path] = hashlib.file_digest(handle, "sha256").hexdigest()
+    return seen[path]
+
+
+@functools.lru_cache(maxsize=None)
+def _compiler_id(gcc: str) -> str:
+    """Driver, cc1 and gcc env."""
+    real = Path(os.path.realpath(gcc))
+    digest = hashlib.sha256(str(real).encode())
+    # Standard layout: libexec/gcc/<target>/<version>/cc1.
+    for path in [real, *sorted(real.parent.parent.glob("libexec/gcc/*/*/cc1"))]:
+        digest.update(f"{path}\0{_file_digest(Path('/'), str(path), {})}\0".encode())
+    for name in _GCC_ENV:
+        digest.update(f"{name}={os.environ.get(name)}\0".encode())
+    return digest.hexdigest()
+
+
+@functools.lru_cache(maxsize=None)
+def _rules_id(rule_counts: Callable[[str], Counter]) -> str:
+    """Digest of the rule code."""
+    import sys
+
+    from . import c_lex
+
+    files = {sys.modules[rule_counts.__module__].__file__, __file__, c_lex.__file__}
+    digest = hashlib.sha256(f"{rule_counts.__module__}.{rule_counts.__qualname__}\0".encode())
+    for name in sorted(files):
+        digest.update(Path(name).read_bytes())
+    return digest.hexdigest()
+
+
+def _listing(root: Path) -> str:
+    """Digest of every Source/ and Include/ path."""
+    digest = hashlib.sha256()
+    for top in ("Include", "Source"):
+        for path in sorted((root / top).rglob("*")):
+            rel = path.relative_to(root).as_posix()
+            kind = "L" + os.readlink(path) if path.is_symlink() else "D" if path.is_dir() else "F"
+            digest.update(f"{rel}\0{kind}\0".encode())
+    return digest.hexdigest()
+
+
+def _unit_key(base: str, root: Path, unit: str, flags: tuple[str, ...], seen: dict) -> str:
+    """Key of one unit scan."""
+    digest = hashlib.sha256(f"{base}\0{unit}\0{_file_digest(root, unit, seen)}\0".encode())
+    for flag in flags:
+        digest.update(f"{flag}\0".encode())
+        # Flag files: -include, -imacros, @file.
+        for name in (flag, flag[1:]):
+            if name and os.path.isfile(os.path.join(root, name)):
+                digest.update(f"{_file_digest(root, name, seen)}\0".encode())
+    return digest.hexdigest()
+
+
+def _cached(key: str, root: Path, cache: Optional[Path], seen: dict) -> Optional[dict[str, Counter]]:
+    """Counts whose deps all match."""
+    entries = _SCANS.get(key)
+    if entries is None and cache is not None:
+        try:
+            entries = _SCANS[key] = json.loads((cache / f"{key}.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            entries = None
+    for entry in entries or ():
+        if all(_file_digest(root, name, seen) == want for name, want in entry["deps"].items()):
+            return {origin: Counter(found) for origin, found in entry["counts"].items()}
+    return None
+
+
+def _remember(key: str, deps: dict[str, str], counts: dict[str, Counter]) -> dict:
+    entry = {"deps": deps, "counts": {origin: dict(found) for origin, found in counts.items()}}
+    _SCANS.setdefault(key, []).append(entry)
+    return entry
+
+
+def _store(cache: Path, entries: dict[str, list[dict]]) -> None:
+    """Add entries to disk; races keep one."""
+    cache.mkdir(parents=True, exist_ok=True)
+    for key, found in entries.items():
+        path = cache / f"{key}.json"
+        try:
+            old = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            old = []
+        kept = [entry for entry in old if entry not in found] + found
+        tmp = cache / f".{key}.{os.getpid()}"
+        tmp.write_text(json.dumps(kept[-CACHE_VARIANTS:]), encoding="utf-8")
+        tmp.replace(path)
 
 
 def _tree_counts(
     gcc: str, root: Path, rule_counts: Callable[[str], Counter], configs: dict, deadline: float, abort: str,
-    fatal: Callable[[str], bool] = lambda key: False,
+    fatal: Callable[[str], bool] = lambda key: False, cache: Optional[Path] = None, store: bool = False,
 ) -> tuple[dict, set[str]]:
     """Max rule counts per origin, plus failed units.
 
     At most scan_workers() jobs are in flight. Raises TimeoutError past
     the deadline, ScanStopped on a fatal failure; either way after
-    killing every outstanding run.
+    killing every outstanding run. Memoized units skip gcc; with
+    store, clean results reach cache once the whole scan ends.
     """
     counts: dict[tuple[str, str], Counter] = {}
     failed: set[str] = set()
-    jobs = iter([(config, unit) for config in configs for unit in _units(root)])
+    base = f"{_compiler_id(gcc)}\0{_rules_id(rule_counts)}\0{_listing(root)}\0{TIMEOUT_S}\0{OUTPUT_CAP}"
+    keys, todo, seen, new = {}, [], {}, {}
+    for config in configs:
+        for unit in _units(root):
+            flags = _unit_flags(configs[config], unit)
+            key = keys[(config, unit)] = _unit_key(f"{base}\0{config}", root, unit, flags, seen)
+            hit = _cached(key, root, cache, seen)
+            if hit is None:
+                todo.append((config, unit))
+                continue
+            for origin, found_counts in hit.items():
+                counts[(config, origin)] = counts.get((config, origin), Counter()) | found_counts
+    jobs = iter(todo)
     window = scan_workers()
     pending: dict[Future, tuple[str, str]] = {}
     # Parsing gcc -E output is CPU bound.
@@ -248,6 +388,10 @@ def _tree_counts(
                     if fatal(f"{config}:{unit}"):
                         raise ScanStopped(unit, f"gcc -E failed for {config}:{unit}")
                     continue
+                found, deps = found
+                if deps is not None:
+                    entry = _remember(keys[(config, unit)], deps, found)
+                    new.setdefault(keys[(config, unit)], []).append(entry)
                 for origin, found_counts in found.items():
                     key = (config, origin)
                     counts[key] = counts.get(key, Counter()) | found_counts
@@ -257,16 +401,19 @@ def _tree_counts(
         raise
     finally:
         pool.shutdown(wait=True, cancel_futures=True)
+    if store and cache is not None and new:
+        _store(cache, new)
     return counts, failed
 
 
 def preprocess_findings(
     tree: Path, archive: bytes, rule_counts: Callable[[str], Counter], configs: dict = CONFIGS,
-    deadline_s: float = SCAN_DEADLINE_S,
+    deadline_s: float = SCAN_DEADLINE_S, cache: Optional[Path] = None,
 ) -> list[dict]:
     """Rules that grow after gcc -E.
 
-    archive: base Include/ and Source/ as a tar.
+    archive: base Include/ and Source/ as a tar. cache: trusted dir
+    for base scans; candidate scans stay in memory.
     """
     units = len(_units(tree))
     if units > MAX_UNITS:
@@ -278,10 +425,10 @@ def preprocess_findings(
         try:
             base.mkdir()
             extract_tar(archive, base)
-            before, base_failed = _tree_counts(gcc, base, rule_counts, configs, deadline, abort)
+            before, base_failed = _tree_counts(gcc, base, rule_counts, configs, deadline, abort, cache=cache, store=True)
             # A unit the base built must build.
             after, _ = _tree_counts(gcc, tree, rule_counts, configs, deadline, abort,
-                                         lambda key: key not in base_failed or key.startswith("build:"))
+                                    lambda key: key not in base_failed or key.startswith("build:"))
         except TimeoutError:
             return [{"rule": "scan_error", "path": "", "message": f"scan passed its {deadline_s:g} s deadline"}]
         except ScanStopped as stop:

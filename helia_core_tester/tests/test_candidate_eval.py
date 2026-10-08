@@ -19,9 +19,10 @@ REAL_TESTER_DIRTY = candidate_eval.tester_dirty
 
 
 @pytest.fixture(autouse=True)
-def clean_tester(monkeypatch) -> None:
+def clean_tester(monkeypatch, tmp_path) -> None:
     """CLI tests assume a committed tester."""
     monkeypatch.setattr(candidate_eval, "tester_dirty", lambda: False)
+    monkeypatch.setattr(candidate_eval, "scan_cache_dir", lambda: tmp_path / "scan_cache")
     # Fake runs build no objects.
     monkeypatch.setattr(candidate_eval, "object_check", lambda *args: None)
     monkeypatch.setattr(candidate_eval, "kernel_graph", lambda board: None)
@@ -41,8 +42,10 @@ class FakeRun:
     def __init__(self, root: Path, base: dict | None = None, **cand) -> None:
         self.root, self.base, self.cand, self.calls = root, base or {}, cand, []
 
-    def __call__(self, args: list[str], log: Path):
+    def __call__(self, args: list[str], log: Path, on_built=None):
         self.calls.append(args)
+        if on_built is not None:
+            on_built()
         session = args[args.index("--session-id") + 1]
         options = self.cand if session.startswith("eval-") else self.base
         path = sb._bundle(self.root, session, **options)
@@ -137,7 +140,7 @@ def test_missing_base_copy_refuses(tmp_path, kernels) -> None:
 @pytest.mark.parametrize(("rc", "expected"), [(3, "refused"), (5, "error"), (1, "error")])
 def test_run_without_bundle_maps_exit(tmp_path, kernels, rc, expected) -> None:
     out, _ = _baseline(tmp_path, kernels)
-    verdict = _eval(kernels, out, lambda args, log: (rc, None))
+    verdict = _eval(kernels, out, lambda args, log, on_built=None: (rc, None))
     assert verdict["verdict"] == expected and verdict["stage"] == "run"
 
 
@@ -218,6 +221,72 @@ def test_object_check_rejects_after_build(tmp_path, kernels, monkeypatch) -> Non
     assert verdict["verdict"] == "rejected" and verdict["stage"] == "objects"
 
 
+def test_object_check_overlaps_run(tmp_path, kernels, monkeypatch) -> None:
+    """The scan runs once, inside the run."""
+    out, _ = _baseline(tmp_path, kernels)
+    order = []
+    monkeypatch.setattr(candidate_eval, "object_check", lambda *a: order.append("objects"))
+
+    class Run(FakeRun):
+        def __call__(self, args, log, on_built=None):
+            result = super().__call__(args, log, on_built)
+            order.append("run_end")
+            return result
+
+    _eval(kernels, out, Run(tmp_path / "reports"))
+    assert order == ["objects", "run_end"]
+
+
+def test_run_failure_beats_object_check(tmp_path, kernels, monkeypatch) -> None:
+    out, _ = _baseline(tmp_path, kernels)
+    monkeypatch.setattr(candidate_eval, "object_check", lambda *a: {"ok": False, "findings": []})
+
+    def run(args, log, on_built=None):
+        on_built()
+        return 5, None
+
+    verdict = _eval(kernels, out, run)
+    assert verdict["verdict"] == "error" and verdict["stage"] == "run"
+
+
+def test_object_check_error_waits_for_run(tmp_path, kernels, monkeypatch) -> None:
+    out, _ = _baseline(tmp_path, kernels)
+    ended = []
+
+    def broken(*a):
+        raise OSError("disk")
+
+    monkeypatch.setattr(candidate_eval, "object_check", broken)
+
+    def run(args, log, on_built=None):
+        on_built()
+        ended.append(True)
+        return FakeRun(tmp_path / "reports")(args, log)
+
+    with pytest.raises(OSError, match="disk"):
+        _eval(kernels, out, run)
+    assert ended == [True]
+
+
+def _fake_cli(tmp_path: Path, body: str) -> str:
+    script = tmp_path / "fake-python"
+    script.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
+    script.chmod(0o755)
+    return str(script)
+
+
+@pytest.mark.parametrize(("body", "built"), [
+    # dash cannot redirect to fds above 9.
+    ('printf 1 > "/dev/fd/$HCT_BUILT_FD"; echo \'{"bundle": "b"}\'', True),
+    ('echo \'{"bundle": "b"}\'', False),
+])
+def test_hardware_run_signals_build(tmp_path, monkeypatch, body, built) -> None:
+    monkeypatch.setattr(candidate_eval.sys, "executable", _fake_cli(tmp_path, body))
+    seen = []
+    rc, summary = candidate_eval.hardware_run(["x"], tmp_path / "log", lambda: seen.append(True))
+    assert rc == 0 and summary == {"bundle": "b"} and seen == ([True] if built else [])
+
+
 def test_snapshot_skips_fifos_and_links(tmp_path, kernels) -> None:
     """No hang, no followed links."""
     import os
@@ -248,8 +317,8 @@ def test_eval_cli_interrupt_exits_130(tmp_path, kernels, monkeypatch) -> None:
 class OtherBuild(FakeRun):
     """Builds kernels other than the snapshot."""
 
-    def __call__(self, args: list[str], log: Path):
-        rc, summary = super().__call__(args, log)
+    def __call__(self, args: list[str], log: Path, on_built=None):
+        rc, summary = super().__call__(args, log, on_built)
         manifest_path = Path(summary["bundle"]) / "session_manifest.json"
         manifest = json.loads(manifest_path.read_text())
         manifest["build"]["kernels"]["tree_hash"] = "other"
@@ -361,11 +430,11 @@ def test_file_growing_during_copy_hits_total(tmp_path, kernels, monkeypatch) -> 
 
 def test_baseline_keeps_run_refusal(tmp_path, kernels, monkeypatch) -> None:
     """A refused run refuses the baseline (3)."""
-    monkeypatch.setattr(candidate_eval, "hardware_run", lambda args, log: (3, None))
+    monkeypatch.setattr(candidate_eval, "hardware_run", lambda args, log, on_built=None: (3, None))
     out = tmp_path / "base"
     result = runner.invoke(app, ["candidate", "baseline", "--kernels", str(kernels), "--board", "apollo510_evb", "--out", str(out)])
     assert result.exit_code == 3
-    monkeypatch.setattr(candidate_eval, "hardware_run", lambda args, log: (5, None))
+    monkeypatch.setattr(candidate_eval, "hardware_run", lambda args, log, on_built=None: (5, None))
     result = runner.invoke(app, ["candidate", "baseline", "--kernels", str(kernels), "--board", "apollo510_evb",
                                  "--out", str(tmp_path / "base2")])
     assert result.exit_code == 5
