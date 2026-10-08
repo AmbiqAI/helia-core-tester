@@ -151,7 +151,7 @@ class FakeBoard:
         return subprocess.CompletedProcess(cmd, 0 if out else 1, stdout=text)
 
 
-def _ok_check(ws, campaign, base, area):
+def _ok_check(ws, campaign, base, area, deadline=None):
     return True, {"check": {"ok": True}, "build": "ok", "code_size": {"delta_bytes": 64}}
 
 
@@ -212,6 +212,36 @@ def test_submit_candidate_errors_are_charged(ws: Workspace, capsys, monkeypatch)
     assert view["evals_left"] == 0 and "timed out" in view["legs"]["tcm"]["reason"]
 
 
+def test_charged_error_survives_busy_retry(ws: Workspace, capsys, monkeypatch) -> None:
+    monkeypatch.setattr(judge, "RETRY_PAUSE_S", 0)
+    crash = {"verdict": "error", "stage": "run", "reason": "hardware run exited 5"}
+    board = FakeBoard([crash, ""])
+    rc, view = _submit(ws, board, capsys)
+    assert rc == 5 and view["evals_left"] == 1 and view["legs"]["tcm"]["reason"] == "hardware run exited 5"
+    assert ledger.Ledger(ws.ledger).rows()[0]["charged"]
+
+
+def test_run_bounded_kills_on_deadline() -> None:
+    import time
+
+    start = time.monotonic()
+    with pytest.raises(judge.OutOfTime):
+        judge.run_bounded(["sh", "-c", "sleep 30 & sleep 30"], time.monotonic() + 0.5)
+    assert time.monotonic() - start < 5
+    assert judge.run_bounded(["sh", "-c", "echo hi"], time.monotonic() + 5).stdout == "hi\n"
+
+
+def test_run_check_times_out(ws: Workspace, monkeypatch) -> None:
+    campaign, _ = ws.load()
+
+    def slow(*args, **kwargs):
+        raise judge.OutOfTime
+
+    monkeypatch.setattr(judge, "_check_steps", slow)
+    ok, out = judge.run_check(ws, campaign, "b" * 40, ws.check_dir, deadline=0.0)
+    assert not ok and "timed out" in out["check"]["error"]
+
+
 def test_submit_respects_deadline(ws: Workspace, capsys, monkeypatch) -> None:
     campaign, facts = ws.load()
     ws.save(Campaign(**{**campaign.__dict__, "submit_deadline_s": 120, "eval_timeout_s": 300}), facts)
@@ -223,7 +253,7 @@ def test_submit_respects_deadline(ws: Workspace, capsys, monkeypatch) -> None:
 
 
 def test_submit_precheck_is_free(ws: Workspace, capsys) -> None:
-    def bad(ws, campaign, base, area):
+    def bad(ws, campaign, base, area, deadline=None):
         return False, {"check": {"ok": True}, "build": {"ok": False, "errors": ["a.c:1: error: x"]}}
 
     board = FakeBoard([])
@@ -432,5 +462,29 @@ def test_launch_records_real_pid(ws: Workspace) -> None:
     args = seen["args"]
     assert meta["pid"] == 4242 and json.loads(ws.run_meta.read_text())["pid"] == 4242
     assert seen["start_new_session"] and seen["cwd"] == ws.agent
-    assert args[args.index("--max-budget-usd") + 1] == "25" and args[args.index("--session-id") + 1] == meta["session_id"]
+    assert args[args.index("--max-budget-usd") + 1] == "25.00"
+    assert args[args.index("--session-id") + 1] == meta["session_id"]
     assert args[args.index("--permission-mode") + 1] == "dontAsk" and "--no-session-persistence" not in args
+    # Finished run: resume with the rest of the cap.
+    Path(meta["log"]).write_text(json.dumps({"type": "result", "total_cost_usd": 10.0}) + "\n")
+    Proc.pid = 1  # not a claude process
+    resumed = agent.launch(ws, popen=popen, resume=True)
+    args = seen["args"]
+    assert args[args.index("--resume") + 1] == meta["session_id"] and "--session-id" not in args
+    assert args[args.index("--max-budget-usd") + 1] == "15.00" and args[args.index("--settings") + 1] == str(ws.settings)
+    assert args[args.index("--permission-mode") + 1] == "dontAsk" and "--strict-mcp-config" in args
+    assert resumed["log"] != meta["log"] and resumed["logs"] == [meta["log"], resumed["log"]]
+    # Status reads only the newest log.
+    assert agent.status(ws, tail=0)["cost"] == {"finished": False} and agent.status(ws, tail=0)["spent_usd"] == 10.0
+
+
+def test_commands_need_finished_init(ws: Workspace) -> None:
+    from typer.testing import CliRunner
+
+    from helia_core_tester.cli import app
+
+    result = CliRunner().invoke(app, ["agent-loop", "status", "-w", str(ws.root)])
+    assert result.exit_code == 2 and "not done" in result.output
+    campaign, facts = ws.load()
+    ws.save(campaign, {**facts, "ready": True})
+    assert CliRunner().invoke(app, ["agent-loop", "status", "-w", str(ws.root)]).exit_code == 0

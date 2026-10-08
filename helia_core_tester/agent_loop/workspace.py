@@ -76,10 +76,6 @@ class Workspace:
         return self.root / "agent-settings.json"
 
     @property
-    def run_jsonl(self) -> Path:
-        return self.logs / "agent-run.jsonl"
-
-    @property
     def run_meta(self) -> Path:
         return self.root / "agent-run.json"
 

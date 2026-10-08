@@ -202,5 +202,7 @@ def init_workspace(ws: Workspace, campaign: Campaign, echo: Echo = print) -> dic
     echo("Building the size reference...")
     make_size_ref(ws, campaign)
     write_agent_files(ws, campaign, start_diff)
+    # Other commands require this.
+    facts["ready"] = True
     ws.save(campaign, facts)
     return facts

@@ -16,9 +16,14 @@ WS_OPT = typer.Option(..., "--workspace", "-w", file_okay=False, resolve_path=Tr
 
 
 def _ws(path: Path) -> Workspace:
+    """A workspace whose init finished."""
     ws = Workspace(path)
-    if not ws.state.is_file():
-        typer.echo(f"✗ No campaign in {path}; run agent-loop init.", err=True)
+    try:
+        _, facts = ws.load()
+    except FileNotFoundError:
+        facts = {}
+    if not facts.get("ready"):
+        typer.echo(f"✗ Init of {path} is not done; run agent-loop init.", err=True)
         raise typer.Exit(2)
     return ws
 
@@ -85,12 +90,15 @@ def disasm_command(
 
 
 @agent_loop_app.command("launch")
-def launch_command(workspace: Path = WS_OPT) -> None:
+def launch_command(
+    workspace: Path = WS_OPT,
+    resume: bool = typer.Option(False, "--resume", help="Continue the saved session; cap the remaining cost."),
+) -> None:
     """Start the agent detached, with the cost cap."""
     from .agent import launch
 
     try:
-        meta = launch(_ws(workspace))
+        meta = launch(_ws(workspace), resume=resume)
     except RuntimeError as exc:
         typer.echo(f"✗ {exc}", err=True)
         raise typer.Exit(1)
@@ -115,6 +123,7 @@ def status_command(
     cost = info["cost"]
     if cost["finished"]:
         typer.echo(f"finished {cost['subtype']}: ${cost['cost_usd']}, {cost['turns']} turns, {cost['denials']} denials")
+    typer.echo(f"cost of finished runs: ${info['spent_usd']}")
     for row in info["rows"]:
         charged = "" if row["charged"] else " (free)"
         means = ", ".join(f"{leg} {fam} {g:.3f}" for leg, fams in row["geomean"].items()

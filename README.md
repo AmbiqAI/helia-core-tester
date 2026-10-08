@@ -495,8 +495,9 @@ uv run helia_core_tester agent-loop init conv-s8.yaml -w ~/campaigns/conv-s8
    cycles per MAC) and the ceiling from `assets/scoring/ceilings.yaml`.
    Writes `W/agent-settings.json` (absolute paths) and `W/bin/{submit,check,disasm}`.
 
-Init saves the campaign first and skips any step whose output exists, so
-after a failure rerun the same command (a rerun reuses the campaign's
+Init saves the campaign first, skips any step whose output exists, and
+marks the workspace ready at the end; the other commands refuse a
+workspace that is not ready. After a failure rerun the same command (a rerun reuses the campaign's
 seed). To change the campaign file, start a new workspace. On apollo330mP, a DepthwiseConv S8 campaign (50 public and 24
 hidden cases, `repeats: 2`) took about 6 minutes to initialize, and each
 `submit` about 3.5 minutes for both legs (measured).
@@ -528,11 +529,15 @@ uv run helia_core_tester agent-loop stop -w ~/campaigns/conv-s8
 - `launch` starts `claude -p` in `W/agent` in its own process session with
   `--permission-mode dontAsk`, only the Read, Edit, Write, Glob, Grep and
   Bash tools, `--setting-sources project`, `--strict-mcp-config`,
-  `--max-budget-usd cost_usd` and a fixed `--session-id`. It writes the
-  stream to `W/logs/agent-run.jsonl` and the real claude pid, session id
-  and a resume command to `W/agent-run.json`.
-- `status` prints the ledger, whether the pid is alive, recent tool calls,
-  and the cost and turns once the stream has its `result` event.
+  `--max-budget-usd cost_usd` and a fixed `--session-id`. Each run writes
+  its own stream log under `W/logs/`; `W/agent-run.json` holds the real
+  claude pid, the session id and the logs.
+- `launch --resume` continues that session with the same flags and caps
+  it at `cost_usd` minus the cost of the finished runs. A run killed
+  before its `result` event counts as $0, so set the cap with margin.
+- `status` prints the ledger, whether the pid is alive, recent tool calls
+  from the newest log, its cost and turns once it has a `result` event,
+  and the cost of all finished runs.
 - `stop` sends SIGTERM to the agent's process group.
 
 ### What the agent sees
@@ -544,7 +549,8 @@ uv run helia_core_tester agent-loop stop -w ~/campaigns/conv-s8
 - `W/bin/disasm FN`: one function from the last check build, up to 600
   lines.
 - `W/bin/submit`: stages a copy of the agent's trees in `W/submit/tree`
-  and runs check on it. A tree that fails is rejected and costs no eval.
+  and runs check on it. A tree that fails, or a check that runs past the
+  deadline, is rejected and costs no eval.
   Every leg then judges that frozen copy, so edits made during a submit
   wait for the next one. Each leg runs under `bench-agent run --timeout`
   and `timeout`, both cut to fit `submit_deadline_s`. A later leg runs
@@ -556,7 +562,7 @@ uv run helia_core_tester agent-loop stop -w ~/campaigns/conv-s8
     any earlier leg's scores. After `max_infra_errors` such submits in a
     row, submit tells the agent to stop.
   - Verdict `error` from `candidate eval` (often a kernel fault) is
-    retried once, then charged. A leg killed by `timeout` (a hang) is
+    retried once, then charged, even when the retry finds the board busy. A leg killed by `timeout` (a hang) is
     charged without a retry.
   - The printed view keeps touched case rows only, a count and speedup
     range for untouched cases, and hints for the ten slowest touched cases
@@ -567,7 +573,7 @@ uv run helia_core_tester agent-loop stop -w ~/campaigns/conv-s8
 ### After the run
 
 `W/ledger/` holds, per eval `NNN`: the diff of the judged copy (`NNN.diff`),
-each leg's full verdict (`NNN.<leg>.json`, may name hidden cases' kernels
+each leg attempt's full verdict (`NNN.<leg>.<attempt>.json`, may name hidden cases' kernels
 but never their shapes) and stderr. `ledger.jsonl` has one row per submit
 with verdict, charged and infra flags, per-family geomeans and code size
 delta. Ids come from a counter under the submit lock. To continue from the

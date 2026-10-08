@@ -90,22 +90,44 @@ def read_meta(ws: Workspace) -> dict[str, Any]:
         return {}
 
 
-def launch(ws: Workspace, popen=subprocess.Popen) -> dict[str, Any]:
-    """Start the agent detached; record its pid."""
+RESUME_PROMPT = "Continue the work plan from where you stopped."
+
+
+def spent_usd(meta: dict[str, Any]) -> float:
+    """Cost of every finished run so far."""
+    total = 0.0
+    for log in meta.get("logs") or []:
+        cost = run_cost(stream_events(Path(log)))
+        total += cost.get("cost_usd") or 0.0
+    return total
+
+
+def launch(ws: Workspace, popen=subprocess.Popen, resume: bool = False) -> dict[str, Any]:
+    """Start or resume the agent detached."""
     campaign, _ = ws.load()
     meta = read_meta(ws)
     if pid_alive(meta.get("pid")):
         raise RuntimeError(f"Agent already running as pid {meta['pid']}")
+    if resume and not meta.get("session_id"):
+        raise RuntimeError("No session to resume; launch first")
+    left = campaign.cost_usd - (spent_usd(meta) if resume else 0.0)
+    if left <= 0:
+        raise RuntimeError("Cost cap spent; raise cost_usd to resume")
     ws.logs.mkdir(parents=True, exist_ok=True)
-    session = str(uuid.uuid4())
-    args = [*claude_args(ws, campaign.model, ws.prompt.read_text(encoding="utf-8")),
-            "--session-id", session, "--max-budget-usd", f"{campaign.cost_usd:g}", "--name", f"agent-loop {campaign.name}"]
-    with ws.run_jsonl.open("ab") as out:
+    session = meta["session_id"] if resume else str(uuid.uuid4())
+    prompt = RESUME_PROMPT if resume else ws.prompt.read_text(encoding="utf-8")
+    # Same locked-down flags either way.
+    args = [*claude_args(ws, campaign.model, prompt), *(["--resume", session] if resume else ["--session-id", session]),
+            "--max-budget-usd", f"{left:.2f}", "--name", f"agent-loop {campaign.name}"]
+    run = len(meta.get("logs") or []) + 1 if resume else 1
+    log = ws.logs / f"agent-run-{session[:8]}-{run}.jsonl"
+    with log.open("wb") as out:
         # Own session; outlives this process.
         proc = popen(args, cwd=ws.agent, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
                      start_new_session=True)
-    meta = {"pid": proc.pid, "session_id": session, "model": campaign.model, "max_budget_usd": campaign.cost_usd,
-            "log": str(ws.run_jsonl), "resume": f"cd {ws.agent} && claude --resume {session}"}
+    logs = [*(meta.get("logs") or []), str(log)] if resume else [str(log)]
+    meta = {"pid": proc.pid, "session_id": session, "model": campaign.model, "max_budget_usd": round(left, 2),
+            "log": str(log), "logs": logs}
     ws.run_meta.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
     return meta
 
@@ -163,13 +185,13 @@ def status(ws: Workspace, tail: int = 10) -> dict[str, Any]:
     campaign, _ = ws.load()
     ledger = Ledger(ws.ledger)
     meta = read_meta(ws)
-    events = stream_events(ws.run_jsonl)
+    events = stream_events(Path(meta["log"])) if meta.get("log") else []
     rows = [{"eval": r["eval"], "verdict": r["verdict"], "charged": r.get("charged"),
              "geomean": {leg: v.get("geomean") for leg, v in (r.get("legs") or {}).items()},
              "size_delta": r.get("size_delta")} for r in ledger.rows()]
     return {"campaign": campaign.name, "evals_used": ledger.charged(), "evals": campaign.evals, "rows": rows,
             "pid": meta.get("pid"), "running": pid_alive(meta.get("pid")), "session_id": meta.get("session_id"),
-            "cost": run_cost(events), "recent": readable(events)[-tail:] if tail else []}
+            "cost": run_cost(events), "spent_usd": round(spent_usd(meta), 2), "recent": readable(events)[-tail:] if tail else []}
 
 
 # --- selftest ---------------------------------------------------------------------------

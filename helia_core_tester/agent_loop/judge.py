@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
+import signal
 import subprocess
 import time
 from pathlib import Path
@@ -83,8 +85,39 @@ def _trim(lines: list[str], ws: Workspace, area: Path) -> list[str]:
     return lines
 
 
-def run_check(ws: Workspace, campaign: Campaign, base_sha: str, area: Path) -> tuple[bool, dict[str, Any]]:
+class OutOfTime(Exception):
+    """A bounded command hit the deadline."""
+
+
+def run_bounded(cmd: list[str], deadline: float, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+                ) -> subprocess.CompletedProcess:
+    """Run until deadline; kill the whole group."""
+    left = deadline - time.monotonic()
+    if left <= 0:
+        raise OutOfTime
+    proc = subprocess.Popen(cmd, stdout=stdout, stderr=stderr, text=True, start_new_session=True)
+    try:
+        out, err = proc.communicate(timeout=left)
+    except subprocess.TimeoutExpired:
+        os.killpg(proc.pid, signal.SIGKILL)
+        proc.communicate()
+        raise OutOfTime from None
+    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+
+
+def run_check(ws: Workspace, campaign: Campaign, base_sha: str, area: Path,
+              deadline: Optional[float] = None) -> tuple[bool, dict[str, Any]]:
     """Stage area/tree; rules, build, size."""
+    if deadline is None:
+        deadline = time.monotonic() + campaign.submit_deadline_s
+    try:
+        return _check_steps(ws, campaign, base_sha, area, deadline)
+    except OutOfTime:
+        return False, {"check": {"ok": False, "error": "check or build timed out"}, "build": "timed out"}
+
+
+def _check_steps(ws: Workspace, campaign: Campaign, base_sha: str, area: Path, deadline: float
+                 ) -> tuple[bool, dict[str, Any]]:
     out: dict[str, Any] = {}
     with file_lock(area.with_name(f".{area.name}-tree.lock")):
         try:
@@ -92,8 +125,7 @@ def run_check(ws: Workspace, campaign: Campaign, base_sha: str, area: Path) -> t
         except TooLarge as exc:
             out["check"] = {"ok": False, "error": str(exc)}
             return False, out
-        proc = subprocess.run([*ws.tester_cmd(), "candidate", "check", str(tree), "--base", base_sha],
-                              capture_output=True, text=True)
+        proc = run_bounded([*ws.tester_cmd(), "candidate", "check", str(tree), "--base", base_sha], deadline)
         (area / "check.err").write_text(proc.stderr, encoding="utf-8")
         try:
             report = json.loads(proc.stdout)
@@ -107,9 +139,9 @@ def run_check(ws: Workspace, campaign: Campaign, base_sha: str, area: Path) -> t
             return False, out
         log = area / "build.log"
         with log.open("w", encoding="utf-8") as handle:
-            build = subprocess.run(
+            build = run_bounded(
                 [*ws.tester_cmd(), "hardware", "build", "--board", campaign.board, "--cmsis-nn-root", str(tree),
-                 "--build-dir", str(area / "build")], stdout=handle, stderr=subprocess.STDOUT,
+                 "--build-dir", str(area / "build")], deadline, stdout=handle, stderr=subprocess.STDOUT,
             )
         if build.returncode != 0:
             lines = [line for line in log.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -188,6 +220,8 @@ def run_leg(ws: Workspace, campaign: Campaign, eid: str, leg: str, deadline: flo
             runner=subprocess.run) -> tuple[dict, int]:
     """One leg; retry errors while time lasts."""
     verdict: Optional[dict] = None
+    # A charged error outlives later busy retries.
+    charged: Optional[dict] = None
     attempt = 0
     for attempt in range(1, campaign.retries + 2):
         if attempt > 1:
@@ -199,7 +233,7 @@ def run_leg(ws: Workspace, campaign: Campaign, eid: str, leg: str, deadline: flo
         with err.open("a", encoding="utf-8") as handle:
             proc = runner(leg_command(ws, campaign, eid, leg, *times), cwd=ws.tester, stdout=subprocess.PIPE,
                           stderr=handle, text=True)
-        (ws.ledger / f"{eid}.{leg}.json").write_text(proc.stdout or "", encoding="utf-8")
+        (ws.ledger / f"{eid}.{leg}.{attempt}.json").write_text(proc.stdout or "", encoding="utf-8")
         try:
             verdict = json.loads(proc.stdout)
         except (TypeError, ValueError):
@@ -207,8 +241,12 @@ def run_leg(ws: Workspace, campaign: Campaign, eid: str, leg: str, deadline: flo
         if verdict is None and proc.returncode == TIMED_OUT:
             # A hang is the candidate's.
             return {"verdict": "error", "stage": "run", "reason": f"eval timed out after {times[1]} s"}, attempt
-        if not is_infra(verdict) and verdict.get("verdict") != "error":
+        if is_infra(verdict):
+            continue
+        if verdict.get("verdict") != "error":
             return verdict, attempt
+        charged = verdict
+    verdict = charged or verdict
     if not isinstance(verdict, dict) or not verdict.get("verdict"):
         # Never pass raw stderr on.
         verdict = {"verdict": "error", "stage": "board", "reason": "board busy or eval failed"}
@@ -238,7 +276,7 @@ def submit(ws: Workspace, runner=subprocess.run, checker=run_check) -> int:
             return VERDICT_EXITS["error"]
         eid = ledger.next_id()
         # Legs judge this frozen copy.
-        ok, checked = checker(ws, campaign, facts["base_commit"], ws.submit_dir)
+        ok, checked = checker(ws, campaign, facts["base_commit"], ws.submit_dir, deadline)
         diff = tree_diff(ws, ws.submit_dir / "tree")
         (ws.ledger / f"{eid}.diff").write_bytes(diff)
         size = checked.get("code_size") or {"error": "no build"}
