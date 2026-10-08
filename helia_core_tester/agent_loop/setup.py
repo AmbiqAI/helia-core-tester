@@ -260,7 +260,9 @@ def init_workspace(ws: Workspace, campaign: Campaign, echo: Echo = print) -> dic
         echo(f"Recording the {leg.name} baseline on {campaign.bench_id}...")
         make_baseline(ws, campaign, leg, echo)
     # Submit refuses if these change.
-    firsts = {leg.toolchain: leg.name for leg in reversed(campaign.runs)}
+    firsts: dict[str, str] = {}
+    for leg in campaign.runs:
+        firsts.setdefault(leg.toolchain, leg.name)
     facts["toolchains"] = {t: recorded_toolchain(ws.baseline(name)) for t, name in firsts.items()}
     ws.save(campaign, facts)
     for toolchain in campaign.toolchains:
