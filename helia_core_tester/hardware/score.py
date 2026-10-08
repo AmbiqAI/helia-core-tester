@@ -9,8 +9,9 @@ baseline median), with the baseline's MAD: the larger of its in-run
 MAD and the spread of its repeat medians. A case timed valid in the
 baseline but not in the candidate fails. Only timing_status "valid" cases are timed.
 Code layout moves untouched kernels, so given the touched case set
-(cases whose kernel code changed) the per-case gate covers only those;
-the rest still count in family geomeans and gates.
+(cases whose kernel code changed) the case and family gates, family
+geomeans and the score cover only those; untouched drift is reported
+per family but never fails. Correctness gates cover every case.
 With repeat baselines the floor is the small session floor instead of
 the board floor. Each family also fails when its geomean is slower than
 max(family floor, median case band / sqrt(cases)). Prepare cycles move
@@ -55,7 +56,7 @@ from .pmu_explain import _DTYPE_RE, classify_route, load_ceilings
 from .work_count import per_unit
 
 SCHEMA = "hct.score"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 SCORING_DIR = repo_root() / "assets" / "scoring"
 MAD_SIGMA = 1.4826
 # Typer usage errors already exit 2.
@@ -444,12 +445,16 @@ def _case(
         floor = scoring["session_floor_pct"] if len(baselines) > 1 else scoring["floor_pct"]
         band = max(floor, scoring["mad_k"] * _spread(base) / a * 100.0)
         delta = (b - a) / a * 100.0
-        # Untouched cases move with layout only.
-        gated = case["touched"] is not False
-        case.update(speedup=a / b, delta_pct=delta, band_pct=band, within_noise=abs(delta) <= band, regression=gated and delta > band)
+        case.update(speedup=a / b, delta_pct=delta, band_pct=band, within_noise=abs(delta) <= band,
+                    regression=_gated(case) and delta > band)
     elif case["excluded_by"] is None:
         case["excluded_by"] = "zero_cycles"
     return case
+
+
+def _gated(case: dict) -> bool:
+    """Untouched cases move with layout only."""
+    return case["touched"] is not False
 
 
 def _geomean(cases: list[dict]) -> float:
@@ -475,7 +480,8 @@ def _contributions(cases: list[dict], scoring: dict, renorm: bool) -> dict[str, 
 
 
 # Documented in score_bundles; tests pin it.
-FAMILY_KEYS = ("weight", "cases", "geomean_speedup", "band_pct", "gates", "regression", "focus_cases", "focus_geomean", "contribution")
+FAMILY_KEYS = ("weight", "cases", "geomean_speedup", "band_pct", "gates", "regression", "focus_cases", "focus_geomean",
+               "contribution", "untouched_cases", "untouched_geomean")
 GATE_KEYS = ("subset", "cases", "slowdown_pct", "band_pct", "regression")
 
 
@@ -497,20 +503,24 @@ def score_bundles(
     candidate session ids, settings, families {name: {weight, cases,
     geomean_speedup, band_pct, gates [{subset, cases, slowdown_pct,
     band_pct, regression}], regression, focus_cases, focus_geomean,
-    contribution}}, subscores ({public, hidden: {cases, score}} when the
+    contribution, untouched_cases, untouched_geomean}}, subscores ({public, hidden: {cases, score}} when the
     run has hidden cases, else null; each renormalized), cases (eligible
     and excluded rows), failures [{kind,
     case_id, reason}]. settings.check is the trusted {tree_hash,
     base_commit}, or null when unchecked; settings.focus is {routes,
     dtypes} or null; settings.case_gate is "touched" when `touched`
     (case ids whose kernel code changed) is given, else "all". Each
-    case's `touched` is a bool, or null when unknown; untouched cases
-    never fail the per-case regression gate. Failure kinds: not_comparable, comparison_failed,
+    case's `touched` is a bool, or null when unknown. Untouched cases
+    never fail a speed gate and leave cases, geomean_speedup, band_pct,
+    focus and contribution; untouched_cases and untouched_geomean
+    report their drift (0 and null when every case is gated). A family
+    with no gated case has null geomean_speedup and band_pct and no
+    gates. Failure kinds: not_comparable, comparison_failed,
     missing_case, input_digest, timing_lost, regression,
     family_regression, prepare_regression, no_eligible_cases.
 
-    Correctness, family and prepare gates cover every case, the case
-    gate every touched case; under
+    Correctness and prepare gates cover every case, the case and
+    family gates every touched case; under
     focus the family gate judges the focus and rest subsets apart. The score covers
     focus cases only (by baseline route), with family weights
     renormalized over the families they hit.
@@ -581,13 +591,16 @@ def score_bundles(
         if prepare and prepare["regression"] and case["excluded_by"] != "comparison_failed":
             reason = f"prepare cycles {prepare['baseline']:.0f} -> {_cell(prepare['candidate'], '.0f')}, {prepare['cause']}"
             failures.append({"kind": "prepare_regression", "case_id": case["case_id"], "reason": reason})
-    focused = [case for case in eligible if case["in_focus"]]
-    if not focused:
+    if not any(case["in_focus"] for case in eligible):
         reason = "no focus case has valid timing" if focus else "no case has valid timing"
         failures.append({"kind": "no_eligible_cases", "case_id": None, "reason": reason})
 
+    # Layout drift never fails a candidate.
+    gated = [case for case in eligible if _gated(case)]
+    focused = [case for case in gated if case["in_focus"]]
     for family in sorted({case["family"] for case in eligible}):
-        members = [case for case in eligible if case["family"] == family]
+        members = [case for case in gated if case["family"] == family]
+        drift = [case for case in eligible if case["family"] == family and not _gated(case)]
         hits = [case for case in members if case["in_focus"]]
         # Gate focus and rest apart.
         subsets = {"focus": hits, "rest": [c for c in members if not c["in_focus"]]} if focus else {"all": members}
@@ -597,9 +610,12 @@ def score_bundles(
                 reason = f"{family} {gate['subset']}: {gate['slowdown_pct']:+.2f}% slower than band {gate['band_pct']:.2f}%"
                 failures.append({"kind": "family_regression", "case_id": None, "reason": reason})
         report["families"][family] = {
-            "weight": scoring["weights"].get(family, 0.0), "cases": len(members), "geomean_speedup": _geomean(members),
-            "band_pct": _family_band(members, scoring), "gates": gates, "regression": any(g["regression"] for g in gates),
+            "weight": scoring["weights"].get(family, 0.0), "cases": len(members),
+            "geomean_speedup": _geomean(members) if members else None,
+            "band_pct": _family_band(members, scoring) if members else None, "gates": gates,
+            "regression": any(g["regression"] for g in gates),
             "focus_cases": len(hits), "focus_geomean": _geomean(hits) if hits else None, "contribution": 0.0,
+            "untouched_cases": len(drift), "untouched_geomean": _geomean(drift) if drift else None,
         }
     for family, contribution in _contributions(focused, scoring, bool(focus)).items():
         report["families"][family]["contribution"] = contribution
@@ -632,11 +648,13 @@ def format_report(report: dict) -> str:
     if report["settings"]["focus"]:
         lines.append(f"focus: {json.dumps(report['settings']['focus'])}")
     if report["families"]:
-        lines += ["", f"{'family':<16} {'weight':>6} {'cases':>5} {'geomean':>8} {'band%':>6} {'focus':>5} {'f geo':>8} {'contrib':>9}"]
+        lines += ["", f"{'family':<16} {'weight':>6} {'cases':>5} {'geomean':>8} {'band%':>6} {'focus':>5} {'f geo':>8} {'contrib':>9} {'untch':>5} {'u geo':>8}"]
         for name, fam in report["families"].items():
             lines.append(
-                f"{name:<16} {fam['weight']:>6.2f} {fam['cases']:>5} {fam['geomean_speedup']:>8.4f} {fam['band_pct']:>6.2f} "
-                f"{fam['focus_cases']:>5} {_cell(fam['focus_geomean'], '.4f'):>8} {fam['contribution']:>+9.5f}"
+                f"{name:<16} {fam['weight']:>6.2f} {fam['cases']:>5} {_cell(fam['geomean_speedup'], '.4f'):>8} "
+                f"{_cell(fam['band_pct'], '.2f'):>6} "
+                f"{fam['focus_cases']:>5} {_cell(fam['focus_geomean'], '.4f'):>8} {fam['contribution']:>+9.5f} "
+                f"{fam['untouched_cases']:>5} {_cell(fam['untouched_geomean'], '.4f'):>8}"
             )
     timed = [case for case in report["cases"] if case["eligible"]]
     if timed:

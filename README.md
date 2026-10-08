@@ -369,7 +369,7 @@ the agent's view.
    On apollo330mP, 50 DW s8 cases took about 1 minute per eval and the
    two-repeat baseline about 2 minutes (measured).
 
-The verdict (schema `hct.candidate_eval` v2) has these fields:
+The verdict (schema `hct.candidate_eval` v3) has these fields:
 
 - `verdict`, `exit_code`, and `stage`: `tester` (dirty tester),
   `baseline` (unusable baseline dir), `check`, `run`, `objects` (once
@@ -386,13 +386,18 @@ The verdict (schema `hct.candidate_eval` v2) has these fields:
   or its timed symbol itself, changed in the built objects.
 - `case_gate`: `{scope, reason}`. Code layout moves untouched kernels by
   a few percent, so with scope `touched` only touched cases face the
-  per-case regression gate; untouched ones still count in family geomeans
-  and gates. Scope `all` (with a reason) when the baseline predates
+  case and family regression gates and count in the score and family
+  geomeans. Untouched drift shows per family as `untouched_cases` and
+  `untouched_geomean` and never fails; correctness gates still cover
+  every case. Scope `all` (with a reason) when the baseline predates
   `code_graph.json` or the candidate objects are unreadable.
 - `hints`: `pct_of_peak` (0-100), a diagnosis and ranked hints for each public MAC case
   (from `explain`).
 - `hidden`: null without hidden cases; otherwise case, touched and failure counts,
-  plus the scorer's hidden `subscores` when it reports them.
+  plus the scorer's hidden `subscores` when it reports them. `failed` lists
+  each hidden failure as `{kind, symbol, via, touched, count}`: the inner
+  kernel, the timed symbol when it differs, and how many cases share the
+  entry. It never names a case, shape or cycle count.
 
 | Exit | Verdict | Meaning |
 |---|---|---|

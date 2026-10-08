@@ -17,8 +17,9 @@ and in family totals, but their ids never print.
 The baseline also keeps code_graph.json: digests and references of
 every kernel function and data object, read from the built objects.
 Eval reads the candidate build the same way, and only cases whose
-kernel code changed face the per-case regression gate (see
-code_graph). A baseline without the file gates every case.
+kernel code changed face the case and family speed gates (see
+code_graph). A baseline without the file gates every case. Each
+hidden failure names its kernel and timed path, never the case.
 
 Exit codes: 0 pass, 1 fail, 2 usage, 3 refused, rejected or not
 comparable, 4 no_gain, 5 error (build, board, transport), 130
@@ -59,8 +60,8 @@ from .score import DEFAULT_MIN_SCORE, EXIT_REFUSED, EXITS, load_bundle, load_sco
 
 SCHEMA = "hct.candidate_eval"
 BASELINE_SCHEMA = "hct.candidate_baseline"
-# Verdict 2: hints pct_of_peak in percent.
-SCHEMA_VERSION = 2
+# Verdict 3: touched-only gates, hidden kernels.
+SCHEMA_VERSION = 3
 BASELINE_VERSION = 1
 BASELINE_FILE = "baseline.json"
 GRAPH_FILE = "code_graph.json"
@@ -429,6 +430,21 @@ def _hints(bundle: Path, hidden: set[str]) -> list[dict]:
     ]
 
 
+def hidden_failures(report: dict, hidden: set[str]) -> list[dict]:
+    """Hidden failures by kernel, without ids."""
+    cases = {case["case_id"]: case for case in report["cases"]}
+    counts: Counter = Counter()
+    for failure in report["failures"]:
+        if failure.get("case_id") not in hidden:
+            continue
+        case = cases.get(failure["case_id"]) or {}
+        timed = case.get("timed_symbol")
+        symbol = case.get("inner_symbol") or timed
+        counts[(failure["kind"], symbol, timed if timed != symbol else None, case.get("touched"))] += 1
+    return [{"kind": kind, "symbol": symbol, "via": via, "touched": touched, "count": n}
+            for (kind, symbol, via, touched), n in counts.items()]
+
+
 def verdict_from(report: dict, hidden: set[str], candidate: Path, gate_reason: Optional[str] = None) -> dict:
     """The agent-facing verdict; hidden ids redacted."""
     public = [c for c in report["cases"] if c["case_id"] not in hidden and not c.get("hidden")]
@@ -448,7 +464,7 @@ def verdict_from(report: dict, hidden: set[str], candidate: Path, gate_reason: O
         "candidate_session": report["candidate"][0], "baseline_sessions": report["baseline"],
         "families": report["families"], "failures": failures, "cases": [_case_view(c) for c in public],
         "case_gate": {"scope": report["settings"]["case_gate"], "reason": gate_reason},
-        "hidden": {"cases": len(hidden), "failures": dict(hidden_kinds),
+        "hidden": {"cases": len(hidden), "failures": dict(hidden_kinds), "failed": hidden_failures(report, hidden),
                    "touched": None if report["settings"]["case_gate"] == "all" else
                    sum(bool(c["touched"]) for c in report["cases"] if c["case_id"] in hidden),
                    "subscores": (report.get("subscores") or {}).get("hidden")} if hidden else None,
