@@ -565,15 +565,17 @@ after an `Operator note:` line. `W/agent-run.json` records its path and
 sha256. Without a note, resume sends "Continue the work plan from where
 you stopped."
 
-Cost accounting: each run log counts at its `result` event's
-`total_cost_usd` when that is above zero. A stopped run's `result` says $0
-(SIGINT gives `error_during_execution`, SIGTERM gives no event), so its
-cost is estimated from the per-message `usage` blocks and the price table
-in `agent.py`. Input and cache tokens are exact; streamed usage
-under-reports output, so output counts as the larger of the reported
-tokens and visible characters / 2. Hidden thinking is not visible, so
-keep margin on `cost_usd`. A log with a model missing from the price
-table, or a message without usage, blocks resume until you pass
+Cost accounting: a finished run counts its `result` event's own `usage`
+priced by the table in `agent.py`. On `--resume`, `total_cost_usd`
+includes earlier finished runs of the session, so it is not summed; for a
+model missing from the table, the run counts the rise in
+`total_cost_usd`. A stopped run's `result` says $0 (SIGINT gives
+`error_during_execution`, SIGTERM gives no event), so its cost is
+estimated from the per-message `usage` blocks. Input and cache tokens are
+exact; streamed usage under-reports output, so output counts as the larger
+of the reported tokens and visible characters / 2. Hidden thinking is not
+visible, so keep margin on `cost_usd`. A stopped run with a model missing
+from the table, or a message without usage, blocks resume until you pass
 `--assume-spent USD`; the value is recorded in `W/agent-run.json` and
 counts toward the cap on every later resume.
 

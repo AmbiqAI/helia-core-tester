@@ -147,35 +147,45 @@ def usage_cost(events: list[dict]) -> Optional[float]:
         # Content blocks repeat the message id.
         entry = msgs.setdefault(msg.get("id") or f"#{n}", {"prices": prices, "usage": usage, "chars": 0})
         entry["chars"] += _visible_chars(msg.get("content") or [])
-    total = 0.0
-    for entry in msgs.values():
-        p_in, p_out, p_read, p_5m, p_1h = entry["prices"]
-        u = entry["usage"]
-        split = u.get("cache_creation") or {}
-        w5 = split.get("ephemeral_5m_input_tokens", 0)
-        # Unsplit writes count at the 1h rate.
-        w1 = u.get("cache_creation_input_tokens", 0) - w5
-        # Streamed usage under-reports output tokens.
-        out = max(u.get("output_tokens", 0), math.ceil(entry["chars"] / 2))
-        total += (u.get("input_tokens", 0) * p_in + out * p_out + u.get("cache_read_input_tokens", 0) * p_read
-                  + w5 * p_5m + w1 * p_1h) / 1e6
-    return total
+    return sum(_price(e["prices"], e["usage"], e["chars"]) for e in msgs.values())
 
 
-def log_cost(path: Path) -> dict[str, Any]:
-    """Result cost, else usage estimate, else unknown."""
-    events = stream_events(path)
-    result = run_cost(events)
-    if result["finished"] and (result["cost_usd"] or 0) > 0:
-        return {"log": str(path), "cost_usd": result["cost_usd"], "estimated": False}
-    return {"log": str(path), "cost_usd": usage_cost(events), "estimated": True}
+def _price(prices: tuple, u: dict, chars: int = 0) -> float:
+    p_in, p_out, p_read, p_5m, p_1h = prices
+    w5 = (u.get("cache_creation") or {}).get("ephemeral_5m_input_tokens", 0)
+    # Unsplit writes count at the 1h rate.
+    w1 = u.get("cache_creation_input_tokens", 0) - w5
+    # Streamed usage under-reports output tokens.
+    out = max(u.get("output_tokens", 0), math.ceil(chars / 2))
+    return (u.get("input_tokens", 0) * p_in + out * p_out + u.get("cache_read_input_tokens", 0) * p_read
+            + w5 * p_5m + w1 * p_1h) / 1e6
+
+
+def result_cost(result: dict) -> Optional[float]:
+    """Price this run's own result usage."""
+    prices = [model_prices(m) for m in result.get("modelUsage") or {}]
+    if not prices or None in prices or not result.get("usage"):
+        return None
+    return _price(max(prices, key=lambda x: x[1]), result["usage"])
 
 
 def spend_summary(meta: dict[str, Any]) -> dict[str, Any]:
     """Exact, estimated, assumed and unpriced spend."""
+    runs, restored = [], 0.0
+    for log in meta.get("logs") or []:
+        events = stream_events(Path(log))
+        result = next((e for e in reversed(events) if e.get("type") == "result"), {})
+        total = result.get("total_cost_usd") or 0.0
+        if total > 0:
+            # Resume restores earlier cost into total_cost_usd.
+            own = result_cost(result)
+            runs.append({"log": log, "cost_usd": own if own is not None else total - min(restored, total),
+                         "estimated": False})
+            restored = total
+        else:
+            runs.append({"log": log, "cost_usd": usage_cost(events), "estimated": True})
     assumed = meta.get("assumed") or []
     covered = {log for a in assumed for log in a.get("logs") or []}
-    runs = [log_cost(Path(log)) for log in meta.get("logs") or []]
     unpriced = [r["log"] for r in runs if r["cost_usd"] is None and r["log"] not in covered]
     priced = [r for r in runs if r["cost_usd"] is not None]
     estimated = sum(r["cost_usd"] for r in priced if r["estimated"])
@@ -183,11 +193,6 @@ def spend_summary(meta: dict[str, Any]) -> dict[str, Any]:
     total = sum(r["cost_usd"] for r in priced) + assumed_usd
     return {"usd": round(total, 4), "estimated_usd": round(estimated, 4), "assumed_usd": assumed_usd,
             "unpriced": unpriced, "runs": runs}
-
-
-def spent_usd(meta: dict[str, Any]) -> float:
-    """Cost of every run so far."""
-    return spend_summary(meta)["usd"]
 
 
 def launch(ws: Workspace, popen=subprocess.Popen, resume: bool = False, note: Optional[str] = None,
@@ -201,13 +206,17 @@ def launch(ws: Workspace, popen=subprocess.Popen, resume: bool = False, note: Op
         raise RuntimeError("No session to resume; launch first")
     if not resume and (note is not None or assume_spent is not None):
         raise RuntimeError("--note and --assume-spent need --resume")
-    assumed = list(meta.get("assumed") or []) if resume else []
-    if assume_spent is not None:
-        assumed.append({"usd": assume_spent, "logs": spend_summary(meta)["unpriced"]})
-    spend = spend_summary({**meta, "assumed": assumed}) if resume else None
-    if resume and spend["unpriced"]:
-        raise RuntimeError("Run cost unknown; pass --assume-spent USD")
-    left = campaign.cost_usd - (spend["usd"] if spend else 0.0)
+    left, assumed = campaign.cost_usd, []
+    if resume:
+        spend, assumed = spend_summary(meta), list(meta.get("assumed") or [])
+        if assume_spent is not None:
+            if not spend["unpriced"]:
+                raise RuntimeError("Every run is priced; drop --assume-spent")
+            assumed.append({"usd": assume_spent, "logs": spend["unpriced"]})
+            spend = {**spend, "usd": spend["usd"] + assume_spent, "unpriced": []}
+        if spend["unpriced"]:
+            raise RuntimeError("Run cost unknown; pass --assume-spent USD")
+        left -= spend["usd"]
     if left < 0.01:
         raise RuntimeError("Cost cap spent; raise cost_usd to resume")
     prompt = ws.prompt.read_text(encoding="utf-8")
@@ -256,6 +265,12 @@ def stop(ws: Workspace) -> str:
         else:
             os.killpg(pgid, sig)
         if _wait_gone(pid, wait):
+            if sig == signal.SIGINT:
+                # End leftover tools, e.g. submit.
+                try:
+                    os.killpg(pgid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
             return f"Agent pid {pid} stopped after {sig.name}."
     return f"Agent pid {pid} still alive after SIGKILL."
 

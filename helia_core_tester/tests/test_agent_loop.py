@@ -552,24 +552,45 @@ def _stopped_run(ws: Workspace, lines: list[str]) -> dict:
     return meta
 
 
+def _spend(*names: str) -> dict:
+    return agent.spend_summary({"logs": [str(FIXTURES / n) for n in names]})
+
+
 def test_sigint_log_is_estimated() -> None:
     # Live haiku run killed by SIGINT: result says $0.
     events = agent.stream_events(FIXTURES / "haiku-sigint.jsonl")
     assert agent.run_cost(events)["cost_usd"] == 0
-    cost = agent.log_cost(FIXTURES / "haiku-sigint.jsonl")
+    (run,) = _spend("haiku-sigint.jsonl")["runs"]
     # Usage says 4 out; streamed text says more.
     text = sum(len(b.get("text", "")) for e in events if e["type"] == "assistant" for b in e["message"]["content"])
     out = -(-text // 2)
     assert out > 4
-    assert cost["estimated"] and cost["cost_usd"] == pytest.approx((10 * 1 + out * 5 + 22383 * 0.1 + 8658 * 2) / 1e6)
+    assert run["estimated"] and run["cost_usd"] == pytest.approx((10 * 1 + out * 5 + 22383 * 0.1 + 8658 * 2) / 1e6)
 
 
-def test_finished_log_uses_result() -> None:
-    cost = agent.log_cost(FIXTURES / "haiku-finished.jsonl")
-    assert cost == {"log": str(FIXTURES / "haiku-finished.jsonl"), "cost_usd": 0.0222912, "estimated": False}
+def test_finished_log_prices_result() -> None:
+    (run,) = _spend("haiku-finished.jsonl")["runs"]
+    assert not run["estimated"] and run["cost_usd"] == pytest.approx(0.0222912)
     # Estimate stays close to the real cost.
     estimate = agent.usage_cost(agent.stream_events(FIXTURES / "haiku-finished.jsonl"))
     assert 0.8 * 0.0222912 < estimate < 1.2 * 0.0222912
+
+
+def test_resumed_result_is_cumulative() -> None:
+    # Live resume: total_cost_usd includes the first run.
+    spend = _spend("haiku-finished.jsonl", "haiku-resumed.jsonl")
+    assert [r["cost_usd"] for r in spend["runs"]] == pytest.approx([0.0222912, 0.0043105])
+    assert spend["usd"] == pytest.approx(0.0266, abs=1e-4)
+
+
+def test_unpriced_result_uses_delta(tmp_path: Path) -> None:
+    logs = []
+    for n, total in enumerate((2.0, 5.0)):
+        logs.append(tmp_path / f"{n}.jsonl")
+        logs[-1].write_text(json.dumps({"type": "result", "total_cost_usd": total, "modelUsage": {"x-model": {}},
+                                        "usage": {"input_tokens": 1}}) + "\n")
+    spend = agent.spend_summary({"logs": [str(p) for p in logs]})
+    assert [r["cost_usd"] for r in spend["runs"]] == [2.0, 3.0] and spend["usd"] == 5.0
 
 
 def test_usage_cost_dedups_and_prices() -> None:
@@ -604,9 +625,11 @@ def test_unknown_model_needs_assumed_spend(ws: Workspace) -> None:
     resumed = agent.launch(ws, popen=_popen(seen), resume=True, assume_spent=5.0)
     assert seen["args"][seen["args"].index("--max-budget-usd") + 1] == "20.00"
     assert resumed["assumed"] == [{"usd": 5.0, "logs": [meta["log"]]}]
-    # The assumption carries to later resumes.
+    # The assumption carries; repeating it is refused.
     agent.launch(ws, popen=_popen(seen), resume=True)
     assert seen["args"][seen["args"].index("--max-budget-usd") + 1] == "20.00"
+    with pytest.raises(RuntimeError, match="drop --assume-spent"):
+        agent.launch(ws, popen=_popen({}), resume=True, assume_spent=5.0)
 
 
 def test_resume_note_prompt(ws: Workspace, tmp_path: Path) -> None:
@@ -653,7 +676,7 @@ def test_cli_note_flags(ws: Workspace, tmp_path: Path, monkeypatch) -> None:
 
 
 @pytest.mark.parametrize("exit_after,sent", [
-    ("SIGINT", ["kill SIGINT"]),
+    ("SIGINT", ["kill SIGINT", "killpg SIGTERM"]),
     ("SIGTERM", ["kill SIGINT", "killpg SIGTERM"]),
     (None, ["kill SIGINT", "killpg SIGTERM", "killpg SIGKILL"]),
 ])
