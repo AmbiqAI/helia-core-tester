@@ -1,7 +1,7 @@
 """Run case bundles on a board over SEGGER RTT and write the result bundle.
 
-Cases are streamed in batches: each batch is one fresh (reset-on-open) RTT session
-and one SESSION_PLAN, sized from what the target announced in TARGET_INFO (cases
+Cases are streamed in batches over one reset-on-open RTT session: each batch is one
+SESSION_PLAN, sized from what the target announced in TARGET_INFO (cases
 per plan, receive-buffer bytes, PMU passes) rather than from mirrored constants.
 The batches' results are merged into a single SessionResult and result bundle.
 

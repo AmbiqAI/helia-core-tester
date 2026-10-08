@@ -640,8 +640,8 @@ def stream(
     dispatch table in `generated_test_bridge.py` (or call `bridged_families()` at
     runtime). Everything else is reported as skipped with the reason. Bridged cases are
     batched by the limits the target advertises (cases and PMU passes per plan, receive
-    buffer), each batch run over its own fresh reset-on-open RTT session and merged into
-    one result bundle.
+    buffer), all batches run over one reset-on-open RTT session and merged into one
+    result bundle.
     """
     from .firmware_build import resolve_build_dir
     from .hardware_pipeline import finalize_timing, prepare_bundles, stream_generated_tests

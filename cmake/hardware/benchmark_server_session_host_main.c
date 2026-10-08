@@ -281,6 +281,8 @@ int main(void)
     static const int8_t kExpected[] = {12, 1, 0, 7, 99, 5, 8, 3, 4, 11, 2, 100};
     hct_server_session_t session;
     uint8_t inbound_payload[512];
+    uint8_t plan_copy[512];
+    size_t plan_length;
     uint8_t outbound_payload[1024];
     size_t outbound_length = 0u;
     size_t offset = 0u;
@@ -338,6 +340,8 @@ int main(void)
 #else
     (void)second_id_offset;
 #endif
+    memcpy(plan_copy, inbound_payload, offset);
+    plan_length = offset;
     if (hct_server_session_accept_frame(&session, inbound_frame, encode_frame(HCTP_MSG_SESSION_PLAN, session.session_id, next_host_sequence++, inbound_payload, offset, inbound_frame)) != HCTP_STATUS_OK) return 13;
     if (drain_single_message(&session, HCTP_MSG_REQUEST_CASE, outbound_payload, &outbound_length) != 0) return 14;
 
@@ -479,6 +483,9 @@ int main(void)
             else if (frame.header.message_type == HCTP_MSG_SESSION_COMPLETE)
             {
                 if (sample_count != 6 || cpu_pass_samples != 3 || mve_pass_samples != 3) return 36;
+                /* The next plan restarts at case 0. */
+                if (hct_server_session_accept_frame(&session, inbound_frame, encode_frame(HCTP_MSG_SESSION_PLAN, session.session_id, next_host_sequence++, plan_copy, plan_length, inbound_frame)) != HCTP_STATUS_OK) return 44;
+                if (drain_single_message(&session, HCTP_MSG_REQUEST_CASE, outbound_payload, &outbound_length) != 0 || outbound_length != 2u || outbound_payload[0] != 0u || outbound_payload[1] != 0u) return 45;
                 printf("samples=%d passes=2 state=%d\n", sample_count, (int)session.state);
                 return 0;
             }
