@@ -395,6 +395,57 @@ def write_kernels(root: Path, module_dir: Path) -> None:
         _vendor(root, module_dir)
 
 
+def _stamp_path(module_dir: Path) -> Path:
+    """Marks a module vendored with fresh mtimes."""
+    return module_dir.with_name(module_dir.name + ".fresh")
+
+
+def _file_hashes(module_dir: Path) -> dict[str, str]:
+    """sha256 per regular file."""
+    return {
+        str(path.relative_to(module_dir)): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in module_dir.rglob("*")
+        if path.is_file() and not path.is_symlink()
+    }
+
+
+def _vendored_hashes(module_dir: Path) -> Optional[dict[str, str]]:
+    """Hashes this code vendored, if current."""
+    try:
+        stamp = json.loads(_stamp_path(module_dir).read_text(encoding="utf-8"))
+        if stamp.get("ino") != module_dir.stat().st_ino or not isinstance(stamp.get("files"), dict):
+            return None
+        return stamp["files"]
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def _keep_mtimes(fresh: Path, old: Path) -> None:
+    """Same bytes keep the old mtime.
+
+    Old mtimes are trusted only from a fresh vendor,
+    and only for files still holding vendored bytes.
+    Added paths keep none: headers may shadow.
+    """
+    if old.is_symlink() or not old.is_dir():
+        return
+    vendored = _vendored_hashes(old)
+    if vendored is None:
+        return
+    paths = sorted(path.relative_to(fresh) for path in fresh.rglob("*"))
+    if not set(paths) <= {path.relative_to(old) for path in old.rglob("*")}:
+        return
+    for rel in paths:
+        path, prior = fresh / rel, old / rel
+        if path.is_symlink() or prior.is_symlink() or not (path.is_file() and prior.is_file()):
+            continue
+        # In-place edits break the match.
+        digest = hashlib.sha256(prior.read_bytes()).hexdigest()
+        if digest == vendored.get(str(rel)) == hashlib.sha256(path.read_bytes()).hexdigest():
+            info = prior.stat()
+            os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns))
+
+
 def _vendor(root: Path, module_dir: Path) -> None:
     """Build fresh, then swap in."""
     import tempfile
@@ -403,8 +454,8 @@ def _vendor(root: Path, module_dir: Path) -> None:
     try:
         (fresh / "nsx").mkdir()
         # Native manifest at the module root.
-        shutil.copy2(root / "nsx" / "nsx-module.yaml", fresh / "nsx-module.yaml")
-        shutil.copy2(root / "nsx" / "CMakeLists.txt", fresh / "nsx" / "CMakeLists.txt")
+        shutil.copy(root / "nsx" / "nsx-module.yaml", fresh / "nsx-module.yaml")
+        shutil.copy(root / "nsx" / "CMakeLists.txt", fresh / "nsx" / "CMakeLists.txt")
         # Keep the shim's mtime: CMake reruns otherwise.
         shim = module_dir / "CMakeLists.txt"
         if not module_dir.is_symlink() and shim.is_file() and not shim.is_symlink() and shim.read_text(
@@ -413,11 +464,15 @@ def _vendor(root: Path, module_dir: Path) -> None:
             shutil.copy2(shim, fresh / "CMakeLists.txt")
         else:
             (fresh / "CMakeLists.txt").write_text(KERNEL_SHIM, encoding="utf-8")
-        # copytree keeps mtimes: ninja skips unchanged.
+        # Fresh mtimes; same bytes get old ones.
         for name in KERNEL_TREES:
             if (root / name).is_dir():
-                shutil.copytree(root / name, fresh / name)
+                shutil.copytree(root / name, fresh / name, copy_function=shutil.copy)
+        _keep_mtimes(fresh, module_dir)
+        _stamp_path(module_dir).unlink(missing_ok=True)
         _swap_in(fresh, module_dir)
+        stamp = {"ino": module_dir.stat().st_ino, "files": _file_hashes(module_dir)}
+        _stamp_path(module_dir).write_text(json.dumps(stamp) + "\n", encoding="utf-8")
     except BaseException:
         _remove(fresh)
         raise

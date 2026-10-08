@@ -107,17 +107,18 @@ def open_rtt_session(
     *,
     build_dir: Path,
     counter_passes: Sequence[CounterPass],
+    reset: bool = True,
 ) -> tuple[HostSession, Transport, int]:
     """Open a fresh reset-on-open RTT session to the board's flashed firmware. Returns
     the host session, its transport (the caller closes it) and the RTT control-block
-    address taken from the ELF in `build_dir`."""
+    address taken from the ELF in `build_dir`. reset=False: the board just booted."""
     rtt_address = symbol_address_from_elf(str(elf_path(build_dir)), "_SEGGER_RTT")
     transport = JLinkRttTransport(
         serial_no=serial_no,
         chip_name=board.jlink_device,
         speed_khz=board.swd_speed_khz,
         rtt_address=rtt_address,
-        reset_on_open=True,
+        reset_on_open=reset,
         # Sampling waits this long per pass.
         read_timeout_s=10.0,
     )
@@ -185,6 +186,7 @@ def run_case_bundles(
     on_case_complete: OnCaseComplete | None = None,
     expected_build_id: str | None = None,
     compare: dict | None = None,
+    fresh_boot: bool = False,
 ) -> tuple[SessionResult, Path]:
     """Stream `case_bundles` to the board in as many SESSION_PLANs as the target's
     limits require, merge every case into one SessionResult, and write its result bundle.
@@ -200,6 +202,8 @@ def run_case_bundles(
     (session.MAX_CASE_ID_BYTES) are checked against the host's mirror of the firmware
     limits before the probe is opened; the target's advertised limits are re-checked
     at every handshake.
+
+    `fresh_boot`: a flash just reset the board, so the open skips its reset.
     """
     build_dir = build_dir or board.build_dir(project_root)
     sid = session_id or default_session_id(board)
@@ -231,7 +235,7 @@ def run_case_bundles(
         while remaining:
             if session is None:
                 session, transport, rtt_address = open_rtt_session(
-                    board, serial_no, build_dir=build_dir, counter_passes=counter_passes
+                    board, serial_no, build_dir=build_dir, counter_passes=counter_passes, reset=not fresh_boot,
                 )
             batch: list[CaseBundle] = []
             try:

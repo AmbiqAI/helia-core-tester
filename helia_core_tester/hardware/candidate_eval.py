@@ -110,6 +110,12 @@ def agent_pmu(board: str) -> tuple[str, ...]:
     return tuple(f"{group}:{','.join(names)}" for group, names in AGENT_PMU_SELECTION.items())
 
 
+def build_dir_for(spec: RunSpec) -> Path:
+    """One build dir per placement: no flip rebuilds."""
+    base = resolve_board(spec.board).build_dir(repo_root())
+    return base.with_name(f"{base.name}-eval-{spec.placement}")
+
+
 def run_args(
     spec: RunSpec, session_id: str, *, golden_from: Optional[Path] = None, skip_generate: bool = False, skip_flash: bool = False,
 ) -> list[str]:
@@ -117,7 +123,7 @@ def run_args(
     args = [
         "hardware", "run", "--board", spec.board, "--cmsis-nn-root", str(spec.kernels),
         "--placement", spec.placement, "--inline-asm" if spec.inline_asm else "--no-inline-asm",
-        "--fvp-gate", "off", "--session-id", session_id, "--json",
+        "--fvp-gate", "off", "--session-id", session_id, "--json", "--build-dir", str(build_dir_for(spec)),
     ]
     for flag, values in (("--pmu-counters", spec.pmu), ("--op", spec.ops), ("--dtype", spec.dtypes), ("--case-id", spec.case_ids)):
         for value in values:
@@ -207,7 +213,7 @@ def write_baseline(spec: RunSpec, out: Path, repeats: int, run=None) -> dict:
         shutil.copytree(summary["bundle"], out / "bundles" / session)
         sessions.append(session)
     try:
-        graph = kernel_graph(spec.board)
+        graph = kernel_graph(build_dir_for(spec))
     except (OSError, ValueError, KeyError, struct.error):
         # Eval then gates every case.
         graph = None
@@ -373,11 +379,8 @@ def scan_cache_dir() -> Path:
     return repo_root() / "artifacts" / "scan_cache"
 
 
-def object_check(snap: Path, base: str, board: str) -> Optional[dict]:
+def object_check(snap: Path, base: str, build_dir: Path) -> Optional[dict]:
     """Recheck with the built objects."""
-    from .firmware_build import resolve_build_dir
-
-    build_dir = resolve_build_dir(repo_root(), resolve_board(board), None)
     report = check_candidate(snap, base, build_dir=build_dir, scan_cache=scan_cache_dir())
     if (report.get("objects") or {}).get("kernels_hash") != report.get("tree_hash"):
         report["ok"] = False
@@ -385,11 +388,9 @@ def object_check(snap: Path, base: str, board: str) -> Optional[dict]:
     return report
 
 
-def kernel_graph(board: str) -> Optional[dict]:
-    """Code graph of the board's last build."""
-    from .firmware_build import resolve_build_dir
-
-    return code_graph(resolve_build_dir(repo_root(), resolve_board(board), None))
+def kernel_graph(build_dir: Path) -> Optional[dict]:
+    """Code graph of a build dir."""
+    return code_graph(build_dir)
 
 
 def stored_graph(baseline: Path) -> Optional[dict]:
@@ -414,13 +415,13 @@ def touched_cases(baselines: list, candidate, base: dict, cand: dict) -> frozens
     return frozenset(out)
 
 
-def case_gate(baseline: Path, board: str, baselines: list, candidate) -> tuple[Optional[frozenset[str]], Optional[str]]:
+def case_gate(baseline: Path, build_dir: Path, baselines: list, candidate) -> tuple[Optional[frozenset[str]], Optional[str]]:
     """Touched cases, or None and why."""
     base = stored_graph(baseline)
     if base is None:
         return None, "baseline has no code graph"
     try:
-        cand = read_graph(kernel_graph(board))
+        cand = read_graph(kernel_graph(build_dir))
     except (OSError, ValueError, KeyError, struct.error) as exc:
         return None, f"candidate objects unreadable: {exc}"
     if cand is None:
@@ -518,13 +519,14 @@ def evaluate(kernels: Path, baseline: Path, meta: dict, min_score: float, run=No
     if not check["ok"]:
         return {**head, "verdict": "rejected", "stage": "check", "findings": check["findings"]}
     spec = RunSpec.from_json(meta["run"], snap)
+    build_dir = build_dir_for(spec)
     bundles = [baseline / "bundles" / name for name in meta["sessions"]]
     objects: dict = {}
 
     def on_built() -> None:
         # Overlaps the flash and stream.
         try:
-            objects["report"] = object_check(snap, meta["base_commit"], head["board"])
+            objects["report"] = object_check(snap, meta["base_commit"], build_dir)
         except Exception as exc:  # noqa: BLE001 -- raised after the run
             objects["error"] = exc
         mark("objects_done")
@@ -538,13 +540,13 @@ def evaluate(kernels: Path, baseline: Path, meta: dict, min_score: float, run=No
         return {**head, "verdict": verdict, "stage": "run", "reason": f"hardware run exited {rc}"}
     if "error" in objects:
         raise objects["error"]
-    built = objects["report"] if "report" in objects else object_check(snap, meta["base_commit"], head["board"])
+    built = objects["report"] if "report" in objects else object_check(snap, meta["base_commit"], build_dir)
     mark("objects_checked")
     if built is not None and not built["ok"]:
         return {**head, "verdict": "rejected", "stage": "objects", "findings": built["findings"]}
     baselines, candidate = [load_bundle(path) for path in bundles], load_bundle(Path(summary["bundle"]))
     scoring = load_scoring(head["board"]) | {"min_score": min_score}
-    touched, reason = case_gate(baseline, head["board"], baselines, candidate)
+    touched, reason = case_gate(baseline, build_dir, baselines, candidate)
     report = score_bundles(baselines, [candidate], scoring, check=check, touched=touched)
     verdict = {**head, **verdict_from(report, _hidden_ids(baselines + [candidate]), candidate.path, reason)}
     mark("verdict_done")

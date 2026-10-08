@@ -215,6 +215,8 @@ def decide_flash(build_dir: Path, serial_no: int, *, force: bool = False) -> Fla
     if not stamp.exists():
         return FlashDecision(True, digest, f"no flash stamp for serial {serial_no} yet", build_id)
     previous = stamp.read_text(encoding="utf-8").strip()
+    if previous == digest and flashed_other(build_dir, serial_no, digest):
+        return FlashDecision(True, digest, f"serial {serial_no} last flashed another ELF", build_id)
     if previous == digest:
         return FlashDecision(
             False, digest, f"ELF sha256 unchanged since last flash to serial {serial_no} (stamp {stamp})", build_id
@@ -286,9 +288,23 @@ def confirm_board_build_id(
     return FlashDecision(False, decision.digest, f"{decision.reason}; board confirmed build id {expected}", expected, actual)
 
 
+def probe_stamp_path(build_dir: Path, serial_no: int) -> Path:
+    """Probe-wide stamp shared by sibling dirs."""
+    return build_dir.parent / f".probe-{serial_no}.sha256"
+
+
+def flashed_other(build_dir: Path, serial_no: int, digest: str) -> bool:
+    """The probe's last flash was another ELF."""
+    try:
+        return probe_stamp_path(build_dir, serial_no).read_text(encoding="utf-8").strip() != digest
+    except OSError:
+        return False
+
+
 def record_flash(build_dir: Path, serial_no: int, digest: str) -> Path:
     stamp = flash_stamp_path(build_dir, serial_no)
     stamp.write_text(digest + "\n", encoding="utf-8")
+    probe_stamp_path(build_dir, serial_no).write_text(digest + "\n", encoding="utf-8")
     return stamp
 
 
