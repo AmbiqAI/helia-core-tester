@@ -326,11 +326,15 @@ def _submit_locked(ws: Workspace, campaign: Campaign, facts: dict, ledger: Ledge
         return _emit(ws, eid, view)
 
 
-def _rewrite_header(line: bytes) -> bytes:
+HUNK_RE = re.compile(rb"^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@")
+# Git extended headers we accept.
+GIT_META = (b"diff ", b"index ", b"new file mode ", b"deleted file mode ")
+
+
+def _rewrite_path(mark: bytes, line: bytes) -> bytes:
     """Map any diff path to a/<tree>/..."""
     body = line.rstrip(b"\r\n")
-    mark, rest = body[:4], body[4:]
-    path, sep, tail = rest.partition(b"\t")
+    path, sep, tail = body[4:].partition(b"\t")
     tail += line[len(body):]
     if path == b"/dev/null":
         return line
@@ -338,23 +342,64 @@ def _rewrite_header(line: bytes) -> bytes:
         key = tree.encode() + b"/"
         at = path.find(b"/" + key)
         rel = path[at + 1:] if at >= 0 else path if path.startswith(key) else None
-        if rel is not None:
+        if rel is not None and b"/../" not in b"/" + rel + b"/":
             side = b"a/" if mark == b"--- " else b"b/"
             return mark + side + rel + sep + tail
     raise ValueError(f"patch touches {path.decode(errors='replace')}, outside Source/Include")
 
 
+def clean_patch(diff: bytes) -> bytes:
+    """Strict parse; every header pair checked."""
+    lines = diff.splitlines(keepends=True)
+    out, i, headers = [], 0, False
+    while i < len(lines):
+        line = lines[i]
+        if line.startswith(b"--- "):
+            if i + 1 >= len(lines) or not lines[i + 1].startswith(b"+++ "):
+                raise ValueError("patch: --- without +++")
+            out += [_rewrite_path(b"--- ", line), _rewrite_path(b"+++ ", lines[i + 1])]
+            i, headers = i + 2, True
+            continue
+        hunk = HUNK_RE.match(line)
+        if hunk:
+            if not headers:
+                raise ValueError("patch: hunk before file headers")
+            old = int(hunk.group(1) or 1)
+            new = int(hunk.group(2) or 1)
+            out.append(line)
+            i += 1
+            # Consume exactly the hunk body.
+            while old > 0 or new > 0:
+                if i >= len(lines):
+                    raise ValueError("patch: hunk ends early")
+                body, kind = lines[i], lines[i][:1]
+                if kind == b" ":
+                    old, new = old - 1, new - 1
+                elif kind == b"-":
+                    old -= 1
+                elif kind == b"+":
+                    new -= 1
+                elif kind != b"\\":
+                    raise ValueError("patch: bad hunk line")
+                if old < 0 or new < 0:
+                    raise ValueError("patch: hunk longer than its header")
+                out.append(body)
+                i += 1
+            while i < len(lines) and lines[i].startswith(b"\\"):
+                out.append(lines[i])
+                i += 1
+            continue
+        if line.startswith(GIT_META):
+            out.append(line)
+            i += 1
+            continue
+        raise ValueError(f"patch: unexpected line {line[:60]!r}")
+    return b"".join(out)
+
+
 def apply_patch(tree: Path, diff: bytes) -> None:
     """Apply a base -> agent diff to tree."""
-    lines, header = [], True
-    for line in diff.splitlines(keepends=True):
-        # Headers sit between diff and @@.
-        if line.startswith(b"diff "):
-            header = True
-        elif line.startswith(b"@@"):
-            header = False
-        lines.append(_rewrite_header(line) if header and line.startswith((b"--- ", b"+++ ")) else line)
-    proc = subprocess.run(["patch", "-p1", "--batch", "--forward", "-d", str(tree)], input=b"".join(lines),
+    proc = subprocess.run(["patch", "-p1", "--batch", "--forward", "-d", str(tree)], input=clean_patch(diff),
                           capture_output=True)
     if proc.returncode != 0:
         raise ValueError(f"start patch does not apply: {proc.stdout.decode(errors='replace')[-500:]}")

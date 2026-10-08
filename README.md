@@ -483,10 +483,13 @@ uv run helia_core_tester agent-loop init conv-s8.yaml -w ~/campaigns/conv-s8
    while you keep working here.
 2. Clones `W/base` (clean) and `W/agent` (tagged `base`) as standalone
    one-commit repos with no remote, so git commands in the agent's tree
-   cannot reach other repos. `start_patch` (a ledger diff, or any diff of
-   `Source/`/`Include/`) is applied to `W/agent`.
+   cannot reach other repos. `start_patch` (a ledger diff, or any unified
+   diff of `Source/`/`Include/`) is applied to `W/agent`. It is parsed
+   strictly: every header pair must name a path under `Source/` or
+   `Include/`, and any line outside a counted hunk is refused.
 3. Writes a fresh secret seed and hidden set in `secrets_dir` (mode 0700,
-   seed 0600). The dir must be new or empty.
+   seed 0600). The dir must be new or empty. The workspace records that
+   it owns the dir, and only that workspace's rerun reuses its seed.
 4. Records one `candidate baseline` per leg under `bench-agent run`.
 5. Builds the base kernel library once and saves per-object code sizes
    (`W/size-ref.json`).

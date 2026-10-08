@@ -110,18 +110,28 @@ def shallow_tree(repo: Path, sha: str, dest: Path, tag: bool = False) -> None:
         _git("tag", "base", cwd=dest)
 
 
-def make_hidden(ws: Workspace, campaign: Campaign) -> None:
+def claim_secrets(ws: Workspace, campaign: Campaign, facts: dict) -> None:
+    """Own an empty secrets_dir, or refuse."""
+    if facts.get("secrets_owner") == str(ws.root):
+        return
+    root = campaign.secrets_dir
+    if root.exists() and any(root.iterdir()):
+        raise InitError(f"{root} is not empty; use a fresh secrets_dir")
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    root.chmod(0o700)
+    # Recorded before any secret exists.
+    facts["secrets_owner"] = str(ws.root)
+    ws.save(campaign, facts)
+
+
+def make_hidden(ws: Workspace, campaign: Campaign, facts: dict) -> None:
     """Fresh secret and hidden set, private."""
+    claim_secrets(ws, campaign, facts)
     hidden, seed = ws.hidden_dir(campaign), ws.seed_file(campaign)
     if (hidden / "done").is_file():
         return
-    root = campaign.secrets_dir
     # Resume reuses this campaign's seed.
     if not seed.is_file():
-        if root.exists() and any(root.iterdir()):
-            raise InitError(f"{root} is not empty; use a fresh secrets_dir")
-        root.mkdir(mode=0o700, parents=True, exist_ok=True)
-        root.chmod(0o700)
         fd = os.open(seed, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, "w") as handle:
             handle.write(secrets.token_hex(SECRET_BYTES))
@@ -212,7 +222,7 @@ def init_workspace(ws: Workspace, campaign: Campaign, echo: Echo = print) -> dic
     echo(f"Base and agent trees at {base[:12]}")
     if campaign.hidden_shapes:
         echo("Generating the hidden set...")
-        make_hidden(ws, campaign)
+        make_hidden(ws, campaign, facts)
     for leg in campaign.legs:
         echo(f"Recording the {leg} baseline on {campaign.bench_id}...")
         make_baseline(ws, campaign, leg)

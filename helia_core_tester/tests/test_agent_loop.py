@@ -332,6 +332,36 @@ def test_apply_patch_new_file_from_dev_null(tmp_path: Path) -> None:
     assert (tree / "Source" / "n.c").read_text() == "int n;\n"
 
 
+def test_apply_patch_checks_every_header(tmp_path: Path) -> None:
+    tree = _patch_tree(tmp_path)
+    (tree / "nsx").mkdir()
+    (tree / "nsx" / "x.txt").write_text("a\n")
+    # Second header pair, no diff line.
+    diff = (b"--- base/Source/Conv/a.c\n+++ agent/Source/Conv/a.c\n@@ -1,2 +1,2 @@\n one\n-two\n+three\n"
+            b"--- a/nsx/x.txt\n+++ b/nsx/x.txt\n@@ -1 +1 @@\n-a\n+evil\n")
+    with pytest.raises(ValueError, match="outside Source/Include"):
+        judge.apply_patch(tree, diff)
+    assert (tree / "nsx" / "x.txt").read_text() == "a\n" and "three" not in (tree / "Source" / "Conv" / "a.c").read_text()
+
+
+@pytest.mark.parametrize("diff, message", [
+    (b"--- a/Source/../nsx/x\n+++ b/Source/../nsx/x\n@@ -1 +1 @@\n-a\n+b\n", "outside"),
+    (b"--- a/Source/a.c\n+++ b/Source/a.c\n@@ -1 +1 @@\n-a\n+b\n+c\n", "unexpected line"),
+    (b"@@ -1 +1 @@\n-a\n+b\n", "before file headers"),
+    (b"--- a/Source/a.c\n+++ b/Source/a.c\n@@ -1,2 +1,2 @@\n-a\n", "ends early"),
+    (b"Only in agent/Source: x.c\n", "unexpected line"),
+])
+def test_clean_patch_rejects(diff: bytes, message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        judge.clean_patch(diff)
+
+
+def test_clean_patch_keeps_no_newline_marker() -> None:
+    diff = (b"--- base/Source/a.c\n+++ agent/Source/a.c\n@@ -1 +1 @@\n-a\n\\ No newline at end of file\n"
+            b"+b\n\\ No newline at end of file\n")
+    assert judge.clean_patch(diff).count(b"\\ No newline") == 2
+
+
 def test_apply_patch_refuses_other_trees(tmp_path: Path) -> None:
     diff = b"--- base/nsx/x.txt\n+++ agent/nsx/x.txt\n@@ -0,0 +1 @@\n+x\n"
     with pytest.raises(ValueError, match="outside Source/Include"):
@@ -545,3 +575,29 @@ def test_selftest_probes_are_unique(ws: Workspace) -> None:
     writes = [p["arg"] for p in first if p["tool"] == "Write"]
     assert all("aaaa" in w for w in writes)
     assert not set(writes) & {p["arg"] for p in second}
+
+
+def test_secrets_dir_needs_ownership(tmp_path: Path) -> None:
+    from helia_core_tester.agent_loop import setup
+
+    secrets_dir = tmp_path / "s"
+    (secrets_dir / "hidden").mkdir(parents=True)
+    (secrets_dir / "seed").write_text("x" * 64)
+    (secrets_dir / "hidden" / "done").write_text("")
+    camp = _campaign(secrets_dir=str(secrets_dir))
+    ws = Workspace(tmp_path / "ws")
+    ws.root.mkdir()
+    ws.save(camp, {})
+    # Old campaign's done marker: refused.
+    with pytest.raises(setup.InitError, match="not empty"):
+        setup.make_hidden(ws, camp, {})
+    # Owner resumes; done is honoured.
+    facts = {"secrets_owner": str(ws.root)}
+    setup.make_hidden(ws, camp, facts)
+    fresh = Workspace(tmp_path / "ws2")
+    fresh.root.mkdir()
+    camp2 = _campaign(secrets_dir=str(tmp_path / "s2"))
+    facts2: dict = {}
+    setup.claim_secrets(fresh, camp2, facts2)
+    assert facts2["secrets_owner"] == str(fresh.root) and fresh.load()[1]["secrets_owner"] == str(fresh.root)
+    assert oct((tmp_path / "s2").stat().st_mode & 0o777) == "0o700"
