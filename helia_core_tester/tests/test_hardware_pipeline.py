@@ -593,7 +593,7 @@ def test_json_summary_identifies_its_schema(tmp_path: Path, monkeypatch) -> None
     assert datetime.fromisoformat(encoded["generated_at"]).utcoffset() == timedelta(0)
     assert encoded["selection"] == {
         "suite": "float", "limit": 2, "family": "ActivationFunctions", "test_name": None,
-        "ops": [], "dtypes": [], "case_ids": [], "precision": "f32",
+        "ops": [], "dtypes": [], "case_ids": [], "precision": "f32", "seed": None,
         "pmu_counters": {"cpu": "all"}, "fvp_gate": "strict",
         "compare": {"strict": False, "golden_from": None, "golden_session_id": None},
     }
@@ -649,7 +649,7 @@ def test_run_hardware_pipeline_generates_flashes_then_streams(tmp_path: Path, mo
     board = resolve_board("apollo510_evb")
     order: list[str] = []
 
-    def _generate(repo_root, spec, suite, float_precision=None, cmsis_nn_root=None, select=None):
+    def _generate(repo_root, spec, suite, float_precision=None, cmsis_nn_root=None, select=None, seed=None):
         order.append(f"generate:{spec.cpu}:{suite}:{float_precision}:{cmsis_nn_root}")
 
     def _stage(spec, *, build_dir, options, force_sync, update_dependencies):

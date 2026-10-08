@@ -101,7 +101,8 @@ class Config:
     dtype_filter: Optional[str] = None
     name_filter: Optional[str] = None
     limit: Optional[int] = None
-    seed: Optional[int] = 500
+    # The run seed every case's draw derives from; None draws a fresh one per run.
+    seed: Optional[int] = None
 
     force_generate: bool = False
     # Shared trees: keep other runs' cases.

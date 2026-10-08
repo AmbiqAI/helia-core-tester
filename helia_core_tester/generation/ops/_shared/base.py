@@ -1116,6 +1116,9 @@ class OperationBase(ABC):
             "op_suffix": op_suffix,
             "kernel_fn": resolved_context.get("kernel_fn"),
             "comparison": comparison,
+            # The seeds the case's data was drawn from (run_seed is set by generate_test).
+            "run_seed": getattr(self, "run_seed", None),
+            "case_seed": self.seed,
             "resolved_tensor_dtypes": self.resolved_tensor_dtypes(),
             "scalars": scalars,
         }

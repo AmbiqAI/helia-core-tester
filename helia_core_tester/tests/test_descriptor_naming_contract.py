@@ -142,7 +142,7 @@ def test_generation_name_filter_uses_renamed_descriptor_names(tmp_path: Path, mo
     monkeypatch.setattr(generation_module, "find_descriptors_dir", lambda: repo_root / "assets" / "descriptors")
     monkeypatch.setattr(generation_module, "load_all_descriptors", lambda _path: descriptors)
 
-    def _fake_generate_test(desc, out_dir, seed=None, cpu="cortex-m55", conversion_failures=None, generation_failures=None):
+    def _fake_generate_test(desc, out_dir, seed=None, cpu="cortex-m55", conversion_failures=None, generation_failures=None, run_seed=0):
         generated.append(desc["name"])
         test_dir = Path(out_dir) / desc["_family"] / desc["name"]
         test_dir.mkdir(parents=True, exist_ok=True)

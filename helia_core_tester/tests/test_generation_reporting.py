@@ -49,7 +49,7 @@ def test_generation_emits_canonical_report_files(tmp_path: Path, monkeypatch: py
         ],
     )
 
-    def _fake_generate_test(desc, out_dir, seed=None, cpu="cortex-m55", conversion_failures=None, generation_failures=None):
+    def _fake_generate_test(desc, out_dir, seed=None, cpu="cortex-m55", conversion_failures=None, generation_failures=None, run_seed=0):
         test_dir = Path(out_dir) / desc["_family"] / desc["name"]
         test_dir.mkdir(parents=True, exist_ok=True)
         (test_dir / f"{desc['name']}.tflite").write_bytes(b"\x01")
@@ -238,13 +238,14 @@ def test_second_generation_reuses_every_case(tmp_path: Path, monkeypatch: pytest
 
     generate_calls: list[str] = []
 
-    def _fake_generate_test(desc, out_dir, seed=None, cpu="cortex-m55", conversion_failures=None, generation_failures=None):
+    def _fake_generate_test(desc, out_dir, seed=None, cpu="cortex-m55", conversion_failures=None, generation_failures=None, run_seed=0):
         generate_calls.append(desc["name"])
         test_dir = Path(out_dir) / desc["_family"] / desc["name"]
         test_dir.mkdir(parents=True, exist_ok=True)
         # The sidecar is what a reused case's manifest entry is rebuilt from, so
-        # the fake has to emit it exactly as the real generator does.
-        (test_dir / "descriptor.yaml").write_text(yaml.dump(desc, sort_keys=False))
+        # the fake has to emit it exactly as the real generator does, seeds included.
+        (test_dir / "descriptor.yaml").write_text(
+            yaml.dump({**desc, "run_seed": int(run_seed), "case_seed": int(seed)}, sort_keys=False))
         (test_dir / f"{desc['name']}.tflite").write_bytes(b"\x01")
         (test_dir / f"{desc['name']}_{desc['operator'].lower()}.c").write_text("// fake generated harness\n")
 

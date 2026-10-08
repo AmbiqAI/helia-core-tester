@@ -26,7 +26,9 @@ def pytest_addoption(parser):
     parser.addoption("--limit", action="store", type=int, default=None,
                     help="Limit number of tests to run")
     parser.addoption("--seed", action="store", type=int, default=None,
-                    help="Random seed for test generation (default: hash of test name)")
+                    help="Run seed every case's draw derives from (default: HCT_SEED, else a fresh draw)")
+    parser.addoption("--fresh-seed", action="store_true", default=False,
+                    help="The --seed was drawn by the pipeline, not chosen: cases are not reused")
     parser.addoption("--cpu", action="store", default="cortex-m55",
                     help="Target CPU for code generation")
     parser.addoption("--generated-tests-dir", action="store", default=None,
@@ -151,6 +153,7 @@ def test_filters(request):
         'name': request.config.getoption("--name"),
         'limit': request.config.getoption("--limit"),
         'seed': request.config.getoption("--seed"),
+        'fresh_seed': request.config.getoption("--fresh-seed"),
         'cpu': request.config.getoption("--cpu"),
         'suite': request.config.getoption("--suite"),
         'float_precision': request.config.getoption("--float-precision"),

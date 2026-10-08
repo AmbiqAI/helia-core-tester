@@ -16,6 +16,8 @@ args=(
 if [[ -n "${HCT_NIGHTLY_LIMIT:-}" ]]; then
   args+=(--limit "${HCT_NIGHTLY_LIMIT}")
 fi
+# Every leg of one night draws the same cases; the seed is in each bundle for replay.
+args+=(--seed "${HCT_NIGHTLY_SEED:-$(date -u +%Y%m%d)}")
 # DWT-only boards refuse PMU counters.
 tier="$(uv run python -c 'import sys; from helia_core_tester.hardware.boards import resolve_board; print(resolve_board(sys.argv[1]).pmu_tier)' "${HPX_BOARD}")"
 if [[ "${tier}" != "dwt" ]]; then
