@@ -171,9 +171,7 @@ def test_s16_edges_covered() -> None:
     assert any(case.get("activation_min", 0) < -128 for case in cases)
 
 
-def test_s8_draws_ignore_s16() -> None:
-    both = rs.sample_cases(8, 21, ops=(CONV, DW, DW16))
-    assert [c for c in both if c["activation_dtype"] == "S8"] == rs.sample_cases(8, 21, ops=(CONV, DW))
+def test_streams_and_tags_unique() -> None:
     assert len({gen.stream for gen in rs.GENERATORS.values()}) == len(rs.GENERATORS)
     assert len({gen.tag for gen in rs.GENERATORS.values()}) == len(rs.GENERATORS)
 

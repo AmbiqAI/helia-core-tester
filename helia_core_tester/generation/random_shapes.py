@@ -23,7 +23,7 @@ from helia_core_tester.hardware.generated_test_bridge import (
     _depthwise_s8_scratch_bytes,
     _with_weight_sums,
 )
-from helia_core_tester.hardware.wrapper_route import conv_route, dw_route, dw_s16_route
+from helia_core_tester.hardware.wrapper_route import FAST_S16_TAPS, conv_route, dw_route, dw_s16_route
 from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
 # Per-case cap; keeps a 50-case stream short.
@@ -41,8 +41,6 @@ CONV_ROUTES = (
 # One input channel runs as conv.
 DW_AS_CONV = "as_conv"
 DW16_ROUTES = ("arm_depthwise_conv_fast_s16", "arm_depthwise_conv_s16")
-# Fast s16 needs fewer taps.
-FAST_S16_TAPS = 512
 SECRET_ENV = "HCT_HIDDEN_SEED"
 # Short secrets fall to brute force.
 MIN_SECRET = 16
@@ -53,7 +51,6 @@ HIDDEN_ID_HEX = 12
 class Generator:
     """Random-shape source for one op and dtype."""
 
-    dtype: str
     tag: str
     descriptor_file: str
     # RNG stream id; never reuse one.
@@ -187,7 +184,13 @@ def _dw_layer(rng: np.random.Generator, route: str) -> Layer:
     mult = int(rng.integers(1, 5))
     cin = _channels(rng, 2, 48)
     layer = Layer(_size(rng, 2, 24), _size(rng, 2, 24), cin, cin * mult, kh, kw, *_stride(rng), padding=pad, mult=mult)
-    if mult == 1:
+    return _off_fast_path(rng, layer)
+
+
+def _off_fast_path(rng: np.random.Generator, layer: Layer) -> Layer:
+    """Dilate so the generic route runs."""
+    if layer.mult == 1:
+        # 2D dilation forces the generic route.
         layer.sh = layer.sw = 1
         layer.dh, layer.dw = int(rng.integers(2, 4)), int(rng.integers(1, 4))
         return layer
@@ -213,14 +216,7 @@ def _dw16_layer(rng: np.random.Generator, route: str) -> Layer:
         # 1D dilation keeps the fast route.
         return Layer(1, _size(rng, 8, 96), cin, cin, 1, kw, dw=int(rng.integers(2, 5)), padding=pad)
     layer = Layer(_size(rng, 2, 24), _size(rng, 2, 24), cin, cin * mult, kh, kw, *_stride(rng), padding=pad, mult=mult)
-    if fast:
-        return layer
-    if mult == 1:
-        # 2D dilation forces the generic route.
-        layer.sh = layer.sw = 1
-        layer.dh, layer.dw = int(rng.integers(2, 4)), int(rng.integers(1, 4))
-        return layer
-    return _maybe_dilate(rng, layer)
+    return layer if fast else _off_fast_path(rng, layer)
 
 
 def _conv_routes(mve: bool) -> list[str]:
@@ -238,11 +234,9 @@ def _dw16_routes(mve: bool) -> list[str]:
 
 # Register new random-shape ops here.
 GENERATORS: dict[tuple[str, str], Generator] = {
-    ("Convolve", "S8"): Generator("S8", "conv", "ConvolutionFunctions/convolve.yaml", 0, _conv_routes, _conv_layer),
-    ("DepthwiseConv", "S8"): Generator("S8", "dw", "ConvolutionFunctions/depthwise_conv.yaml", 1, _dw_routes, _dw_layer),
-    ("DepthwiseConv", "S16"): Generator(
-        "S16", "dw16", "ConvolutionFunctions/depthwise_conv.yaml", 2, _dw16_routes, _dw16_layer
-    ),
+    ("Convolve", "S8"): Generator("conv", "ConvolutionFunctions/convolve.yaml", 0, _conv_routes, _conv_layer),
+    ("DepthwiseConv", "S8"): Generator("dw", "ConvolutionFunctions/depthwise_conv.yaml", 1, _dw_routes, _dw_layer),
+    ("DepthwiseConv", "S16"): Generator("dw16", "ConvolutionFunctions/depthwise_conv.yaml", 2, _dw16_routes, _dw16_layer),
 }
 # (op, dtype) keys, in draw order.
 OPS = tuple(GENERATORS)
@@ -280,7 +274,7 @@ def select_ops(op_filter: str | None = None, dtype_filter: str | None = None) ->
         raise ValueError(f"No random shapes for {', '.join(unknown)}; have {have}")
     picked = tuple(
         key for key, gen in GENERATORS.items()
-        if (not ops or any(_matches(key[0], gen, wanted) for wanted in ops)) and (not dtypes or gen.dtype in dtypes)
+        if (not ops or any(_matches(key[0], gen, wanted) for wanted in ops)) and (not dtypes or key[1] in dtypes)
     )
     if not picked:
         raise ValueError(f"No random shapes for that op/dtype; have {have}")
