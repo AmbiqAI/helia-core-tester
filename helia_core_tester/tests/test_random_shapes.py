@@ -20,6 +20,7 @@ from helia_core_tester.generation.ops._shared.quant_knobs import clamp_golden, v
 from helia_core_tester.hardware.generated_test_bridge import HW_CASE_SUFFIX
 
 SEEDS = (0, 1, 7, 12345)
+CONV, DW, DW16 = ("Convolve", "S8"), ("DepthwiseConv", "S8"), ("DepthwiseConv", "S16")
 
 
 def _layer(case: dict) -> rs.Layer:
@@ -38,52 +39,59 @@ def test_same_seed_same_cases() -> None:
 
 def test_ops_draw_independently() -> None:
     both = rs.sample_cases(10, 3)
-    assert [c for c in both if c["operator"] == "Convolve"] == rs.sample_cases(10, 3, ops=("Convolve",))
+    assert [c for c in both if c["operator"] == "Convolve"] == rs.sample_cases(10, 3, ops=(CONV,))
+    assert [c for c in both if c["activation_dtype"] == "S16"] == rs.sample_cases(10, 3, ops=(DW16,))
 
 
 @pytest.mark.parametrize(("op", "dtype", "picked"), [
-    (None, None, ("Convolve", "DepthwiseConv")),
-    ("Convolve", None, ("Convolve",)),
-    ("DepthwiseConv", "s8", ("DepthwiseConv",)),
-    ("depthwise_conv", None, ("DepthwiseConv",)),
-    (None, "S8", ("Convolve", "DepthwiseConv")),
+    (None, None, (CONV, DW, DW16)),
+    ("Convolve", None, (CONV,)),
+    ("DepthwiseConv", "s8", (DW,)),
+    ("DepthwiseConv", "S16", (DW16,)),
+    ("depthwise_conv", None, (DW, DW16)),
+    (None, "S8", (CONV, DW)),
+    (None, "s16", (DW16,)),
 ])
 def test_select_ops_matches_filters(op, dtype, picked) -> None:
     assert rs.select_ops(op, dtype) == picked
 
 
 @pytest.mark.parametrize(("op", "dtype"), [
-    ("FullyConnected", None), ("Convolve", "S16"), (None, "S4"), ("rs", None),
+    ("FullyConnected", None), ("Convolve", "S16"), (None, "S4"), ("rs", None), ("DepthwiseConv", "S4"),
     # A typo fails even beside a match.
     ("Convolve,Softmax", "S8"),
     # Drawn names cannot be filtered.
     ("rs7_conv", None),
 ])
 def test_select_ops_refuses_unknown(op, dtype) -> None:
-    with pytest.raises(ValueError, match="have Convolve S8, DepthwiseConv S8"):
+    with pytest.raises(ValueError, match="have Convolve S8, DepthwiseConv S8, DepthwiseConv S16$"):
         rs.select_ops(op, dtype)
 
 
 def test_case_pattern_follows_registry(monkeypatch) -> None:
     assert rs.random_case_pattern().fullmatch("rs7_dw_3")
+    assert rs.random_case_pattern().fullmatch("rs7_dw16_3")
     assert not rs.random_case_pattern().fullmatch("rs7_fc_3")
-    monkeypatch.setitem(rs.GENERATORS, "FullyConnected", dataclasses.replace(rs.GENERATORS["Convolve"], tag="fc"))
+    monkeypatch.setitem(rs.GENERATORS, ("FullyConnected", "S8"), dataclasses.replace(rs.GENERATORS[CONV], tag="fc"))
     assert rs.random_case_pattern().fullmatch("rs7_fc_3")
 
 
 def test_one_op_draw_is_a_subset() -> None:
     both = rs.hidden_cases(4, SECRET.encode(), "cortex-m55")
-    for op in rs.OPS:
-        alone = rs.hidden_cases(4, SECRET.encode(), "cortex-m55", (op,))
-        assert alone == [c for c in both if c["operator"] == op]
+    for key in rs.OPS:
+        alone = rs.hidden_cases(4, SECRET.encode(), "cortex-m55", (key,))
+        assert alone == [c for c in both if (c["operator"], c["activation_dtype"]) == key]
 
 
 def test_summary_records_ops(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(rs.SECRET_ENV, SECRET)
-    descriptors = rs.prepare_hidden(tmp_path, 3, "cortex-m55", ("DepthwiseConv",))
+    descriptors = rs.prepare_hidden(tmp_path, 3, "cortex-m55", (DW,))
     summary = json.loads((descriptors.parent / "summary.json").read_text())
     assert summary["ops"] == {"DepthwiseConv": "S8"} and list(summary["routes"]) == ["DepthwiseConv"]
     assert [p.name for p in descriptors.rglob("*.yaml")] == ["depthwise_conv.yaml"]
+    descriptors = rs.prepare_hidden(tmp_path, 3, "cortex-m55", (DW, DW16))
+    summary = json.loads((descriptors.parent / "summary.json").read_text())
+    assert summary["ops"] == {"DepthwiseConv": "S8,S16"} and summary["cases"] == 6
 
 
 def test_random_filter_refused_early() -> None:
@@ -99,11 +107,11 @@ def test_cases_fit_the_board(cpu: str, seed: int) -> None:
     workspace = rs.min_workspace(cpu)
     mve = cpu == "cortex-m55"
     for case in rs.sample_cases(50, seed, cpu):
-        op, layer = case["operator"], _layer(case)
+        op, dtype, layer = case["operator"], case["activation_dtype"], _layer(case)
         assert min(layer.out_hw()) >= 1
-        assert rs.footprint(op, layer) <= workspace
+        assert rs.footprint(op, layer, dtype) <= workspace
         assert rs.layer_macs(op, layer) <= rs.MAX_MACS
-        assert rs.layer_route(op, layer, mve) == case["expected_route"]
+        assert rs.layer_route(op, layer, mve, dtype) == case["expected_route"]
         assert case["shape_seed"] == seed and f"rs{seed}_" in case["name"]
         assert len(case["name"] + HW_CASE_SUFFIX) < 96
         if op == "DepthwiseConv":
@@ -111,7 +119,7 @@ def test_cases_fit_the_board(cpu: str, seed: int) -> None:
 
 
 def test_routes_and_edges_covered() -> None:
-    cases = rs.sample_cases(50, 11)
+    cases = rs.sample_cases(50, 11, ops=(CONV, DW))
     routes = rs.route_counts(cases)
     assert set(routes["Convolve"]) == set(rs.CONV_ROUTES)
     assert {"arm_depthwise_conv_s8", "arm_depthwise_conv_s8_opt"} <= set(routes["DepthwiseConv"])
@@ -131,8 +139,61 @@ def test_routes_and_edges_covered() -> None:
     assert {c["depth_multiplier"] for c in cases if c["operator"] == "DepthwiseConv"} == {1, 2, 3, 4}
 
 
+@pytest.mark.parametrize("cpu", ["cortex-m55", "cortex-m4"])
+@pytest.mark.parametrize("seed", SEEDS)
+def test_s16_hits_both_routes(cpu: str, seed: int) -> None:
+    cases = rs.sample_cases(12, seed, cpu, (DW16,))
+    assert rs.route_counts(cases)["DepthwiseConv"] == dict.fromkeys(sorted(rs.DW16_ROUTES), 6)
+    assert all(c["activation_dtype"] == "S16" and c["name"].startswith(f"rs{seed}_dw16_") for c in cases)
+
+
+def test_s16_edges_covered() -> None:
+    cases = rs.sample_cases(50, 11, ops=(DW16,))
+    layers = [(c, _layer(c)) for c in cases]
+    taps = {route: [l.kh * l.kw for c, l in layers if c["expected_route"] == route] for route in rs.DW16_ROUTES}
+    fast, generic = rs.DW16_ROUTES
+    # Both sides of the tap limit.
+    assert rs.FAST_S16_TAPS - 32 < max(taps[fast]) < rs.FAST_S16_TAPS
+    assert max(taps[generic]) >= rs.FAST_S16_TAPS
+    assert {c["depth_multiplier"] for c in cases} == {1, 2, 3, 4}
+    assert any(c["depth_multiplier"] == 1 and c["expected_route"] == generic for c in cases)
+    assert any(max(c["dilation"]) > 1 and c["expected_route"] == fast for c in cases)
+    assert any(c["dilation"][0] > 1 for c in cases)
+    assert any(l.cin % 4 for _, l in layers) and any(l.cin in rs.PRIMES for _, l in layers)
+    assert {c["padding"] for c in cases} == {"SAME", "VALID"}
+    assert any(c["use_bias"] for c in cases) and any(not c["use_bias"] for c in cases)
+    # Int16 fused activations floor at zero.
+    for case in cases:
+        if case["activation"] != "NONE":
+            assert case["activation_min"] >= 0
+        if "activation_max" in case:
+            assert -32768 <= case["activation_min"] < case["activation_max"] <= 32767
+    assert any(case.get("activation_min", 0) < -128 for case in cases)
+
+
+def test_s8_draws_ignore_s16() -> None:
+    both = rs.sample_cases(8, 21, ops=(CONV, DW, DW16))
+    assert [c for c in both if c["activation_dtype"] == "S8"] == rs.sample_cases(8, 21, ops=(CONV, DW))
+    assert len({gen.stream for gen in rs.GENERATORS.values()}) == len(rs.GENERATORS)
+    assert len({gen.tag for gen in rs.GENERATORS.values()}) == len(rs.GENERATORS)
+
+
+@pytest.mark.parametrize(("cpu", "digest"), [
+    ("cortex-m55", "0e7ab2bbc4ec98883baf528c60ff3f236e7b3c4920c281b11e70e671e3a7c721"),
+    ("cortex-m4", "ae31993618c4838acbcd2d8a02d22cf9a3378c4206fe49e8d1ce250c25817cb0"),
+])
+def test_s8_hidden_sets_unchanged(cpu: str, digest: str) -> None:
+    import hashlib
+
+    import yaml
+
+    # Digests pinned before s16 joined.
+    cases = rs.hidden_cases(8, SECRET.encode(), cpu, rs.select_ops(None, "S8"))
+    assert hashlib.sha256(yaml.safe_dump_all(cases, sort_keys=False).encode()).hexdigest() == digest
+
+
 def test_plain_cpu_hits_3x3_route() -> None:
-    routes = rs.route_counts(rs.sample_cases(20, 2, "cortex-m4"))
+    routes = rs.route_counts(rs.sample_cases(20, 2, "cortex-m4", (CONV, DW)))
     assert "arm_depthwise_conv_3x3_s8" in routes["DepthwiseConv"]
     assert not set(routes["Convolve"]) & set(rs.MVE_CONV_ROUTES)
 
@@ -140,9 +201,9 @@ def test_plain_cpu_hits_3x3_route() -> None:
 def test_written_descriptors_load(tmp_path: Path) -> None:
     descriptors = rs.prepare_shapes(tmp_path, 6, 9, "cortex-m55")
     loaded = load_all_descriptors(str(descriptors))
-    assert [d["name"] for d in loaded] == [c["name"] for c in rs.sample_cases(6, 9)]
+    assert sorted(d["name"] for d in loaded) == sorted(c["name"] for c in rs.sample_cases(6, 9))
     summary = json.loads((descriptors.parent / "summary.json").read_text())
-    assert summary["shape_seed"] == 9 and summary["cases"] == 12
+    assert summary["shape_seed"] == 9 and summary["cases"] == 18
 
 
 def test_quant_knobs() -> None:
