@@ -269,7 +269,8 @@ def next_note(picks: list[dict], evals_left: int, size_evals: int, passed: bool)
         return None
     head = f"next: {'shrink code' if shrink else 'keep chasing speed'} {phase_count(evals_left, size_evals)}"
     note = f"{head}; fastest pass {fastest['eval']} {pick_text(fastest)}"
-    if shrink and smallest is not None and smallest is not fastest:
+    # Skip a smallest that saves nothing.
+    if shrink and smallest is not None and (not _known(fastest) or _bytes(smallest) < _bytes(fastest)):
         note += f"; smallest pass {smallest['eval']} {pick_text(smallest)}"
     return note
 

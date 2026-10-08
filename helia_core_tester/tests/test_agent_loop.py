@@ -6,7 +6,6 @@ import shlex
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Optional
 
 import pytest
 
@@ -786,9 +785,13 @@ def test_disasm_wrapper_args(ws: Workspace, tmp_path: Path) -> None:
 LEGS4 = ("tcm", "mram", "tcm-atfe", "mram-atfe")
 
 
-def _two_toolchains(ws: Workspace) -> None:
+def _replace(ws: Workspace, **over) -> None:
     campaign, facts = ws.load()
-    ws.save(dataclasses.replace(campaign, toolchains=("gcc", "atfe")), facts)
+    ws.save(dataclasses.replace(campaign, **over), facts)
+
+
+def _two_toolchains(ws: Workspace) -> None:
+    _replace(ws, toolchains=("gcc", "atfe"))
 
 
 def _keyed_check(ws, campaign, base, area, deadline=None):
@@ -943,13 +946,8 @@ def test_pass_names_the_phase(ws: Workspace, capsys) -> None:
     assert rc == 1 and "next" not in view
 
 
-def _set_evals(ws: Workspace, evals: int, size_evals: Optional[int] = None) -> None:
-    campaign, facts = ws.load()
-    ws.save(dataclasses.replace(campaign, evals=evals, size_evals=size_evals), facts)
-
-
 def test_speed_phase_then_size_phase(ws: Workspace, capsys) -> None:
-    _set_evals(ws, 5, 2)
+    _replace(ws, evals=5, size_evals=2)
     rc, view = _submit(ws, FakeBoard([_leg("fail"), _leg("pass")]), capsys)
     assert rc == 1 and "next" not in view
     rc, view = _submit(ws, FakeBoard([_leg("pass"), _leg("pass")]), capsys)
@@ -960,14 +958,14 @@ def test_speed_phase_then_size_phase(ws: Workspace, capsys) -> None:
 
 
 def test_speed_fail_has_no_next(ws: Workspace, capsys) -> None:
-    _set_evals(ws, 6, 2)
+    _replace(ws, evals=6, size_evals=2)
     _submit(ws, FakeBoard([_leg("pass"), _leg("pass")]), capsys)
     rc, view = _submit(ws, FakeBoard([_leg("fail"), _leg("pass")]), capsys)
     assert rc == 1 and view["evals_left"] == 4 and "next" not in view
 
 
 def test_no_size_phase_note(ws: Workspace, capsys) -> None:
-    _set_evals(ws, 3, 0)
+    _replace(ws, evals=3, size_evals=0)
     _, view = _submit(ws, FakeBoard([_leg("pass"), _leg("pass")]), capsys)
     assert view["next"] == "next: keep chasing speed (2 evals left); fastest pass 001 1.10x at +64 B"
     _, view = _submit(ws, FakeBoard([_leg("fail"), _leg("pass")]), capsys)
@@ -986,10 +984,17 @@ def test_phase_text(left, size_evals, text) -> None:
     assert ledger.size_phase(left, size_evals) == text.startswith("size")
 
 
+def test_size_tie_names_fastest_only() -> None:
+    rows = [{"eval": e, "verdict": "pass", "size_delta": 64, "legs": {"tcm": {"geomean": {"f": gain}}}}
+            for e, gain in (("003", 3.0353), ("004", 3.0357))]
+    picks = ledger.passing_evals(rows, _campaign().runs)
+    assert ledger.next_note(picks, 2, 2, True) == "next: shrink code (2 evals left); fastest pass 004 3.04x at +64 B"
+
+
 def test_free_evals_have_no_next(ws: Workspace, capsys, monkeypatch) -> None:
     monkeypatch.setattr(judge, "RETRY_PAUSE_S", 0)
     # Size phase after the pass.
-    _set_evals(ws, 4, 3)
+    _replace(ws, evals=4, size_evals=3)
     _submit(ws, FakeBoard([_leg("pass"), _leg("pass")]), capsys)
     rejected = lambda *a, **k: (False, {"check": {"ok": False}})  # noqa: E731
     rc, view = _submit(ws, FakeBoard([]), capsys, checker=rejected)
@@ -1000,7 +1005,7 @@ def test_free_evals_have_no_next(ws: Workspace, capsys, monkeypatch) -> None:
 
 def test_pass_note_names_fastest_and_smallest(ws: Workspace, atfe_root: Path, capsys) -> None:
     _two_toolchains(ws)
-    _set_evals(ws, 3)
+    _replace(ws, evals=3)
     board = FakeBoard([_leg_gain("pass", 2.0)] * 4)
     _submit(ws, board, capsys, checker=_keyed_check)
     small = lambda *a, **k: (True, {"check": {"ok": True}, "build": {"gcc": "ok", "atfe": "ok"},  # noqa: E731
