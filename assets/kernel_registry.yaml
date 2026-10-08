@@ -1154,3 +1154,11 @@ kernels:
     operator: LSTMUnidirectional
     dtype: S8
     cmsis_function: arm_lstm_unidirectional_s8
+
+  # Direct kernel; no s16 wrapper exists.
+  - kernel_id: 186
+    family: ConvolutionFunctions
+    operator: TransposeConv
+    dtype: S16
+    weight_dtype: S8
+    cmsis_function: arm_transpose_conv_s16
