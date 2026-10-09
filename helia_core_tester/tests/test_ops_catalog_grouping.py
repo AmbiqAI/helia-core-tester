@@ -138,7 +138,6 @@ def test_selected_ops_define_local_litert_wrappers() -> None:
     ops_root = _repo_root() / "helia_core_tester" / "generation" / "ops" / "BasicMathFunctions"
     expected_wrappers = {
         "abs.py": "build_abs_op",
-        "add.py": "build_add_op",
         "argmax.py": "build_argmax_op",
         "argmin.py": "build_argmin_op",
         "rsqrt.py": "build_rsqrt_op",
@@ -153,6 +152,9 @@ def test_selected_ops_define_local_litert_wrappers() -> None:
     litert_builder_text = (_repo_root() / "helia_core_tester" / "generation" / "utils" / "litert_builder.py").read_text()
     assert "def build_abs_op(" not in litert_builder_text
     assert "def build_add_op(" not in litert_builder_text
+    # Add takes its golden from the C reference library and builds no LiteRT model at all.
+    add_text = (ops_root / "add.py").read_text()
+    assert "litert" not in add_text.lower() and "def build_add_op(" not in add_text
     assert "def build_arg_op(" not in litert_builder_text
     assert "def build_rsqrt_op(" not in litert_builder_text
     assert "def build_sqrt_op(" not in litert_builder_text

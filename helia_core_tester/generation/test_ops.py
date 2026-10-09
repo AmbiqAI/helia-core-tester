@@ -4,6 +4,7 @@ Thin generator that discovers YAML descriptors and generates TFLite models.
 """
 
 import hashlib
+import os
 import re
 import json
 from datetime import datetime, timezone
@@ -32,9 +33,32 @@ from helia_core_tester.generation.reuse import (
 from helia_core_tester.generation.utils.temp_sizer_probe import kernel_source_exists, missing_header_symbols
 
 
-def default_seed_for_case(name: str) -> int:
-    """Deterministic per-case seed, independent of PYTHONHASHSEED."""
-    return int.from_bytes(hashlib.sha256(name.encode("utf-8")).digest()[:4], "little")
+RUN_SEED_ENV = "HCT_SEED"
+
+
+def default_seed_for_case(name: str, run_seed: int = 0) -> int:
+    """The case's own seed: the run seed mixed with the case name, independent of PYTHONHASHSEED.
+
+    Two cases of one run never share a draw, and the same run seed reproduces every case. Run seed
+    0 is the historical per-name seed, so pinned fixtures and `HCT_SEED=0` keep their draws."""
+    if int(run_seed) == 0:
+        return int.from_bytes(hashlib.sha256(name.encode("utf-8")).digest()[:4], "little")
+    payload = f"{int(run_seed)}\0{name}".encode("utf-8")
+    return int.from_bytes(hashlib.sha256(payload).digest()[:4], "little")
+
+
+def resolve_run_seed(filters: Dict[str, Any]) -> tuple[int, bool]:
+    """The run seed and whether the caller chose it.
+
+    `--seed N` pins it (reuse stamps match again); otherwise HCT_SEED, else a fresh draw, so every
+    run redraws every case's data. A fresh seed is printed and recorded so a failure reproduces
+    with `--seed N`. `--fresh-seed` marks a seed the pipeline drew itself as not chosen."""
+    if filters.get("seed") is not None:
+        return int(filters["seed"]), not bool(filters.get("fresh_seed"))
+    env = os.environ.get(RUN_SEED_ENV)
+    if env is not None and env.strip():
+        return int(env.strip(), 0), True
+    return int.from_bytes(os.urandom(4), "little"), False
 
 
 def _descriptor_family(desc: Dict[str, Any]) -> str:
@@ -251,8 +275,16 @@ def _manifest_entry(
         "relative_test_dir": str(test_dir.relative_to(generated_tests_dir)),
         "tflite": str(test_dir / f"{desc['name']}.tflite"),
         "c_sources": sorted(p.name for p in test_dir.glob("*.c")),
+        # Provenance of a reference golden; None for operators not yet on the C reference.
+        "reference": (
+            str(test_dir / f"{desc['name']}.reference.json")
+            if (test_dir / f"{desc['name']}.reference.json").is_file()
+            else None
+        ),
         "cpu": cpu,
         "reused": reused,
+        "run_seed": desc.get("run_seed"),
+        "case_seed": desc.get("case_seed"),
     }
 
 
@@ -283,6 +315,17 @@ def _reused_manifest_entry(
     )
 
 
+def _write_reference_record(op, test_dir: Path, name: str, *, run_seed: int, case_seed: int) -> None:
+    """Write `<name>.reference.json`; a reference-backed case without a recorded call is an error."""
+    if op.reference is None:
+        raise RuntimeError(f"{name}: {type(op).__name__}.uses_reference() but no ReferenceCall was recorded")
+    from helia_core_tester.generation.reference.bindings import loaded_library_key
+
+    op.reference.to_json(test_dir / f"{name}.reference.json",
+                         seeds={"run_seed": int(run_seed), "case_seed": int(case_seed)},
+                         library_key=loaded_library_key())
+
+
 def generate_test(
     desc: Dict[str, Any],
     out_dir: str,
@@ -290,6 +333,7 @@ def generate_test(
     cpu: str = "cortex-m55",
     conversion_failures: Optional[List[Dict[str, Any]]] = None,
     generation_failures: Optional[List[Dict[str, Any]]] = None,
+    run_seed: int = 0,
 ) -> None:
     """
     Generate TFLite model for a descriptor.
@@ -297,7 +341,8 @@ def generate_test(
     Args:
         desc: YAML descriptor
         out_dir: Output directory for generated files
-        seed: Optional random seed (if None, uses hash of test name)
+        seed: The case's seed; None derives it from `run_seed` and the case name
+        run_seed: The run's seed, recorded with the case so the draw reproduces
     """
     name = desc['name']
     operator = desc['operator']
@@ -307,10 +352,13 @@ def generate_test(
     test_dir = _descriptor_test_dir(Path(out_dir), desc)
     test_dir.mkdir(parents=True, exist_ok=True)
     
-    # Save the complete descriptor as YAML in the test directory
+    if seed is None:
+        seed = default_seed_for_case(name, run_seed)
+    # Save the complete descriptor as YAML in the test directory, with the seeds that drew it.
     descriptor_path = test_dir / "descriptor.yaml"
     with open(descriptor_path, 'w') as f:
-        yaml.dump(desc, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+        yaml.dump({**desc, "run_seed": int(run_seed), "case_seed": int(seed)}, f,
+                  default_flow_style=False, sort_keys=False, allow_unicode=True)
     
     # Get operation class
     op_map = get_op_map()
@@ -319,13 +367,12 @@ def generate_test(
         
     op_class = op_map[operator]
     
-    # Initialize operation with deterministic seed
-    if seed is None:
-        seed = default_seed_for_case(name)
     op = op_class(desc, seed, target_cpu=cpu)
+    op.run_seed = int(run_seed)
     
-    # Build Keras model (skip for ops that generate LiteRT models directly)
-    if op.needs_keras_model():
+    uses_reference = op.uses_reference()
+    # A reference-backed case needs no model: its golden is a ReferenceCall on the C library.
+    if not uses_reference and op.needs_keras_model():
         try:
             model = op.build_keras_model()
         except Exception as e:
@@ -348,8 +395,11 @@ def generate_test(
     # Convert to TFLite (some ops allow no-tflite fallback)
     tflite_path = test_dir / f"{name}.tflite"
     try:
-        op.convert_to_tflite(model, str(tflite_path), seed)
-        print(f"Generated TFLite model: {name}")
+        if uses_reference:
+            print(f"Reference golden: {name}")
+        else:
+            op.convert_to_tflite(model, str(tflite_path), seed)
+            print(f"Generated TFLite model: {name}")
     except Exception as e:
         if op.allow_no_tflite():
             print(f"INFO: Skipping TFLite generation for {name}: {e}")
@@ -380,15 +430,24 @@ def generate_test(
     
     # Generate C/H files from templates
     try:
-        op.generate_c_files(test_dir)
+        try:
+            op.generate_c_files(test_dir)
+        except NotImplementedError as exc:
+            # A reference-backed operator has no "not yet": it must produce a golden.
+            if uses_reference:
+                raise RuntimeError(f"{name}: reference operator {operator} is not implemented: {exc}") from exc
+            raise
         op.assert_input_mode_consumed()
         check_case_golden(test_dir, desc)
+        if uses_reference:
+            _write_reference_record(op, test_dir, name, run_seed=run_seed, case_seed=seed)
     except NotImplementedError:
         # Operator doesn't support C file generation yet
         print(f"INFO: {name} - C file generation not implemented")
     except Exception as e:
         import traceback
         print(f"ERROR: Failed to generate C/H files for {name}: {e}")
+        print(f"ERROR: Reproduce with --seed {int(run_seed)} --name {name}")
         print(f"ERROR: Traceback:")
         traceback.print_exc()
         if generation_failures is not None:
@@ -400,6 +459,8 @@ def generate_test(
                 "stage": "c_files",
                 "exception": repr(e),
                 "traceback": traceback.format_exc(),
+                "run_seed": int(run_seed),
+                "case_seed": int(seed),
             })
         # Do not silently continue: an unexpected failure to generate C/H files
         # must fail this descriptor's generation (and therefore the overall
@@ -411,6 +472,13 @@ def test_generation(test_filters):
     """
     Generate TFLite models for all descriptors.
     """
+    # One seed per run: every case's draw derives from it, and it is recorded everywhere.
+    run_seed, seed_chosen = resolve_run_seed(test_filters)
+    test_filters = {**test_filters, "run_seed": run_seed, "seed_chosen": seed_chosen}
+    if seed_chosen:
+        print(f"Run seed: {run_seed} (chosen; unchanged cases are reused)")
+    else:
+        print(f"Run seed: {run_seed} (fresh: every case is redrawn; pass --seed {run_seed} to reproduce or reuse)")
     # Load all descriptors using discovery
     random_shapes = test_filters.get("random_shapes")
     hidden_dir = test_filters.get("hidden_dir")
@@ -547,16 +615,17 @@ def test_generation(test_filters):
             continue
         case_name = str(desc["name"])
         test_dir = _descriptor_test_dir(Path(top_generated), desc)
+        case_seed = default_seed_for_case(case_name, run_seed)
         stamp = case_stamp(
             desc,
             case_name=case_name,
             cpu=target_cpu,
             suite=suite_mode,
-            seed=test_filters.get("seed") if test_filters.get("seed") is not None
-            else default_seed_for_case(case_name),
+            seed=case_seed,
             version_hash=version_hash,
         )
-        if not force_generate and case_reusable(test_dir, stamp):
+        # A fresh seed never matches a stamp: skip the hashing, the run redraws every case.
+        if not force_generate and seed_chosen and case_reusable(test_dir, stamp):
             reused_entry = _reused_manifest_entry(
                 test_dir, generated_tests_dir=Path(top_generated), cpu=target_cpu
             )
@@ -574,14 +643,15 @@ def test_generation(test_filters):
             generate_test(
                 desc,
                 str(top_generated),
-                seed=test_filters.get('seed'),
+                seed=case_seed,
                 cpu=target_cpu,
                 conversion_failures=conversion_failures,
                 generation_failures=generation_failures,
+                run_seed=run_seed,
             )
             manifest_entries.append(
                 _manifest_entry(
-                    desc,
+                    {**desc, "run_seed": run_seed, "case_seed": case_seed},
                     test_dir=test_dir,
                     generated_tests_dir=Path(top_generated),
                     cpu=target_cpu,
@@ -695,7 +765,11 @@ def test_generation(test_filters):
         "cpu": target_cpu,
         "generated_tests_dir": str(top_generated),
         "manifest_path": str(manifest_path) if manifest_path else None,
+        "run_seed": run_seed,
+        "seed_chosen": seed_chosen,
     }
+    # The seed on its own, for scripts that only need to replay the run.
+    (report_dir / "run_seed.json").write_text(json.dumps({"run_seed": run_seed, "seed_chosen": seed_chosen}, indent=2))
     if manifest_path:
         try:
             manifest_pointer["manifest_relative_path"] = str(manifest_path.relative_to(repo_root))
@@ -735,7 +809,8 @@ def test_generation(test_filters):
             "wtype": test_filters.get("wtype"),
             "name": test_filters.get("name"),
             "limit": test_filters.get("limit"),
-            "seed": test_filters.get("seed"),
+            "seed": run_seed,
+            "seed_chosen": seed_chosen,
             "suite": suite_mode,
             "float_precision": float_precision_mode,
             "force_generate": force_generate,
@@ -817,6 +892,8 @@ def _write_manifest_and_cmake(
             "float_precision": _float_precision_mode(test_filters),
             **_shape_filters(test_filters),
         },
+        "run_seed": test_filters.get("run_seed"),
+        "seed_chosen": test_filters.get("seed_chosen"),
         "tests": entries,
         "skipped": skipped_entries,
     }

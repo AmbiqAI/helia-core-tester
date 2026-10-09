@@ -17,6 +17,16 @@ from helia_core_tester.hardware.hardware_pipeline import (
     HiddenSetError, StreamOptions, prepare_bundles, resolved_selection, run_hardware_pipeline,
 )
 
+
+@pytest.fixture(autouse=True)
+def _stub_host_check(monkeypatch):
+    """These tests stub generation, so there are no real cases to host-check;
+    the host-check stage itself is covered in test_hardware_host_check.py."""
+    from helia_core_tester.hardware import hardware_pipeline
+
+    monkeypatch.setattr(hardware_pipeline, "host_check_tests_for_board", lambda *a, **k: "host check stubbed")
+
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 BOARD = resolve_board("apollo510_evb")
 COMMITMENT = "ab" * 32
