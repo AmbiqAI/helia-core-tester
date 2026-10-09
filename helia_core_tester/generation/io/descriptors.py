@@ -3,6 +3,7 @@ Descriptor ingestion with dtype validation and kernel resolution.
 """
 
 import copy
+import functools
 import yaml
 import os
 from typing import Dict, Any, List, Tuple
@@ -326,6 +327,15 @@ def _validate_and_normalize_descriptor(desc: Dict[str, Any]) -> Dict[str, Any]:
     return normalized
 
 
+_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+
+
+@functools.lru_cache(maxsize=512)
+def _parse_yaml_docs(data: bytes) -> tuple:
+    """Parse once per distinct content."""
+    return tuple(yaml.load_all(data, Loader=_LOADER))
+
+
 def load_descriptor(desc_path: str) -> List[Dict[str, Any]]:
     """
     Load and validate YAML descriptor(s) from a file.
@@ -337,8 +347,10 @@ def load_descriptor(desc_path: str) -> List[Dict[str, Any]]:
     Returns:
         List of validated descriptor dictionaries (one per YAML document in the file)
     """
-    with open(desc_path, 'r') as f:
-        documents = list(yaml.safe_load_all(f))
+    with open(desc_path, 'rb') as f:
+        data = f.read()
+    # Validator deep-copies, so cache stays pristine.
+    documents = list(_parse_yaml_docs(data))
     
     # Filter out None documents (empty separators)
     documents = [doc for doc in documents if doc is not None]
