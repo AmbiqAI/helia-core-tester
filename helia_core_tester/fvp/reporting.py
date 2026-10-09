@@ -154,13 +154,12 @@ def run_tests_with_reporting(
             if active_names is not None and desc_name not in active_names:
                 continue
             generated_test_dir = tracker.generated_test_dir_for(desc_name, cpu_generated_tests_dir)
-            tflite_file = generated_test_dir / f"{desc_name}.tflite"
             includes_dir = generated_test_dir / "includes"
             model_headers = list(includes_dir.glob(f"{desc_name}_*.h")) if includes_dir.exists() else []
             model_header_old = generated_test_dir / "includes" / f"{desc_name}_model.h"
             has_model_header = len(model_headers) > 0 or model_header_old.exists()
             elf_path = tracker.elf_path_for(desc_name, build_dir)
-            if tflite_file.exists() or has_model_header or elf_path.exists():
+            if has_model_header or elf_path.exists():
                 active_descriptors.add(desc_name)
 
         descriptor_results: dict[str, DescriptorResult] = {}

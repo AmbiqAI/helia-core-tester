@@ -22,11 +22,6 @@ class BinaryBasicMathBase(OperationBase):
     # one-op LiteRT builder fixed them; kept so their goldens do not move.
     FIXED_QUANT: Dict[str, Tuple[float, int]] = {"S8": (0.125, 0), "S16": (1.0 / 32768.0, 0)}
 
-    def needs_tflite(self) -> bool:
-        # Shapes come from the descriptor, quantization is FIXED_QUANT, and the
-        # golden is a reference call (int) or numpy (float).
-        return False
-
     def _binary_shapes(self) -> Tuple[Tuple[int, ...], Tuple[int, ...], Tuple[int, ...]]:
         shape_1 = tuple(int(d) for d in self.desc["input_1_shape"])
         shape_2 = tuple(int(d) for d in self.desc["input_2_shape"])

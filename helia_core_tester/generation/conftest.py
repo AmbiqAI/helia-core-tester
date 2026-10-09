@@ -121,11 +121,6 @@ def pytest_configure(config):
     if generated_tests_dir.exists():
         print(f"\nCleaning existing generated tests directory...")
         try:
-            # Count existing files before deletion
-            existing_count = sum(1 for _ in generated_tests_dir.rglob("*.tflite"))
-            if existing_count > 0:
-                print(f"   Removing {existing_count} existing TFLite model(s)")
-            
             shutil.rmtree(generated_tests_dir)
             print(f"Directory cleaned")
         except OSError as e:

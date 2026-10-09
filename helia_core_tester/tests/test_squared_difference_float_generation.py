@@ -17,7 +17,6 @@ import pytest
 from helia_core_tester.generation.io.descriptors import load_descriptor
 from helia_core_tester.generation.ops.BasicMathFunctions.squared_difference import OpSquaredDifference
 from helia_core_tester.generation.ops.catalog import get_operator_spec
-from helia_core_tester.generation.utils.litert_builder import LITERT_AVAILABLE
 
 TESTER_ROOT = Path(__file__).resolve().parents[2]
 DESCRIPTOR_PATH = TESTER_ROOT / "assets" / "descriptors" / "BasicMathFunctions" / "squared_difference_float.yaml"
@@ -81,14 +80,9 @@ def _float_desc(
 
 
 def _generate(desc: dict, out_dir: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[str, str, dict]:
-    """Run convert + C generation; return (c source, header, sidecar)."""
-    if not LITERT_AVAILABLE:
-        pytest.skip("ai_edge_litert is required for squared difference LiteRT generation")
+    """Run C generation; return (c source, header, sidecar)."""
     monkeypatch.setenv("CMSIS_NN_REPO_ROOT", str(TESTER_ROOT))
     op = OpSquaredDifference(desc, seed=1, target_cpu=CPU)
-    tflite_path = out_dir / f"{desc['name']}.tflite"
-    if op.needs_tflite() and not op.uses_reference():
-        op.convert_to_tflite(None, str(tflite_path), 1)
     op.generate_c_files(out_dir)
     op.assert_input_mode_consumed()
     name = desc["name"]
@@ -274,8 +268,6 @@ def test_float_case_renders_flat_call_and_float_validation(tmp_path: Path, monke
 def test_random_golden_matches_the_binary16_model(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     desc = _descriptors()["squared_difference_float_odd_block_f16"]
     monkeypatch.setenv("CMSIS_NN_REPO_ROOT", str(TESTER_ROOT))
-    if not LITERT_AVAILABLE:
-        pytest.skip("ai_edge_litert is required")
     op = OpSquaredDifference(desc, seed=1, target_cpu=CPU)
     a, b = op._float_operands((1, 3, 5, 3), (1, 3, 5, 3))
     assert a.dtype == np.float16 and b.dtype == np.float16 and a.shape == (1, 3, 5, 3)
@@ -430,15 +422,11 @@ def test_fault_cases_render_a_status_only_harness(
 
 
 def test_fault_kinds_are_rejected_on_the_int_kernels(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    if not LITERT_AVAILABLE:
-        pytest.skip("ai_edge_litert is required")
     monkeypatch.setenv("CMSIS_NN_REPO_ROOT", str(TESTER_ROOT))
     desc = {"operator": "SquaredDifference", "name": "int_fault", "activation_dtype": "S8", "weight_dtype": "S8",
             "input_1_shape": [1, 2, 2, 3], "input_2_shape": [1, 2, 2, 3],
             "fault": "null_input_1", "expected_status": "ARM_CMSIS_NN_ARG_ERROR"}
     op = OpSquaredDifference(desc, seed=1, target_cpu=CPU)
-    if op.needs_tflite() and not op.uses_reference():
-        op.convert_to_tflite(None, str(tmp_path / "int_fault.tflite"), 1)
     with pytest.raises(ValueError, match="not covered by the float fault edits"):
         op.generate_c_files(tmp_path)
 

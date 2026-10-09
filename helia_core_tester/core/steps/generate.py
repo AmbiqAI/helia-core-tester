@@ -1,5 +1,5 @@
 """
-TFLite model generation step.
+Test-case generation step.
 """
 
 import os
@@ -15,7 +15,7 @@ from helia_core_tester.utils.command_runner import run_command
 
 
 class GenerateStep(StepBase):
-    """Step for generating TFLite models."""
+    """Step for generating test cases."""
     
     _run_seed: Optional[tuple[int, bool]] = None
 
@@ -121,7 +121,7 @@ class GenerateStep(StepBase):
         return self._run_seed
 
     def _do_execute(self) -> StepResult:
-        """Execute TFLite model generation."""
+        """Execute test-case generation."""
         seed, chosen = self.run_seed()
         if self.config.verbosity >= 1:
             self.logger.info("Generating reference models and test cases using pytest")
@@ -159,12 +159,12 @@ class GenerateStep(StepBase):
                 )
             if self.config.verbosity >= 1:
                 self.logger.info(
-                    f"TFLite models generated successfully for targets={len(generation_targets)} cpus={','.join(self.config.cpus)}"
+                    f"Test cases generated successfully for targets={len(generation_targets)} cpus={','.join(self.config.cpus)}"
                 )
             return StepResult(
                 name=self.name,
                 status=StepStatus.SUCCESS,
-                message="TFLite models generated successfully",
+                message="Test cases generated successfully",
                 outputs={
                     "generated_tests_root": str(self._output_root())
                 },
@@ -181,7 +181,7 @@ class GenerateStep(StepBase):
                 },
             )
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
-            error_msg = f"Failed to generate TFLite models: {e}"
+            error_msg = f"Failed to generate test cases: {e}"
             self.logger.error(error_msg)
             gen_error = GenerationError(error_msg)
             gen_error.__cause__ = e

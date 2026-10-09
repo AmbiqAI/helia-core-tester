@@ -151,11 +151,10 @@ def _run_generation(tmp_path, monkeypatch, cmsis_nn_root: Path):
 
     generated: list[str] = []
 
-    def _fake_generate_test(desc, out_dir, seed=None, cpu="cortex-m55", conversion_failures=None, generation_failures=None, run_seed=0):
+    def _fake_generate_test(desc, out_dir, seed=None, cpu="cortex-m55", generation_failures=None, run_seed=0):
         generated.append(desc["name"])
         test_dir = Path(out_dir) / desc["_family"] / desc["name"]
         test_dir.mkdir(parents=True, exist_ok=True)
-        (test_dir / f"{desc['name']}.tflite").write_bytes(b"\x01")
         (test_dir / f"{desc['name']}_mean.c").write_text("// fake\n")
 
     monkeypatch.setattr(generation_module, "generate_test", _fake_generate_test)
@@ -227,7 +226,7 @@ def test_generation_fails_loudly_when_undeclared_symbol_has_kernel_source(
     # below carries the loud per-descriptor message.
     with pytest.raises(
         AssertionError,
-        match="No TFLite models were generated|Generation failures occurred",
+        match="No test cases were generated|Generation failures occurred",
     ):
         _run_generation(tmp_path, monkeypatch, root)
 
@@ -329,7 +328,6 @@ def test_mean_float_generates_reduce_sum_shaped_call_and_mean_golden(
         "axes": [1, 2],
     }
     op = OpMean(desc, seed=7, target_cpu="cortex-m55")
-    (tmp_path / f"{name}.tflite").write_bytes(b"\x01")
 
     op.generate_c_files(tmp_path)
 
@@ -380,7 +378,6 @@ def test_hard_swish_float_generates_size_call_and_contract_golden(
         "input_shape": [1, 4, 4, 8],
     }
     op = OpHardSwishPrecise(desc, seed=11, target_cpu="cortex-m55")
-    (tmp_path / f"{name}.tflite").write_bytes(b"\x01")
 
     op.generate_c_files(tmp_path)
 

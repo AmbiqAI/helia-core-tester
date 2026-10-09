@@ -10,10 +10,6 @@ from helia_core_tester.generation.ops._shared.base import OperationBase
 class OpScatterNd(OperationBase):
     """ScatterNd operation."""
 
-    def needs_tflite(self) -> bool:
-        # The golden is computed in numpy; nothing reads a .tflite.
-        return False
-
     def _select_kernel(self) -> Dict[str, str]:
         activation_dtype = self.desc.get("activation_dtype", "S8")
         if activation_dtype == "S16":

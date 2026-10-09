@@ -80,10 +80,10 @@ def test_scaffold_operator_creates_grouped_skeleton(tmp_path: Path) -> None:
     assert created["schema"].exists()
 
     module_text = created["module"].read_text()
-    assert "def build_example_op(" in module_text
-    assert "build_unary_same_shape_op" in module_text
-    assert 'self.tensor_litert_dtype("input")' in module_text
-    assert 'output_dtype=self.tensor_litert_dtype("output")' in module_text
+    assert "class OpExampleOp(OperationBase):" in module_text
+    assert "def generate_c_files(self, output_dir: Path) -> None:" in module_text
+    assert "litert" not in module_text.lower() and "keras" not in module_text.lower()
+    compile(module_text, str(created["module"]), "exec")
 
     catalog_text = created["catalog"].read_text()
     assert '"ExampleOp": _spec("ExampleOp", "BasicMathFunctions", "example_op", "OpExampleOp"' in catalog_text
@@ -134,26 +134,6 @@ def test_ops_use_grouped_template_paths_directly() -> None:
             assert first.endswith("Functions") or first == "TesterExtensions", (path, literal)
 
 
-def test_selected_ops_define_local_litert_wrappers() -> None:
-    ops_root = _repo_root() / "helia_core_tester" / "generation" / "ops" / "BasicMathFunctions"
-    expected_wrappers = {
-        "argmax.py": "build_argmax_op",
-        "argmin.py": "build_argmin_op",
-    }
-
-    for filename, wrapper_name in expected_wrappers.items():
-        text = (ops_root / filename).read_text()
-        assert f"def {wrapper_name}(" in text
-        assert f"from helia_core_tester.generation.utils.litert_builder import {wrapper_name}" not in text
-
-    litert_builder_text = (_repo_root() / "helia_core_tester" / "generation" / "utils" / "litert_builder.py").read_text()
-    assert "def build_abs_op(" not in litert_builder_text
-    assert "def build_add_op(" not in litert_builder_text
-    assert "def build_arg_op(" not in litert_builder_text
-    assert "def build_rsqrt_op(" not in litert_builder_text
-    assert "def build_sqrt_op(" not in litert_builder_text
-
-
 def test_root_readme_documents_add_op_workflow() -> None:
     readme_candidates = []
     if len(_repo_root().parents) > 1:
@@ -165,7 +145,7 @@ def test_root_readme_documents_add_op_workflow() -> None:
             continue
         content = readme.read_text()
         if "scaffold_operator.py" in content:
-            assert "build_<op>_op()" in content or "tensor_dtypes" in content
+            assert "tensor_dtypes" in content
             return
 
     raise AssertionError("No README documents the Helia-Core Tester op workflow")

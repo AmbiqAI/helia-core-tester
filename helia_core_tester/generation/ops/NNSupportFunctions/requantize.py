@@ -23,10 +23,6 @@ class OpRequantize(QuantizationFamilyBase):
     Requantize operation (int8->int8, int16->int16).
     """
 
-    def needs_tflite(self) -> bool:
-        # The golden is computed directly; nothing reads a .tflite.
-        return False
-
     def _select_cmsis_requantize_kernel(self) -> Dict[str, str]:
         activation_dtype = self.desc.get("activation_dtype", "S8")
         if activation_dtype == "S8":

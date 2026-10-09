@@ -10,10 +10,6 @@ from helia_core_tester.generation.ops._shared.base import OperationBase
 class OpDynamicUpdateSlice(OperationBase):
     """DynamicUpdateSlice operation."""
 
-    def needs_tflite(self) -> bool:
-        # The golden is computed in numpy; nothing reads a .tflite.
-        return False
-
     _SUCCESS = "ARM_CMSIS_NN_SUCCESS"
     _ARG_ERROR = "ARM_CMSIS_NN_ARG_ERROR"
     _ARG_ERROR_CASES = {"operand", "update", "start_indices", "params", "output"}

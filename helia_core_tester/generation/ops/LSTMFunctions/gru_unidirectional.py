@@ -2,7 +2,7 @@
 
 CMSIS-only (force_cmsis) float test generation for arm_gru_unidirectional_f16
 and arm_gru_unidirectional_f32. Mirrors the OpLSTMUnidirectional force_cmsis
-code path: no Keras/TFLite model is built; a pure-numpy reference (matching the
+code path: a pure-numpy reference (matching the
 arm_nn_gru_step_*.c math for both the reset-after and pre-reset formulations)
 produces the golden output directly.
 """
@@ -20,10 +20,6 @@ GRU_FRAGMENTS = "LSTMFunctions/gru_unidirectional"
 
 class OpGRUUnidirectional(OperationBase):
     """GRUUnidirectional operation (FP32/FP16, CMSIS-only)."""
-
-    def needs_tflite(self) -> bool:
-        # The golden is computed directly; nothing reads a .tflite.
-        return False
 
     FAULT_KINDS = (
         "null_input",

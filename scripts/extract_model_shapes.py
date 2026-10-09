@@ -10,8 +10,9 @@ the other layers.
 The cases replace a marked block at the end of each operator's descriptor file.
 
 Usage, with M the helia-profiler checkout's tests/fixtures/mlperf_tiny
-(the MLPerf Tiny models the hpx nightly profiles):
-    uv run python scripts/extract_model_shapes.py \
+(the MLPerf Tiny models the hpx nightly profiles); the flatbuffer schema comes
+from ai-edge-litert, which the tester itself no longer depends on:
+    uv run --with ai-edge-litert python scripts/extract_model_shapes.py \
         ad=$M/ad/ad01_int8.tflite ic=$M/ic/ic_resnet_int8.tflite \
         kws=$M/kws/kws_ref_model.tflite vww=$M/vww/vww_96_int8.tflite
 """
@@ -19,14 +20,36 @@ Usage, with M the helia-profiler checkout's tests/fixtures/mlperf_tiny
 from __future__ import annotations
 
 import argparse
+import functools
 import sys
 from pathlib import Path
 
 import yaml
-from ai_edge_litert import schema_py_generated as fb
 
 from helia_core_tester.generation.ops.catalog import get_operator_spec
-from helia_core_tester.generation.utils.litert_utils import load_litert_model
+
+@functools.cache
+def _schema():
+    """The LiteRT flatbuffer schema and the name tables read from it."""
+    try:
+        from ai_edge_litert import schema_py_generated as fb
+    except ImportError as exc:
+        raise SystemExit("extract_model_shapes.py needs ai-edge-litert: uv run --with ai-edge-litert python ...") from exc
+    ops = {v: k for k, v in vars(fb.BuiltinOperator).items() if not k.startswith("_")}
+    acts = {fb.ActivationFunctionType.NONE: "NONE", fb.ActivationFunctionType.RELU: "RELU",
+            fb.ActivationFunctionType.RELU6: "RELU6"}
+    pads = {fb.Padding.SAME: "SAME", fb.Padding.VALID: "VALID"}
+    return fb, ops, acts, pads
+
+
+def load_litert_model(path: str):
+    """The model and its first subgraph, as the flatbuffer object API reads them."""
+    fb = _schema()[0]
+    model = fb.ModelT.InitFromObj(fb.Model.GetRootAsModel(Path(path).read_bytes(), 0))
+    if not model.subgraphs:
+        raise ValueError(f"{path}: model has no subgraphs")
+    return model, model.subgraphs[0]
+
 
 _DESCRIPTOR_DIR = Path(__file__).resolve().parent.parent / "assets" / "descriptors"
 _OUTPUTS = {
@@ -35,15 +58,11 @@ _OUTPUTS = {
     "FULLY_CONNECTED": "FullyConnected",
     "AVERAGE_POOL_2D": "AvgPool",
 }
-_OP_NAMES = {v: k for k, v in vars(fb.BuiltinOperator).items() if not k.startswith("_")}
-_ACT_NAMES = {fb.ActivationFunctionType.NONE: "NONE", fb.ActivationFunctionType.RELU: "RELU",
-              fb.ActivationFunctionType.RELU6: "RELU6"}
-_PAD_NAMES = {fb.Padding.SAME: "SAME", fb.Padding.VALID: "VALID"}
 
 
 def layer_fields(op_name: str, opts, shapes: list[list[int]]) -> dict:
     """Map one tflite operator to descriptor fields."""
-    act = _ACT_NAMES[opts.fusedActivationFunction]
+    act = _schema()[2][opts.fusedActivationFunction]
     if op_name == "FULLY_CONNECTED":
         return {"activation": act, "input_shape": shapes[0], "filter_shape": shapes[1],
                 "use_bias": len(shapes) > 2}
@@ -58,7 +77,7 @@ def layer_fields(op_name: str, opts, shapes: list[list[int]]) -> dict:
         fields["filter_shape"] = [kh, kw, shapes[0][3], opts.depthMultiplier]
         fields["depth_multiplier"] = opts.depthMultiplier
     fields["strides"] = [opts.strideH, opts.strideW]
-    fields["padding"] = _PAD_NAMES[opts.padding]
+    fields["padding"] = _schema()[3][opts.padding]
     if op_name != "AVERAGE_POOL_2D":
         dilation = [opts.dilationHFactor, opts.dilationWFactor]
         if dilation != [1, 1]:
@@ -72,11 +91,11 @@ def model_layers(tag: str, path: Path):
     model, graph = load_litert_model(str(path))
     for index, op in enumerate(graph.operators):
         code = model.operatorCodes[op.opcodeIndex]
-        op_name = _OP_NAMES[max(code.builtinCode, code.deprecatedBuiltinCode)]
+        op_name = _schema()[1][max(code.builtinCode, code.deprecatedBuiltinCode)]
         if op_name not in _OUTPUTS:
             continue
         tensors = [graph.tensors[i] for i in op.inputs if i >= 0]
-        if tensors[0].type != fb.TensorType.INT8:
+        if tensors[0].type != _schema()[0].TensorType.INT8:
             sys.exit(f"{path}: op {index} is not int8")
         shapes = [[int(d) for d in t.shape] for t in tensors]
         yield op_name, f"{tag}_l{index}", layer_fields(op_name, op.builtinOptions, shapes)

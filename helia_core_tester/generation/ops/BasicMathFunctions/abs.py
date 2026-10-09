@@ -30,9 +30,6 @@ class OpAbs(OperationBase):
     # the goldens do not move.
     FIXED_QUANT = {"S8": (0.125, 0), "S16": (1.0 / 32768.0, 0)}
 
-    def needs_tflite(self) -> bool:
-        return False
-
     def _select_cmsis_abs_kernel(self) -> Dict[str, str]:
         activation_dtype = self.desc.get("activation_dtype", "S8")
         if activation_dtype == "S8":

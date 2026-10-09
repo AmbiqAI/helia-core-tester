@@ -80,10 +80,6 @@ class OpSVDF(OperationBase):
                     kind, "arm_svdf_s8 only checks ctx->buf under ARM_MATH_MVEI; add required_capabilities: [mve]"
                 )
 
-    def needs_tflite(self) -> bool:
-        # Integer goldens come from the TFLM SVDF port in the reference shim, float ones from numpy.
-        return False
-
     @staticmethod
     def _requantize_np(values: np.ndarray, multiplier: int, shift: int) -> np.ndarray:
         left_shift = shift if shift > 0 else 0

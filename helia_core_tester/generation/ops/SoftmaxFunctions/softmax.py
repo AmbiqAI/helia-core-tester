@@ -68,11 +68,6 @@ class OpSoftmax(OperationBase):
         else:
             raise NotImplementedError(f"Unsupported Softmax dtype: {activation_dtype}")
 
-    def needs_tflite(self) -> bool:
-        # Shapes come from the descriptor; the golden is a reference call (int),
-        # the CMSIS fixed-point port (force_cmsis) or numpy (float).
-        return False
-
     def uses_reference(self) -> bool:
         if self.desc.get("hint", {}).get("force_cmsis", False):
             return False

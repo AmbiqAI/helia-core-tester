@@ -20,10 +20,6 @@ def batch_norm_argument_pool(context: dict) -> ArgumentPool:
 class OpBatchNorm(OperationBase):
     """Generate float batch normalization parity tests."""
 
-    def needs_tflite(self) -> bool:
-        # The golden is computed directly; nothing reads a .tflite.
-        return False
-
     def generate_c_files(self, output_dir: Path) -> None:
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 

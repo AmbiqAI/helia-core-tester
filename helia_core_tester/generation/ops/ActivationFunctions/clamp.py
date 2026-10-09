@@ -29,10 +29,6 @@ class OpClamp(OperationBase):
     Clamp operation.
     """
 
-    def needs_tflite(self) -> bool:
-        # The golden is computed directly; nothing reads a .tflite.
-        return False
-
     def _select_cmsis_clamp_kernel(self) -> Dict[str, str]:
         activation_dtype = self.desc.get('activation_dtype', 'S8')
         if activation_dtype == 'S8':

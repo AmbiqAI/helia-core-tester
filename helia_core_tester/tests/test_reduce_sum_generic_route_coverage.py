@@ -164,7 +164,6 @@ def test_shipped_golden_agrees_with_a_float64_reduction(tmp_path, name):
 
     desc = _descriptors()[name]
     op = OpReduceSum(desc, default_seed_for_case(name))
-    assert not op.needs_tflite()
     op.generate_c_files(tmp_path)
 
     header = next(tmp_path.rglob(f"{name}_reduce_sum.h")).read_text()

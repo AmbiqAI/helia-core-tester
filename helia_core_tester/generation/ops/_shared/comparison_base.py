@@ -56,9 +56,6 @@ class ComparisonFamilyBase(OperationBase):
     # goldens do not move. Comparison goldens are the CMSIS rescale-and-compare port.
     FIXED_QUANT = {"S8": (0.125, 0), "S16": (1.0 / 32768.0, 0)}
 
-    def needs_tflite(self) -> bool:
-        return False
-
     def _quant_params(self) -> Dict[str, int]:
         from helia_core_tester.generation.utils.tflite_utils import comparison_quant_params
 

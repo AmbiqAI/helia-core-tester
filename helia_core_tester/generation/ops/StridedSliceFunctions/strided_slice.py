@@ -13,10 +13,6 @@ class OpStridedSlice(OperationBase):
     StridedSlice operation.
     """
 
-    def needs_tflite(self) -> bool:
-        # StridedSlice is data movement: the golden is a numpy slice of the input.
-        return False
-
     def _select_cmsis_strided_slice_kernel(self) -> Dict[str, str]:
         """
         Select appropriate CMSIS-NN kernel function for StridedSlice operation.

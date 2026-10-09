@@ -18,10 +18,6 @@ _FLOAT_KERNELS: Dict[str, Dict[str, object]] = {
 class OpPack(OperationBase):
     """Pack operation."""
 
-    def needs_tflite(self) -> bool:
-        # The golden is computed in numpy; nothing reads a .tflite.
-        return False
-
     def _kernel(self) -> Dict[str, object]:
         dtype = self.tensor_dtype("input")
         try:

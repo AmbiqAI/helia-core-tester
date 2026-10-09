@@ -148,7 +148,7 @@ def generate(
     plan: bool = typer.Option(False, "--plan", help="Print execution plan and exit"),
     project_root: Optional[Path] = typer.Option(None, "--repo-root", help="Repository root directory"),
 ):
-    """Generate TFLite models and template C/H files."""
+    """Generate the test cases: goldens and template C/H files."""
     config = get_config(
         cpu=cpu,
         verbosity=verbosity,

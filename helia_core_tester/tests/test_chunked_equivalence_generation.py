@@ -92,8 +92,6 @@ def test_generates_full_vs_chunked_comparison_without_golden_data(
         chunk_sizes=[3, 8, 7, 5, 4, 2],
     )
     op = OpChunkedEquivalence(desc, seed=1, target_cpu="cortex-m4")
-    assert op.needs_keras_model() is False
-    assert op.allow_no_tflite() is True
     op.generate_c_files(tmp_path)
 
     c_text = (tmp_path / f"{name}_chunked_equivalence.c").read_text()

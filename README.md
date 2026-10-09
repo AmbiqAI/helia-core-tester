@@ -682,7 +682,6 @@ Reference ops for float infrastructure:
 Future ops should consume resolved tensor roles rather than raw legacy dtype fields:
 - `self.tensor_dtype("input")`
 - `self.tensor_c_type("output")`
-- `self.tensor_litert_dtype("input")`
 - `self.comparison_config()`
 
 ### Non-finite inputs
@@ -806,9 +805,9 @@ bit equality.
 `if`/`then` gate in `schema.json` is documentation until the descriptor loader validates the whole
 schema (#100).
 
-To scaffold a new tester op, start from `helia_core_tester/scripts/scaffold_operator.py`.
-
-Generated LiteRT-only ops should route through `build_<op>_op()` and resolve tensor roles from
+To scaffold a new tester op, start from `helia_core_tester/scripts/scaffold_operator.py`. The
+skeleton's `generate_c_files()` takes its golden from numpy or, for a kernel the vendored TFLM
+reference covers, from `self.reference_golden(ReferenceCall(...))`; resolve tensor roles from
 `tensor_dtypes` or the normalized descriptor metadata instead of hand-parsing legacy dtype fields.
 
 ### Non-finite float comparison
@@ -894,9 +893,8 @@ cases are all one- or two-pixel and sit below this floor, which is why that oper
 wired to the rule.
 
 Two kinds of operand are check-only: the generator never steers them, so a failing one must be
-waived. An operand baked into the TFLite model (a PReLU alpha) cannot move, because the
-reference interpreter would keep using the model's copy and the golden would stop matching the
-emitted array. An operand the descriptor pins explicitly (`hint.extras.input_values`, or
+waived. An operand the operator fixes rather than draws (a PReLU alpha) is part of the case
+definition, not data to steer. An operand the descriptor pins explicitly (`hint.extras.input_values`, or
 `input_1_values` / `input_2_values` for the float squared difference) must not
 move, because the pinned values are the case.
 
@@ -906,9 +904,8 @@ An operand that is intentionally one-signed opts out in its descriptor under
 ```yaml
 operand_sign_span_exempt:
   input: pinned uniformly negative input to hold the alpha branch on every lane (hct#81)
-  alpha: PReLU's alpha is the positive slope constant baked into the TFLite model; steering it
-    would leave the reference interpreter using the model's copy, and the kernel branches on
-    the sign of the input, not of alpha (hct#81)
+  alpha: PReLU's alpha is the case's fixed positive slope constant, not a drawn operand, and
+    the kernel branches on the sign of the input, not of alpha (hct#81)
 ```
 
 The reason is required, and the key must name an operand the operator actually submits to the
@@ -962,7 +959,9 @@ recurrent case, integer and float; see `third_party/VENDOR.md` for the pinned co
 
 ### Reference goldens, host check and quantization policy
 
-No case builds a Keras model or writes a `.tflite`. A case whose golden comes from a reference kernel writes
+The tester does not depend on TensorFlow, Keras or LiteRT (`tests/test_no_tensorflow.py` checks
+the imports, `pyproject.toml` and `uv.lock`, and generates with them blocked). No case builds a
+model or writes a `.tflite`. A case whose golden comes from a reference kernel writes
 `<name>.reference.json` (kernel, parameters, tensor shapes/dtypes/sha256, seeds, library key)
 next to its sources, the sidecar gains a `reference` entry, and `manifest.json` points at the
 file; an unbounded float activation records its bounds as the strings `"-inf"`/`"inf"`, so the

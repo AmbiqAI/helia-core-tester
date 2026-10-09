@@ -508,9 +508,6 @@ def _op(call):
     class Op(OperationBase):
         calls = 0
 
-        def build_keras_model(self):
-            return None
-
         def build_reference(self):
             type(self).calls += 1
             return call
@@ -518,7 +515,7 @@ def _op(call):
     return Op({"name": "hook_case_s8", "operator": "Relu", "activation_dtype": "S8"}, seed=3)
 
 
-def test_operation_without_reference_keeps_its_old_path() -> None:
+def test_operation_without_reference_keeps_its_numpy_path() -> None:
     op = _op(None)
     assert op.reference is None
     with pytest.raises(NotImplementedError):

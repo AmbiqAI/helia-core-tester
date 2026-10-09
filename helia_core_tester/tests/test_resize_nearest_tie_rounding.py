@@ -121,7 +121,6 @@ def test_reference_matches_compiled_kernel_helper_exhaustively(tmp_path):
 def test_resize_nearest_needs_no_model():
     op = OpResizeNearestNeighbor.__new__(OpResizeNearestNeighbor)
     op.desc = {"name": "resize_probe", "activation_dtype": "S8", "input_shape": [1, 3, 3, 2], "size": [5, 5]}
-    assert not op.needs_tflite()
 
 
 def test_generate_c_files_rejects_float_loudly_until_the_float_kernels_are_wired(tmp_path):
@@ -130,6 +129,5 @@ def test_generate_c_files_rejects_float_loudly_until_the_float_kernels_are_wired
     # from the suite instead of failing the generation run.
     op = OpResizeNearestNeighbor.__new__(OpResizeNearestNeighbor)
     op.desc = {"name": "resize_probe", "activation_dtype": "FP32", "input_shape": [1, 2, 2, 1], "size": [3, 3]}
-    (tmp_path / "resize_probe.tflite").write_bytes(b"model")
     with pytest.raises(ValueError):
         op.generate_c_files(tmp_path)

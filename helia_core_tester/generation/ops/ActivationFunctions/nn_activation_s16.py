@@ -15,10 +15,6 @@ class OpNNActivationS16(OperationBase):
     NN activation (sigmoid/tanh) for int16.
     """
 
-    def needs_tflite(self) -> bool:
-        # The golden is computed directly; nothing reads a .tflite.
-        return False
-
     def _load_sigmoid_table(self) -> List[int]:
         # The same checkout the firmware compiles (CMSIS_NN_ROOT / --cmsis-nn-root);
         # the old parents[N] guess pointed one level short of the nested layout.

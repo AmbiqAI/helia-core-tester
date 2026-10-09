@@ -1,3 +1,3 @@
 """
-Utilities for TFLite model processing and template generation.
+Utilities for golden computation and template generation.
 """

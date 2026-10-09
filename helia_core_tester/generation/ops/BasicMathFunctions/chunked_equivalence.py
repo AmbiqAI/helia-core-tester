@@ -336,10 +336,6 @@ class OpChunkedEquivalence(OperationBase):
     calls over the same data.
     """
 
-    def needs_tflite(self) -> bool:
-        # The golden is computed directly; nothing reads a .tflite.
-        return False
-
     def _kernel_key(self) -> Tuple[str, str]:
         kernel = str(self.desc.get("kernel", "")).strip().lower()
         dtype = self.tensor_dtype("input", default=str(self.desc.get("activation_dtype", "S8"))).upper()

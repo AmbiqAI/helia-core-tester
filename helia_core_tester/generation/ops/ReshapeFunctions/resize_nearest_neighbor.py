@@ -13,10 +13,6 @@ class OpResizeNearestNeighbor(OperationBase):
     ResizeNearestNeighbor operation.
     """
 
-    def needs_tflite(self) -> bool:
-        # The golden is computed in numpy; nothing reads a .tflite.
-        return False
-
     # Dtypes the LiteRT model side can build. The harness side is narrower; see generate_c_files.
     SUPPORTED_MODEL_DTYPES = ('S8', 'S16', 'FP32', 'FP16')
 

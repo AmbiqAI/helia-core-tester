@@ -13,10 +13,6 @@ class OpPad(OperationBase):
     Pad operation.
     """
 
-    def needs_tflite(self) -> bool:
-        # The golden is computed in numpy; nothing reads a .tflite.
-        return False
-
     def _select_cmsis_pad_kernel(self) -> Dict[str, str]:
         """
         Select appropriate CMSIS-NN kernel function for Pad operation.

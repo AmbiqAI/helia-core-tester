@@ -1,5 +1,5 @@
 """
 Generation module for CMSIS-NN Tools.
 
-This module handles TFLite model generation and C code template generation.
+This module computes goldens and renders the C test-case templates.
 """

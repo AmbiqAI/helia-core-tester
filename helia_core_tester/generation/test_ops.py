@@ -1,6 +1,6 @@
 """
-Main TFLite model generation for Helia-Core Tester.
-Thin generator that discovers YAML descriptors and generates TFLite models.
+Main test-case generation for Helia-Core Tester.
+Thin generator that discovers YAML descriptors and generates the C test cases.
 """
 
 import hashlib
@@ -273,8 +273,7 @@ def _manifest_entry(
         "suite": _descriptor_suite(desc),
         "path": str(test_dir),
         "relative_test_dir": str(test_dir.relative_to(generated_tests_dir)),
-        "tflite": str(test_dir / f"{desc['name']}.tflite"),
-        # The provenance of a reference-kernel golden; None for cases still on the .tflite path.
+        # The provenance of a reference-kernel golden; None for a numpy golden.
         "reference": (
             str(test_dir / f"{desc['name']}.reference.json")
             if (test_dir / f"{desc['name']}.reference.json").is_file()
@@ -320,12 +319,11 @@ def generate_test(
     out_dir: str,
     seed: Optional[int] = None,
     cpu: str = "cortex-m55",
-    conversion_failures: Optional[List[Dict[str, Any]]] = None,
     generation_failures: Optional[List[Dict[str, Any]]] = None,
     run_seed: int = 0,
 ) -> None:
     """
-    Generate TFLite model for a descriptor.
+    Generate the C test case for a descriptor.
     
     Args:
         desc: YAML descriptor
@@ -360,67 +358,8 @@ def generate_test(
     op.run_seed = int(run_seed)
     
     uses_reference = op.uses_reference()
-    # Reference-golden and numpy-golden cases need neither a model nor a .tflite.
-    needs_tflite = not uses_reference and op.needs_tflite()
-    # Build Keras model (skip for ops that generate LiteRT models directly)
-    if needs_tflite and op.needs_keras_model():
-        try:
-            model = op.build_keras_model()
-        except Exception as e:
-            if generation_failures is not None:
-                import traceback
-                generation_failures.append({
-                    "name": name,
-                    "operator": operator,
-                    "family": _descriptor_family(desc),
-                    "parity_kind": _descriptor_parity_kind(desc),
-                    "stage": "build_model",
-                    "exception": repr(e),
-                    "traceback": traceback.format_exc(),
-                })
-            print(f"ERROR: Model build failed for {name} ({operator}): {e}")
-            raise
-    else:
-        model = None
-    
-    # Convert to TFLite (some ops allow no-tflite fallback)
-    tflite_path = test_dir / f"{name}.tflite"
-    try:
-        if uses_reference:
-            print(f"Reference-kernel golden: {name}")
-        elif not needs_tflite:
-            print(f"Golden computed without a model: {name}")
-        else:
-            op.convert_to_tflite(model, str(tflite_path), seed)
-            print(f"Generated TFLite model: {name}")
-    except Exception as e:
-        if op.allow_no_tflite():
-            print(f"INFO: Skipping TFLite generation for {name}: {e}")
-        else:
-            if conversion_failures is not None:
-                import traceback
-                conversion_failures.append({
-                    "name": name,
-                    "operator": operator,
-                    "family": _descriptor_family(desc),
-                    "parity_kind": _descriptor_parity_kind(desc),
-                    "exception": repr(e),
-                    "traceback": traceback.format_exc(),
-                })
-            if generation_failures is not None:
-                import traceback
-                generation_failures.append({
-                    "name": name,
-                    "operator": operator,
-                    "family": _descriptor_family(desc),
-                    "parity_kind": _descriptor_parity_kind(desc),
-                    "stage": "conversion",
-                    "exception": repr(e),
-                    "traceback": traceback.format_exc(),
-                })
-            print(f"ERROR: TFLite conversion failed for {name} ({operator}): {e}")
-            raise
-    
+    print(f"{'Reference-kernel' if uses_reference else 'Numpy'} golden: {name}")
+
     # Generate C/H files from templates
     try:
         op.generate_c_files(test_dir)
@@ -465,7 +404,7 @@ def generate_test(
 
 def test_generation(test_filters):
     """
-    Generate TFLite models for all descriptors.
+    Generate test cases for all descriptors.
     """
     # One seed per run: every case's draw derives from it, and it is recorded everywhere.
     run_seed, seed_chosen = resolve_run_seed(test_filters)
@@ -514,7 +453,7 @@ def test_generation(test_filters):
     target_cpu = normalize_cpu(test_filters.get('cpu') or "cortex-m55")
     suite_mode = _suite_mode(test_filters)
         
-    # Generate TFLite models for each descriptor.
+    # Generate a test case for each descriptor.
     generated_override = test_filters.get("generated_tests_dir")
     top_generated = (
         Path(generated_override).resolve()
@@ -536,7 +475,6 @@ def test_generation(test_filters):
     version_hash = generator_version_hash()
     manifest_entries: List[Dict[str, Any]] = []
     skipped_entries: List[Dict[str, Any]] = []
-    conversion_failures: List[Dict[str, Any]] = []
     generation_failures: List[Dict[str, Any]] = []
     # Per-run cache for the per-symbol codegen probe (one header scan per
     # distinct kernel symbol, however many descriptors require it).
@@ -640,7 +578,6 @@ def test_generation(test_filters):
                 str(top_generated),
                 seed=case_seed,
                 cpu=target_cpu,
-                conversion_failures=conversion_failures,
                 generation_failures=generation_failures,
                 run_seed=run_seed,
             )
@@ -665,14 +602,10 @@ def test_generation(test_filters):
                 )
                 print(f"Dropping {case_name}: {e}")
                 continue
-            print(f"Failed to generate TFLite model for {desc['name']}: {e}")
+            print(f"Failed to generate {desc['name']}: {e}")
             # Continue with other models
             continue
             
-    conversion_failures = sorted(
-        conversion_failures,
-        key=lambda item: (str(item.get("name", "")), str(item.get("operator", "")), str(item.get("exception", ""))),
-    )
     generation_failures = sorted(
         generation_failures,
         key=lambda item: (
@@ -719,13 +652,6 @@ def test_generation(test_filters):
         f"Successfully produced {produced_count} test case(s): "
         f"{generated_count} generated, {reused_count} reused"
     )
-    conversion_failures_path = report_dir / "conversion_failures.json"
-    conversion_failures_path.write_text(json.dumps(conversion_failures, indent=2))
-    if conversion_failures:
-        failed_names = ", ".join(f["name"] for f in conversion_failures)
-        print(f"Conversion failures ({len(conversion_failures)}): {failed_names}")
-    else:
-        print("Conversion failures (0)")
     generation_failures_path = report_dir / "generation_failures.json"
     generation_failures_path.write_text(json.dumps(generation_failures, indent=2))
     if generation_failures:
@@ -774,7 +700,7 @@ def test_generation(test_filters):
 
     end_time = datetime.now(timezone.utc)
     status = "success"
-    if conversion_failures or generation_failures:
+    if generation_failures:
         status = "partial_failure" if produced_count > 0 or skipped_entries else "failed_no_generated_tests"
     elif produced_count == 0 and skipped_entries:
         status = "skipped_only"
@@ -827,12 +753,10 @@ def test_generation(test_filters):
             "skipped_degenerate": sum(
                 1 for entry in skipped_entries if entry.get("status") == "skipped_degenerate"
             ),
-            "conversion_failures": len(conversion_failures),
             "generation_failures": len(generation_failures),
         },
         "outputs": {
             "generated_tests_dir": str(top_generated),
-            "conversion_failures": str(conversion_failures_path),
             "generation_failures": str(generation_failures_path),
             "capability_skips": str(capability_skips_path),
             "manifest_pointer": str(manifest_pointer_path),
@@ -840,7 +764,7 @@ def test_generation(test_filters):
     }
     (report_dir / "generation_summary.json").write_text(json.dumps(summary, indent=2))
     # A selection that matches nothing is a different fault from a selection
-    # whose cases all failed to convert, and only the caller can tell which one
+    # whose cases all failed to generate, and only the caller can tell which one
     # they meant, so say which happened.
     assert produced_count > 0 or skipped_entries or filtered_descriptors, (
         f"Filter matched no descriptors out of {len(descriptors)} loaded "
@@ -848,11 +772,7 @@ def test_generation(test_filters):
         f"wtype={test_filters.get('wtype')!r}, name={test_filters.get('name')!r}, "
         f"limit={test_filters.get('limit')!r}, suite={suite_mode!r})"
     )
-    assert produced_count > 0 or skipped_entries, "No TFLite models were generated"
-    assert not conversion_failures, (
-        f"Conversion failures occurred for {len(conversion_failures)} descriptor(s): "
-        f"{', '.join(str(f.get('name')) for f in conversion_failures)}"
-    )
+    assert produced_count > 0 or skipped_entries, "No test cases were generated"
     assert not generation_failures, (
         f"Generation failures occurred for {len(generation_failures)} descriptor(s): "
         f"{', '.join(str(f.get('name')) for f in generation_failures)}"
@@ -917,7 +837,7 @@ def _write_manifest_and_cmake(
 
 def test_generated_files_exist(test_filters):
     """
-    Verify that generated TFLite files exist and are valid.
+    Verify that every generated case has its headers.
     This should run AFTER test_generation().
     """
     # Don't generate, just validate what test_generation() created
@@ -942,15 +862,9 @@ def test_generated_files_exist(test_filters):
                 pytest.skip("Only capability-skipped descriptors are present")
         assert len(test_dirs) > 0, "No test directories found"
     
-    # Check that each test has TFLite file or generated headers
+    # Check that each test has generated headers
     for test_dir in test_dirs:
         name = test_dir.name
-        tflite_file = test_dir / f"{name}.tflite"
-        if tflite_file.exists():
-            # Check that file is not empty
-            assert tflite_file.stat().st_size > 0, f"{name}.tflite is empty"
-            continue
-
         includes_dir = test_dir / "includes"
         headers = list(includes_dir.glob("*.h")) if includes_dir.exists() else []
-        assert headers, f"Missing {name}.tflite and no generated headers"
+        assert headers, f"{name}: no generated headers"

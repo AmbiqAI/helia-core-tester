@@ -34,11 +34,6 @@ class OpReduceMin(OperationBase):
             raise NotImplementedError(f"Unsupported reduce extrema dtype: {dtype}")
         return dtype
 
-    def needs_tflite(self) -> bool:
-        # Input and output share quantization, so the golden is a selection over
-        # the raw codes (numpy); the float path has its own numpy golden.
-        return False
-
     def _select_cmsis_reduce_min_kernel(self) -> Dict[str, str]:
         """
         Select appropriate CMSIS-NN kernel function for ReduceMin operation.

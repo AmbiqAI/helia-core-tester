@@ -341,13 +341,11 @@ use_bias: true
 # the output. A case that masks every lane asserts nothing beyond SUCCESS and is
 # rejected at generation time.
 #
-# A second input row would leave finite lanes, and the descriptors already accept a
-# batch: fully_connected_float_vector8_f32 asks for input_shape [2, 16] and
-# fully_connected_float_k64_n13_batch2_f32 for [2, 64]. The shared Keras-to-TFLite
-# conversion drops the batch -- both generate input_dims.n = 1 over a single input
-# row, so the batch2 case covers the K 64 row groups of the NT_T matmul and not a
-# batch dimension -- and the batch cannot be reached from a descriptor alone. No
-# case in this file exercises a batch. See AmbiqAI/helia-core-tester#106.
+# A second input row would leave finite lanes. Since the golden moved onto the TFLM
+# reference the descriptor's batch reaches the kernel: fully_connected_float_vector8_f32
+# ([2, 16]) and fully_connected_float_k64_n13_batch2_f32 ([2, 64]) generate
+# input_dims.n = 2 (under the old Keras-to-TFLite conversion they ran one row), so a
+# batch-2 nonfinite case is now expressible. See AmbiqAI/helia-core-tester#106.
 ---
 operator: FullyConnected
 name: fully_connected_fault_filter_n_mismatch_f32

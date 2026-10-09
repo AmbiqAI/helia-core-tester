@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Iterable
 
 import numpy as np
-import tensorflow as tf
 from pathlib import Path
 
 from helia_core_tester.generation.ops._shared.base import OperationBase
@@ -53,22 +52,8 @@ _DTYPE_INFO = {
 }
 
 
-class _ScalarInputPreluReference(tf.keras.layers.Layer):
-    """Keras reference layer that enforces explicit float casting before PReLU math."""
-
-    def call(self, inputs):
-        scalar_tensor, alpha_tensor = inputs
-        scalar_f32 = tf.cast(scalar_tensor, tf.float32)
-        alpha_f32 = tf.cast(alpha_tensor, tf.float32)
-        return tf.where(scalar_f32 >= 0.0, scalar_f32, scalar_f32 * alpha_f32)
-
-
 class OpPReLUScalar(OperationBase):
     """Generate direct scalar-input arm_prelu_scalar_s8/arm_prelu_scalar_s16 tests."""
-
-    def needs_tflite(self) -> bool:
-        # The golden is computed directly; nothing reads a .tflite.
-        return False
 
     @staticmethod
     def _resolve_alpha_values(alpha_shape: tuple[int, ...], values: Iterable[float] | None) -> np.ndarray:
@@ -189,19 +174,10 @@ class OpPReLUScalar(OperationBase):
                 pixel_expected = requantize_np(prod, output_multiplier_alpha, output_shift_alpha) + output_offset
             expected_q[pixel] = np.clip(pixel_expected, qmin, qmax).astype(np_dtype)
 
-        # Keep Keras-based reference generation in place for parity diagnostics.
-        scalar_input = tf.keras.Input(shape=(1,), dtype=tf.float32, name="scalar")
-        alpha_input = tf.keras.Input(shape=(block_size,), dtype=tf.float32, name="alpha")
-        reference_layer = _ScalarInputPreluReference(name="prelu_scalar_reference")
-        ref_model = tf.keras.Model([scalar_input, alpha_input], reference_layer([scalar_input, alpha_input]))
-        ref_float = ref_model(
-            [
-                tf.constant(scalar_float.reshape(num_pixels, 1), dtype=tf.float32),
-                tf.constant(alpha_float, dtype=tf.float32),
-            ],
-            training=False,
-        ).numpy()
-        # NOTE: for S16 this Keras/float reference is a diagnostic-only signal, since the
+        # A float PReLU on the dequantized operands, kept as a parity diagnostic.
+        scalar_f32 = scalar_float.reshape(num_pixels, 1).astype(np.float32)
+        ref_float = np.where(scalar_f32 >= 0.0, scalar_f32, scalar_f32 * alpha_float.astype(np.float32))
+        # NOTE: for S16 this float reference is a diagnostic-only signal, since the
         # LiteRT int16 PReLU reference (and its float-emulation path here) is known to be
         # inaccurate on the negative branch (see PR description); expected_q above (computed
         # directly from the CMSIS-NN fixed-point math) is the authoritative golden output.

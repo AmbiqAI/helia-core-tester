@@ -59,10 +59,6 @@ def _generate(name: str, out_dir: Path, target_cpu: str, seed: int = _SEED) -> s
         "DepthwiseConv": OpDepthwiseConv,
     }.get(desc["operator"], OpFullyConnected)
     op = op_cls(desc, seed=seed, target_cpu=target_cpu)
-    if not op.uses_reference():
-        model = op.build_keras_model() if op.needs_keras_model() else None
-        if op.needs_tflite() and not op.uses_reference():
-            op.convert_to_tflite(model, str(out_dir / f"{name}.tflite"), seed)
     op.generate_c_files(out_dir)
     return (out_dir / "includes").glob(f"{name}_*.h").__next__().read_text()
 
@@ -106,8 +102,7 @@ def _bias_carrying_int_cases(*, weight_dtype_s4: bool) -> List[str]:
     Derived from the descriptors rather than enumerated so a new case is held to
     the floor the moment it is added.  Float cases have no quantization step to
     clear and use_bias: false cases have no bias; quantized dilated convs are
-    included, their bias being written into the lowered CONV_2D placeholder
-    after conversion rather than coming from the Keras model.
+    included.
     """
     names: List[str] = []
     for desc in _all_descriptors():
@@ -280,9 +275,7 @@ def test_s8_fully_connected_bias_reaches_the_kernel_via_the_weight_sum(tmp_path:
     )
 
 
-# Every case the lowering strands, Convolve and DepthwiseConv alike: their bias
-# is the injected one, so all of them clear the floor whatever the operator's
-# own Keras initializer does.
+# Every dilated case, Convolve and DepthwiseConv alike, must clear the floor.
 @pytest.mark.parametrize("case_name", _dilated_bias_cases())
 def test_dilated_bias_is_detectable_on_every_channel(
     case_name: str, tmp_path: Path

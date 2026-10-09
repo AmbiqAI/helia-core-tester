@@ -28,10 +28,6 @@ class OpGatherND(OperationBase):
     GatherND operation - gathers slices from params using indices.
     """
 
-    def needs_tflite(self) -> bool:
-        # The golden is computed in numpy; nothing reads a .tflite.
-        return False
-
     def _element_dtype(self) -> str:
         """The resolved element dtype, which for a copy operator is input and output alike.
 

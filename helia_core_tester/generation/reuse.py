@@ -1,6 +1,6 @@
 """Per-case reuse stamps for the generation step.
 
-TFLite conversion plus interpreter inference dominates generation wall time, and
+Golden computation and rendering dominate generation wall time, and
 every input that can change a case's emitted bytes is knowable before that work
 starts: the descriptor document, the per-case generation inputs (cpu, suite,
 seed), the generator itself, the resolved dependency set and interpreter it runs
@@ -35,9 +35,8 @@ STAMP_FILENAME = ".stamp"
 _STAMP_SCHEMA = "helia-core-tester/generation-stamp/7"
 
 # The lock file is the whole resolved dependency set, so it covers every package
-# that can move emitted bytes -- the converter and runtime, but equally numpy's
-# RNG streams, keras, jinja2, flatbuffers and pyyaml -- without anyone having to
-# keep a hand-maintained list of them in step.
+# that can move emitted bytes -- numpy's RNG streams, jinja2 and pyyaml -- without
+# anyone having to keep a hand-maintained list of them in step.
 _LOCK_FILENAME = "uv.lock"
 
 # Modules outside generation/ that still decide emitted bytes: the CPU profile
@@ -391,7 +390,7 @@ def _remove_entry(path: Path) -> None:
 def case_reusable(test_dir: Path, stamp: str) -> bool:
     """True iff this case was generated from ``stamp`` and is still intact.
 
-    Presence is not integrity: a truncated .c, a deleted .tflite, a missing
+    Presence is not integrity: a truncated .c, a deleted reference record, a missing
     header or a lost CMakeLists.txt each leave a case that still looks generated
     but no longer builds, or no longer tests what the stamp claims. Comparing
     the recorded artifact digest (generation/artifact_identity.py, the same

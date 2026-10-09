@@ -60,9 +60,6 @@ class OpPReLU(OperationBase):
     # kept so the goldens do not move.
     FIXED_QUANT = {"S8": (0.125, 0), "S16": (1.0 / 32768.0, 0)}
 
-    def needs_tflite(self) -> bool:
-        return False
-
     def uses_reference(self) -> bool:
         return not self._is_arg_error_case() and self.desc.get("activation_dtype", "S8") == "S8"
 
@@ -144,7 +141,7 @@ class OpPReLU(OperationBase):
         Generate a CMSIS-direct harness for a deliberately-mismatched-shape
         PReLU test case, expecting arm_prelu_s8 to return ARM_CMSIS_NN_ARG_ERROR
         (input_dims != output_dims is rejected up front by the kernel, before
-        any TFLite model is needed).
+        any golden is needed).
         """
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
         from helia_core_tester.generation.utils.tflite_utils import calculate_multiplier_shift
@@ -447,9 +444,8 @@ class OpPReLU(OperationBase):
         
         input_q = np.round(input_data / float(input_scale) + float(input_zp)).astype(np.int32)
         input_q = np.clip(input_q, qmin, qmax).astype(np_in_dtype)
-        # alpha is a constant baked into the TFLite model, so it can only be
-        # waived, never steered: the reference interpreter would keep using the
-        # model's copy and the golden would stop matching the emitted array.
+        # alpha is the case's fixed slope constant, not drawn data, so it can only
+        # be waived, never steered.
         # A descriptor that pins input_values chose those exact operands, so
         # the input is check-only for the same reason the values exist.
         input_q, _ = self._enforce_int_operand_sign_span(

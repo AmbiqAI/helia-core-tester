@@ -218,7 +218,8 @@ def test_flat_random_draw_is_dropped(tmp_path: Path, monkeypatch: pytest.MonkeyP
     def _fake_generate_test(desc, out_dir, generation_failures=None, **_kwargs):
         test_dir = Path(out_dir) / desc["_family"] / desc["name"]
         test_dir.mkdir(parents=True, exist_ok=True)
-        (test_dir / f"{desc['name']}.tflite").write_bytes(b"\x01")
+        (test_dir / "includes").mkdir(exist_ok=True)
+        (test_dir / "includes" / f"{desc['name']}.h").write_text("// fake generated header\n")
         if desc["name"].endswith("001"):
             generation_failures.append({"name": desc["name"]})
             raise DegenerateGoldenError("flat")
@@ -314,7 +315,8 @@ def test_hidden_generation_stays_outside(tmp_path: Path, monkeypatch: pytest.Mon
     def _fake_generate_test(desc, out_dir, **_kwargs):
         test_dir = Path(out_dir) / desc["_family"] / desc["name"]
         test_dir.mkdir(parents=True, exist_ok=True)
-        (test_dir / f"{desc['name']}.tflite").write_bytes(b"\x01")
+        (test_dir / "includes").mkdir(exist_ok=True)
+        (test_dir / "includes" / f"{desc['name']}.h").write_text("// fake generated header\n")
 
     monkeypatch.setattr(generation_module, "generate_test", _fake_generate_test)
     filters = {"op": None, "dtype": None, "wtype": None, "name": None, "limit": None, "seed": 1,

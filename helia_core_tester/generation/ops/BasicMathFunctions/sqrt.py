@@ -157,9 +157,6 @@ class OpSqrt(OperationBase):
     Sqrt operation.
     """
 
-    def needs_tflite(self) -> bool:
-        return False
-
     def _select_cmsis_sqrt_kernel(self) -> Dict[str, str]:
         """
         Select appropriate CMSIS-NN kernel function for Sqrt operation.

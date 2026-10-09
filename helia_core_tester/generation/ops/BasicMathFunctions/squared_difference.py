@@ -68,10 +68,6 @@ class OpSquaredDifference(BinaryBasicMathBase):
     # `block_size < 1`.
     FAULT_KINDS = ("null_input_1", "null_input_2", "null_output", "zero_block", "negative_block")
 
-    def needs_tflite(self) -> bool:
-        # Quantization is the preset table and the golden the TFLite formula in numpy.
-        return False
-
     def _preset_quant(self) -> Tuple[Tuple[float, int], Tuple[float, int], Tuple[float, int]]:
         dtype = {"S8": "int8", "S16": "int16"}[self.desc.get("activation_dtype", "S8")]
         quant = squared_difference_quant_preset(dtype, str(self.desc.get("quant_preset", "default")))

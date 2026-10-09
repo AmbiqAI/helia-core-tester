@@ -110,9 +110,6 @@ def derive_rsqrt_universal_quant_params(output_scale: float) -> Dict[str, int]:
 class OpRsqrt(OperationBase):
     """Rsqrt operation."""
 
-    def needs_tflite(self) -> bool:
-        return False
-
     def uses_reference(self) -> bool:
         return self.tensor_dtype("input") == "S16" and not self.desc.get("hint", {}).get("force_negative_input_case", False)
 

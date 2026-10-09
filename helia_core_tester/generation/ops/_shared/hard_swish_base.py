@@ -32,9 +32,6 @@ class HardSwishFamilyBase(OperationBase):
     INPUT_RANGE = (-8.0, 8.0)
     OUTPUT_RANGE = (-0.375, 8.0)
 
-    def needs_tflite(self) -> bool:
-        return False
-
     def uses_reference(self) -> bool:
         # Compat is TFLite's int8 HardSwish, so the TFLM reference is its oracle; the
         # precise kernels are a different algorithm and keep their fixed-point port.

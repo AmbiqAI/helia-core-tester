@@ -83,8 +83,6 @@ def test_generate_every_float_descriptor(tmp_path, operator, cls):
         out = tmp_path / desc["name"]
         out.mkdir()
         op = cls(desc, seed=500, target_cpu="cortex-m55")
-        if op.needs_tflite() and not op.uses_reference():
-            op.convert_to_tflite(None, str(out / (desc["name"] + ".tflite")), 500)
         op.generate_c_files(out)
         source = (out / (desc["name"] + "_" + operator + ".c")).read_text()
         assert desc["required_kernel_symbols"][0] in source
@@ -92,28 +90,13 @@ def test_generate_every_float_descriptor(tmp_path, operator, cls):
         assert "HELIA_VALIDATE_RETURN_FAILURES" in source
 
 
-@pytest.mark.parametrize("reciprocal,op_name", [(False, "SQRT"), (True, "RSQRT")])
-def test_positive_f32_reference_against_tflite(tmp_path, reciprocal, op_name):
-    from helia_core_tester.generation.utils.litert_builder import (
-        build_unary_same_shape_op,
-    )
-    from ai_edge_litert.interpreter import Interpreter, OpResolverType
-
+@pytest.mark.parametrize("reciprocal", [False, True])
+def test_positive_f32_reference_against_float64(reciprocal):
+    # sqrt is correctly rounded (IEEE 754); rsqrt as 1 / sqrt rounds twice, within 1 ulp.
     values = np.array([0.25, 1, 2, 3, 4, 9, 17, 0.125, 65504], dtype=np.float32)
-    model = build_unary_same_shape_op(
-        op_name=op_name, input_shape=values.shape, dtype="float32"
-    )
-    interpreter = Interpreter(
-        model_content=model, experimental_op_resolver_type=OpResolverType.BUILTIN_REF
-    )
-    interpreter.allocate_tensors()
-    interpreter.set_tensor(interpreter.get_input_details()[0]["index"], values)
-    interpreter.invoke()
-    actual = (
-        interpreter.get_tensor(interpreter.get_output_details()[0]["index"])
-        .view(np.uint32)
-        .astype(np.int64)
-    )
+    wide = np.sqrt(values.astype(np.float64))
+    exact = (1.0 / wide if reciprocal else wide).astype(np.float32)
+    actual = exact.view(np.uint32).astype(np.int64)
     expected = sqrt_float_reference(values.view(np.uint32), reciprocal).astype(np.int64)
     assert np.max(np.abs(actual - expected)) <= int(reciprocal)
 

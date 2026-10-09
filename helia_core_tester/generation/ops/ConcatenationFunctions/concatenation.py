@@ -14,10 +14,6 @@ class OpConcatenation(OperationBase):
     Concatenation operation - concatenates tensors along an axis.
     """
 
-    def needs_tflite(self) -> bool:
-        # The golden is computed in numpy; nothing reads a .tflite.
-        return False
-    
     def _axis_call_style(self, axis: int, input_rank: int) -> str:
         if axis < 0:
             axis += input_rank

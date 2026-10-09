@@ -3,8 +3,8 @@
 A call is fully explicit: the kernel entry, its parameters (plain JSON values,
 mirroring the shim structs), the integer/float tensors it consumes, and the
 output shape. `<case>.reference.json` records all of it (tensors by shape,
-dtype and sha256) next to the seeds and the library key, replacing the .tflite
-as the artifact that says how a golden was produced.
+dtype and sha256) next to the seeds and the library key: the artifact that says
+how a golden was produced.
 """
 
 from __future__ import annotations

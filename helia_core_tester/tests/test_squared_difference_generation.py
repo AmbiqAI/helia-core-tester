@@ -131,7 +131,6 @@ def test_squared_difference_uses_preset_quantization() -> None:
     assert (s1, zp1) == (pytest.approx(1.0 / 128.0), -40)
     assert (s2, zp2) == (pytest.approx(1.0 / 256.0), -40)
     assert (so, zpo) == (pytest.approx(1.0 / 64.0), -128)
-    assert not op.needs_tflite()
 
 
 def test_squared_difference_golden_is_the_tflite_formula() -> None:

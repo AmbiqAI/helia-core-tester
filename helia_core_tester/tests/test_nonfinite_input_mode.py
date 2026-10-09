@@ -28,9 +28,6 @@ def _repo_root() -> Path:
 class _StubOp(OperationBase):
     """Minimal concrete OperationBase so the sampling helpers can be exercised alone."""
 
-    def build_keras_model(self):  # pragma: no cover - never called by these tests
-        raise NotImplementedError
-
     def generate_c_files(self, output_dir):  # pragma: no cover - never called
         raise NotImplementedError
 

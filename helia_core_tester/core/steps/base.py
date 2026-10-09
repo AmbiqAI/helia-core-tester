@@ -55,7 +55,7 @@ class StepBase(ABC):
     Base class for all pipeline steps.
     
     Each step represents a single operation in the test pipeline:
-    - generate: TFLite model generation
+    - generate: test-case generation
     - build: CMake build
     - run: FVP execution
     - clean: Cleanup

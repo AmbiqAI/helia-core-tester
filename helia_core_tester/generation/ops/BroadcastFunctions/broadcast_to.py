@@ -38,10 +38,6 @@ def broadcast_to_argument_pool(context):
 class OpBroadcastTo(OperationBase):
     """BroadcastTo operation."""
 
-    def needs_tflite(self) -> bool:
-        # The golden is np.broadcast_to; nothing reads a .tflite.
-        return False
-
     _SUCCESS = "ARM_CMSIS_NN_SUCCESS"
     _ARG_ERROR = "ARM_CMSIS_NN_ARG_ERROR"
     _ARG_ERROR_CASES = {"input", "params", "output"}

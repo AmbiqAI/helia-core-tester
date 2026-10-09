@@ -27,7 +27,6 @@ def _make_case(root: Path, family: str, name: str, stamp: str | None = None) -> 
     case_dir = root / family / name
     case_dir.mkdir(parents=True, exist_ok=True)
     (case_dir / "descriptor.yaml").write_text(f"name: {name}\noperator: Add\n")
-    (case_dir / f"{name}.tflite").write_bytes(b"\x00")
     (case_dir / f"{name}.c").write_text("void run(void) {}\n")
     (case_dir / "CMakeLists.txt").write_text(f"add_test({name})\n")
     (case_dir / "includes").mkdir(exist_ok=True)
@@ -125,7 +124,6 @@ def test_stamp_round_trip_and_invalidation(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     "corrupt",
     [
-        pytest.param(lambda d: (d / "Add_s8_basic.tflite").unlink(), id="tflite-deleted"),
         pytest.param(lambda d: (d / "Add_s8_basic.c").unlink(), id="c-deleted"),
         pytest.param(
             lambda d: (d / "Add_s8_basic.c").write_text("void run(vo"), id="c-truncated"

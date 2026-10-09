@@ -69,10 +69,6 @@ class OpTranspose(OperationBase):
     # The (scale, zero point) the one-op LiteRT builder gave the input; kept so goldens do not move.
     FIXED_QUANT = {"S8": (0.125, 0), "S16": (1.0 / 32768.0, 0)}
 
-    def needs_tflite(self) -> bool:
-        # The golden is a numpy transpose; shapes come from the descriptor.
-        return False
-
     def generate_c_files(self, output_dir: Path) -> None:
         """
         Generate C and H files from templates for Transpose operation.

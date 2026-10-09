@@ -53,10 +53,6 @@ def parse_fill_value(raw: Any) -> float:
 class OpFill(OperationBase):
     """Fill operation."""
 
-    def needs_tflite(self) -> bool:
-        # The golden is computed in numpy; nothing reads a .tflite.
-        return False
-
     def _kernel(self) -> Dict[str, object]:
         dtype = self.tensor_dtype("output")
         try:

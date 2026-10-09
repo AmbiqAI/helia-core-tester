@@ -13,7 +13,7 @@ include = ["helia_core_tester*"]
 [project]
 name = "helia_core_tester"
 version = "0.9.0"
-description = "A comprehensive toolkit for CMSIS-NN testing, model generation, and FVP simulation"
+description = "A comprehensive toolkit for CMSIS-NN testing, test generation, and FVP simulation"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 license = {text = "Apache-2.0"}
@@ -26,11 +26,9 @@ dependencies = [
     # ~1 ULP, so bumping it needs a golden re-baseline of its own, separate from
     # this Python floor bump.
     "numpy>=1.20.0,<2.0.0",
-    "tensorflow>=2.12.0,<3.0.0",
     "pytest>=7.4.0,<9.0.0",
     "pyyaml>=6.0.0,<7.0.0",
     "jinja2>=3.0.0,<4.0.0",
-    "ai_edge_litert>=2.1.1",
     "typer>=0.9.0,<1.0.0",
     "pylink-square>=1.2.0,<3.0.0",
     # Same pin helia-profiler carries.
@@ -53,10 +51,6 @@ dev = [
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["helia_core_tester/tests"]
-filterwarnings = [
-    'ignore:In the future `np.object` will be defined as the corresponding NumPy scalar\.:FutureWarning:keras\.src\.export\.tf2onnx_lib',
-    'ignore:Statistics for quantized inputs were expected, but not specified; continuing anyway\.:UserWarning:tensorflow\.lite\.python\.convert',
-]
 
 [tool.uv]
 package = true

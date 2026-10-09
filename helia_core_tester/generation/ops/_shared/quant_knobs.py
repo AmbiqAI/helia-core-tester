@@ -13,16 +13,6 @@ def value_range(desc: Mapping[str, Any], key: str, default: Sequence[float]) -> 
     return float(lo), float(hi)
 
 
-def kernel_init(desc: Mapping[str, Any], seed: int):
-    """Glorot weights, scaled by weight_gain."""
-    import tensorflow as tf
-
-    gain = desc.get("weight_gain")
-    if gain is None:
-        return tf.keras.initializers.GlorotUniform(seed=seed)
-    return tf.keras.initializers.VarianceScaling(float(gain), "fan_avg", "uniform", seed=seed)
-
-
 def clamp_golden(desc: Mapping[str, Any], output: np.ndarray) -> np.ndarray:
     """Apply the descriptor's activation clamp."""
     if "activation_min" not in desc and "activation_max" not in desc:

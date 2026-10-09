@@ -577,7 +577,6 @@ def test_broadcast_to_expected_error_generation_renders_rank_override(tmp_path: 
     }
     op = OpBroadcastTo(desc, seed=1)
 
-    assert op.allow_no_tflite()
     op.generate_c_files(tmp_path)
 
     header = (tmp_path / "includes" / "broadcast_to_rank9_smoke_broadcast_to.h").read_text()
@@ -609,7 +608,6 @@ def test_dynamic_update_slice_expected_error_generation_renders_rank_override(tm
     }
     op = OpDynamicUpdateSlice(desc, seed=1)
 
-    assert op.allow_no_tflite()
     op.generate_c_files(tmp_path)
 
     header = (tmp_path / "includes" / "dynamic_update_slice_rank0_smoke_dynamic_update_slice.h").read_text()

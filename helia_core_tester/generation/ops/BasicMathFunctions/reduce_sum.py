@@ -18,10 +18,6 @@ class OpReduceSum(OperationBase):
     ReduceSum operation (FP32/FP16).
     """
 
-    def needs_tflite(self) -> bool:
-        # The golden is computed in numpy; nothing reads a .tflite.
-        return False
-
     def _select_cmsis_reduce_sum_kernel(self) -> Dict[str, str]:
         """
         Select appropriate CMSIS-NN kernel function for ReduceSum operation.

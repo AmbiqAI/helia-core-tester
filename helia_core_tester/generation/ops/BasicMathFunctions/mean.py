@@ -16,9 +16,6 @@ class OpMean(OperationBase):
     def _is_float_kernel(self) -> bool:
         return self.tensor_dtype("input", default="S8") in ("FP32", "FP16")
 
-    def needs_tflite(self) -> bool:
-        return False
-
     def uses_reference(self) -> bool:
         return not self._is_float_kernel()
 

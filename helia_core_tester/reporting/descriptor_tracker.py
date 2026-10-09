@@ -185,11 +185,7 @@ class DescriptorTracker:
             model_header_old = generated_test_dir / "includes" / f"{descriptor_name}_model.h"
             
             if not model_headers and not model_header_old.exists():
-                tflite_file = generated_test_dir / f"{descriptor_name}.tflite"
-                if not tflite_file.exists():
-                    return TestStatus.GENERATION_FAILED, "generation", "TFLite model not generated"
-                else:
-                    return TestStatus.CONVERSION_FAILED, "conversion", "Model header not found"
+                return TestStatus.GENERATION_FAILED, "generation", "Test case headers not generated"
             else:
                 return TestStatus.BUILD_FAILED, "build", "ELF file not found in build directory"
         else:

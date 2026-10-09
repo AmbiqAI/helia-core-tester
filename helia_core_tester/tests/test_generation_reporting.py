@@ -49,10 +49,11 @@ def test_generation_emits_canonical_report_files(tmp_path: Path, monkeypatch: py
         ],
     )
 
-    def _fake_generate_test(desc, out_dir, seed=None, cpu="cortex-m55", conversion_failures=None, generation_failures=None, run_seed=0):
+    def _fake_generate_test(desc, out_dir, seed=None, cpu="cortex-m55", generation_failures=None, run_seed=0):
         test_dir = Path(out_dir) / desc["_family"] / desc["name"]
         test_dir.mkdir(parents=True, exist_ok=True)
-        (test_dir / f"{desc['name']}.tflite").write_bytes(b"\x01")
+        (test_dir / "includes").mkdir(exist_ok=True)
+        (test_dir / "includes" / f"{desc['name']}.h").write_text("// fake generated header\n")
         # tests.cmake only lists directories with runnable c_sources (see
         # test_ops.py's runnable_entries filter), so the fake must emit a .c
         # file too for this test to exercise the real tests.cmake contract.
@@ -65,7 +66,6 @@ def test_generation_emits_canonical_report_files(tmp_path: Path, monkeypatch: py
     report_dir = repo_root / "artifacts" / "reports" / "generation" / "int" / "cortex-m4"
     summary = json.loads((report_dir / "generation_summary.json").read_text())
     manifest_pointer = json.loads((report_dir / "manifest_pointer.json").read_text())
-    conversion_failures = json.loads((report_dir / "conversion_failures.json").read_text())
     generation_failures = json.loads((report_dir / "generation_failures.json").read_text())
     capability_skips = json.loads((report_dir / "capability_skips.json").read_text())
 
@@ -79,7 +79,6 @@ def test_generation_emits_canonical_report_files(tmp_path: Path, monkeypatch: py
     assert manifest["tests"][0]["relative_test_dir"] == "FullyConnectedFunctions/fc_smoke"
     assert manifest["tests"][0]["resolved_tensor_dtypes"] == {"input": "S8", "output": "S8", "weights": "S8"}
     assert '"artifacts/generated_tests/int/cortex-m4/FullyConnectedFunctions/fc_smoke"' in (generated_tests_dir / "tests.cmake").read_text()
-    assert conversion_failures == []
     assert generation_failures == []
     assert capability_skips == []
 
@@ -108,12 +107,12 @@ def test_generation_writes_reports_even_when_no_outputs(tmp_path: Path, monkeypa
         ],
     )
 
-    def _always_fail(desc, out_dir, seed=None, cpu="cortex-m55", conversion_failures=None, generation_failures=None):
+    def _always_fail(desc, out_dir, seed=None, cpu="cortex-m55", generation_failures=None):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(generation_module, "generate_test", _always_fail)
 
-    with pytest.raises(AssertionError, match="No TFLite models were generated"):
+    with pytest.raises(AssertionError, match="No test cases were generated"):
         generation_module.test_generation(_filters(generated_tests_dir))
 
     report_dir = repo_root / "artifacts" / "reports" / "generation" / "int" / "cortex-m55"
@@ -238,7 +237,7 @@ def test_second_generation_reuses_every_case(tmp_path: Path, monkeypatch: pytest
 
     generate_calls: list[str] = []
 
-    def _fake_generate_test(desc, out_dir, seed=None, cpu="cortex-m55", conversion_failures=None, generation_failures=None, run_seed=0):
+    def _fake_generate_test(desc, out_dir, seed=None, cpu="cortex-m55", generation_failures=None, run_seed=0):
         generate_calls.append(desc["name"])
         test_dir = Path(out_dir) / desc["_family"] / desc["name"]
         test_dir.mkdir(parents=True, exist_ok=True)
@@ -246,7 +245,8 @@ def test_second_generation_reuses_every_case(tmp_path: Path, monkeypatch: pytest
         # the fake has to emit it exactly as the real generator does, seeds included.
         (test_dir / "descriptor.yaml").write_text(
             yaml.dump({**desc, "run_seed": int(run_seed), "case_seed": int(seed)}, sort_keys=False))
-        (test_dir / f"{desc['name']}.tflite").write_bytes(b"\x01")
+        (test_dir / "includes").mkdir(exist_ok=True)
+        (test_dir / "includes" / f"{desc['name']}.h").write_text("// fake generated header\n")
         (test_dir / f"{desc['name']}_{desc['operator'].lower()}.c").write_text("// fake generated harness\n")
 
     monkeypatch.setattr(generation_module, "generate_test", _fake_generate_test)
@@ -312,7 +312,8 @@ def test_keep_unselected_skips_the_prune(tmp_path: Path, monkeypatch: pytest.Mon
     def _fake_generate_test(desc, out_dir, **_kwargs):
         test_dir = Path(out_dir) / desc["_family"] / desc["name"]
         test_dir.mkdir(parents=True, exist_ok=True)
-        (test_dir / f"{desc['name']}.tflite").write_bytes(b"\x01")
+        (test_dir / "includes").mkdir(exist_ok=True)
+        (test_dir / "includes" / f"{desc['name']}.h").write_text("// fake generated header\n")
 
     monkeypatch.setattr(generation_module, "generate_test", _fake_generate_test)
     generation_module.test_generation({**_filters(generated_tests_dir, cpu="cortex-m4"), "keep_unselected": keep})

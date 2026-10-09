@@ -13,7 +13,7 @@ from pathlib import Path
 
 
 _ROOT_NAMES = {"descriptor.yaml", "CMakeLists.txt"}
-_SUFFIXES = {".c", ".h", ".json", ".tflite"}
+_SUFFIXES = {".c", ".h", ".json"}
 
 
 def generated_case_artifact_sha256(case_dir: Path) -> str:

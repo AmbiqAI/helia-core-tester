@@ -87,7 +87,6 @@ FIXED_CASES = [
 
 @pytest.mark.parametrize("name", FIXED_CASES)
 def test_fixed_family_golden(tmp_path, name):
-    pytest.importorskip("tensorflow")
     from helia_core_tester.generation.test_ops import generate_test
 
     descs = {d["name"]: d for d in load_all_descriptors(str(find_descriptors_dir()))}

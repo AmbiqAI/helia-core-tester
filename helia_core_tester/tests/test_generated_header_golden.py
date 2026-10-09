@@ -174,7 +174,6 @@ def _emit_header(output_dir: Path) -> str:
     # The generator's own seed derivation, so the fixture is the same text a real
     # `helia_core_tester generate` run produces, not a test-only artifact.
     op = OpNNActivationFloat(desc, default_seed_for_case(GOLDEN_CASE), target_cpu=GOLDEN_CPU)
-    (output_dir / f"{GOLDEN_CASE}.tflite").touch()
     op.generate_c_files(output_dir)
     return (output_dir / "includes" / f"{GOLDEN_CASE}_nn_activation_float.h").read_text()
 
@@ -210,8 +209,6 @@ def test_tanh_lut_grid_cases_emit_exact_discriminators(
     name = f"nn_activation_float_tanh_lut_{kind}_f16"
     op = OpNNActivationFloat(_descriptor(name), seed, target_cpu=cpu)
     # Emitter-only check, deliberately bypassing admission (DSP remains gated).
-    # Header emission does not read the model; full generation is qualified separately.
-    (tmp_path / f"{name}.tflite").touch()
     op.generate_c_files(tmp_path)
     header = (tmp_path / "includes" / f"{name}_nn_activation_float.h").read_text()
     for suffix, bits in (("input", input_bits), ("expected_output", output_bits)):

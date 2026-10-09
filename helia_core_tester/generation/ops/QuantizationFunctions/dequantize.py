@@ -32,10 +32,6 @@ class OpDequantize(QuantizationFamilyBase):
     Dequantize operation.
     """
 
-    def needs_tflite(self) -> bool:
-        # The golden is the dequantize formula (or an exact widening) in numpy.
-        return False
-
     def _widens_f16_bits(self) -> bool:
         """An `entry:` case: arm_dequantize_f16_bits_f32 on binary16 bit patterns, checked bit for bit
         against each NaN rule rather than against a converted model."""
@@ -43,7 +39,7 @@ class OpDequantize(QuantizationFamilyBase):
 
     def _widens_f16(self) -> bool:
         """FP16 -> FP32 is arm_dequantize_f16_f32 (ns-cmsis-nn#475): a bit-exact widening
-        with no scale or zero point, built as a LiteRT DEQUANTIZE rather than a Keras model."""
+        with no scale or zero point."""
         return self.tensor_dtype("input") == "FP16"
 
     def _select_cmsis_dequantize_kernel(self) -> dict[str, str]:

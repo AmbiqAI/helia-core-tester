@@ -12,10 +12,6 @@ class OpSpaceToBatchND(OperationBase):
     SpaceToBatchND operation.
     """
 
-    def needs_tflite(self) -> bool:
-        # The golden is computed in numpy; nothing reads a .tflite.
-        return False
-
     @staticmethod
     def _space_to_batch_nd_numpy(input_np: np.ndarray, block_shape: list, paddings: list, pad_value: int) -> np.ndarray:
         batch, h, w, c = input_np.shape

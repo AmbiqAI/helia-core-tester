@@ -12,10 +12,6 @@ class OpBatchToSpaceND(OperationBase):
     BatchToSpaceND operation.
     """
 
-    def needs_tflite(self) -> bool:
-        # The golden is computed in numpy; nothing reads a .tflite.
-        return False
-
     @staticmethod
     def _batch_to_space_nd_numpy(input_np: np.ndarray, block_shape: list, crops: list) -> np.ndarray:
         """Reference BatchToSpaceND for NHWC [N, H, W, C]. block_shape and crops are 2-element."""

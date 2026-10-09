@@ -15,9 +15,6 @@ class OpQuantize(QuantizationFamilyBase):
     Quantize operation.
     """
 
-    def needs_tflite(self) -> bool:
-        return False
-
     def uses_reference(self) -> bool:
         return True
 

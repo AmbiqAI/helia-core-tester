@@ -35,8 +35,8 @@ subnormals widen to normal FP32 and retain their mathematical result.
 
 `test_sqrt_float_generation.py` checks all 65,536 FP16 encodings, using exact
 rational squared-midpoint bounds for positive finite results and explicit bits
-for special values. It also queries a real LiteRT reference interpreter for
-finite FP32 inputs and compiles generated validators with deliberate numerical,
+for special values. It also checks finite FP32 inputs against correctly rounded
+float64 sqrt (rsqrt within 1 ulp) and compiles generated validators with deliberate numerical,
 special-value and memory faults. The kernel Unity suites separately exhaust the
 FP16 kernels themselves; the 52 generated descriptors are a compact coverage
 suite, not an exhaustive kernel run.

@@ -3,18 +3,10 @@
 from pathlib import Path
 
 import numpy as np
-import tensorflow as tf
 
 from helia_core_tester.core.cpu_targets import get_cpu_profile
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.harness.simple import tensor_case_pool
-
-
-_ACTIVATION_LAYERS = {
-    "ARM_NN_FLT_ACT_SIGMOID": tf.keras.activations.sigmoid,
-    "ARM_NN_FLT_ACT_TANH": tf.keras.activations.tanh,
-    "ARM_NN_FLT_ACT_NONE": tf.keras.activations.linear,
-}
 
 
 def _fp16(value) -> np.ndarray:
@@ -106,10 +98,6 @@ def _activation_reference(
 
 class OpNNActivationFloat(OperationBase):
     """Generate float activation parity tests."""
-
-    def needs_tflite(self) -> bool:
-        # The golden is computed directly; nothing reads a .tflite.
-        return False
 
     def _activation_symbol(self) -> str:
         return str(self.desc["activation_type"]).upper()

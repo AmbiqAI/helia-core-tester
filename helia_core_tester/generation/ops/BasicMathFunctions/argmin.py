@@ -6,34 +6,15 @@ from typing import Dict, Any
 import numpy as np
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.base import OperationBase
-from helia_core_tester.generation.utils.litert_builder import build_arg_reduction_op
 from helia_core_tester.generation.ops._shared.arg_extrema_float import (
     float_arg_kernel, generate_arg_extrema_float,
 )
-
-
-def build_argmin_op(
-    *,
-    input_shape,
-    axis: int = -1,
-    dtype: str = "int8",
-) -> bytes:
-    return build_arg_reduction_op(
-        op_name="ARG_MIN",
-        input_shape=input_shape,
-        axis=axis,
-        dtype=dtype,
-    )
 
 
 class OpArgMin(OperationBase):
     """
     ArgMin operation.
     """
-
-    def needs_tflite(self) -> bool:
-        # The golden is computed in numpy; nothing reads a .tflite.
-        return False
 
     def _select_cmsis_argmin_kernel(self) -> Dict[str, str]:
         """

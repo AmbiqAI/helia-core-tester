@@ -14,10 +14,6 @@ class OpSplit(OperationBase):
     Split operation - splits a tensor into multiple tensors.
     """
 
-    def needs_tflite(self) -> bool:
-        # The golden is computed in numpy; nothing reads a .tflite.
-        return False
-
     def _split_dtype(self) -> str:
         return self.tensor_dtype("input", default=str(self.desc.get("activation_dtype", "S8")))
 

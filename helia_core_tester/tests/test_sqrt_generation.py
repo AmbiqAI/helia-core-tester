@@ -137,19 +137,6 @@ def test_sqrt_parity_descriptors_generate_litert_and_c(
     desc = _sqrt_descriptor_map()[name]
     assert desc["activation_dtype"] == dtype
     op = OpSqrt(desc, seed=1, target_cpu="cortex-m55")
-    tflite_path = tmp_path / f"{name}.tflite"
-
-    assert op.needs_keras_model() is False
-    with pytest.raises(NotImplementedError):
-        op.build_keras_model()
-
-    if op.needs_tflite() and not op.uses_reference():
-        op.convert_to_tflite(None, str(tflite_path), 1)
-
-    assert not op.needs_tflite()
-
-    fake_output = np.zeros(shape, dtype=output_dtype)
-    monkeypatch.setattr(op, "run_inference", lambda *_args, **_kwargs: fake_output)
     op.generate_c_files(tmp_path)
 
     c_path = tmp_path / f"{name}_sqrt.c"

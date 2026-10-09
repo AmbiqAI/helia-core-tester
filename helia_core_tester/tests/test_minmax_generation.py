@@ -3,35 +3,29 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from ai_edge_litert import schema_py_generated as litert
 
 from helia_core_tester.generation.ops.BasicMathFunctions.minmax import OpMinMax
-from helia_core_tester.generation.utils.litert_builder import LITERT_AVAILABLE
 
 
 @pytest.mark.parametrize(
-    ("operator", "dtype", "expected_builtin", "expected_kernel"),
+    ("operator", "dtype", "expected_kernel"),
     [
-        ("Minimum", "S8", litert.BuiltinOperator.MINIMUM, "arm_minimum_s8"),
-        ("Maximum", "S8", litert.BuiltinOperator.MAXIMUM, "arm_maximum_s8"),
-        ("Minimum", "S16", litert.BuiltinOperator.MINIMUM, "arm_minimum_s16"),
-        ("Maximum", "S16", litert.BuiltinOperator.MAXIMUM, "arm_maximum_s16"),
-        ("Minimum", "FP16", litert.BuiltinOperator.MINIMUM, "arm_minimum_f16"),
-        ("Maximum", "FP16", litert.BuiltinOperator.MAXIMUM, "arm_maximum_f16"),
-        ("Minimum", "FP32", litert.BuiltinOperator.MINIMUM, "arm_minimum_f32"),
-        ("Maximum", "FP32", litert.BuiltinOperator.MAXIMUM, "arm_maximum_f32"),
+        ("Minimum", "S8", "arm_minimum_s8"),
+        ("Maximum", "S8", "arm_maximum_s8"),
+        ("Minimum", "S16", "arm_minimum_s16"),
+        ("Maximum", "S16", "arm_maximum_s16"),
+        ("Minimum", "FP16", "arm_minimum_f16"),
+        ("Maximum", "FP16", "arm_maximum_f16"),
+        ("Minimum", "FP32", "arm_minimum_f32"),
+        ("Maximum", "FP32", "arm_maximum_f32"),
     ],
 )
-def test_minmax_generates_direct_litert_model_and_c(
+def test_minmax_generates_c_from_the_descriptor(
     operator: str,
     dtype: str,
-    expected_builtin: int,
     expected_kernel: str,
     tmp_path: Path,
 ) -> None:
-    if not LITERT_AVAILABLE:
-        pytest.skip("ai_edge_litert is required for min/max LiteRT generation")
-
     name = f"{operator.lower()}_{dtype.lower()}_broadcast"
     input_1_shape = (1, 2, 3, 4)
     input_2_shape = (1, 1, 3, 1)
@@ -43,11 +37,7 @@ def test_minmax_generates_direct_litert_model_and_c(
         "input_2_shape": list(input_2_shape),
     }
     op = OpMinMax(desc, seed=1, target_cpu="cortex-m55")
-    # Shapes come from the descriptor and quantization is fixed: no model is built.
-    assert op.needs_tflite() is False
-    assert op.needs_keras_model() is False
-    with pytest.raises(NotImplementedError):
-        op.build_keras_model()
+    # Shapes come from the descriptor and quantization is fixed.
     assert op._binary_shapes() == (input_1_shape, input_2_shape, (1, 2, 3, 4))
 
     op.generate_c_files(tmp_path)

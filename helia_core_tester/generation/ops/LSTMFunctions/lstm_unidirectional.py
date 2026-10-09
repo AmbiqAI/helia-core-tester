@@ -14,10 +14,6 @@ class OpLSTMUnidirectional(OperationBase):
 
     FAULT_KINDS = ("null_input", "null_output", "null_params", "null_buffers")
 
-    def needs_tflite(self) -> bool:
-        # Integer goldens come from TFLM's LSTM in the reference shim, float ones from numpy.
-        return False
-
     def uses_reference(self) -> bool:
         return self.desc.get("hint", {}).get("force_cmsis", False) and str(
             self.desc.get("activation_dtype", "S8")).upper() in {"S8", "S16"}

@@ -285,7 +285,6 @@ def test_int_and_float_cases_use_the_reference() -> None:
         OpFullyConnected({"name": "f", "activation_dtype": "FP16", "weight_dtype": "FP16"}, seed=1),
     ):
         assert op.uses_reference()
-        assert not op.needs_keras_model()
 
 
 def test_reference_rng_streams_are_independent_of_the_input_draw() -> None:

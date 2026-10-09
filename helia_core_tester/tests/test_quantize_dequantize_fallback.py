@@ -64,13 +64,6 @@ def _render(op, tmp_path: Path, stem: str) -> str:
     return (tmp_path / f"{name}_{stem}.c").read_text() + (tmp_path / "includes" / f"{name}_{stem}.h").read_text()
 
 
-def test_quantize_and_dequantize_need_no_model() -> None:
-    for op in (OpQuantize(_quantize_desc("q", "NONE", "S8"), seed=1, target_cpu="cortex-m55"),
-               OpDequantize(_dequantize_desc("d", "NONE", "S8"), seed=1, target_cpu="cortex-m55")):
-        assert not op.needs_tflite()
-        assert not op.needs_keras_model()
-
-
 @pytest.mark.parametrize(
     ("name", "activation", "dtype", "scale", "zero_point"),
     [

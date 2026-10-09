@@ -22,7 +22,6 @@ from helia_core_tester.core.discovery import find_descriptors_dir
 from helia_core_tester.generation.io.descriptors import load_all_descriptors
 from helia_core_tester.generation.ops.BasicMathFunctions.fill import parse_fill_value
 from helia_core_tester.generation.ops.catalog import get_operator_spec
-from helia_core_tester.generation.utils.litert_builder import build_fill_op, build_pack_op, build_unpack_op
 from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
 
@@ -165,41 +164,6 @@ def test_parse_fill_value_nan_and_rejects_junk() -> None:
         parse_fill_value("seven")
     with pytest.raises(ValueError):
         parse_fill_value(True)
-
-
-def _output_shapes(model_bytes: bytes) -> list[tuple[int, ...]]:
-    from ai_edge_litert.interpreter import Interpreter
-
-    interpreter = Interpreter(model_content=model_bytes)
-    interpreter.allocate_tensors()
-    return [tuple(int(v) for v in detail["shape"]) for detail in interpreter.get_output_details()]
-
-
-def test_litert_topologies_match_numpy_shapes() -> None:
-    # Cross-checks the builders' own shape arithmetic against LiteRT's.
-    assert _output_shapes(build_pack_op(input_shape=[], num_inputs=8, axis=0)) == [(8,)]
-    assert _output_shapes(build_pack_op(input_shape=[2, 3], num_inputs=3, axis=2)) == [(2, 3, 3)]
-    assert _output_shapes(build_unpack_op(input_shape=[2, 5, 3], axis=1)) == [(2, 3)] * 5
-    assert _output_shapes(build_unpack_op(input_shape=[2, 5, 3], axis=1, dtype="float16")) == [(2, 3)] * 5
-    assert _output_shapes(build_fill_op(output_shape=[17], dtype="float16")) == [(17,)]
-    with pytest.raises(ValueError):
-        build_pack_op(input_shape=[2, 3], num_inputs=2, axis=3)
-    with pytest.raises(ValueError):
-        build_unpack_op(input_shape=[2, 0], axis=1)
-
-
-def test_float16_pack_model_is_provenance_only() -> None:
-    # LiteRT's reference PACK has no FLOAT16 registration, so the f16 pack model
-    # cannot be prepared. It does not have to be: the .tflite is a provenance
-    # artifact and nothing in the pipeline interprets it -- OpPack's golden is
-    # numpy.stack over its own emitted operands (asserted below). UNPACK and FILL
-    # do register FLOAT16, which is why only pack is called out here. If LiteRT
-    # ever gains the registration this test fails and the cross-check above can
-    # widen to cover it.
-    model = build_pack_op(input_shape=[], num_inputs=8, axis=0, dtype="float16")
-    assert model
-    with pytest.raises(RuntimeError, match="FLOAT16"):
-        _output_shapes(model)
 
 
 @pytest.fixture(scope="module")

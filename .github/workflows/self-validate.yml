@@ -127,11 +127,14 @@ jobs:
       - name: Setup build dependencies
         run: ./scripts/setup_ci.sh
 
+      # Every run draws fresh case data; the run id is the seed, so a failure
+      # reproduces locally with --seed <run id>.
       - name: Generate + compile (no FVP run) against ns-cmsis-nn ${{ github.event.inputs.ns_cmsis_nn_ref || 'dev/kernel-contracts' }}
         run: |
           uv run helia_core_tester full \
             --cpu cortex-m55 \
             --suite ${{ matrix.suite }} \
+            --seed ${{ github.run_id }} \
             --cmsis-nn-root "${{ github.workspace }}/ns-cmsis-nn-scratch" \
             --skip-run \
             --no-report \
@@ -203,7 +206,7 @@ jobs:
 
       - name: Generate cortex-m55 int + float (present leg)
         if: matrix.leg == 'present'
-        run: uv run helia_core_tester generate --cpu cortex-m55 --suite both --verbosity 1
+        run: uv run helia_core_tester generate --cpu cortex-m55 --suite both --seed ${{ github.run_id }} --verbosity 1
 
       - name: Generate one Convolve case against a checkout without the export (absent leg)
         if: matrix.leg == 'absent'

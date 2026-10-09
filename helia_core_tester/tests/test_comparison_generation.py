@@ -1,5 +1,3 @@
-import pytest
-
 from helia_core_tester.generation.ops.ComparisonFunctions.comparison import OpComparison
 
 
@@ -15,12 +13,6 @@ def test_comparison_equal_generates(tmp_path):
         "input_2_shape": [1, 2, 2, 1],
     }
     op = OpComparison(desc, seed=1, target_cpu="cortex-m55")
-    assert op.needs_keras_model() is False
-    with pytest.raises(NotImplementedError):
-        op.build_keras_model()
-    tflite_path = tmp_path / "equal_test.tflite"
-    if op.needs_tflite() and not op.uses_reference():
-        op.convert_to_tflite(None, str(tflite_path), 1)
     op.generate_c_files(tmp_path)
 
     c_path = tmp_path / "equal_test_comparison.c"

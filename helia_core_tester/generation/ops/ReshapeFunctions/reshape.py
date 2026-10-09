@@ -14,10 +14,6 @@ class OpReshape(OperationBase):
     Reshape operation.
     """
 
-    def needs_tflite(self) -> bool:
-        # The golden is computed in numpy; nothing reads a .tflite.
-        return False
-
     def _select_cmsis_reshape_kernel(self) -> Dict[str, str]:
         """
         Select appropriate CMSIS-NN kernel function for Reshape operation.

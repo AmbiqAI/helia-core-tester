@@ -172,37 +172,6 @@ def test_rsqrt_parity_descriptors_generate_litert_and_c(
     assert desc["hint"]["call_style"] == call_style
 
     op = OpRsqrt(desc, seed=1, target_cpu="cortex-m55")
-    tflite_path = tmp_path / f"{name}.tflite"
-
-    assert op.needs_keras_model() is False
-    with pytest.raises(NotImplementedError):
-        op.build_keras_model()
-
-    if op.needs_tflite() and not op.uses_reference():
-        op.convert_to_tflite(None, str(tflite_path), 1)
-
-    assert not op.needs_tflite()
-
-    fake_output = np.zeros(shape, dtype=np.int16)
-
-    class _FakeInterpreter:
-        def get_input_details(self):
-            return [{"index": 0}]
-
-        def get_output_details(self):
-            return [{"index": 0}]
-
-        def set_tensor(self, index, value):
-            del index, value
-
-        def invoke(self):
-            return None
-
-        def get_tensor(self, index):
-            del index
-            return fake_output
-
-    monkeypatch.setattr(op, "load_litert_interpreter", lambda _path: _FakeInterpreter())
     op.generate_c_files(tmp_path)
 
     c_path = tmp_path / f"{name}_rsqrt.c"
@@ -240,9 +209,6 @@ def test_rsqrt_negative_input_case_generates_expected_status_contract(
         "hint": {"call_style": call_style, "force_negative_input_case": True},
     }
     op = OpRsqrt(desc, seed=1, target_cpu="cortex-m55")
-    tflite_path = tmp_path / f"{desc['name']}.tflite"
-    if op.needs_tflite() and not op.uses_reference():
-        op.convert_to_tflite(None, str(tflite_path), 1)
     op.generate_c_files(tmp_path)
 
     c_content = (tmp_path / f"{desc['name']}_rsqrt.c").read_text()

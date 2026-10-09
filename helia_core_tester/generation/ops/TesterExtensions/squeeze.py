@@ -14,10 +14,6 @@ class OpSqueeze(OperationBase):
     Squeeze operation - removes dimensions of size 1.
     """
     
-    def needs_tflite(self) -> bool:
-        # A squeeze is a copy: the golden is the reshaped input, quantized from its own range.
-        return False
-
     def _select_cmsis_squeeze_kernel(self) -> Dict[str, str]:
         """
         Select appropriate CMSIS-NN kernel function for Squeeze operation.

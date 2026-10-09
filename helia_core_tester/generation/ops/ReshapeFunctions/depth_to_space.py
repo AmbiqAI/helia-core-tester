@@ -12,10 +12,6 @@ class OpDepthToSpace(OperationBase):
     DepthToSpace operation.
     """
 
-    def needs_tflite(self) -> bool:
-        # The golden is computed in numpy; nothing reads a .tflite.
-        return False
-
     def generate_c_files(self, output_dir) -> None:
         """
         Generate C and H files from templates for DepthToSpace.
