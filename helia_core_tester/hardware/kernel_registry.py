@@ -54,14 +54,13 @@ _LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 
 def load_kernel_registry(project_root: Path) -> list[KernelEntry]:
     path = _registry_path(project_root)
-    stat = path.stat()
-    return list(_parse_registry(str(path), stat.st_mtime_ns, stat.st_size))
+    return list(_parse_registry(path.read_bytes()))
 
 
 @functools.lru_cache(maxsize=8)
-def _parse_registry(path: str, mtime_ns: int, size: int) -> tuple[KernelEntry, ...]:
-    """Parse once per file version."""
-    data = yaml.load(Path(path).read_text(encoding="utf-8"), Loader=_LOADER)
+def _parse_registry(raw: bytes) -> tuple[KernelEntry, ...]:
+    """Parse once per distinct content."""
+    data = yaml.load(raw, Loader=_LOADER)
     return tuple(
         KernelEntry(
             kernel_id=int(entry["kernel_id"]),

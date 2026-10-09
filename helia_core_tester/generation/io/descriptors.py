@@ -331,10 +331,9 @@ _LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 
 
 @functools.lru_cache(maxsize=512)
-def _parse_yaml_docs(path: str, mtime_ns: int, size: int) -> tuple:
-    """Parse once per file version."""
-    with open(path, 'r') as f:
-        return tuple(yaml.load_all(f, Loader=_LOADER))
+def _parse_yaml_docs(data: bytes) -> tuple:
+    """Parse once per distinct content."""
+    return tuple(yaml.load_all(data, Loader=_LOADER))
 
 
 def load_descriptor(desc_path: str) -> List[Dict[str, Any]]:
@@ -348,9 +347,10 @@ def load_descriptor(desc_path: str) -> List[Dict[str, Any]]:
     Returns:
         List of validated descriptor dictionaries (one per YAML document in the file)
     """
-    stat = os.stat(desc_path)
+    with open(desc_path, 'rb') as f:
+        data = f.read()
     # Validator deep-copies, so cache stays pristine.
-    documents = list(_parse_yaml_docs(str(desc_path), stat.st_mtime_ns, stat.st_size))
+    documents = list(_parse_yaml_docs(data))
     
     # Filter out None documents (empty separators)
     documents = [doc for doc in documents if doc is not None]

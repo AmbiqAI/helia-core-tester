@@ -32,9 +32,11 @@ def _registry(tmp_path, kid):
     return path
 
 
-def _bump_mtime(path):
+def _rewrite_same_stat(path, text):
     stat = path.stat()
-    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000))
+    path.write_text(text)
+    assert path.stat().st_size == stat.st_size
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
 
 
 def test_registry_cache_hit(tmp_path):
@@ -50,8 +52,7 @@ def test_registry_cache_hit(tmp_path):
 def test_registry_edit_invalidates(tmp_path):
     path = _registry(tmp_path, 7)
     assert kernel_registry.load_kernel_registry(tmp_path)[0].kernel_id == 7
-    path.write_text(_REGISTRY.format(kid=8))
-    _bump_mtime(path)
+    _rewrite_same_stat(path, _REGISTRY.format(kid=8))
     assert kernel_registry.load_kernel_registry(tmp_path)[0].kernel_id == 8
 
 
@@ -75,9 +76,8 @@ def test_descriptor_edit_invalidates(tmp_path):
     path = tmp_path / "abs.yaml"
     path.write_text(_ABS.format(name="abs_a_s8"))
     assert descriptors.load_descriptor(str(path))[0]["name"] == "abs_a_s8"
-    # Same size, so only mtime changes.
-    path.write_text(_ABS.format(name="abs_b_s8"))
-    _bump_mtime(path)
+    # Same size and mtime, new bytes.
+    _rewrite_same_stat(path, _ABS.format(name="abs_b_s8"))
     assert descriptors.load_descriptor(str(path))[0]["name"] == "abs_b_s8"
 
 
