@@ -22,6 +22,10 @@ EXIT_BUDGET = 6
 INFRA_STAGES = ("tester", "baseline")
 CASE_COLUMNS = ["case_id", "baseline_cycles", "candidate_cycles", "speedup", "band_pct", "cycles_per_mac"]
 TOP_HINTS = 10
+# A leg the judge did not run.
+SKIPPED = "skipped"
+# Verdicts later legs can still worsen.
+OPEN_VERDICTS = ORDER[ORDER.index("no_gain"):]
 
 
 class LockBusy(Exception):
@@ -100,13 +104,31 @@ def is_infra(verdict: Optional[dict]) -> bool:
     return verdict["verdict"] == "refused" and verdict.get("stage") in INFRA_STAGES
 
 
+def skipped(verdict: Optional[dict]) -> bool:
+    return isinstance(verdict, dict) and verdict.get("verdict") == SKIPPED
+
+
+def skip_reason(leg: Leg, legs: dict[str, dict], runs: tuple[Leg, ...]) -> Optional[str]:
+    """Why this leg need not run."""
+    for name, verdict in legs.items():
+        # Fail or worse settles the eval.
+        if not skipped(verdict) and (not scored(verdict) or verdict.get("verdict") not in OPEN_VERDICTS):
+            return f"{name} was {verdict.get('verdict')}"
+    if leg.placement == "mram":
+        tcm = next((r.name for r in runs if r.placement == "tcm" and r.toolchain == leg.toolchain), None)
+        if tcm in legs and legs[tcm].get("verdict") != "pass":
+            return f"{tcm} did not pass"
+    return None
+
+
 def merge_legs(legs: dict[str, Optional[dict]], wanted: tuple[str, ...]) -> str:
-    """Worst leg wins; pass needs every leg."""
-    verdicts = [v.get("verdict") if v.get("verdict") in ORDER else "error" for v in legs.values() if v is not None]
+    """Worst run leg wins; pass needs every leg."""
+    run = [v for v in legs.values() if v is not None and not skipped(v)]
+    verdicts = [v.get("verdict") if v.get("verdict") in ORDER else "error" for v in run]
     if not verdicts:
         return "error"
     overall = min(verdicts, key=ORDER.index)
-    if overall == "pass" and any(legs.get(leg) is None for leg in wanted):
+    if overall == "pass" and any(legs.get(leg) is None or skipped(legs[leg]) for leg in wanted):
         return "error"
     return overall
 
@@ -118,6 +140,8 @@ def scored(verdict: Optional[dict]) -> bool:
 
 def leg_view(v: dict, hints: bool) -> dict[str, Any]:
     """One leg, compact: touched rows only."""
+    if skipped(v):
+        return dict(v)
     keep = ("verdict", "stage", "reason", "findings", "failures", "score", "hidden")
     out = {k: v.get(k) for k in keep if v.get(k) is not None}
     fam_keys = ("cases", "geomean_speedup", "regression", "untouched_cases", "untouched_geomean")
@@ -176,8 +200,9 @@ def ledger_row(eid: str, overall: str, legs: dict, *, charged: bool, infra: bool
     row = {
         "eval": eid, "time": time.strftime("%Y-%m-%dT%H:%M:%S"), "verdict": overall, "charged": charged,
         "infra": infra, "attempts": attempts,
-        "legs": {k: {"verdict": v.get("verdict"), "stage": v.get("stage"), "score": v.get("score"),
-                     "geomean": family_geomeans(v), "hidden": v.get("hidden")} for k, v in legs.items() if v},
+        "legs": {k: {**v, "geomean": {}} if skipped(v) else
+                 {"verdict": v.get("verdict"), "stage": v.get("stage"), "score": v.get("score"),
+                  "geomean": family_geomeans(v), "hidden": v.get("hidden")} for k, v in legs.items() if v},
         "size_delta": size_deltas(size, runs), **diff_digest(diff),
     }
     gains = toolchain_gains(legs, runs, size)

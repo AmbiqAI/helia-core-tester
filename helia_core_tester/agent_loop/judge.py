@@ -19,8 +19,8 @@ from helia_core_tester.hardware.candidate_scan import run_binutil
 from helia_core_tester.hardware.toolchain import toolchain_spec
 
 from .config import Campaign
-from .ledger import (EXIT_BUDGET, Ledger, LockBusy, agent_view, file_lock, is_infra, ledger_row, merge_legs,
-                     next_note, passing_evals, scored)
+from .ledger import (EXIT_BUDGET, SKIPPED, Ledger, LockBusy, agent_view, file_lock, is_infra, ledger_row,
+                     merge_legs, next_note, passing_evals, skip_reason)
 from .workspace import Workspace, kernel_lib
 
 EDIT_TREES = ("Source", "Include")
@@ -338,12 +338,15 @@ def _submit_locked(ws: Workspace, campaign: Campaign, facts: dict, ledger: Ledge
         legs: dict[str, Optional[dict]] = {}
         attempts: dict[str, int] = {}
         infra = False
-        for leg in campaign.leg_names:
-            # Later legs need a scored leg.
-            if legs and not all(scored(v) for v in legs.values()):
-                break
-            legs[leg], attempts[leg] = run_leg(ws, campaign, eid, leg, deadline, runner)
-            if is_infra(legs[leg]) or legs[leg].get("stage") == "board":
+        # tcm first, so it gates mram.
+        order = sorted(campaign.runs, key=lambda r: (campaign.toolchains.index(r.toolchain), r.placement != "tcm"))
+        for run in order:
+            reason = skip_reason(run, legs, campaign.runs)
+            if reason:
+                legs[run.name] = {"verdict": SKIPPED, "reason": reason}
+                continue
+            legs[run.name], attempts[run.name] = run_leg(ws, campaign, eid, run.name, deadline, runner)
+            if is_infra(legs[run.name]) or legs[run.name].get("stage") == "board":
                 infra = True
                 break
         overall = "error" if infra else merge_legs(legs, campaign.leg_names)

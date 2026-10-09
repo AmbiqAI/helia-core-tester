@@ -42,7 +42,10 @@ leg (a few minutes in total):
 - leg `{{ leg.name }}`: {{ leg.text }}
 {%- endfor %}
 {%- if legs|length > 1 %}
-A later leg runs only when the earlier legs got as far as scoring.
+Once a leg fails, or stops before scoring, later legs are skipped.
+{%- if gates_mram %}
+An mram leg runs only after the tcm leg on its compiler passes.
+{%- endif %}
 {%- endif %}
 {%- if toolchains %}
 Each placement runs once per compiler: {{ toolchains|join(" and ") }} (atfe is Arm
@@ -100,7 +103,8 @@ may Read if the printed output was cut:
   over its legs and its code bytes added.
 {%- endif %}
 - `legs.<leg>`, each with:
-  - `verdict`, `stage` (check, run, objects, score) and `score`.
+  - `verdict`, `stage` (check, run, objects, score) and `score`. A leg the
+    judge did not run has verdict `skipped` and a `reason`.
   - `findings`: why the checker rejected the tree.
   - `failures`: what failed, by kind: `comparison_failed` (output differs
     from baseline), `regression` (a case got slower beyond its noise band),
