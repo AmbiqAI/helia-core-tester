@@ -338,6 +338,118 @@ structs:
       - [activation_type, int32]
       - [act_param, float32]
 
+  HctPerChannelQuantParams:
+    doc: >-
+      PopulateConvolutionQuantizationParams: each channel's (input_scale * filter_scale[c]) / output_scale,
+      formed in double from the float32 scales, through QuantizeMultiplier.
+    fields:
+      - [input_scale, float32]
+      - [output_scale, float32]
+  HctConvParams:
+    doc: >-
+      TFLite ConvParams for the quantized convolutions: input_offset is -input_zero_point, output_offset the
+      output zero point (both 0 for int16); groups follow from input depth / filter input depth.
+    fields:
+      - [stride_h, int32]
+      - [stride_w, int32]
+      - [dilation_h, int32]
+      - [dilation_w, int32]
+      - [pad_h, int32]
+      - [pad_w, int32]
+      - [input_offset, int32]
+      - [output_offset, int32]
+      - [activation_min, int32]
+      - [activation_max, int32]
+  HctConvFloatParams:
+    fields:
+      - [stride_h, int32]
+      - [stride_w, int32]
+      - [dilation_h, int32]
+      - [dilation_w, int32]
+      - [pad_h, int32]
+      - [pad_w, int32]
+      - [activation_min, float32]
+      - [activation_max, float32]
+
+  HctFullyConnectedParams:
+    doc: >-
+      TFLite FullyConnectedParams: input_offset is -input_zero_point, filter_offset -filter_zero_point (0 when
+      the filter is symmetric, as per-channel filters are), output_offset the output zero point.
+    fields:
+      - [input_offset, int32]
+      - [filter_offset, int32]
+      - [output_offset, int32]
+      - [activation_min, int32]
+      - [activation_max, int32]
+
+  HctBatchMatMulParams:
+    doc: >-
+      adj_x / adj_y (0 or 1) mean the stored operand is transposed in its last two dims; offsets are
+      -zero_point for the operands, +zero_point for the output; one per-tensor multiplier and shift.
+    fields:
+      - [adj_x, int32]
+      - [adj_y, int32]
+      - [lhs_offset, int32]
+      - [rhs_offset, int32]
+      - [output_offset, int32]
+      - [multiplier, int32]
+      - [shift, int32]
+      - [activation_min, int32]
+      - [activation_max, int32]
+  HctBatchMatMulFloatParams:
+    fields:
+      - [adj_x, int32]
+      - [adj_y, int32]
+      - [activation_min, float32]
+      - [activation_max, float32]
+
+  HctPoolParams:
+    fields:
+      - [stride_h, int32]
+      - [stride_w, int32]
+      - [filter_h, int32]
+      - [filter_w, int32]
+      - [pad_h, int32]
+      - [pad_w, int32]
+      - [activation_min, int32]
+      - [activation_max, int32]
+  HctPoolFloatParams:
+    fields:
+      - [stride_h, int32]
+      - [stride_w, int32]
+      - [filter_h, int32]
+      - [filter_w, int32]
+      - [pad_h, int32]
+      - [pad_w, int32]
+      - [activation_min, float32]
+      - [activation_max, float32]
+
+  HctAxisMaskParams:
+    doc: Bit d set reduces input dim d.
+    fields:
+      - [axis_mask, int32]
+  HctAxisParams:
+    fields:
+      - [axis, int32]
+  HctMeanQuant:
+    doc: QuantizedMeanOrSum's requantization for a reduction over `count` elements.
+    fields:
+      - [input_scale, float32]
+      - [output_scale, float32]
+      - [count, int64]
+  HctMeanParams:
+    doc: input_scale / output_scale through QuantizeMultiplier, with 1 / count folded in as TFLM folds it.
+    fields:
+      - [multiplier, int32]
+      - [shift, int32]
+  HctMeanQuantizedParams:
+    fields:
+      - [axis_mask, int32]
+      - [input_zero_point, int32]
+      - [output_zero_point, int32]
+      - [multiplier, int32]
+      - [shift, int32]
+
 prepare:
   quantize_multiplier:
     in: HctQuantizeMultiplierIn
@@ -387,6 +499,9 @@ prepare:
   softmax_prepare:
     in: HctSoftmaxQuant
     out: HctSoftmaxParams
+  mean_prepare:
+    in: HctMeanQuant
+    out: HctMeanParams
 
 kernels:
   add_s8:
@@ -545,6 +660,14 @@ kernels:
     params: HctNoParams
     inputs: {input: float16, alpha: float16}
     outputs: {output: float16}
+  batch_norm_f32:
+    params: HctNoParams
+    inputs: {input: float32, scale: float32, bias: float32}
+    outputs: {output: float32}
+  batch_norm_f16:
+    params: HctNoParams
+    inputs: {input: float16, scale: float16, bias: float16}
+    outputs: {output: float16}
   hard_swish_s8:
     params: HctHardSwishParams
     inputs: {input: int8}
@@ -665,3 +788,207 @@ kernels:
     params: HctNoParams
     inputs: {input: float16}
     outputs: {output: float16}
+  per_channel_quant:
+    params: HctPerChannelQuantParams
+    inputs: {filter_scale: float32}
+    outputs: {multiplier: int32, shift: int32}
+  conv_s8:
+    params: HctConvParams
+    inputs: {input: int8, filter: int8, bias: int32, multiplier: int32, shift: int32}
+    outputs: {output: int8}
+  conv_s16:
+    params: HctConvParams
+    inputs: {input: int16, filter: int8, bias: int64, multiplier: int32, shift: int32}
+    outputs: {output: int16}
+  conv_f32:
+    params: HctConvFloatParams
+    inputs: {input: float32, filter: float32, bias: float32}
+    outputs: {output: float32}
+  conv_f16:
+    params: HctConvFloatParams
+    inputs: {input: float16, filter: float16, bias: float16}
+    outputs: {output: float16}
+  depthwise_conv_s8:
+    params: HctConvParams
+    inputs: {input: int8, filter: int8, bias: int32, multiplier: int32, shift: int32}
+    outputs: {output: int8}
+  depthwise_conv_s16:
+    params: HctConvParams
+    inputs: {input: int16, filter: int8, bias: int64, multiplier: int32, shift: int32}
+    outputs: {output: int16}
+  depthwise_conv_f32:
+    params: HctConvFloatParams
+    inputs: {input: float32, filter: float32, bias: float32}
+    outputs: {output: float32}
+  depthwise_conv_f16:
+    params: HctConvFloatParams
+    inputs: {input: float16, filter: float16, bias: float16}
+    outputs: {output: float16}
+  transpose_conv_s8:
+    params: HctConvParams
+    inputs: {input: int8, filter: int8, bias: int32, multiplier: int32, shift: int32}
+    outputs: {output: int8}
+  transpose_conv_s16:
+    params: HctConvParams
+    inputs: {input: int16, filter: int8, bias: int64, multiplier: int32, shift: int32}
+    outputs: {output: int16}
+  transpose_conv_f32:
+    params: HctConvFloatParams
+    inputs: {input: float32, filter: float32, bias: float32}
+    outputs: {output: float32}
+  transpose_conv_f16:
+    params: HctConvFloatParams
+    inputs: {input: float16, filter: float16, bias: float16}
+    outputs: {output: float16}
+  fully_connected_s8:
+    params: HctFullyConnectedParams
+    inputs: {input: int8, filter: int8, bias: int32, multiplier: int32, shift: int32}
+    outputs: {output: int8}
+  fully_connected_s16:
+    params: HctFullyConnectedParams
+    inputs: {input: int16, filter: int8, bias: int64, multiplier: int32, shift: int32}
+    outputs: {output: int16}
+  fully_connected_f32:
+    params: HctFloatActivationParams
+    inputs: {input: float32, filter: float32, bias: float32}
+    outputs: {output: float32}
+  fully_connected_f16:
+    params: HctFloatActivationParams
+    inputs: {input: float16, filter: float16, bias: float16}
+    outputs: {output: float16}
+  batch_matmul_s8:
+    params: HctBatchMatMulParams
+    inputs: {lhs: int8, rhs: int8}
+    outputs: {output: int8}
+  batch_matmul_s16:
+    params: HctBatchMatMulParams
+    inputs: {lhs: int16, rhs: int16}
+    outputs: {output: int16}
+  batch_matmul_f32:
+    params: HctBatchMatMulFloatParams
+    inputs: {lhs: float32, rhs: float32}
+    outputs: {output: float32}
+  batch_matmul_f16:
+    params: HctBatchMatMulFloatParams
+    inputs: {lhs: float16, rhs: float16}
+    outputs: {output: float16}
+  avg_pool_s8:
+    params: HctPoolParams
+    inputs: {input: int8}
+    outputs: {output: int8}
+  avg_pool_s16:
+    params: HctPoolParams
+    inputs: {input: int16}
+    outputs: {output: int16}
+  avg_pool_f32:
+    params: HctPoolFloatParams
+    inputs: {input: float32}
+    outputs: {output: float32}
+  avg_pool_f16:
+    params: HctPoolFloatParams
+    inputs: {input: float16}
+    outputs: {output: float16}
+  max_pool_s8:
+    params: HctPoolParams
+    inputs: {input: int8}
+    outputs: {output: int8}
+  max_pool_s16:
+    params: HctPoolParams
+    inputs: {input: int16}
+    outputs: {output: int16}
+  max_pool_f32:
+    params: HctPoolFloatParams
+    inputs: {input: float32}
+    outputs: {output: float32}
+  max_pool_f16:
+    params: HctPoolFloatParams
+    inputs: {input: float16}
+    outputs: {output: float16}
+  mean_s8:
+    params: HctMeanQuantizedParams
+    inputs: {input: int8}
+    outputs: {output: int8}
+  mean_s16:
+    params: HctMeanQuantizedParams
+    inputs: {input: int16}
+    outputs: {output: int16}
+  mean_f32:
+    params: HctAxisMaskParams
+    inputs: {input: float32}
+    outputs: {output: float32}
+  mean_f16:
+    params: HctAxisMaskParams
+    inputs: {input: float16}
+    outputs: {output: float16}
+  reduce_sum_f32:
+    params: HctAxisMaskParams
+    inputs: {input: float32}
+    outputs: {output: float32}
+  reduce_sum_f16:
+    params: HctAxisMaskParams
+    inputs: {input: float16}
+    outputs: {output: float16}
+  reduce_max_f32:
+    params: HctAxisMaskParams
+    inputs: {input: float32}
+    outputs: {output: float32}
+  reduce_max_f16:
+    params: HctAxisMaskParams
+    inputs: {input: float16}
+    outputs: {output: float16}
+  reduce_min_f32:
+    params: HctAxisMaskParams
+    inputs: {input: float32}
+    outputs: {output: float32}
+  reduce_min_f16:
+    params: HctAxisMaskParams
+    inputs: {input: float16}
+    outputs: {output: float16}
+  reduce_max_s8:
+    params: HctAxisMaskParams
+    inputs: {input: int8}
+    outputs: {output: int8}
+  reduce_max_s16:
+    params: HctAxisMaskParams
+    inputs: {input: int16}
+    outputs: {output: int16}
+  reduce_min_s8:
+    params: HctAxisMaskParams
+    inputs: {input: int8}
+    outputs: {output: int8}
+  reduce_min_s16:
+    params: HctAxisMaskParams
+    inputs: {input: int16}
+    outputs: {output: int16}
+  arg_max_s8:
+    params: HctAxisParams
+    inputs: {input: int8}
+    outputs: {output: int32}
+  arg_max_s16:
+    params: HctAxisParams
+    inputs: {input: int16}
+    outputs: {output: int32}
+  arg_max_f32:
+    params: HctAxisParams
+    inputs: {input: float32}
+    outputs: {output: int32}
+  arg_max_f16:
+    params: HctAxisParams
+    inputs: {input: float16}
+    outputs: {output: int32}
+  arg_min_s8:
+    params: HctAxisParams
+    inputs: {input: int8}
+    outputs: {output: int32}
+  arg_min_s16:
+    params: HctAxisParams
+    inputs: {input: int16}
+    outputs: {output: int32}
+  arg_min_f32:
+    params: HctAxisParams
+    inputs: {input: float32}
+    outputs: {output: int32}
+  arg_min_f16:
+    params: HctAxisParams
+    inputs: {input: float16}
+    outputs: {output: int32}

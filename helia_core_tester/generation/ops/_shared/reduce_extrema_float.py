@@ -1,12 +1,10 @@
-"""Raw-bit fixtures for the float reduce-extrema contract (ns-cmsis-nn#498)."""
+"""Raw-bit fixtures for the float reduce-extrema contract (ns-cmsis-nn#498); goldens from the C
+reference's reduce_max/min_f32/f16 entries, which implement that contract."""
 
 from pathlib import Path
 
 import numpy as np
 
-from helia_core_tester.generation.ops._shared.reduce_extrema_reference import (
-    reduce_extrema_reference,
-)
 from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
 
@@ -29,7 +27,14 @@ def generate_reduce_extrema_float(
             "input_bits must contain unsigned integers of the element width"
         )
     bits = np.asarray(raw, dtype=word).reshape(shape)
-    expected = reduce_extrema_reference(bits.view(dtype), axes, kind).view(word)
+    from helia_core_tester.generation.reference.call import ReferenceCall
+
+    norm = sorted({int(a) % len(shape) for a in axes})
+    golden = op.reference_golden(ReferenceCall(
+        f"reduce_{kind}_{'f16' if half else 'f32'}", {"axis_mask": sum(1 << a for a in norm)},
+        {"input": np.ascontiguousarray(bits.view(dtype))},
+        {"output": tuple(1 if i in norm else n for i, n in enumerate(shape))}))
+    expected = np.ascontiguousarray(golden).view(word)
     builder = TemplateContextBuilder()
     context = {
         "name": op.desc["name"],

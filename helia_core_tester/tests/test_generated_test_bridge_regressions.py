@@ -95,8 +95,26 @@ def test_depthwise_batch_case_rejected_without_truncation(tmp_path: Path) -> Non
         _bridge(tmp_path, "ConvolutionFunctions", "depthwise_conv_mult_batches_s8")
 
 
-def test_pool_batch_padded_case_truncates_to_header_dims(tmp_path: Path) -> None:
-    manifest = _bridge(tmp_path, "PoolingFunctions", "avg_pool_valid_pool1x1_stride1x2_s16")
+def _generated(tmp_path: Path, family: str, desc: dict) -> GeneratedTestCase:
+    generate_test(desc, str(tmp_path / "artifacts" / "generated_tests" / "int" / "cortex-m55"), seed=Config.seed)
+    (case,) = discover_generated_tests(tmp_path, family=family, name_filter=desc["name"])
+    return case
+
+
+def test_pool_case_keeps_its_declared_batch_and_bridges_at_batch_one(tmp_path: Path) -> None:
+    from copy import deepcopy
+
+    desc = next(d for d in load_all_descriptors(str(PROJECT_ROOT / "assets" / "descriptors"))
+                if d["name"] == "avg_pool_valid_pool1x1_stride1x2_s16")
+    assert desc["input_shape"][0] == 3
+    with pytest.raises(UnsupportedGeneratedTestError, match="batch size 3 > 1"):
+        build_case_bundle_from_generated_test(PROJECT_ROOT, _generated(tmp_path / "b3", "PoolingFunctions", desc),
+                                              output_root=tmp_path / "b3" / "bundle", require_fvp_pass=False)
+    single = deepcopy(desc)
+    single["input_shape"][0] = 1
+    bundle = build_case_bundle_from_generated_test(PROJECT_ROOT, _generated(tmp_path / "b1", "PoolingFunctions", single),
+                                                   output_root=tmp_path / "b1" / "bundle", require_fvp_pass=False)
+    manifest = load_case_bundle(bundle.manifest_path).manifest
     blobs = {blob["role"]: blob for blob in manifest["blob_roles"]}
     assert blobs["input_0"]["dimensions"] == [1, 1, 9, 2]
     assert blobs["input_0"]["byte_length"] == 36

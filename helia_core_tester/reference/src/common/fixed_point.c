@@ -49,6 +49,14 @@ int32_t hct_cmsis_requantize(int32_t x, int32_t multiplier, int32_t shift)
     return hct_rounding_divide_by_pot((int32_t)high, shift > 0 ? 0 : -shift);
 }
 
+int64_t hct_multiply_by_quantized_multiplier_64(int64_t x, int32_t multiplier, int32_t shift)
+{
+    const int32_t reduced = multiplier < 0x7FFF0000 ? (multiplier + (1 << 15)) >> 16 : 0x7FFF;
+    const int32_t total_shift = 15 - shift;
+    const int64_t round = (int64_t)1 << (total_shift - 1);
+    return (x * reduced + round) >> total_shift;
+}
+
 int32_t hct_quantize_multiplier_impl(double real, int32_t *multiplier, int32_t *shift)
 {
     if (multiplier == NULL || shift == NULL)

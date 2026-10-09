@@ -43,13 +43,13 @@ static const cmsis_nn_dw_conv_params_f16 depthwise_conv_float_default_f16_dw_con
 
 // Weights
 static const float16_t depthwise_conv_float_default_f16_weights[] = {
-    (float16_t)0.197265625f, (float16_t)0.385253906f, (float16_t)-0.24230957f, (float16_t)0.233520508f, (float16_t)-0.065429688f, (float16_t)-0.235351562f, (float16_t)-0.025680542f, (float16_t)0.3984375f, (float16_t)0.390625f, (float16_t)-0.230957031f, (float16_t)-0.018234253f, (float16_t)0.057800293f, (float16_t)-0.161499023f, (float16_t)0.253417969f, (float16_t)-0.067626953f, (float16_t)-0.1875f,
-    (float16_t)0.096557617f, (float16_t)-0.042144775f, (float16_t)0.268798828f, (float16_t)0.212036133f, (float16_t)0.350585938f, (float16_t)0.238525391f, (float16_t)0.145874023f, (float16_t)-0.159790039f, (float16_t)0.355712891f, (float16_t)0.10333252f, (float16_t)0.084472656f
+    (float16_t)0.316650391f, (float16_t)0.139648438f, (float16_t)-0.152099609f, (float16_t)0.1796875f, (float16_t)0.2421875f, (float16_t)-0.284912109f, (float16_t)0.262207031f, (float16_t)-0.04196167f, (float16_t)-0.3125f, (float16_t)-0.313720703f, (float16_t)0.283447266f, (float16_t)0.390136719f, (float16_t)-0.024581909f, (float16_t)0.30078125f, (float16_t)-0.282470703f, (float16_t)0.401611328f,
+    (float16_t)-0.04498291f, (float16_t)-0.374511719f, (float16_t)-0.285888672f, (float16_t)-0.145263672f, (float16_t)-0.181518555f, (float16_t)0.158203125f, (float16_t)-0.257324219f, (float16_t)-0.026580811f, (float16_t)0.388183594f, (float16_t)-0.043426514f, (float16_t)-0.170288086f
 };
 
 // Biases
 static const float16_t depthwise_conv_float_default_f16_biases[] = {
-    (float16_t)-0.842773438f, (float16_t)-0.380371094f, (float16_t)0.952148438f
+    (float16_t)-0.305419922f, (float16_t)-0.482421875f, (float16_t)0.616210938f
 };
 
 // Input data (for testing)
@@ -65,13 +65,13 @@ static const float16_t depthwise_conv_float_default_f16_input[] = {
 
 // Expected output (golden)
 static const float16_t depthwise_conv_float_default_f16_expected_output[] = {
-    (float16_t)-0.489990234f, (float16_t)-0.138183594f, (float16_t)0.726074219f, (float16_t)-0.689941406f, (float16_t)-0.115722656f, (float16_t)1.359375f, (float16_t)-0.678710938f, (float16_t)-0.177978516f, (float16_t)0.90234375f, (float16_t)-0.273193359f, (float16_t)-0.618164062f, (float16_t)0.781738281f, (float16_t)-0.505371094f, (float16_t)-0.260986328f, (float16_t)1.221679688f, (float16_t)-0.522460938f,
-    (float16_t)-0.294921875f, (float16_t)0.684570312f, (float16_t)-1.244140625f, (float16_t)0.049346924f, (float16_t)1.21875f, (float16_t)-1.03125f, (float16_t)0.130859375f, (float16_t)0.550292969f, (float16_t)-1.276367188f, (float16_t)-0.696289062f, (float16_t)0.534667969f, (float16_t)-1.329101562f, (float16_t)-0.139282227f, (float16_t)1.668945312f, (float16_t)-1.263671875f, (float16_t)-0.380859375f,
-    (float16_t)1.44140625f, (float16_t)-1.166015625f, (float16_t)-0.534179688f, (float16_t)0.229614258f, (float16_t)-0.848144531f, (float16_t)0.056945801f, (float16_t)0.55859375f, (float16_t)-0.489257812f, (float16_t)-1.1328125f, (float16_t)0.808105469f, (float16_t)-0.821289062f, (float16_t)0.215698242f, (float16_t)1.16015625f, (float16_t)-0.801757812f, (float16_t)-0.606933594f, (float16_t)0.856933594f,
-    (float16_t)-0.476318359f, (float16_t)-0.395263672f, (float16_t)1.331054688f, (float16_t)-0.728027344f, (float16_t)-0.357421875f, (float16_t)0.770019531f, (float16_t)-0.641113281f, (float16_t)-0.904785156f, (float16_t)1.360351562f, (float16_t)-0.978027344f, (float16_t)-0.210449219f, (float16_t)1.236328125f, (float16_t)-1.225585938f, (float16_t)-0.50390625f, (float16_t)0.581054688f, (float16_t)-1.1640625f,
-    (float16_t)-0.604003906f, (float16_t)0.294677734f, (float16_t)-1.0703125f, (float16_t)-0.618164062f, (float16_t)1.633789062f, (float16_t)-0.91015625f, (float16_t)-0.575683594f, (float16_t)1.075195312f, (float16_t)-0.571777344f, (float16_t)-0.308105469f, (float16_t)1.041992188f, (float16_t)-0.651855469f, (float16_t)-0.277587891f, (float16_t)1.129882812f, (float16_t)-1.126953125f, (float16_t)-0.422607422f,
-    (float16_t)1.40625f, (float16_t)-0.743652344f, (float16_t)-0.424072266f, (float16_t)0.276855469f, (float16_t)-1.01953125f, (float16_t)-1.15234375f, (float16_t)1.072265625f, (float16_t)-0.699707031f, (float16_t)-0.255859375f, (float16_t)1.143554688f, (float16_t)-0.875976562f, (float16_t)-0.230957031f, (float16_t)1.0f, (float16_t)-1.083984375f, (float16_t)-0.250976562f, (float16_t)0.834960938f,
-    (float16_t)-0.763671875f, (float16_t)-0.610839844f, (float16_t)1.411132812f, (float16_t)-0.713378906f, (float16_t)-0.834472656f, (float16_t)1.099609375f, (float16_t)-0.914550781f, (float16_t)-0.245239258f, (float16_t)0.673339844f, (float16_t)-0.983398438f, (float16_t)-0.884765625f, (float16_t)0.734863281f
+    (float16_t)0.155517578f, (float16_t)-0.404052734f, (float16_t)0.478515625f, (float16_t)-0.918945312f, (float16_t)-0.336425781f, (float16_t)0.46484375f, (float16_t)-0.215576172f, (float16_t)-0.045410156f, (float16_t)1.044921875f, (float16_t)0.342773438f, (float16_t)-0.59765625f, (float16_t)0.541503906f, (float16_t)-0.3046875f, (float16_t)-0.844726562f, (float16_t)-0.293945312f, (float16_t)-0.347167969f,
+    (float16_t)-0.20324707f, (float16_t)0.698730469f, (float16_t)-0.282714844f, (float16_t)-0.735351562f, (float16_t)0.340820312f, (float16_t)-1.7890625f, (float16_t)0.023651123f, (float16_t)1.064453125f, (float16_t)0.249389648f, (float16_t)-0.009170532f, (float16_t)0.269287109f, (float16_t)-0.140014648f, (float16_t)-0.454101562f, (float16_t)0.51953125f, (float16_t)-0.584960938f, (float16_t)-0.453125f,
+    (float16_t)0.453613281f, (float16_t)-0.47265625f, (float16_t)-0.659667969f, (float16_t)0.050292969f, (float16_t)-0.577148438f, (float16_t)-0.045806885f, (float16_t)0.692382812f, (float16_t)-0.801269531f, (float16_t)6.184577942e-04f, (float16_t)-0.295166016f, (float16_t)0.59375f, (float16_t)-0.994628906f, (float16_t)0.26953125f, (float16_t)-0.773925781f, (float16_t)-0.696777344f, (float16_t)1.080078125f,
+    (float16_t)0.166381836f, (float16_t)-0.212036133f, (float16_t)0.228881836f, (float16_t)0.523925781f, (float16_t)-0.204956055f, (float16_t)0.193603516f, (float16_t)-0.741210938f, (float16_t)-0.416992188f, (float16_t)0.937988281f, (float16_t)-0.488037109f, (float16_t)-0.673339844f, (float16_t)0.282958984f, (float16_t)-0.1875f, (float16_t)-0.514160156f, (float16_t)-0.303955078f, (float16_t)-1.362304688f,
+    (float16_t)-0.416748047f, (float16_t)0.973144531f, (float16_t)-0.136962891f, (float16_t)-0.237426758f, (float16_t)0.766601562f, (float16_t)0.075073242f, (float16_t)-0.627929688f, (float16_t)0.246459961f, (float16_t)-0.540527344f, (float16_t)-0.913085938f, (float16_t)0.809570312f, (float16_t)-0.652832031f, (float16_t)-0.985351562f, (float16_t)0.504394531f, (float16_t)-0.510742188f, (float16_t)-0.372314453f,
+    (float16_t)-0.221557617f, (float16_t)-0.909667969f, (float16_t)-0.266357422f, (float16_t)-0.345458984f, (float16_t)0.274902344f, (float16_t)-0.791503906f, (float16_t)0.352783203f, (float16_t)-0.109863281f, (float16_t)-0.682128906f, (float16_t)0.737304688f, (float16_t)-0.502441406f, (float16_t)-0.483398438f, (float16_t)0.613769531f, (float16_t)-0.603515625f, (float16_t)-0.269775391f, (float16_t)0.589355469f,
+    (float16_t)-0.742675781f, (float16_t)-0.149169922f, (float16_t)0.680175781f, (float16_t)-0.694824219f, (float16_t)-0.719726562f, (float16_t)-0.117492676f, (float16_t)0.113098145f, (float16_t)-0.940429688f, (float16_t)0.011016846f, (float16_t)-0.46875f, (float16_t)-0.58203125f, (float16_t)0.443115234f
 };
 
 #endif

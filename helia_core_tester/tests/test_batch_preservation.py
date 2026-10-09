@@ -1,10 +1,10 @@
-"""Declared batches must reach both the model and the emitted kernel call."""
+"""Declared batches must reach both the reference call and the emitted kernel call."""
 
 from copy import deepcopy
+import json
 from pathlib import Path
 import re
 
-from ai_edge_litert.interpreter import Interpreter
 import numpy as np
 import pytest
 import yaml
@@ -66,16 +66,16 @@ for desc in yaml.safe_load_all(
 def test_declared_batches_reach_emitted_data(tmp_path, family, desc):
     generate_test(desc, str(tmp_path), seed=500)
     case = tmp_path / family / desc["name"]
-    interpreter = Interpreter(model_path=str(case / f'{desc["name"]}.tflite'))
-    interpreter.allocate_tensors()
+    record = json.loads((case / f'{desc["name"]}.reference.json').read_text())
     shapes = (
         [desc["input_shape"]]
         if "input_shape" in desc
         else [desc["input_1_shape"], desc["input_2_shape"]]
     )
-    assert [d["shape"].tolist() for d in interpreter.get_input_details()] == shapes
     batch = shapes[0][0]
-    output_shape = interpreter.get_output_details()[0]["shape"].tolist()
+    names = ["input"] if len(shapes) == 1 else ["lhs", "rhs"]
+    assert all(record["inputs"][name]["shape"][0] == batch for name in names)
+    output_shape = record["outputs"]["output"]
     assert output_shape[0] == batch
 
     header = "\n".join(p.read_text() for p in (case / "includes").glob("*.h"))
@@ -206,75 +206,3 @@ def test_quantized_bmm_bridge_singleton_and_dimension_guards(
             ROOT, generated, output_root=output_root, require_fvp_pass=False
         )
     assert not output_root.exists()
-
-
-@pytest.mark.parametrize("input_count", [1, 2])
-def test_single_batch_retains_original_converter(monkeypatch, input_count):
-    from helia_core_tester.generation.ops._shared import fixed_batch
-
-    tf = fixed_batch.tf
-    inputs = [tf.keras.Input(batch_shape=(1, 3)) for _ in range(input_count)]
-    output = tf.keras.layers.Add()(inputs) if input_count > 1 else inputs[0] * 2
-    model = tf.keras.Model(inputs, output)
-    converter = object()
-    seen = []
-    monkeypatch.setattr(
-        fixed_batch.tf.lite.TFLiteConverter,
-        "from_keras_model",
-        lambda value: seen.append(value) or converter,
-    )
-    assert (
-        fixed_batch.converter_for_batched_model(model, [[1, 3]] * input_count)
-        is converter
-    )
-    assert seen == [model]
-
-
-@pytest.mark.parametrize("shape_count", [0, 1, 3])
-def test_single_batch_rejects_mismatched_shape_count(monkeypatch, shape_count):
-    from helia_core_tester.generation.ops._shared import fixed_batch
-
-    tf = fixed_batch.tf
-    inputs = [tf.keras.Input(batch_shape=(1, 3)) for _ in range(2)]
-    model = tf.keras.Model(inputs, tf.keras.layers.Add()(inputs))
-    seen = []
-    monkeypatch.setattr(
-        tf.lite.TFLiteConverter, "from_keras_model", lambda value: seen.append(value)
-    )
-    with pytest.raises(
-        ValueError, match="Input shape count must match model input count"
-    ):
-        fixed_batch.converter_for_batched_model(model, [[1, 3]] * shape_count)
-    assert seen == []
-
-
-@pytest.mark.parametrize("input_count", [1, 2])
-def test_batched_converter_accepts_legacy_zip(monkeypatch, input_count):
-    from helia_core_tester.generation.ops._shared import fixed_batch
-
-    # Python 3.8/3.9 zip accepts no keyword arguments.
-    monkeypatch.setattr(fixed_batch, "zip", lambda *values: zip(*values), raising=False)
-    tf = fixed_batch.tf
-    inputs = [tf.keras.Input(batch_shape=(2, 3)) for _ in range(input_count)]
-    output = tf.keras.layers.Add()(inputs) if input_count > 1 else inputs[0] * 2
-    model = tf.keras.Model(inputs, output)
-    converter = fixed_batch.converter_for_batched_model(model, [[2, 3]] * input_count)
-    interpreter = Interpreter(model_content=converter.convert())
-    interpreter.allocate_tensors()
-    assert [item["shape"].tolist() for item in interpreter.get_input_details()] == [
-        [2, 3]
-    ] * input_count
-    assert interpreter.get_output_details()[0]["shape"].tolist() == [2, 3]
-
-
-@pytest.mark.parametrize("shape_count", [1, 3])
-def test_batched_converter_rejects_mismatched_shape_count(shape_count):
-    from helia_core_tester.generation.ops._shared import fixed_batch
-
-    tf = fixed_batch.tf
-    inputs = [tf.keras.Input(batch_shape=(2, 3)) for _ in range(2)]
-    model = tf.keras.Model(inputs, tf.keras.layers.Add()(inputs))
-    with pytest.raises(
-        ValueError, match="Input shape count must match model input count"
-    ):
-        fixed_batch.converter_for_batched_model(model, [[2, 3]] * shape_count)

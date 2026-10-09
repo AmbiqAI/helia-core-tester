@@ -69,6 +69,11 @@ int32_t hct_multiply_by_quantized_multiplier(int32_t x, int32_t multiplier, int3
  * then a rounding right shift. shift in [-31, 30]; a positive shift wraps as int32 math does. */
 int32_t hct_cmsis_requantize(int32_t x, int32_t multiplier, int32_t shift);
 
+/* MultiplyByQuantizedMultiplier(int64_t, ...): the multiplier reduced to 16 bits, one
+ * rounding shift. shift in [-31, 7], |x| < 2^47; TFLite requires the result to fit int32, which
+ * the caller checks. */
+int64_t hct_multiply_by_quantized_multiplier_64(int64_t x, int32_t multiplier, int32_t shift);
+
 /* QuantizeMultiplier: real in [0, inf) -> (multiplier in [2^30, 2^31) or 0, shift). */
 int32_t hct_quantize_multiplier_impl(double real, int32_t *multiplier, int32_t *shift);
 
@@ -146,6 +151,11 @@ static inline void hct_store_i32(HctTensor *t, int64_t i, int32_t v)
     }
 }
 
+static inline int64_t hct_load_i64(const HctTensor *t, int64_t i)
+{
+    return t->dtype == HCT_INT64 ? ((const int64_t *)t->data)[i] : hct_load_i32(t, i);
+}
+
 /* float32 element, or a binary16 element widened exactly. */
 static inline float hct_load_f32(const HctTensor *t, int64_t i)
 {
@@ -191,6 +201,57 @@ static inline int32_t hct_lut_lookup_s16(int32_t value, const int16_t *lut)
     const int32_t base = lut[index];
     const int32_t slope = lut[index + 1] - lut[index];
     return (int16_t)(base + ((slope * offset + 64) >> 7));
+}
+
+/* Rounds a binary64 value once to the tensor's float type (binary16 directly, not through
+ * binary32), then applies [lo, hi] as TFLite's ActivationFunctionWithMinMax does (NaN passes).
+ * Clamping after rounding equals rounding after clamping: the bounds are representable. */
+static inline void hct_store_rounded(HctTensor *t, int64_t i, double v, float lo, float hi)
+{
+    if (t->dtype == HCT_FLOAT16)
+    {
+        const float r = hct_f16_to_f32(hct_f64_to_f16(v));
+        ((uint16_t *)t->data)[i] = hct_f32_to_f16(hct_clamp_f32(r, hct_round_f16(lo), hct_round_f16(hi)));
+    }
+    else
+    {
+        ((float *)t->data)[i] = hct_clamp_f32((float)v, lo, hi);
+    }
+}
+
+/* ---- exact sums ---- */
+
+/* 22 limbs from 2^-352: every binary32 x binary32 product (lowest bit >= 2^-350, below 2^256)
+ * and sums of up to HCT_MAX_ELEMENTS of them, with room for the sign. */
+#define HCT_XSUM_LIMBS 22
+#define HCT_XSUM_BASE (-352)
+
+typedef struct
+{
+    int64_t limb[HCT_XSUM_LIMBS];
+    int32_t pending;
+    int32_t nan, pos_inf, neg_inf, out_of_range;
+} HctXsum;
+
+void hct_xsum_init(HctXsum *x);
+
+/* Adds v exactly. Non-finite values are tracked as IEEE addition would combine them; a finite v
+ * outside the accumulator's range marks it, and hct_xsum_round then fails with HCT_E_PARAM. */
+void hct_xsum_add(HctXsum *x, double v);
+void hct_xsum_add_product(HctXsum *x, float a, float b);
+
+/* The exact sum divided by `divisor` (1..HCT_MAX_ELEMENTS), rounded once to nearest even in
+ * `dtype` (HCT_FLOAT32 or HCT_FLOAT16; overflow to infinity), returned as a binary64 that holds
+ * that value exactly. An exact zero is +0. */
+int32_t hct_xsum_round(const HctXsum *x, int64_t divisor, int32_t dtype, double *out);
+
+/* Stores the rounded sum (divided by `divisor`) into a float tensor element, then clamps. */
+static inline int32_t hct_store_xsum(HctTensor *t, int64_t i, const HctXsum *x, int64_t divisor, float lo, float hi)
+{
+    double v = 0.0;
+    HCT_TRY(hct_xsum_round(x, divisor, t->dtype, &v));
+    hct_store_rounded(t, i, v, lo, hi);
+    return HCT_OK;
 }
 
 /* Checks a two-input, one-output broadcasting entry and sets up its iteration. */

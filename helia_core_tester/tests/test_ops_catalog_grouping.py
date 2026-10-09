@@ -137,8 +137,6 @@ def test_ops_use_grouped_template_paths_directly() -> None:
 def test_selected_ops_define_local_litert_wrappers() -> None:
     ops_root = _repo_root() / "helia_core_tester" / "generation" / "ops" / "BasicMathFunctions"
     expected_wrappers = {
-        "argmax.py": "build_argmax_op",
-        "argmin.py": "build_argmin_op",
     }
 
     for filename, wrapper_name in expected_wrappers.items():
@@ -174,6 +172,19 @@ REFERENCE_BACKED_SOURCES = (
     "_shared/relu_base.py",
     "_shared/hard_swish_base.py",
     "_shared/tanh_logistic_base.py",
+    "ConvolutionFunctions/convolve.py",
+    "ConvolutionFunctions/depthwise_conv.py",
+    "ConvolutionFunctions/transpose_conv.py",
+    "FullyConnectedFunctions/fully_connected.py",
+    "FullyConnectedFunctions/batch_matmul.py",
+    "BasicMathFunctions/mean.py",
+    "BasicMathFunctions/reduce_sum.py",
+    "BasicMathFunctions/reduce_max.py",
+    "BasicMathFunctions/reduce_min.py",
+    "BasicMathFunctions/argmax.py",
+    "BasicMathFunctions/argmin.py",
+    "NNSupportFunctions/batch_norm.py",
+    "_shared/pool_base.py",
 )
 
 # Thin subclasses of a reference-backed base above.
@@ -184,6 +195,8 @@ REFERENCE_BACKED_WRAPPERS = (
     "ActivationFunctions/hard_swish_precise.py",
     "ActivationFunctions/tanh.py",
     "ActivationFunctions/logistic.py",
+    "PoolingFunctions/avg_pool.py",
+    "PoolingFunctions/max_pool.py",
 )
 
 

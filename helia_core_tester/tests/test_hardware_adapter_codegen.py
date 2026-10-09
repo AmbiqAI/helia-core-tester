@@ -310,8 +310,6 @@ def test_s8_mve_fully_connected_bridges_the_generated_bias(tmp_path: Path) -> No
     case_dir = tmp_path / case_name
     case_dir.mkdir()
     op = OpFullyConnected(descriptor, seed=1, target_cpu="cortex-m55")
-    model = op.build_keras_model() if op.needs_keras_model() else None
-    op.convert_to_tflite(model, str(case_dir / f"{case_name}.tflite"), 1)
     op.generate_c_files(case_dir)
     # The bridge reads (and hashes) the descriptor the generation pipeline drops next to
     # the sources, so mirror that layout rather than the in-memory descriptor alone.

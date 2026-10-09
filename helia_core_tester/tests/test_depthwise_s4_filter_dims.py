@@ -1,4 +1,4 @@
-"""s4 depthwise headers carry the model's kernel height and width.
+"""s4 depthwise headers carry the reference filter's kernel height and width.
 
 s4 cases take their filter shape from the descriptor, [H, W, I, M]. A kernel height of 1
 must not be mistaken for the leading 1 of the TFLite layout [1, H, W, C].
@@ -6,6 +6,7 @@ must not be mistaken for the leading 1 of the TFLite layout [1, H, W, C].
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -25,21 +26,17 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
         "depthwise_conv_opt_s4",
     ],
 )
-def test_filter_dims_match_the_model(name: str, tmp_path: Path) -> None:
+def test_filter_dims_match_the_reference_filter(name: str, tmp_path: Path) -> None:
     desc = next(d for d in load_all_descriptors(str(_PROJECT_ROOT / "assets" / "descriptors")) if d["name"] == name)
     generate_test(desc, str(tmp_path))
-    case_dir = next(p.parent for p in tmp_path.rglob(f"{name}.tflite"))
+    case_dir = next(p.parent for p in tmp_path.rglob(f"{name}.reference.json"))
     header = "".join(p.read_text() for p in (case_dir / "includes").glob("*.h"))
     dims = re.search(r"_filter_dims\b[^{]*\{([^}]*)\}", header).group(1)
     emitted = {k: int(v) for k, v in re.findall(r"\.(\w)\s*=\s*(\d+)", dims)}
 
-    from ai_edge_litert.interpreter import Interpreter
-
-    interpreter = Interpreter(model_path=str(case_dir / f"{name}.tflite"))
+    record = json.loads((case_dir / f"{name}.reference.json").read_text())
     kernel_h, kernel_w = desc["filter_shape"][:2]
-    filters = [d for d in interpreter.get_tensor_details() if len(d["shape"]) == 4 and d["shape"][0] == 1 and d["index"] not in (
-        interpreter.get_input_details()[0]["index"], interpreter.get_output_details()[0]["index"])]
-    assert len(filters) == 1
-    assert tuple(filters[0]["shape"][1:3]) == (kernel_h, kernel_w)
+    filter_shape = record["inputs"]["filter"]["shape"]
+    assert filter_shape[0] == 1 and tuple(filter_shape[1:3]) == (kernel_h, kernel_w)
 
     assert (emitted["h"], emitted["w"]) == (kernel_h, kernel_w)
