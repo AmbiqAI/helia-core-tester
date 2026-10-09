@@ -203,3 +203,17 @@ def descriptor_quant(entry: Optional[dict], dtype: str) -> Optional[TensorQuant]
 
 def as_tuple(values: Sequence[float]) -> Tuple[float, ...]:
     return tuple(float(v) for v in values)
+
+
+def pack_int4(values: np.ndarray) -> np.ndarray:
+    """Pack int4 values (int8 storage, -8..7) two per byte, low nibble first: the
+    layout both TFLite and CMSIS-NN use for s4 weights. An odd count pads the
+    last high nibble with zero."""
+    flat = np.asarray(values, dtype=np.int8).ravel()
+    if flat.size == 0 or np.any(flat < -8) or np.any(flat > 7):
+        raise ValueError("int4 values must be non-empty and within -8..7")
+    if flat.size % 2:
+        flat = np.concatenate([flat, np.zeros(1, dtype=np.int8)])
+    lo = flat[0::2].astype(np.uint8) & 0x0F
+    hi = (flat[1::2].astype(np.uint8) & 0x0F) << 4
+    return (lo | hi).astype(np.int8)

@@ -15,7 +15,7 @@ def test_long_patch_over_a_small_input_gets_eight_patch_rows(tmp_path: Path) -> 
     name = "convolve_float_direct_fold_c20_k5_oc5_f16"
     desc = next(d for d in load_all_descriptors(str(_PROJECT_ROOT / "assets" / "descriptors")) if d["name"] == name)
     generate_test(desc, str(tmp_path))
-    case_dir = next(p.parent for p in tmp_path.rglob(f"{name}.tflite"))
+    case_dir = next(p.parent for p in tmp_path.rglob("descriptor.yaml") if p.parent.name == name)
     source = "".join(p.read_text() for p in case_dir.rglob("*.[ch]"))
 
     size = int(re.search(rf"#define {name.upper()}_BUFFER_SIZE_MAX (\d+)", source).group(1))

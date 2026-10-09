@@ -51,6 +51,12 @@ def _bridge(tmp_path: Path, name: str) -> dict[str, object]:
 
 
 def _model_zero_points(case_dir: Path) -> tuple[int, int]:
+    import json
+
+    record_path = case_dir / f"{case_dir.name}.reference.json"
+    if record_path.is_file():
+        quant = json.loads(record_path.read_text())["quant"]
+        return int(quant["input"]["zero_point"]), int(quant["output"]["zero_point"])
     from ai_edge_litert.interpreter import Interpreter
 
     interpreter = Interpreter(model_path=str(case_dir / f"{case_dir.name}.tflite"))

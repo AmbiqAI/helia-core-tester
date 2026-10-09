@@ -25,9 +25,21 @@ def test_transpose_conv_no_bias_case_omits_bias_tensor_dtype(tmp_path: Path) -> 
 
 
 def test_transpose_conv_bias_case_extracts_padding_offsets(tmp_path: Path) -> None:
-    manifest = _bridge(tmp_path, "transpose_conv_same_kernel6x6_stride2x2_bias_s8")
+    manifest = _bridge(tmp_path, "transpose_conv_reverse_same_kernel3x3_stride1x1_bias_s8")
     scalars = manifest["serialized_scalar_parameters"]
     assert scalars["pad_offset_h"] == 0
     assert scalars["pad_offset_w"] == 0
     assert manifest["tensor_dtypes"]["bias"] == "S32"
-    assert manifest["correctness_comparison"] == {"mode": "tolerant_int", "tolerance": 1}
+    # Bit-exact against the reference golden (see dtypes.py).
+    assert manifest["correctness_comparison"] == {"mode": "exact_int"}
+
+
+def test_batched_transpose_conv_case_is_refused_not_truncated(tmp_path: Path) -> None:
+    # The descriptor declares batch 2; the golden now keeps it (the converter used to
+    # collapse it to 1), and the bridge refuses batches rather than truncating them.
+    import pytest
+
+    from helia_core_tester.hardware.generated_test_bridge import UnsupportedGeneratedTestError
+
+    with pytest.raises(UnsupportedGeneratedTestError, match="batch size > 1"):
+        _bridge(tmp_path, "transpose_conv_same_kernel6x6_stride2x2_bias_s8")

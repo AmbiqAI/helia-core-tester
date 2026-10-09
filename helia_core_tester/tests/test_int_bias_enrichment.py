@@ -17,10 +17,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pytest
 
-from helia_core_tester.generation.ops.ConvolutionFunctions import convolve as convolve_module
-from helia_core_tester.generation.ops.ConvolutionFunctions import depthwise_conv as depthwise_module
 from helia_core_tester.generation.io.descriptors import load_all_descriptors
-from helia_core_tester.generation.ops._shared.bias_init import bias_is_hoisted_by_lowering
 from helia_core_tester.generation.ops.ConvolutionFunctions.convolve import OpConvolve
 from helia_core_tester.generation.ops.ConvolutionFunctions.depthwise_conv import OpDepthwiseConv
 from helia_core_tester.generation.ops.FullyConnectedFunctions.fully_connected import OpFullyConnected
@@ -62,8 +59,9 @@ def _generate(name: str, out_dir: Path, target_cpu: str, seed: int = _SEED) -> s
         "DepthwiseConv": OpDepthwiseConv,
     }.get(desc["operator"], OpFullyConnected)
     op = op_cls(desc, seed=seed, target_cpu=target_cpu)
-    model = op.build_keras_model() if op.needs_keras_model() else None
-    op.convert_to_tflite(model, str(out_dir / f"{name}.tflite"), seed)
+    if not op.uses_reference():
+        model = op.build_keras_model() if op.needs_keras_model() else None
+        op.convert_to_tflite(model, str(out_dir / f"{name}.tflite"), seed)
     op.generate_c_files(out_dir)
     return (out_dir / "includes").glob(f"{name}_*.h").__next__().read_text()
 
@@ -125,17 +123,13 @@ def _bias_carrying_int_cases(*, weight_dtype_s4: bool) -> List[str]:
     return names
 
 
-def _dilated_hoisted_bias_cases(operator: Optional[str] = None) -> List[str]:
-    """Names of the cases whose bias the converter hoists out of the conv op.
+def _dilated_bias_cases(operator: Optional[str] = None) -> List[str]:
+    """Integer dilated Convolve/DepthwiseConv cases that carry a bias.
 
-    A quantized dilated Convolve/DepthwiseConv lowers to SpaceToBatchND -> conv
-    -> BatchToSpaceND, leaving a zero placeholder bias on the op the kernel
-    stands in for; ``inject_hoisted_dilation_bias`` writes a real
-    accumulator-scale bias back into it.  Which cases those are is decided by
-    the same ``bias_is_hoisted_by_lowering`` predicate generation gates the
-    injection on, so a descriptor cannot be held here to a rule production does
-    not apply.  S4 cases are excluded on top of it: they are built with LiteRT
-    directly and never reach the converter that does the lowering.
+    The TFLiteConverter lowered these to SpaceToBatchND -> conv -> BatchToSpaceND
+    and stranded the bias outside the conv; the reference kernels run the dilated
+    conv natively, so their bias is the case's own, and these cases hold it to the
+    same detectability floor as every other.
 
     Args:
         operator: Restrict the sweep to one operator name; all of them if None.
@@ -148,20 +142,21 @@ def _dilated_hoisted_bias_cases(operator: Optional[str] = None) -> List[str]:
             continue
         if str(desc.get("weight_dtype", "S8")).upper() == "S4":
             continue
+        if str(desc.get("activation_dtype", "")).upper() not in ("S8", "S16"):
+            continue
         if not desc.get("use_bias", True):
             continue
-        if not bias_is_hoisted_by_lowering(
-            desc.get("dilation", 1),
-            is_float=str(desc.get("activation_dtype", "")).upper() in ("FP32", "FP16"),
-        ):
+        dilation = desc.get("dilation", 1)
+        rates = (dilation,) if isinstance(dilation, (int, float)) else tuple(dilation)
+        if all(int(rate) == 1 for rate in rates):
             continue
         names.append(desc["name"])
-    assert names, "descriptor sweep found no dilated hoisted-bias cases"
+    assert names, "descriptor sweep found no dilated bias cases"
     return names
 
 
-# The per-channel s8 and s16 int64-bias paths are built from a Keras model whose
-# bias comes from SignedMagnitudeUniform, so every channel clears the floor.
+# Reference-golden biases are drawn worth 3..8 output steps per channel
+# (generation/reference/draw.bias_in_output_steps), so every channel clears the floor.
 @pytest.mark.parametrize("case_name", _bias_carrying_int_cases(weight_dtype_s4=False))
 def test_int_bias_is_detectable_on_every_channel(case_name: str, tmp_path: Path) -> None:
     header = _generate(case_name, tmp_path, "cortex-m55")
@@ -287,7 +282,7 @@ def test_s8_fully_connected_bias_reaches_the_kernel_via_the_weight_sum(tmp_path:
 # Every case the lowering strands, Convolve and DepthwiseConv alike: their bias
 # is the injected one, so all of them clear the floor whatever the operator's
 # own Keras initializer does.
-@pytest.mark.parametrize("case_name", _dilated_hoisted_bias_cases())
+@pytest.mark.parametrize("case_name", _dilated_bias_cases())
 def test_dilated_bias_is_detectable_on_every_channel(
     case_name: str, tmp_path: Path
 ) -> None:
@@ -304,33 +299,25 @@ def test_dilated_bias_is_detectable_on_every_channel(
 @pytest.mark.parametrize(
     "case_name",
     ["convolve_2x2_dilation_s8", "convolve_int16xint8_dilation_case_01_s16"]
-    + _dilated_hoisted_bias_cases("DepthwiseConv"),
+    + _dilated_bias_cases("DepthwiseConv"),
 )
-def test_dilated_golden_moves_with_the_injected_bias(
-    case_name: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The golden has to be recomputed from the model the bias was written into.
+def test_dilated_golden_moves_with_the_bias(case_name: str, tmp_path: Path) -> None:
+    """The golden is computed with the bias the kernel is handed.
 
-    A quantized dilated conv lowers to SpaceToBatchND -> Conv2D ->
-    BatchToSpaceND, and both the emitted bias tensor and the golden are read
-    off that CONV_2D. If the injected bias reached the harness without the
-    golden moving with it, every one of these cases would fail on hardware for
-    a kernel that is behaving correctly.
+    Same seed, same input and weights (independent draw streams); only the bias
+    differs. A golden that ignored it would pass a kernel that drops the bias-add.
     """
     with_bias = _generate(case_name, tmp_path / "with_bias", "cortex-m55")
+    desc = dict(_descriptor(case_name), use_bias=False)
+    op_cls = OpDepthwiseConv if desc["operator"] == "DepthwiseConv" else OpConvolve
+    op = op_cls(desc, seed=_SEED, target_cpu="cortex-m55")
+    (tmp_path / "without_bias").mkdir()
+    op.generate_c_files(tmp_path / "without_bias")
+    without_bias = next((tmp_path / "without_bias" / "includes").glob(f"{case_name}_*.h")).read_text()
 
-    # Returning without writing anything is the only way to get the
-    # pre-injection model out of generation: a failed injection is a hard error.
-    op_module = (
-        depthwise_module
-        if _descriptor(case_name)["operator"] == "DepthwiseConv"
-        else convolve_module
-    )
-    monkeypatch.setattr(op_module, "inject_hoisted_dilation_bias", lambda *_: None)
-    without_bias = _generate(case_name, tmp_path / "without_bias", "cortex-m55")
-
-    assert all(bias == 0 for bias in _int_array(without_bias, "biases") or [])
     assert any(bias != 0 for bias in _int_array(with_bias, "biases") or [])
+    assert _int_array(with_bias, "input") == _int_array(without_bias, "input")
+    assert _int_array(with_bias, "weights") == _int_array(without_bias, "weights")
     assert _int_array(with_bias, "expected_output") != _int_array(
         without_bias, "expected_output"
-    ), f"{case_name} golden is unchanged by the injected bias"
+    ), f"{case_name} golden is unchanged by the bias"

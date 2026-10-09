@@ -12,7 +12,6 @@ import math
 import re
 from pathlib import Path
 
-import numpy as np
 import pytest
 
 from helia_core_tester.generation.io.descriptors import load_all_descriptors
@@ -154,26 +153,18 @@ def _q31_multiplier(scale: float) -> int:
 
 
 def test_per_channel_multipliers_come_from_double_precision_scales(tmp_path: Path) -> None:
-    # Channel 3 of this case sits where a float32 effective scale lands exactly on a
-    # Q15 rounding tie, so the s16 kernel's reduced multiplier differs from TFLite's.
+    # A float32 effective scale can land on a Q15 rounding tie, where the s16
+    # kernel's reduced multiplier would then differ from TFLite's double one.
     name = "depthwise_conv_dilated_1d_k7_d8_c24_s16"
     desc = next(d for d in load_all_descriptors(str(_PROJECT_ROOT / "assets" / "descriptors")) if d["name"] == name)
     op = OpDepthwiseConv(desc, seed=500, target_cpu="cortex-m55")
-    tflite_path = tmp_path / f"{name}.tflite"
-    op.convert_to_tflite(op.build_keras_model(), str(tflite_path), 500)
     op.generate_c_files(tmp_path)
     header = next((tmp_path / "includes").glob(f"{name}_*.h")).read_text()
     emitted = [int(v) for v in re.findall(r"-?\d+", re.search(r"_multiplier\[[0-9]*\]\s*=\s*\{([^}]*)\}", header).group(1))]
 
-    from ai_edge_litert.interpreter import Interpreter
-
-    interpreter = Interpreter(model_path=str(tflite_path))
-    details = interpreter.get_tensor_details()
-    weights = next(d for d in details if d["dtype"] == np.int8 and len(d["shape"]) == 4)
-    weight_scales = weights["quantization_parameters"]["scales"]
+    quant = op.reference.quant
+    weight_scales = quant["weights"].scales
     assert len(weight_scales) == 24
-    input_scale = float(interpreter.get_input_details()[0]["quantization_parameters"]["scales"][0])
-    output_scale = float(interpreter.get_output_details()[0]["quantization_parameters"]["scales"][0])
-    expected = [_q31_multiplier(input_scale * float(s) / output_scale) for s in weight_scales]
+    expected = [_q31_multiplier(quant["input"].scale * float(s) / quant["output"].scale) for s in weight_scales]
 
     assert emitted == expected

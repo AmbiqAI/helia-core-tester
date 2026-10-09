@@ -222,9 +222,9 @@ int32_t hct_ref_dwconv_f32(const HctDwConvParams *params,
                            float *output);
 
 /* ---- fully connected (input [..., in], weights [out, in], output [..., out]) ----
- * quant->count == 1 selects the per-tensor kernel, which honours
- * weights_offset; quant->count == out selects the per-channel kernel, which
- * requires weights_offset == 0 (symmetric weights). */
+ * quant->count == 1 selects the per-tensor kernel; quant->count == out the
+ * per-channel one. Both honour weights_offset (the per-channel kernel runs on
+ * weights widened with the offset applied, as CMSIS-NN computes it). */
 int32_t hct_ref_fc_s8(const HctFcParams *params,
                       const HctPerChannelQuant *quant,
                       const HctShape *input_shape,

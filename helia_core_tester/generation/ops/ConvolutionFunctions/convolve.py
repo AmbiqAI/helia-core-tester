@@ -1,19 +1,13 @@
 """Convolve operation implementation."""
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from pathlib import Path
 import os
 import numpy as np
 import tensorflow as tf
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.ops._shared.fixed_batch import converter_for_batched_model
-from helia_core_tester.generation.ops._shared.quant_knobs import clamp_golden, kernel_init, value_range
-from helia_core_tester.generation.ops._shared.bias_init import (
-    HoistedBiasInjectionError,
-    SignedMagnitudeUniform,
-    bias_is_hoisted_by_lowering,
-    inject_hoisted_dilation_bias,
-)
+from helia_core_tester.generation.ops._shared.quant_knobs import kernel_init
 from helia_core_tester.generation.harness import ArgumentPool, ArrayLiteral, Declaration, GuardedBuffer, Provider
 from helia_core_tester.generation.harness.faults import common_fault, null_context_buffer, struct_copy, with_fault
 from helia_core_tester.generation.entry import check_entry_fault, resolve_entry
@@ -252,8 +246,124 @@ class OpConvolve(OperationBase):
 
         return packed.reshape(-1)
 
+    def uses_reference(self) -> bool:
+        # Integer cases take their golden from the TFLM reference kernels; float
+        # cases stay on the converter path until the float suites move.
+        return str(self.desc.get("activation_dtype", "S8")).upper() in {"S8", "S16"}
+
+    def _bias_is_struct(self, kernel_info: Dict[str, Any]):
+        """(bias passed as cmsis_nn_bias_data, contract decl or None): an entry gets the
+        weight-sum pre-pass and the struct-typed bias exactly when its prototype takes
+        them; the wrappers keep the rules they always had."""
+        contract_decl = None
+        if kernel_info.get("entry_family") == "contract":
+            from helia_core_tester.contract import render as contract_render
+            from helia_core_tester.contract.bind import takes
+
+            contract_decl = contract_render.load_current_contracts().require(kernel_info["kernel_fn"])
+            struct = takes(contract_decl, "bias_data") and "cmsis_nn_bias_data" in next(
+                p.c_type for p in contract_decl.params if p.name in ("bias_data", "bias")
+            )
+            return struct, contract_decl
+        return kernel_info["kernel_fn"] == "arm_convolve_wrapper_s16", None
+
+    def _generate_int_reference(self, output_dir: Path, kernel_info: Dict[str, Any], weight_c_type: str) -> None:
+        """Render an s8/s16 (s8 or s4 weights) case whose golden comes from the
+        TFLM reference convolution kernel (native dilation, groups and batch)."""
+        from helia_core_tester.contract.bind import takes
+        from helia_core_tester.generation.reference import weighted
+        from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
+
+        name = self.desc["name"]
+        builder = TemplateContextBuilder()
+        spec = weighted.conv_spec(self.desc)
+        case = weighted.build_weighted_case(
+            self.desc, spec, self.reference_rng("weights"), self.generate_input_data,
+            bias_ctype=kernel_info["bias_c_type"],
+        )
+        self._reference_call = case.call
+        cout, kh, kw, cin = spec.weight_shape
+        input_dims = builder.nhwc_to_cmsis_dims(spec.input_shape)
+        output_dims = builder.nhwc_to_cmsis_dims(spec.output_shape)
+        filter_dims = {"n": cout, "h": kh, "w": kw, "c": cin}
+        conv_params = builder.build_conv_params(
+            self.desc, spec.input_shape, (kh, kw), spec.output_shape,
+            {"zero_point": case.input_quant.zero_point}, {"zero_point": case.output_quant.zero_point},
+        )
+        conv_params["activation_min"], conv_params["activation_max"] = case.act_min, case.act_max
+        bias_dtype = kernel_info["bias_c_type"]
+        bias_is_struct, contract_decl = self._bias_is_struct(kernel_info)
+        bias = case.bias_q
+        if bias is None and bias_is_struct:
+            # A cmsis_nn_bias_data struct is dereferenced unconditionally; a bias-free
+            # case passes zeros (what the TFLite s16 converter always emitted).
+            bias = np.zeros(cout, dtype=np.int64 if bias_dtype == "int64_t" else np.int32)
+        has_biases = bias is not None
+
+        buffer_size_max = builder.calculate_buffer_size_max(
+            input_dims, filter_dims, output_dims, output_dtype=self.desc.get("activation_dtype", "S8")
+        )
+        entry_scratch_bytes = kernel_info.get("entry_scratch_bytes")
+        if entry_scratch_bytes is not None:
+            buffer_size_max = max(buffer_size_max, int(entry_scratch_bytes))
+
+        context = {
+            "name": name,
+            "input_dims": input_dims,
+            "filter_dims": filter_dims,
+            "output_dims": output_dims,
+            "conv_params": conv_params,
+            "quant_params": case.quant_context(builder),
+            "weights_array": builder.format_array_as_c_literal(case.weights_c),
+            "biases_array": builder.format_array_as_c_literal(bias) if has_biases else "",
+            "has_biases": has_biases,
+            "input_data_array": builder.format_array_as_c_literal(case.input_q),
+            "expected_output_array": builder.format_array_as_c_literal(case.output_q),
+            "input_dtype": kernel_info["input_c_type"],
+            "output_dtype": kernel_info["output_c_type"],
+            "weight_dtype": weight_c_type,
+            "bias_dtype": bias_dtype,
+            "kernel_fn": kernel_info["kernel_fn"],
+            "kernel_get_buffer_size_fn": kernel_info["kernel_get_buffer_size_fn"],
+            "kernel_needs_layout": bool(kernel_info.get("kernel_needs_layout", False)),
+            "buffer_size_needs_layout": bool(kernel_info.get("buffer_size_needs_layout", False)),
+            "call_style": kernel_info.get("call_style", "baseline"),
+            "buffer_size_max": buffer_size_max,
+            "float_kernel": False,
+            "weight_format_macro": "ARM_NN_WEIGHT_FORMAT_STANDARD",
+            "conv_params_type": "cmsis_nn_conv_params",
+            "kernel_layout": kernel_info.get("layout", "ARM_NN_LAYOUT_NHWC"),
+            # See the float path: selects the benchmark backend.
+            "benchmark_target": os.environ.get("HELIA_BENCH_TARGET", "fvp"),
+            "entry_family": kernel_info.get("entry_family"),
+            "conv_s8_weight_sum": kernel_info["kernel_fn"] == "arm_convolve_wrapper_s8"
+            or (contract_decl is not None and takes(contract_decl, "weight_sum_ctx")),
+            "bias_is_struct": bias_is_struct,
+            "entry_scratch_bytes": entry_scratch_bytes,
+            "entry_extra_sizers": kernel_info.get("entry_extra_sizers"),
+            "expected_status": self.expected_status(),
+            # The entry lives only on ns-cmsis-nn's MVE paths, so it declines on a build without them.
+            "autovectorize_declines": bool(self.desc.get("autovectorize_declines", False)),
+            "autovectorize_declines_if": autovectorize_declines_if(kernel_info["input_c_type"]),
+        }
+        pool = convolve_argument_pool(context, has_biases=has_biases, bias_is_struct=bias_is_struct)
+        fault = self.fault_kind()
+        if fault:
+            self._check_fault_reachable(fault, context)
+            context.update(self.fault_context())
+            pool = convolve_fault(pool, fault, context)
+        self.render_harness_files(
+            output_dir, stem="convolve", context=context, pool=pool,
+            validation_key="ConvolutionFunctions/convolve/convolve.c.j2", label="Convolution",
+        )
+        cmake_content = self.render_template(
+            "common/CMakeLists.txt.j2",
+            {"name": name, "operator": self.desc.get("operator", "Convolve"), "operator_name": "convolve"},
+        )
+        (output_dir / "CMakeLists.txt").write_text(cmake_content)
+
     def needs_keras_model(self) -> bool:
-        return str(self.desc.get("weight_dtype", "S8")).upper() != "S4"
+        return True
     
     def build_keras_model(self) -> tf.keras.Model:
         input_shape = self.desc['input_shape']
@@ -308,41 +418,12 @@ class OpConvolve(OperationBase):
         )
         
         use_bias = self.desc.get('use_bias', True)
-        # A zero bias_initializer produces an all-zero bias tensor, which the
-        # TFLite converter's constant-folding optimizer strips from the graph
-        # entirely -- the generated CMSIS-NN test then calls the kernel with a
-        # NULL bias pointer, leaving the bias-add path completely untested.
-        # Use a nonzero uniform bias, deterministic from the case seed, so
-        # real bias data flows through the golden and the kernel call.
-        #
-        # The quantized magnitude has to clear one output quantization step,
-        # or a dropped bias-add still reproduces the golden bit for bit. The
-        # int suite calibrates from inputs in [-32, 32) and the bias itself
-        # widens the calibrated output range by 2*maxval, so the floor is set
-        # against the widest range a case can produce: every bias-carrying
-        # channel clears at least one output step with margin, the bias
-        # spends only a fraction of the dynamic range at the narrowest range,
-        # and it stays orders of magnitude below the int32 accumulator's
-        # headroom. The float range is unchanged.
-        #
-        # A quantized dilated conv keeps a zero Keras bias: it lowers to
-        # SpaceToBatchND -> Conv2D -> BatchToSpaceND (-> Add), and a bias set
-        # here would land in a trailing Add in the output quantization domain
-        # instead of in the CONV_2D the kernel stands in for. Those cases get
-        # their bias written into the CONV_2D placeholder after conversion by
-        # inject_hoisted_dilation_bias, ahead of the golden run.
-        _case_is_float = str(self.tensor_dtype("input", default="S8")).upper() in {"FP32", "FP16"}
-        # Fixed-batch conversion retains native dilation and its bias operand.
-        _bias_hoisted_by_lowering = (
-            input_shape[0] == 1
-            and bias_is_hoisted_by_lowering(dilation, is_float=_case_is_float)
-        )
-        if not use_bias or _bias_hoisted_by_lowering:
-            bias_initializer = 'zeros'
-        elif _case_is_float:
+        # Float cases only (integer cases use the reference kernels). A zero bias
+        # would be folded away by the converter and leave the bias-add untested.
+        if use_bias:
             bias_initializer = tf.keras.initializers.RandomUniform(minval=-0.25, maxval=0.25, seed=self.seed)
         else:
-            bias_initializer = SignedMagnitudeUniform(minval=2.0, maxval=4.0, seed=self.seed)
+            bias_initializer = 'zeros'
 
         conv = tf.keras.layers.Conv2D(
             filters=output_filters,
@@ -363,111 +444,20 @@ class OpConvolve(OperationBase):
 
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
         """Convert Keras model to TFLite with quantization."""
-        weight_dtype = str(self.desc.get("weight_dtype", "S8")).upper()
-        if weight_dtype == "S4":
-            from helia_core_tester.generation.utils.litert_builder import build_conv2d_s4_op
-
-            extras = self.desc.get("hint", {}).get("extras", {})
-            input_scale = float(extras.get("input_scale", 4.0))
-            input_zp = int(extras.get("input_zero_point", 3))
-            weight_scale = extras.get("weight_scale", 1.0)
-            output_scale = float(extras.get("output_scale", 4.0))
-            output_zp = int(extras.get("output_zero_point", 0))
-
-            input_shape = tuple(self.desc["input_shape"])
-            fs = tuple(self.desc["filter_shape"])  # H, W, I, O
-            filter_shape = (fs[3], fs[0], fs[1], fs[2])  # O, H, W, I
-
-            out_ch = filter_shape[0]
-            per_channel = bool(extras.get("per_channel", True))
-            if per_channel:
-                if isinstance(weight_scale, (list, tuple, np.ndarray)):
-                    weight_scales = list(float(v) for v in weight_scale)
-                else:
-                    weight_scales = [float(weight_scale)] * out_ch
-            else:
-                weight_scales = [float(weight_scale)]
-
-            weight_zps = [0] * len(weight_scales)
-
-            weights_int4 = self.rng.integers(-8, 8, size=filter_shape).astype(np.int8)
-            biases = None
-            if self.desc.get("use_bias", True):
-                biases = self.rng.integers(-128, 128, size=(out_ch,), dtype=np.int32)
-
-            tflite_model = build_conv2d_s4_op(
-                input_shape=input_shape,
-                filter_shape=filter_shape,
-                strides=self.desc.get("strides", [1, 1]),
-                padding=self.desc.get("padding", "valid"),
-                dilation=self.desc.get("dilation", [1, 1]),
-                use_bias=self.desc.get("use_bias", True),
-                input_quant=([input_scale], [input_zp]),
-                weight_quant=(weight_scales, weight_zps),
-                output_quant=([output_scale], [output_zp]),
-                weights_int4=weights_int4,
-                biases=biases,
-            )
-            with open(out_path, "wb") as f:
-                f.write(tflite_model)
-            return
-
         activation_dtype = str(self.desc.get('activation_dtype', 'S8')).upper()
         self.round_float16_weights(model)
 
         converter = converter_for_batched_model(model, [self.desc['input_shape']])
 
-        if activation_dtype == 'S8':
-            converter.optimizations = [tf.lite.Optimize.DEFAULT]
-            converter.target_spec.supported_types = [tf.int8]
-            converter.inference_input_type = tf.int8
-            converter.inference_output_type = tf.int8
-        elif activation_dtype == 'S16':
-            converter.optimizations = [tf.lite.Optimize.DEFAULT]
-            converter.target_spec.supported_ops = [
-                tf.lite.OpsSet.EXPERIMENTAL_TFLITE_BUILTINS_ACTIVATIONS_INT16_WEIGHTS_INT8
-            ]
-            converter.inference_input_type = tf.int16
-            converter.inference_output_type = tf.int16
-        elif activation_dtype == 'FP16':
+        if activation_dtype == 'FP16':
             converter.optimizations = []
             converter.target_spec.supported_types = [tf.float16]
         elif activation_dtype == 'FP32':
             converter.optimizations = []
         
-        def representative_data_gen():
-            rep_rng = np.random.default_rng(42)
-            for _ in range(100):
-                if 'input_shape' in self.desc and 'calibration_range' in self.desc:
-                    lo, hi = value_range(self.desc, 'calibration_range', ())
-                    yield [rep_rng.uniform(lo, hi, size=self.desc['input_shape']).astype(np.float32)]
-                elif 'input_shape' in self.desc:
-                    inputs = rep_rng.integers(-32, 32, size=self.desc['input_shape']).astype(np.float32)
-                    yield [inputs]
-                elif 'input_1_shape' in self.desc and 'input_2_shape' in self.desc:
-                    inputs1 = rep_rng.integers(-32, 32, size=self.desc['input_1_shape']).astype(np.float32)
-                    inputs2 = rep_rng.integers(-32, 32, size=self.desc['input_2_shape']).astype(np.float32)
-                    yield [inputs1, inputs2]
-        
-        converter.representative_dataset = representative_data_gen
-        
         tflite_model = converter.convert()
         with open(out_path, 'wb') as f:
             f.write(tflite_model)
-
-        hoisted = bias_is_hoisted_by_lowering(
-            self.desc.get('dilation', [1, 1]),
-            is_float=str(self.tensor_dtype("input", default="S8")).upper() in {"FP32", "FP16"},
-        )
-        if self.desc.get('use_bias', True) and hoisted and self.desc['input_shape'][0] == 1:
-            try:
-                inject_hoisted_dilation_bias(out_path, rep_seed)
-            except HoistedBiasInjectionError as exc:
-                raise ValueError(
-                    f"{self.desc.get('name')}: no accumulator-scale bias was injected "
-                    f"into the lowered dilated conv, so the case cannot detect a "
-                    f"dropped bias-add: {exc}"
-                ) from exc
 
     def _select_cmsis_convolve_kernel(self) -> Dict[str, str]:
         info = resolve_convolve_kernel(
@@ -533,10 +523,6 @@ class OpConvolve(OperationBase):
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
         name = self.desc['name']
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
-
         # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_convolve_kernel()
         float_kernel = kernel_info["input_c_type"] in {"float", "float16_t"}
@@ -547,6 +533,13 @@ class OpConvolve(OperationBase):
                 f"Kernel dispatch missing weight_c_type for Convolve descriptor '{name}' "
                 f"({self.desc.get('activation_dtype', 'S8')} x {self.desc.get('weight_dtype', 'S8')})"
             )
+        if not float_kernel:
+            self._generate_int_reference(output_dir, kernel_info, weight_c_type)
+            return
+
+        tflite_path = output_dir / f"{name}.tflite"
+        if not tflite_path.exists():
+            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
 
         # Load LiteRT model for tensor extraction
         from helia_core_tester.generation.utils.litert_utils import (
@@ -654,12 +647,10 @@ class OpConvolve(OperationBase):
             output_tensor = subgraph.tensors[int(subgraph.outputs[0])]
 
         expected_tensor = None
-        golden_index = int(subgraph.outputs[0])
         if bts_op_index is not None:
             bts_outs = subgraph.operators[bts_op_index].outputs
             if bts_outs is not None and len(bts_outs) > 0:
                 expected_tensor = subgraph.tensors[int(bts_outs[0])]
-                golden_index = int(bts_outs[0])
 
         input_shape = get_tensor_shape_from_litert(input_tensor) if input_tensor is not None else None
         output_shape = (
@@ -713,26 +704,9 @@ class OpConvolve(OperationBase):
             # placeholder CONV_2D carries, so the kernel call matches the
             # golden's bias.
             biases = hoisted_bias_data
-        weight_dtype = str(self.desc.get("weight_dtype", "S8")).upper()
-        if weight_dtype == "S4":
-            from helia_core_tester.generation.utils.litert_utils import get_tensor_data_packed_from_litert
-            packed_weights = None
-            for input_tensor_info in op_tensors['inputs']:
-                if input_tensor_info['data'] is not None and len(input_tensor_info['shape']) > 1:
-                    packed_weights = get_tensor_data_packed_from_litert(input_tensor_info['tensor'], model)
-                    break
-            if packed_weights is None:
-                raise ValueError("Packed S4 weights not found in LiteRT model")
-            weights = packed_weights.astype(np.int8)
-
         # Weight tensor for TFLite Conv2D is OHWI in practice; shape will be (O, H, W, I)
-        if weight_dtype == "S4":
-            fs = tuple(self.desc['filter_shape'])
-            filter_shape = (fs[3], fs[0], fs[1], fs[2])  # OHWI
-        elif weights is not None:
+        if weights is not None:
             filter_shape = tuple(weights.shape)
-            if not float_kernel and weights.dtype != np.int8:
-                weights = weights.astype(np.int8)
         else:
             # Fallback: descriptor is HWIO (kh, kw, in, out)
             fs = tuple(self.desc['filter_shape'])
@@ -742,11 +716,8 @@ class OpConvolve(OperationBase):
         input_dims = builder.nhwc_to_cmsis_dims(input_shape)
         output_dims = builder.nhwc_to_cmsis_dims(output_shape)
 
-        # CMSIS expects OHWI dims
-        # For grouped convolutions, CMSIS calculates groups = input_ch / filter_ch
-        # TFLite stores filters with input_ch channels (all groups), but CMSIS expects input_ch/groups
-        # So we need to adjust filter_dims.c for grouped convolutions
-        groups = self.desc.get('groups', 1)
+        # CMSIS expects OHWI dims; for grouped convolutions filter c is input_ch / groups,
+        # and CMSIS derives groups = input_ch / filter_ch.
         filter_dims = {
             'n': int(filter_shape[0]),
             'h': int(filter_shape[1]),
@@ -767,140 +738,41 @@ class OpConvolve(OperationBase):
             quant_params['output']
         )
 
-        quant_params_dict = None
-        if not float_kernel:
-            # Build quantization parameters
-            # CRITICAL: The effective scale for multiplier/shift is NOT output_scale directly!
-            # It should be: effective_scale = (input_scale * weight_scale) / output_scale
-            # This matches CMSIS-NN test code in op_utils.py line 194
-            input_quant = quant_params['input']
-            output_quant = quant_params['output']
-            weight_quant = quant_params.get('weight', output_quant)
-            
-            input_scale = input_quant.get('scale', 1.0)
-            if isinstance(input_scale, (list, np.ndarray)):
-                input_scale = float(input_scale[0])
-            else:
-                input_scale = float(input_scale)
-
-            output_scale = output_quant.get('scale', 1.0)
-            if isinstance(output_scale, (list, np.ndarray)):
-                output_scale = float(output_scale[0])
-            else:
-                output_scale = float(output_scale)
-
-            weight_scale = weight_quant.get('scale', 1.0)
-            per_channel = bool(weight_quant.get('per_channel', False))
-            
-            # Calculate effective scales: (input_scale * weight_scale) / output_scale
-            if per_channel and isinstance(weight_scale, np.ndarray):
-                # In double precision, as TFLite computes it; the weight scales are float32.
-                effective_scales = (input_scale * weight_scale.astype(np.float64)) / output_scale
-                effective_quant = {
-                    'scale': effective_scales,
-                    'zero_point': output_quant.get('zero_point', 0),
-                    'per_channel': True
-                }
-                quant_params_dict = builder.build_quant_params(effective_quant, per_channel=True)
-                quant_params_dict['effective_scales'] = effective_scales
-                from helia_core_tester.generation.utils.tflite_utils import calculate_per_channel_multiplier_shift
-                multipliers_raw, shifts_raw = calculate_per_channel_multiplier_shift(effective_scales)
-                quant_params_dict['multiplier_array_raw'] = multipliers_raw
-                quant_params_dict['shift_array_raw'] = shifts_raw
-            else:
-                if isinstance(weight_scale, (list, np.ndarray)):
-                    weight_scale = float(weight_scale[0])
-                else:
-                    weight_scale = float(weight_scale)
-                effective_scale = float((input_scale * weight_scale) / output_scale)
-                effective_quant = {
-                    'scale': effective_scale,
-                    'zero_point': output_quant.get('zero_point', 0),
-                    'per_channel': False
-                }
-                quant_params_dict = builder.build_quant_params(effective_quant, per_channel=False)
-                quant_params_dict['effective_scale'] = effective_scale
-                from helia_core_tester.generation.utils.tflite_utils import calculate_multiplier_shift
-                multiplier_raw, shift_raw = calculate_multiplier_shift(effective_scale)
-                quant_params_dict['multiplier_raw'] = multiplier_raw
-                quant_params_dict['shift_raw'] = shift_raw
-            
-            quant_params_dict['per_channel'] = per_channel
-
         # Generate input data and quantize to the interpreter's real input dtype
         # IMPORTANT: Reset RNG to seed to ensure input data matches what was used
         # during TFLite conversion (representative dataset generation may have advanced RNG)
         rng_state = self.rng.__getstate__()
         self.rng = np.random.default_rng(self.seed)
-        if float_kernel:
-            input_data = self._sample_uniform(input_shape)
-        else:
-            input_data = self.generate_input_data()
+        input_data = self._sample_uniform(input_shape)
         self.rng.__setstate__(rng_state)
-        if float_kernel:
-            input_q = np.asarray(input_data, dtype=float_dtype)
-            interpreter_input_dtype = self.load_litert_interpreter(str(tflite_path)).get_input_details()[0]['dtype']
+        input_q = np.asarray(input_data, dtype=float_dtype)
+        interpreter_input_dtype = self.load_litert_interpreter(str(tflite_path)).get_input_details()[0]['dtype']
 
-            def float_reference(operands, _dtype=float_dtype, _in_dtype=interpreter_input_dtype):
-                return self.run_inference(
-                    str(tflite_path), operands[0].astype(_in_dtype)
-                ).astype(_dtype)
+        def float_reference(operands, _dtype=float_dtype, _in_dtype=interpreter_input_dtype):
+            return self.run_inference(
+                str(tflite_path), operands[0].astype(_in_dtype)
+            ).astype(_dtype)
 
-            output_data = float_reference([input_q])
-        else:
-            input_scale = float(self._quant_param_scalar(quant_params['input'], 'scale', 1.0))
-            input_zp = int(self._quant_param_scalar(quant_params['input'], 'zero_point', 0))
-
-            if kernel_info["input_c_type"] == "int8_t":
-                qmin, qmax = -128, 127
-                np_in_dtype = np.int8
-            elif kernel_info["input_c_type"] == "int16_t":
-                qmin, qmax = -32768, 32767
-                np_in_dtype = np.int16
-            else:
-                raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
-
-            input_q = np.round(input_data / float(input_scale) + float(input_zp)).astype(np.int32)
-            input_q = np.clip(input_q, qmin, qmax).astype(np_in_dtype)
-
-            # Reference kernels; XNNPACK diverges on some shapes.
-            from ai_edge_litert.interpreter import OpResolverType
-            from helia_core_tester.generation.utils.litert_utils import run_inference_litert_tensor
-
-            output_data = run_inference_litert_tensor(
-                str(tflite_path), input_q, golden_index, op_resolver_type=OpResolverType.BUILTIN_REF
-            )
-            output_data = clamp_golden(self.desc, output_data)
-
-        # Bias handling (S16 wrapper expects int64 bias)
+        output_data = float_reference([input_q])
         has_biases = biases is not None and getattr(biases, "size", 0) > 0
         bias_dtype = kernel_info["bias_c_type"]
-        if has_biases:
-            if float_kernel and biases.dtype != float_dtype:
-                biases = biases.astype(float_dtype)
-            elif bias_dtype == "int64_t" and biases.dtype != np.int64:
-                biases = biases.astype(np.int64)
-            elif bias_dtype == "int32_t" and biases.dtype != np.int32:
-                biases = biases.astype(np.int32)
-        if float_kernel and weights is not None and weights.dtype != float_dtype:
+        if has_biases and biases.dtype != float_dtype:
+            biases = biases.astype(float_dtype)
+        if weights is not None and weights.dtype != float_dtype:
             weights = weights.astype(float_dtype)
 
         weight_format_macro = "ARM_NN_WEIGHT_FORMAT_STANDARD"
-        if float_kernel:
-            weight_format = str(self._hint().get("weight_format", "STANDARD")).upper()
-            if weight_format in {"NT_N_PACKED", "ARM_NN_WEIGHT_FORMAT_NT_N_PACKED"}:
-                block_cols = 8 if kernel_info["input_c_type"] == "float16_t" else 4
-                weights = self._pack_nt_n_weights(weights, block_cols)
-                weight_format_macro = "ARM_NN_WEIGHT_FORMAT_NT_N_PACKED"
-            elif weight_format not in {"STANDARD", "ARM_NN_WEIGHT_FORMAT_STANDARD"}:
-                raise ValueError(f"Unsupported Convolve weight_format hint: {weight_format}")
+        weight_format = str(self._hint().get("weight_format", "STANDARD")).upper()
+        if weight_format in {"NT_N_PACKED", "ARM_NN_WEIGHT_FORMAT_NT_N_PACKED"}:
+            block_cols = 8 if kernel_info["input_c_type"] == "float16_t" else 4
+            weights = self._pack_nt_n_weights(weights, block_cols)
+            weight_format_macro = "ARM_NN_WEIGHT_FORMAT_NT_N_PACKED"
+        elif weight_format not in {"STANDARD", "ARM_NN_WEIGHT_FORMAT_STANDARD"}:
+            raise ValueError(f"Unsupported Convolve weight_format hint: {weight_format}")
 
-        if float_kernel:
-            output_data, nonfinite_context = self.apply_nonfinite_policy(
-                output_data, reference=float_reference, inputs=[input_q]
-            )
-        else:
-            nonfinite_context = {}
+        output_data, nonfinite_context = self.apply_nonfinite_policy(
+            output_data, reference=float_reference, inputs=[input_q]
+        )
 
         # Format arrays
         weights_array_str = builder.format_array_as_c_literal(weights) if weights is not None else ""
@@ -909,43 +781,26 @@ class OpConvolve(OperationBase):
         expected_output_array_str = builder.format_array_as_c_literal(output_data)
 
         # Calculate buffer size max (conservative estimate)
-        # Use activation_dtype to determine if this is S8 or S16 convolution
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
-        if float_kernel:
-            element_size = np.dtype(float_dtype).itemsize
-            # The patch-GEMM sizers ask for 8 packed patch rows (ARM_NN_CONV_NHWC_PATCH_GEMM_F*_MAX_TILE_ROWS),
-            # which exceeds the tensor total for a long patch over a small input.
-            patch_tile = 8 * filter_dims['h'] * filter_dims['w'] * input_dims['c'] * element_size
-            buffer_size_max = max(
-                1024,
-                patch_tile,
-                int(
-                    (input_dims['n'] * input_dims['h'] * input_dims['w'] * input_dims['c']
-                     + filter_dims['n'] * filter_dims['h'] * filter_dims['w'] * max(filter_dims['c'], 1)
-                     + output_dims['n'] * output_dims['h'] * output_dims['w'] * output_dims['c']) * element_size
-                ),
-            )
-        else:
-            buffer_size_max = builder.calculate_buffer_size_max(
-                input_dims, filter_dims, output_dims, 
-                output_dtype=activation_dtype
-            )
+        element_size = np.dtype(float_dtype).itemsize
+        # The patch-GEMM sizers ask for 8 packed patch rows (ARM_NN_CONV_NHWC_PATCH_GEMM_F*_MAX_TILE_ROWS),
+        # which exceeds the tensor total for a long patch over a small input.
+        patch_tile = 8 * filter_dims['h'] * filter_dims['w'] * input_dims['c'] * element_size
+        buffer_size_max = max(
+            1024,
+            patch_tile,
+            int(
+                (input_dims['n'] * input_dims['h'] * input_dims['w'] * input_dims['c']
+                 + filter_dims['n'] * filter_dims['h'] * filter_dims['w'] * max(filter_dims['c'], 1)
+                 + output_dims['n'] * output_dims['h'] * output_dims['w'] * output_dims['c']) * element_size
+            ),
+        )
         entry_scratch_bytes = kernel_info.get("entry_scratch_bytes")
         if entry_scratch_bytes is not None:
             buffer_size_max = max(buffer_size_max, int(entry_scratch_bytes))
 
-        # An entry gets the weight-sum pre-pass and the struct-typed bias exactly when its
-        # prototype takes them; the wrappers keep the rules they always had.
-        contract_decl = None
-        if kernel_info.get("entry_family") == "contract":
-            from helia_core_tester.contract import render as contract_render
-            from helia_core_tester.contract.bind import takes
+        from helia_core_tester.contract.bind import takes
 
-            contract_decl = contract_render.load_current_contracts().require(kernel_info["kernel_fn"])
-        bias_is_struct = kernel_info["kernel_fn"] == "arm_convolve_wrapper_s16" or (
-            contract_decl is not None and takes(contract_decl, "bias_data")
-            and "cmsis_nn_bias_data" in next(p.c_type for p in contract_decl.params if p.name in ("bias_data", "bias"))
-        )
+        bias_is_struct, contract_decl = self._bias_is_struct(kernel_info)
 
         # Build template context
         context = {
@@ -969,12 +824,10 @@ class OpConvolve(OperationBase):
             'buffer_size_needs_layout': bool(kernel_info.get("buffer_size_needs_layout", False)),
             'call_style': kernel_info.get("call_style", "baseline"),
             'buffer_size_max': buffer_size_max,
-            'float_kernel': float_kernel,
+            'float_kernel': True,
             'weight_format_macro': weight_format_macro,
             'conv_params_type': (
-                'cmsis_nn_conv_params_f16'
-                if kernel_info["input_c_type"] == "float16_t"
-                else ('cmsis_nn_conv_params_f32' if float_kernel else 'cmsis_nn_conv_params')
+                'cmsis_nn_conv_params_f16' if kernel_info["input_c_type"] == "float16_t" else 'cmsis_nn_conv_params_f32'
             ),
             'kernel_layout': kernel_info.get("layout", "ARM_NN_LAYOUT_NHWC"),
             # Selects common/standalone/benchmark.j2's backend: "fvp" (default,
@@ -993,11 +846,8 @@ class OpConvolve(OperationBase):
             'autovectorize_declines': bool(self.desc.get("autovectorize_declines", False)),
             'autovectorize_declines_if': autovectorize_declines_if(kernel_info["input_c_type"]),
         }
-        if float_kernel:
-            context['conv_activation_min_literal'] = builder.format_float_literal(conv_params['activation_min'])
-            context['conv_activation_max_literal'] = builder.format_float_literal(conv_params['activation_max'])
-        else:
-            context['quant_params'] = quant_params_dict
+        context['conv_activation_min_literal'] = builder.format_float_literal(conv_params['activation_min'])
+        context['conv_activation_max_literal'] = builder.format_float_literal(conv_params['activation_max'])
         context.update(nonfinite_context)
 
         pool = convolve_argument_pool(context, has_biases=has_biases, bias_is_struct=bias_is_struct)

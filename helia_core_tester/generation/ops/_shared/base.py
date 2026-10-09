@@ -152,6 +152,11 @@ class OperationBase(ABC):
         for layer in model.layers:
             layer.set_weights([w.astype(np.float16).astype(np.float32) for w in layer.get_weights()])
 
+    def uses_reference(self) -> bool:
+        """True when this case's golden comes from the reference kernels, so the
+        driver builds no Keras model and converts no .tflite for it."""
+        return False
+
     def build_reference(self):
         """The reference-kernel call that produces this case's golden, or None.
 
@@ -229,6 +234,13 @@ class OperationBase(ABC):
     def _seeded_rng(self) -> np.random.Generator:
         """Return a temporary deterministic RNG seeded from the op seed."""
         return np.random.default_rng(self.seed)
+
+    def reference_rng(self, stream: str) -> np.random.Generator:
+        """An RNG for one named draw of a reference-golden case (weights, bias, ...),
+        independent of the input draw's _seeded_rng() stream and of every other name."""
+        import zlib
+
+        return np.random.default_rng([int(self.seed) & 0xFFFFFFFF, zlib.crc32(stream.encode("utf-8"))])
 
     # Which tokens a sweep may request. A descriptor names a subset because the token
     # set is a per-kernel contract question: ns-cmsis-nn documents NaN behaviour for

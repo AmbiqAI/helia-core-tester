@@ -378,11 +378,24 @@ def test_rejects_s16_shift_the_int64_rescale_cannot_take(lib) -> None:
     assert _code(lambda: lib.conv("s16", p_off, ok, x, w, None, (1, 3, 3, 1))) == b.E_PARAM
 
 
-def test_rejects_per_channel_fc_with_weights_offset(lib) -> None:
+def test_per_channel_fc_honours_weights_offset(lib) -> None:
+    # CMSIS-NN's per-channel FC still applies a filter offset (force_filter_offset cases).
+    rng = np.random.default_rng(21)
+    x = rng.integers(-128, 128, size=(2, 13), dtype=np.int64).astype(np.int8)
+    w = rng.integers(-127, 128, size=(5, 13), dtype=np.int64).astype(np.int8)
+    bias = rng.integers(-500, 500, size=5).astype(np.int32)
+    quant = _quant(rng, 5)
+    for offset in (3, -4, 128, -127):
+        out = lib.fc("s8", b.HctFcParams(2, offset, -1, b.make_activation(-128, 127)), quant, x, w, bias, (2, 5))
+        expected = _fc_model(x, w, bias, quant.multiplier, quant.shift, 2, offset, -1, -128, 127)
+        np.testing.assert_array_equal(out, expected.astype(np.int8))
+
+
+def test_rejects_bad_fc_offsets_and_shapes(lib) -> None:
     x = np.zeros((1, 4), np.int8)
     w = np.zeros((2, 4), np.int8)
     quant = b.PerChannel(np.full(2, 1 << 30, np.int32), np.full(2, -1, np.int32))
-    assert _code(lambda: lib.fc("s8", b.HctFcParams(0, 2, 0, b.make_activation(-128, 127)), quant, x, w, None, (1, 2))) == b.E_PARAM
+    assert _code(lambda: lib.fc("s8", b.HctFcParams(0, 129, 0, b.make_activation(-128, 127)), quant, x, w, None, (1, 2))) == b.E_PARAM
     assert _code(lambda: lib.fc("s8", b.HctFcParams(0, 0, 0, b.make_activation(-128, 127)), quant, np.zeros((1, 5), np.int8), w, None, (1, 2))) == b.E_DIMS
 
 

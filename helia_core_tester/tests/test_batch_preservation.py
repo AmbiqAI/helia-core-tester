@@ -4,7 +4,8 @@ from copy import deepcopy
 from pathlib import Path
 import re
 
-from ai_edge_litert.interpreter import Interpreter
+import json
+
 import numpy as np
 import pytest
 import yaml
@@ -62,20 +63,33 @@ for desc in yaml.safe_load_all(
         CASES.append(("ConvolutionFunctions", desc))
 
 
+def _golden_shapes(case, name):
+    """Input shapes and output shape the golden was computed with: the reference
+    call's record, or the converted model for cases still on that path."""
+    record_path = case / f"{name}.reference.json"
+    if record_path.is_file():
+        record = json.loads(record_path.read_text())
+        return [record["tensors"]["input"]["shape"]], record["output"]["shape"]
+    from ai_edge_litert.interpreter import Interpreter
+
+    interpreter = Interpreter(model_path=str(case / f"{name}.tflite"))
+    interpreter.allocate_tensors()
+    inputs = [d["shape"].tolist() for d in interpreter.get_input_details()]
+    return inputs, interpreter.get_output_details()[0]["shape"].tolist()
+
+
 @pytest.mark.parametrize("family,desc", CASES, ids=[d["name"] for _, d in CASES])
 def test_declared_batches_reach_emitted_data(tmp_path, family, desc):
     generate_test(desc, str(tmp_path), seed=500)
     case = tmp_path / family / desc["name"]
-    interpreter = Interpreter(model_path=str(case / f'{desc["name"]}.tflite'))
-    interpreter.allocate_tensors()
     shapes = (
         [desc["input_shape"]]
         if "input_shape" in desc
         else [desc["input_1_shape"], desc["input_2_shape"]]
     )
-    assert [d["shape"].tolist() for d in interpreter.get_input_details()] == shapes
+    model_inputs, output_shape = _golden_shapes(case, desc["name"])
+    assert model_inputs == shapes
     batch = shapes[0][0]
-    output_shape = interpreter.get_output_details()[0]["shape"].tolist()
     assert output_shape[0] == batch
 
     header = "\n".join(p.read_text() for p in (case / "includes").glob("*.h"))
@@ -259,6 +273,8 @@ def test_batched_converter_accepts_legacy_zip(monkeypatch, input_count):
     output = tf.keras.layers.Add()(inputs) if input_count > 1 else inputs[0] * 2
     model = tf.keras.Model(inputs, output)
     converter = fixed_batch.converter_for_batched_model(model, [[2, 3]] * input_count)
+    from ai_edge_litert.interpreter import Interpreter
+
     interpreter = Interpreter(model_content=converter.convert())
     interpreter.allocate_tensors()
     assert [item["shape"].tolist() for item in interpreter.get_input_details()] == [

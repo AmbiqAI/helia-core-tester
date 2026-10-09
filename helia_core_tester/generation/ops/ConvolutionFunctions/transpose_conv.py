@@ -186,6 +186,75 @@ class OpTransposeConv(OperationBase):
                     "(stride <= 2 and input channels > 16)",
                 )
 
+    def uses_reference(self) -> bool:
+        # Integer cases take their golden from the TFLM reference kernels; float
+        # cases stay on the converter path until the float suites move.
+        return str(self.desc.get("activation_dtype", "S8")).upper() in {"S8", "S16"}
+
+    def _generate_int_reference(self, output_dir: Path, kernel_info: Dict[str, str]) -> None:
+        """Render an s8 case whose golden comes from the TFLM reference transpose
+        convolution (activation none, as TFLM's kernel applies none)."""
+        from helia_core_tester.generation.reference import weighted
+        from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
+
+        name = self.desc["name"]
+        builder = TemplateContextBuilder()
+        spec = weighted.tconv_spec(self.desc)
+        case = weighted.build_weighted_case(self.desc, spec, self.reference_rng("weights"), self.generate_input_data)
+        self._reference_call = case.call
+        out_ch, kh, kw, in_ch = spec.weight_shape
+        input_dims = builder.nhwc_to_cmsis_dims(spec.input_shape)
+        output_dims = builder.nhwc_to_cmsis_dims(spec.output_shape)
+        filter_dims = {"n": out_ch, "h": kh, "w": kw, "c": in_ch}
+        transpose_conv_params = builder.build_transpose_conv_params(
+            self.desc, spec.input_shape, (kh, kw), spec.output_shape,
+            {"zero_point": case.input_quant.zero_point}, {"zero_point": case.output_quant.zero_point},
+        )
+        transpose_conv_params["activation_min"] = case.act_min
+        transpose_conv_params["activation_max"] = case.act_max
+        has_biases = case.bias_q is not None
+        stride_h, stride_w = spec.params["stride"]
+        buffer_size_max = builder.calculate_transpose_conv_buffer_size_max(
+            input_dims, filter_dims, output_dims, output_dtype=self.desc.get("activation_dtype", "S8"),
+            stride_h=int(stride_h), stride_w=int(stride_w),
+        )
+        # REVERSE_TCOL_EFFICIENT_THRESHOLD = 16: the reverse-conv route needs a filter-sized
+        # context; the other route an output-sized one.
+        if stride_w <= 2 and stride_h <= 2 and input_dims["c"] > 16:
+            reverse_conv_ctx_size = input_dims["c"] * kw * kh * out_ch
+        else:
+            reverse_conv_ctx_size = output_dims["w"] * output_dims["h"] * output_dims["c"] * 4
+        has_weight_sum = kernel_info["input_c_type"] == "int8_t"
+        context = {
+            "name": name,
+            "input_dims": input_dims,
+            "filter_dims": filter_dims,
+            "output_dims": output_dims,
+            "transpose_conv_params": transpose_conv_params,
+            "quant_params": case.quant_context(builder),
+            "weights_array": builder.format_array_as_c_literal(case.weights_c),
+            "biases_array": builder.format_array_as_c_literal(case.bias_q) if has_biases else "",
+            "has_biases": has_biases,
+            "has_weight_sum": has_weight_sum,
+            "weight_sum_size": output_dims["c"] * 4 if has_weight_sum else 0,
+            "input_data_array": builder.format_array_as_c_literal(case.input_q),
+            "expected_output_array": builder.format_array_as_c_literal(case.output_q),
+            "input_dtype": kernel_info["input_c_type"],
+            "output_dtype": kernel_info["output_c_type"],
+            "bias_dtype": kernel_info["bias_c_type"],
+            "kernel_fn": kernel_info["kernel_fn"],
+            "kernel_get_buffer_size_fn": kernel_info["kernel_get_buffer_size_fn"],
+            "kernel_get_reverse_buffer_size_fn": kernel_info["kernel_get_reverse_buffer_size_fn"],
+            "buffer_size_max": buffer_size_max,
+            "reverse_conv_ctx_size": reverse_conv_ctx_size,
+        }
+        self._render_transpose_conv(output_dir, context)
+        cmake_content = self.render_template(
+            "common/CMakeLists.txt.j2",
+            {"name": name, "operator": self.desc.get("operator", "TransposeConv"), "operator_name": "transpose_conv"},
+        )
+        (output_dir / "CMakeLists.txt").write_text(cmake_content)
+
     def build_keras_model(self) -> tf.keras.Model:
         """Build Keras model for TransposeConv operation.
         """
@@ -233,37 +302,11 @@ class OpTransposeConv(OperationBase):
         # Apply quantization based on activation_dtype
         activation_dtype = str(self.desc.get('activation_dtype', 'S8')).upper()
         
-        if activation_dtype == 'S8':
-            converter.optimizations = [tf.lite.Optimize.DEFAULT]
-            converter.target_spec.supported_types = [tf.int8]
-            converter.inference_input_type = tf.int8
-            converter.inference_output_type = tf.int8
-        elif activation_dtype == 'S16':
-            converter.optimizations = [tf.lite.Optimize.DEFAULT]
-            converter.target_spec.supported_ops = [
-                tf.lite.OpsSet.EXPERIMENTAL_TFLITE_BUILTINS_ACTIVATIONS_INT16_WEIGHTS_INT8
-            ]
-            converter.inference_input_type = tf.int16
-            converter.inference_output_type = tf.int16
-        elif activation_dtype == 'FP16':
+        if activation_dtype == 'FP16':
             converter.optimizations = []
             converter.target_spec.supported_types = [tf.float16]
         elif activation_dtype == 'FP32':
             converter.optimizations = []
-        
-        # Generate representative dataset
-        def representative_data_gen():
-            rep_rng = np.random.default_rng(42)
-            for _ in range(128): 
-                if 'input_shape' in self.desc:
-                    inputs = rep_rng.uniform(-8.0, 8.0, size=self.desc['input_shape']).astype(np.float32)
-                    yield [inputs]
-                elif 'input_1_shape' in self.desc and 'input_2_shape' in self.desc:
-                    inputs1 = rep_rng.uniform(-8.0, 8.0, size=self.desc['input_1_shape']).astype(np.float32)
-                    inputs2 = rep_rng.uniform(-8.0, 8.0, size=self.desc['input_2_shape']).astype(np.float32)
-                    yield [inputs1, inputs2]
-        
-        converter.representative_dataset = representative_data_gen
         
         # Convert and save
         tflite_model = converter.convert()
@@ -348,19 +391,20 @@ class OpTransposeConv(OperationBase):
         """
         Generate C and H files from templates for TransposeConv operation.
         """
-        from pathlib import Path
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
-        # from helia_core_tester.generation.utils.tflite_utils import run_inference
         
         name = self.desc['name']
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
-        
         # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_transpose_conv_kernel()
         float_kernel = kernel_info["input_c_type"] in {"float", "float16_t"}
         float_dtype = np.float16 if kernel_info["input_c_type"] == "float16_t" else np.float32
+        if not float_kernel:
+            self._generate_int_reference(output_dir, kernel_info)
+            return
+
+        tflite_path = output_dir / f"{name}.tflite"
+        if not tflite_path.exists():
+            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
         
         # Load LiteRT model for tensor extraction
         from helia_core_tester.generation.utils.litert_utils import (
@@ -648,179 +692,3 @@ class OpTransposeConv(OperationBase):
             with open(cmake_path, 'w') as f:
                 f.write(cmake_content)
             return
-        
-        # Build quantization parameters
-        # The effective scale for multiplier/shift is NOT output_scale directly!
-        # It should be: effective_scale = (input_scale * weight_scale) / output_scale
-        input_quant = quant_params['input']
-        output_quant = quant_params['output']
-        weight_quant = quant_params.get('weights', quant_params.get('weight', output_quant))
-        
-        input_scale = input_quant.get('scale', 1.0)
-        if isinstance(input_scale, (list, np.ndarray)):
-            input_scale = float(input_scale[0])
-        else:
-            input_scale = float(input_scale)
-        
-        output_scale = output_quant.get('scale', 1.0)
-        if isinstance(output_scale, (list, np.ndarray)):
-            output_scale = float(output_scale[0])
-        else:
-            output_scale = float(output_scale)
-        
-        weight_scale = weight_quant.get('scale', 1.0)
-        per_channel = bool(weight_quant.get('per_channel', False))
-        
-        # Calculate effective scales: (input_scale * weight_scale) / output_scale
-        if per_channel and isinstance(weight_scale, np.ndarray):
-            # Per-channel: effective_scale[i] = (input_scale * weight_scale[i]) / output_scale
-            # in double precision, as TFLite computes it. The weight scales are float32.
-            effective_scales = (input_scale * weight_scale.astype(np.float64)) / output_scale
-            # Create a temporary quant_params dict with effective scales
-            effective_quant = {
-                'scale': effective_scales,
-                'zero_point': output_quant.get('zero_point', 0),
-                'per_channel': True
-            }
-            quant_params_dict = builder.build_quant_params(effective_quant, per_channel=True)
-        else:
-            # Per-tensor: effective_scale = (input_scale * weight_scale) / output_scale
-            if isinstance(weight_scale, (list, np.ndarray)):
-                weight_scale = float(weight_scale[0])
-            else:
-                weight_scale = float(weight_scale)
-            effective_scale = (input_scale * weight_scale) / output_scale
-            # Ensure effective_scale is a Python float, not numpy scalar
-            effective_scale = float(effective_scale)
-            effective_quant = {
-                'scale': effective_scale,
-                'zero_point': output_quant.get('zero_point', 0),
-                'per_channel': False
-            }
-            quant_params_dict = builder.build_quant_params(effective_quant, per_channel=False)
-        
-        quant_params_dict['per_channel'] = per_channel
-        
-
-        has_weight_sum = False
-        weight_sum_size = 0
-        if kernel_info["input_c_type"] == "int8_t" and weights is not None:
-
-            has_weight_sum = True
-        
-        # Format weights and biases as C arrays
-        weights_array_str = builder.format_array_as_c_literal(weights)
-        has_biases = biases is not None and biases.size > 0
-        if has_biases:
-            # Convert biases to int32_t for CMSIS-NN
-            if biases.dtype != np.int32:
-                biases = biases.astype(np.int32)
-            biases_array_str = builder.format_array_as_c_literal(biases)
-        else:
-            biases_array_str = ""
-        
-        # Generate input data and quantize to the interpreter's real input dtype
-        # IMPORTANT: Reset RNG to seed to ensure input data matches what was used
-        # during TFLite conversion (representative dataset generation may have advanced RNG)
-        rng_state = self.rng.__getstate__()
-        self.rng = np.random.default_rng(self.seed)
-        input_data = self.generate_input_data()
-        self.rng.__setstate__(rng_state)
-        
-        input_scale = quant_params['input'].get('scale', 1.0)
-        input_zp = quant_params['input'].get('zero_point', 0)
-        if isinstance(input_scale, (list, np.ndarray)):
-            input_scale = input_scale[0]
-        if isinstance(input_zp, (list, np.ndarray)):
-            input_zp = input_zp[0]
-        
-        if kernel_info["input_c_type"] == "int8_t":
-            qmin, qmax = -128, 127
-            np_in_dtype = np.int8
-        elif kernel_info["input_c_type"] == "int16_t":
-            qmin, qmax = -32768, 32767
-            np_in_dtype = np.int16
-        else:
-            raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
-        
-        input_q = np.round(input_data / float(input_scale) + float(input_zp)).astype(np.int32)
-        input_q = np.clip(input_q, qmin, qmax).astype(np_in_dtype)
-        
-        # Run inference (dtype must match interpreter input)
-        output_data = self.run_inference(str(tflite_path), input_q)
-        
-        # Format input and output arrays
-        input_data_array_str = builder.format_array_as_c_literal(input_q)
-        expected_output_array_str = builder.format_array_as_c_literal(output_data.astype(np.int8))
-
-        strides = self.desc.get('strides', [1, 1])
-        stride_w = strides[1] if len(strides) > 1 else strides[0]
-        stride_h = strides[0] if len(strides) > 0 else 1
-
-        # Calculate buffer size max
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
-        buffer_size_max = builder.calculate_transpose_conv_buffer_size_max(
-            input_dims,
-            filter_dims,
-            output_dims,
-            output_dtype=activation_dtype,
-            stride_h=int(stride_h),
-            stride_w=int(stride_w),
-        )
-
-        input_c = input_dims['c']
-        filter_w = filter_dims['w']
-        filter_h = filter_dims['h']
-        filter_n = filter_dims['n']
-        
-        reverse_conv_possible = (stride_w <= 2) and (stride_h <= 2)
-        reverse_conv_efficient = (input_c > 16)  # REVERSE_TCOL_EFFICIENT_THRESHOLD = 16
-        
-        if reverse_conv_possible and reverse_conv_efficient:
-            reverse_conv_ctx_size = input_c * filter_w * filter_h * filter_n
-        else:
-            # If reverse_conv is not     used, we still need a buffer for output_ctx
-            # Fallback: use output dimensions (conservative estimate
-            reverse_conv_ctx_size = output_dims['w'] * output_dims['h'] * output_dims['c'] * 4
-        
-
-        if has_weight_sum:
-
-            weight_sum_size = output_dims['c'] * 4  
-        
-        # Build template context
-        context = {
-            'name': name,
-            'input_dims': input_dims,
-            'filter_dims': filter_dims,
-            'output_dims': output_dims,
-            'transpose_conv_params': transpose_conv_params,
-            'quant_params': quant_params_dict,
-            'weights_array': weights_array_str,
-            'biases_array': biases_array_str,
-            'has_biases': has_biases,
-            'has_weight_sum': has_weight_sum,
-            'weight_sum_size': weight_sum_size,
-            'input_data_array': input_data_array_str,
-            'expected_output_array': expected_output_array_str,
-            'input_dtype': kernel_info["input_c_type"],
-            'output_dtype': kernel_info["output_c_type"],
-            'bias_dtype': kernel_info["bias_c_type"],
-            'kernel_fn': kernel_info["kernel_fn"],
-            'kernel_get_buffer_size_fn': kernel_info["kernel_get_buffer_size_fn"],
-            'kernel_get_reverse_buffer_size_fn': kernel_info["kernel_get_reverse_buffer_size_fn"],
-            'buffer_size_max': buffer_size_max,
-            'reverse_conv_ctx_size': reverse_conv_ctx_size,
-        }
-        self._render_transpose_conv(output_dir, context)
-
-        cmake_context = {
-            'name': name,
-            'operator': self.desc.get('operator', 'TransposeConv'),
-            'operator_name': 'transpose_conv'
-        }
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
-        cmake_path = output_dir / "CMakeLists.txt"
-        with open(cmake_path, 'w') as f:
-            f.write(cmake_content)
-        

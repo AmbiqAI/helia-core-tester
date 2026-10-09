@@ -524,14 +524,32 @@ int32_t fc_quantized(const HctFcParams *params,
     {
         return HCT_REF_E_PARAM;
     }
-    // Per-channel weights are symmetric by the TFLite quantization spec.
-    if (per_channel && params->weights_offset != 0)
-    {
-        return HCT_REF_E_PARAM;
-    }
     const tflite::FullyConnectedParams p = to_fc_params(params, quant);
     const RuntimeShape bias_shape(1, &channels);
-    if (per_channel)
+    if (per_channel && params->weights_offset != 0)
+    {
+        // TFLite's per-channel kernel assumes symmetric weights; CMSIS-NN's still
+        // honours a filter offset. Widen the weights with the offset applied and
+        // run the same TFLM per-channel kernel on them.
+        const int64_t count = flat_size(filter_shape);
+        std::vector<int16_t> offset_filter;
+        try
+        {
+            offset_filter.resize(static_cast<size_t>(count));
+        }
+        catch (const std::bad_alloc &)
+        {
+            return HCT_REF_E_PARAM;
+        }
+        for (int64_t i = 0; i < count; ++i)
+        {
+            offset_filter[static_cast<size_t>(i)] = static_cast<int16_t>(filter[i] + params->weights_offset);
+        }
+        tflite::reference_integer_ops::FullyConnectedPerChannel<In, int16_t, In, Bias>(
+            p, quant->multiplier, quant->shift, to_runtime(input_shape), input, to_runtime(filter_shape),
+            offset_filter.data(), bias_shape, bias, to_runtime(output_shape), output);
+    }
+    else if (per_channel)
     {
         tflite::reference_integer_ops::FullyConnectedPerChannel<In, int8_t, In, Bias>(
             p, quant->multiplier, quant->shift, to_runtime(input_shape), input, to_runtime(filter_shape), filter,

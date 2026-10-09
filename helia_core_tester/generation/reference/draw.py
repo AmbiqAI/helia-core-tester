@@ -12,7 +12,7 @@ from typing import Sequence, Tuple
 import numpy as np
 
 # Output quantization steps one bias element is worth (from the hoisted-bias
-# rule in ops/_shared/bias_init.py, now applied to every biased case): the floor
+# rule the converter path used for dilated convs, now applied to every biased case): the floor
 # clears a 1 LSB comparison tolerance with margin so a dropped bias-add cannot
 # hide inside it, the ceiling keeps the bias a few percent of the output range.
 BIAS_MIN_STEPS = 3.0
@@ -32,11 +32,16 @@ def uniform(rng: np.random.Generator, shape: Sequence[int], low: float, high: fl
     return rng.uniform(low, high, size=_shape(shape)).astype(np.float32)
 
 
-def glorot_uniform(rng: np.random.Generator, shape: Sequence[int], fan_in: int, fan_out: int) -> np.ndarray:
-    """Keras' default kernel initializer: U(-l, l), l = sqrt(6 / (fan_in + fan_out))."""
+def glorot_uniform(
+    rng: np.random.Generator, shape: Sequence[int], fan_in: int, fan_out: int, gain: float = 1.0
+) -> np.ndarray:
+    """Keras' default kernel initializer, U(-l, l) with l = sqrt(6 * gain / (fan_in + fan_out));
+    gain != 1 is VarianceScaling(gain, "fan_avg", "uniform"), the `weight_gain` knob."""
     if fan_in <= 0 or fan_out <= 0:
         raise ValueError(f"fans must be positive, got {fan_in}, {fan_out}")
-    limit = float(np.sqrt(6.0 / (fan_in + fan_out)))
+    if not np.isfinite(gain) or gain <= 0:
+        raise ValueError(f"gain must be positive, got {gain}")
+    limit = float(np.sqrt(6.0 * gain / (fan_in + fan_out)))
     return uniform(rng, shape, -limit, limit)
 
 

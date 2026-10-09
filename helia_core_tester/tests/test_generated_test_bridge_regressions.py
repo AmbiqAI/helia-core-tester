@@ -121,7 +121,7 @@ def test_fp16_pooling_expected_output_manifest_uses_fp16(tmp_path: Path) -> None
 
 
 def test_grouped_convolve_bridges_with_unified_tolerance(tmp_path: Path) -> None:
-    """A grouped convolve bridges under tolerant_int/tolerance=1.
+    """A grouped convolve bridges under the unified (now exact) Convolve comparison.
 
     case_02 has batch 1; case_01 has batch 2, which the bridge refuses."""
     cases = discover_or_skip(PROJECT_ROOT, family="ConvolutionFunctions", name_filter="convolve_grouped_conv_case_02_s8")
@@ -129,7 +129,7 @@ def test_grouped_convolve_bridges_with_unified_tolerance(tmp_path: Path) -> None
     bundle = build_case_bundle_from_generated_test(
         PROJECT_ROOT, cases[0], output_root=tmp_path, require_fvp_pass=False
     )
-    assert bundle.manifest["correctness_comparison"] == {"mode": "tolerant_int", "tolerance": 1}
+    assert bundle.manifest["correctness_comparison"] == {"mode": "exact_int"}
 
 
 _PACK_BLOCK = {"FP16": 8, "FP32": 4}

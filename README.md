@@ -960,6 +960,51 @@ Keras/TFLiteConverter path; see `third_party/VENDOR.md` for the pinned commits a
 `third_party/manifest.json` and verified before a build; the compiler is `HCT_HOST_CXX`, else
 `c++`/`g++`/`clang++`.
 
+### Reference goldens, host check and quantization policy
+
+Integer FullyConnected, Convolve, DepthwiseConv and TransposeConv cases (s8/s16 activations,
+s8/s4 weights) take their golden from those kernels instead of Keras + TFLiteConverter: no
+model is built and no `.tflite` is written. Each such case writes `<name>.reference.json`
+(kernel, parameters, tensor shapes/dtypes/sha256, seeds, library key) next to its sources, the
+sidecar gains a `reference` entry, and `manifest.json` points at the file. Float cases stay on
+the converter path for now.
+
+How a case is quantized (`generation/reference/weighted.py`, `policy.py`):
+
+- input: the descriptor's `quantization.input`, else `calibration_range`, else `input_range`,
+  else the draw range `[-32, 32]`; s8 is asymmetric (zero point nudged as TFLite does), s16
+  symmetric. The data itself is the operator's usual draw (`input_range` or integers in
+  `[-32, 32)`), so a narrower `calibration_range` still saturates the input on purpose.
+- weights: Glorot draws (`weight_gain` scales them), symmetric, per output channel unless
+  `hint.force_per_tensor` or `quantization.weights.per_channel: false`.
+- output: the float reference on the dequantized input and weights, fused activation applied,
+  widened by the bias margin and `quantization.headroom` (default 1); or `quantization.output`.
+- bias: 3..8 output steps per channel in the accumulator scale (int64 for s16), so a dropped
+  bias-add cannot hide inside one LSB; `use_bias: false` passes none (zeros where the kernel
+  dereferences a `cmsis_nn_bias_data` struct).
+- requantization and the fused-activation clamp come from the TFLM code itself
+  (`QuantizeMultiplier`, `CalculateActivationRangeQuantized`); `activation_min/max` narrow it.
+- s4 weights keep the fixed quantization in `hint.extras` (`input_scale` 4.0,
+  `input_zero_point` 3, `weight_scale` 1.0, `output_scale` 4.0, `output_zero_point` 0 by
+  default) with integer weights in `[-8, 7]`.
+
+```yaml
+quantization:
+  input: {scale: 0.25, zero_point: -3}     # or {range: [lo, hi]}
+  weights: {per_channel: false}            # or {scale: [...]}
+  output: {range: [-6.0, 6.0]}             # or {scale, zero_point}
+  headroom: 1.25
+```
+
+An explicit block and a legacy knob for the same role (`calibration_range`, `hint.extras`
+scales, `hint.force_per_tensor`) are refused, never silently merged. Weights, bias and input
+are drawn from independent streams of the case seed, so a failure reproduces from
+`--seed <run_seed> --name <case>`.
+
+`scripts/ref_fuzz.py --op all --draws N --host-kernels m0,dsp` draws random descriptors per
+family, generates them on this path and runs them on the host kernels with the comparison
+forced exact; its table is the evidence behind the tolerances in `generation/io/dtypes.py`.
+
 ## Mutation scoring
 
 `python -m helia_core_tester.mutation run --cmsis-nn-root <checkout>` generates cases, applies

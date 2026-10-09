@@ -1,9 +1,9 @@
 """Emitted requantization multipliers match TFLite's double-precision QuantizeMultiplier.
 
 TFLite derives each output channel's multiplier from input_scale * filter_scale /
-output_scale evaluated in double. The model's filter scales are float32, so a generator
-that multiplies them without widening keeps the product in float32 and emits Q31
-multipliers that differ from the ones the golden output was computed with.
+output_scale evaluated in double. The scales are float32 tensor parameters (recorded in
+the case's reference.json), so a generator that multiplies them without widening keeps
+the product in float32 and emits Q31 multipliers that differ from the golden's.
 """
 
 from __future__ import annotations
@@ -12,7 +12,6 @@ import math
 import re
 from pathlib import Path
 
-import numpy as np
 import pytest
 
 from helia_core_tester.generation.io.descriptors import load_all_descriptors
@@ -42,26 +41,20 @@ def _q31_multiplier(scale: float) -> int:
 def test_multipliers_come_from_double_precision_scales(name: str, tmp_path: Path) -> None:
     desc = next(d for d in load_all_descriptors(str(_PROJECT_ROOT / "assets" / "descriptors")) if d["name"] == name)
     generate_test(desc, str(tmp_path))
-    case_dir = next(p.parent for p in tmp_path.rglob(f"{name}.tflite"))
+    case_dir = next(p.parent for p in tmp_path.rglob("descriptor.yaml") if p.parent.name == name)
     header = "".join(p.read_text() for p in (case_dir / "includes").glob("*.h"))
     emitted = [int(v) for v in re.findall(r"-?\d+", re.search(r"_multiplier\[[0-9]*\]\s*=\s*\{([^}]*)\}", header).group(1))]
 
-    from ai_edge_litert.interpreter import Interpreter
+    import json
 
-    interpreter = Interpreter(model_path=str(case_dir / f"{name}.tflite"))
-    input_index = interpreter.get_input_details()[0]["index"]
-    output_index = interpreter.get_output_details()[0]["index"]
-    details = {d["index"]: d for d in interpreter.get_tensor_details()}
-    input_scale = float(details[input_index]["quantization_parameters"]["scales"][0])
-    output_scale = float(details[output_index]["quantization_parameters"]["scales"][0])
-    weights = [
-        d
-        for i, d in details.items()
-        if i not in (input_index, output_index) and d["dtype"] == np.int8 and len(d["shape"]) >= 2
-    ]
-    assert len(weights) == 1
-    weight_scales = weights[0]["quantization_parameters"]["scales"]
+    record = json.loads((case_dir / f"{name}.reference.json").read_text())
+    quant = record["quant"]
+    input_scale = float(quant["input"]["scale"])
+    output_scale = float(quant["output"]["scale"])
+    weight_scales = quant["weights"]["scales"]
     assert len(weight_scales) == len(emitted)
     expected = [_q31_multiplier(input_scale * float(s) / output_scale) for s in weight_scales]
 
     assert emitted == expected
+    # The golden ran with exactly the emitted multipliers.
+    assert record["params"]["multiplier"] == emitted

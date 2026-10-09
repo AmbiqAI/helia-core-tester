@@ -175,9 +175,11 @@ _OPERATOR_TOLERANCE_OVERRIDES: Dict[str, int] = {
     "SpaceToDepth": 0,
     "BatchToSpaceND": 0,
     "SpaceToBatchND": 0,
+    # Bit-exact against the TFLM reference golden (scripts/ref_fuzz.py, 200 draws
+    # per dtype on the m0 and dsp host kernels; the cortex-m55 FVP suite for MVE).
+    "Convolve": 0,
+    "TransposeConv": 0,
     # Kernel rounds 1 LSB off TFLite.
-    "Convolve": 1,
-    "TransposeConv": 1,
     "Mean": 1,
     "Quantize": 1,
     # Exact on MVE, DSP and pure C.
@@ -203,8 +205,8 @@ _OPERATOR_TOLERANCE_OVERRIDES: Dict[str, int] = {
 # dtype is S16 (int16_t). Distinct from _OPERATOR_TOLERANCE_OVERRIDES because
 # s8 and s16 outputs take different kernels.
 _OPERATOR_INT16_TOLERANCE_OVERRIDES: Dict[str, int] = {
-    # Kernel rounds 1 LSB off TFLite.
-    "FullyConnected": 1,
+    # Bit-exact against the TFLM reference golden (see Convolve above).
+    "FullyConnected": 0,
     "Convolve": 0,
     "Abs": 0,
     "Add": 0,

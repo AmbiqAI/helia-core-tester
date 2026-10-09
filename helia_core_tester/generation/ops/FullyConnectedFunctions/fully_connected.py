@@ -6,7 +6,6 @@ from typing import Dict, Any, Optional
 import numpy as np
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.ops._shared.fixed_batch import converter_for_batched_model
-from helia_core_tester.generation.ops._shared.bias_init import SignedMagnitudeUniform
 from helia_core_tester.generation.entry import check_entry_fault, resolve_entry
 from helia_core_tester.generation.harness import ArgumentPool, ArrayLiteral, Declaration, Define, GuardedBuffer, Provider, SizeQuery
 from helia_core_tester.generation.harness.faults import common_fault, struct_copy, with_fault
@@ -303,8 +302,128 @@ class OpFullyConnected(OperationBase):
         self.render_harness_files(output_dir, stem="fully_connected", context=context, pool=pool,
                                   validation_key=FC_VALIDATION_KEY, label="Fully connected", sizer_fn=fc_sizer(context))
 
+    def uses_reference(self) -> bool:
+        # Integer cases take their golden from the TFLM reference kernels; float
+        # cases stay on the converter path until the float suites move.
+        return str(self.desc.get("activation_dtype", "S8")).upper() in {"S8", "S16"}
+
+    def _generate_int_reference(self, output_dir: Path, kernel_info: Dict[str, Any]) -> None:
+        """Render an s8/s16 (s8 or s4 weights) case whose golden comes from the
+        TFLM reference fully-connected kernel."""
+        from helia_core_tester.generation.reference import weighted
+        from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
+
+        name = self.desc["name"]
+        builder = TemplateContextBuilder()
+        weight_dtype = str(self.desc.get("weight_dtype", "S8")).upper()
+        extras = (self.desc.get("hint") or {}).get("extras") or {}
+        filter_offset = int(extras.get("force_filter_offset", 0)) if weight_dtype != "S4" else 0
+
+        spec = weighted.fc_spec(self.desc)
+        case = weighted.build_weighted_case(
+            self.desc, spec, self.reference_rng("weights"), self.generate_input_data, weights_offset=filter_offset
+        )
+        self._reference_call = case.call
+        batch, features = spec.input_shape[0], spec.weight_shape[1]
+        units = spec.weight_shape[0]
+        input_dims = {"n": batch, "h": 1, "w": 1, "c": features}
+        filter_dims = {"n": features, "h": 1, "w": 1, "c": units}
+        output_dims = {"n": batch, "h": 1, "w": 1, "c": units}
+        input_zp = case.input_quant.zero_point
+        fc_params = {
+            "input_offset": -input_zp,
+            "filter_offset": filter_offset,
+            "output_offset": case.output_quant.zero_point,
+            "activation_min": case.act_min,
+            "activation_max": case.act_max,
+        }
+        quant_params_dict = case.quant_context(builder)
+        output_dtype = np.int16 if kernel_info["output_c_type"] == "int16_t" else np.int8
+
+        weights = case.weights_q
+        biases = case.bias_q
+        # The MVE s8 kernel reads the bias and input-offset fold from precomputed
+        # kernel sums (and a NULL bias); other builds read the bias itself.
+        weight_sum = None
+        has_weight_sum = False
+        folded_bias = None
+        if weight_dtype != "S4" and self._should_precompute_weight_sum(weights, output_dtype):
+            from helia_core_tester.generation.ops.ConvolutionFunctions.depthwise_conv import vector_sum_s8
+
+            weight_sum = vector_sum_s8(
+                vector_data=weights,
+                vector_cols=features,
+                vector_rows=units,
+                lhs_offset=-input_zp,
+                rhs_offset=filter_offset,
+                bias_data=biases,
+            ).astype(np.int32)
+            has_weight_sum = True
+            if biases is not None:
+                folded_bias = biases
+                biases = None
+
+        has_biases = biases is not None
+        biases_array_str = builder.format_array_as_c_literal(biases) if has_biases else ""
+        # A bias folded into the kernel sum still appears as an array in the header:
+        # the hardware bridge reads it back to rebuild the kernel sum.
+        has_bias_array = has_biases
+        if folded_bias is not None:
+            biases_array_str = builder.format_array_as_c_literal(folded_bias.astype(np.int32))
+            has_bias_array = True
+
+        is_s16 = kernel_info["input_c_type"] == "int16_t"
+        if is_s16 and quant_params_dict.get("per_channel", False):
+            buffer_size_max = output_dims["c"] * 4
+        elif weight_dtype == "S4":
+            buffer_size_max = 0
+        else:
+            buffer_size_max = builder.calculate_fc_buffer_size_max(
+                filter_dims, output_dtype=self.desc.get("activation_dtype", "S8")
+            )
+        entry_scratch_bytes = kernel_info.get("entry_scratch_bytes")
+        if entry_scratch_bytes is not None:
+            buffer_size_max = max(buffer_size_max, int(entry_scratch_bytes))
+
+        context = {
+            "name": name,
+            "entry_family": kernel_info.get("entry_family"),
+            "entry_scratch_bytes": entry_scratch_bytes,
+            "entry_extra_sizers": kernel_info.get("entry_extra_sizers"),
+            "input_dims": input_dims,
+            "filter_dims": filter_dims,
+            "output_dims": output_dims,
+            "fc_params": fc_params,
+            "quant_params": quant_params_dict,
+            "weights_array": builder.format_array_as_c_literal(case.weights_c),
+            "biases_array": biases_array_str,
+            "has_biases": has_biases,
+            "has_bias_array": has_bias_array,
+            "input_data_array": builder.format_array_as_c_literal(case.input_q.flatten()),
+            "expected_output_array": builder.format_array_as_c_literal(case.output_q.flatten()),
+            "input_dtype": kernel_info["input_c_type"],
+            "output_dtype": kernel_info["output_c_type"],
+            "bias_dtype": kernel_info["bias_c_type"],
+            "kernel_fn": kernel_info["kernel_fn"],
+            "kernel_get_buffer_size_fn": kernel_info["kernel_get_buffer_size_fn"],
+            "call_style": kernel_info.get("call_style", "baseline"),
+            "buffer_size_max": buffer_size_max,
+            "weight_sum_array": builder.format_array_as_c_literal(weight_sum) if weight_sum is not None else "",
+            "has_weight_sum": has_weight_sum,
+            "expected_status": self.expected_status(),
+            # The entry lives only on ns-cmsis-nn's MVE paths, so it declines on a build without them.
+            "autovectorize_declines": bool(self.desc.get("autovectorize_declines", False)),
+            "autovectorize_declines_if": autovectorize_declines_if(kernel_info["input_c_type"]),
+        }
+        self._render_fully_connected(output_dir, context)
+        cmake_content = self.render_template(
+            "common/CMakeLists.txt.j2",
+            {"name": name, "operator": self.desc.get("operator", "FullyConnected"), "operator_name": "fully_connected"},
+        )
+        (output_dir / "CMakeLists.txt").write_text(cmake_content)
+
     def needs_keras_model(self) -> bool:
-        return str(self.desc.get("weight_dtype", "S8")).upper() != "S4"
+        return True
     
     def build_keras_model(self):
         """Build Keras model for FullyConnected operation."""
@@ -349,24 +468,12 @@ class OpFullyConnected(OperationBase):
         # tensor, which the TFLite converter's constant-folding optimizer
         # strips from the graph entirely -- the generated CMSIS-NN test then
         # calls the kernel with a NULL bias pointer, leaving the bias-add
-        # path completely untested. Use a nonzero uniform bias, deterministic
-        # from the case seed, so real bias data flows through the golden and
-        # the kernel call.
-        #
-        # The quantized magnitude has to clear one output quantization step,
-        # or a dropped bias-add still reproduces the golden bit for bit. FC
-        # sums far fewer terms than conv does, so its calibrated output range
-        # is much narrower and the floor scales down with it: every
-        # bias-carrying channel of an int FC case clears at least one output
-        # step with margin, while the bias costs only a small fraction of the
-        # calibrated dynamic range. The float range is unchanged.
-        _case_is_float = str(self.tensor_dtype("input", default="S8")).upper() in {"FP32", "FP16"}
+        # path completely untested. Float cases only: integer cases use the
+        # reference kernels.
         if not use_bias:
             bias_initializer = 'zeros'
-        elif _case_is_float:
-            bias_initializer = keras.initializers.RandomUniform(minval=-0.25, maxval=0.25, seed=self.seed)
         else:
-            bias_initializer = SignedMagnitudeUniform(minval=0.125, maxval=0.25, seed=self.seed)
+            bias_initializer = keras.initializers.RandomUniform(minval=-0.25, maxval=0.25, seed=self.seed)
 
         # Dense layer without activation (we'll apply activation separately if needed)
         x = keras.layers.Dense(
@@ -396,46 +503,6 @@ class OpFullyConnected(OperationBase):
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
         """Convert Keras model to TFLite with quantization."""
         self.round_float16_weights(model)
-        weight_dtype = str(self.desc.get("weight_dtype", "S8")).upper()
-        if weight_dtype == "S4":
-            from helia_core_tester.generation.utils.litert_builder import build_fully_connected_s4_op
-
-            extras = self.desc.get("hint", {}).get("extras", {})
-            input_scale = float(extras.get("input_scale", 4.0))
-            input_zp = int(extras.get("input_zero_point", 3))
-            weight_scale = float(extras.get("weight_scale", 1.0))
-            output_scale = float(extras.get("output_scale", 4.0))
-            output_zp = int(extras.get("output_zero_point", 0))
-
-            input_shape = tuple(self.desc["input_shape"])
-            fs = tuple(self.desc["filter_shape"])  # O, I
-            filter_shape = fs
-            out_ch = filter_shape[0]
-
-            weights_int4 = self.rng.integers(-8, 8, size=filter_shape).astype(np.int8)
-            biases = None
-            if self.desc.get("use_bias", True):
-                biases = self.rng.integers(-128, 128, size=(out_ch,), dtype=np.int32)
-
-            # Ensure output_scale is compatible with input_scale * weight_scale to satisfy TFLite checks.
-            effective_scale = input_scale * weight_scale
-            if effective_scale > 0:
-                output_scale = float(effective_scale)
-
-            tflite_model = build_fully_connected_s4_op(
-                input_shape=input_shape,
-                filter_shape=filter_shape,
-                use_bias=self.desc.get("use_bias", True),
-                input_quant=([input_scale], [input_zp]),
-                weight_quant=([weight_scale], [0]),
-                output_quant=([output_scale], [output_zp]),
-                weights_int4=weights_int4,
-                biases=biases,
-            )
-            with open(out_path, "wb") as f:
-                f.write(tflite_model)
-            return
-
         import tensorflow as tf
         
         # Create converter
@@ -521,59 +588,6 @@ class OpFullyConnected(OperationBase):
 
         return 0
     
-    def _get_zero_point(self, quant_dict: Dict[str, Any]) -> int:
-        """Get zero point from quantization dictionary."""
-        if quant_dict is None:
-            return 0
-        zp = quant_dict.get('zero_point', 0)
-        if isinstance(zp, (list, np.ndarray)):
-            return int(zp[0]) if len(zp) > 0 else 0
-        return int(zp)
-    
-    def _compute_activation_range(self, output_quant: Dict[str, Any], output_dtype: np.dtype) -> tuple[int, int]:
-        """Compute activation min/max based on output quantization and dtype."""
-        activation_str = self.desc.get('activation', 'NONE')
-        output_zp = self._get_zero_point(output_quant)
-        output_scale = output_quant.get('scale', 1.0)
-        if isinstance(output_scale, (list, np.ndarray)):
-            output_scale = float(output_scale[0])
-        
-        if output_dtype == np.int16:
-            default_min, default_max = -32768, 32767
-        else:  # int8
-            default_min, default_max = -128, 127
-        
-        # Real zero sits at the output zero point.
-        if activation_str == 'RELU':
-            activation_min = max(output_zp, default_min)
-            activation_max = default_max
-        elif activation_str == 'RELU6':
-            # RELU6: clamp to [0, 6] in float, then quantize
-            relu6_max_float = 6.0
-            relu6_max_quantized = int(np.round(relu6_max_float / output_scale + output_zp))
-            activation_min = max(output_zp, default_min)
-            activation_max = min(relu6_max_quantized, default_max)
-        else:  # NONE, TANH, SIGMOID, etc.
-            activation_min = default_min
-            activation_max = default_max
-        
-        # Override with descriptor values if present
-        if 'activation_min' in self.desc:
-            activation_min = int(self.desc['activation_min'])
-        if 'activation_max' in self.desc:
-            activation_max = int(self.desc['activation_max'])
-        
-        return activation_min, activation_max
-    
-    def _compute_weight_sum_size(self, weights: Optional[np.ndarray], output_dtype: np.dtype) -> int:
-        """Compute the size of the weight sum tensor."""
-        if weights is None:
-            return 0
-        if output_dtype == np.int8 and self._supports_weight_sum():
-            # Weight sum size = output_units (number of rows in weight matrix)
-            return weights.shape[0] if len(weights.shape) == 2 else 0
-        return 0
-    
     def _supports_weight_sum(self) -> bool:
         """Check if platform supports weight sum optimization.
 
@@ -593,92 +607,6 @@ class OpFullyConnected(OperationBase):
             and weights.size > 0
         )
     
-    def _compute_fixed_point_multipliers(
-        self,
-        input_scale: float,
-        weight_scales: np.ndarray,
-        output_scale: float
-    ) -> list[Dict[str, Any]]:
-        """
-        Compute fixed-point multipliers and shifts for each output channel.
-        
-        Returns:
-            List of dictionaries with 'multiplier' and 'shift' keys
-        """
-        from helia_core_tester.generation.utils.tflite_utils import calculate_per_channel_multiplier_shift
-        
-        # Compute effective scales: (input_scale * weight_scale) / output_scale
-        if isinstance(weight_scales, np.ndarray):
-            effective_scales = (input_scale * weight_scales) / output_scale
-        else:
-            effective_scales = np.array([(input_scale * weight_scales) / output_scale])
-        
-        multipliers, shifts = calculate_per_channel_multiplier_shift(
-            effective_scales,
-            reduce_to_q15=False  # Kernel handles reduction internally
-        )
-
-        return [
-            {'multiplier': int(m), 'shift': int(s)}
-            for m, s in zip(multipliers, shifts)
-        ]
-
-    def _compute_fc_reference_output_s8(
-        self,
-        input_q: np.ndarray,
-        weights: np.ndarray,
-        biases: Optional[np.ndarray],
-        quant_params: Dict[str, Any],
-        fc_params: Dict[str, Any],
-    ) -> np.ndarray:
-        """
-        Compute an s8 fully-connected reference output using CMSIS-style arithmetic.
-
-        This is used when descriptor overrides (e.g. force_filter_offset) intentionally
-        diverge from the TFLite model quantization, so LiteRT inference can no longer
-        be used as the expected output source.
-        """
-        from helia_core_tester.generation.utils.tflite_utils import requantize_np
-
-        if weights is None:
-            raise ValueError("Weights are required to compute fully connected reference output")
-
-        # Flatten input to [batch, features] to match FC kernel expectations.
-        in_features = int(weights.shape[1])
-        input_2d = input_q.reshape(input_q.shape[0], in_features).astype(np.int32)
-        weights_2d = weights.astype(np.int32)
-
-        input_offset = int(fc_params["input_offset"])
-        filter_offset = int(fc_params["filter_offset"])
-        output_offset = int(fc_params["output_offset"])
-        activation_min = int(fc_params["activation_min"])
-        activation_max = int(fc_params["activation_max"])
-
-        # Accumulate: sum((input + input_offset) * (weight + filter_offset))
-        accum = (input_2d + input_offset) @ (weights_2d + filter_offset).T
-
-        if biases is not None and biases.size > 0:
-            accum = accum + np.asarray(biases, dtype=np.int32).reshape(1, -1)
-
-        if quant_params.get("per_channel", False):
-            multipliers = np.asarray(quant_params["multiplier"], dtype=np.int32)
-            shifts = np.asarray(quant_params["shift"], dtype=np.int32)
-            requantized = np.empty_like(accum, dtype=np.int32)
-            for ch in range(accum.shape[1]):
-                requantized[:, ch] = requantize_np(
-                    accum[:, ch], int(multipliers[ch]), int(shifts[ch])
-                )
-        else:
-            requantized = requantize_np(
-                accum,
-                int(quant_params["multiplier"]),
-                int(quant_params["shift"]),
-            )
-
-        requantized = requantized + output_offset
-        requantized = np.clip(requantized, activation_min, activation_max)
-        return requantized.astype(np.int8)
-    
     def generate_c_files(self, output_dir: Path) -> None:
         """
         Generate C and H files from templates for FullyConnected operation.
@@ -686,13 +614,16 @@ class OpFullyConnected(OperationBase):
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
         
         name = self.desc['name']
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
-        
         # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_fc_kernel()
         float_kernel = kernel_info["input_c_type"] in {"float", "float16_t"}
+        if not float_kernel:
+            self._generate_int_reference(output_dir, kernel_info)
+            return
+
+        tflite_path = output_dir / f"{name}.tflite"
+        if not tflite_path.exists():
+            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
         
         # Load LiteRT model for shape and quantization extraction
         from helia_core_tester.generation.utils.litert_utils import get_operator_tensors_from_litert
@@ -729,11 +660,6 @@ class OpFullyConnected(OperationBase):
         # For 4D inputs, op[0] may be RESHAPE, so using operator index 0 can be wrong.
         weights = op_tensors.get('weights')
         biases = op_tensors.get('biases')
-        biases_for_reference = (
-            np.asarray(biases, dtype=np.int32).copy()
-            if biases is not None and biases.size > 0
-            else None
-        )
         
         # Get weight quantization from LiteRT
         from helia_core_tester.generation.utils.litert_utils import (
@@ -786,20 +712,8 @@ class OpFullyConnected(OperationBase):
             'per_channel': weight_quant.get('per_channel', False)
         }
         
-        weight_dtype = str(self.desc.get("weight_dtype", "S8")).upper()
-
         # Validate weights shape
-        if weight_dtype == "S4":
-            fs = tuple(self.desc['filter_shape'])
-            if len(fs) != 2:
-                raise ValueError(f"Unsupported filter_shape in descriptor: {fs}")
-            filter_dims = {
-                'n': int(fs[1]),  # input_features
-                'h': 1,
-                'w': 1,
-                'c': int(fs[0])   # output_units
-            }
-        elif weights is not None:
+        if weights is not None:
             filter_shape = tuple(weights.shape)
             if len(filter_shape) == 1:
                 # Try to infer 2D shape
@@ -861,16 +775,7 @@ class OpFullyConnected(OperationBase):
             input_dims = builder.nhwc_to_cmsis_dims(input_shape)
         
         # Compute output dimensions - use weights shape to get correct output_units
-        if weight_dtype == "S4":
-            fs = tuple(self.desc['filter_shape'])
-            batch_size = int(output_shape[0]) if len(output_shape) >= 1 else int(input_shape[0])
-            output_dims = {
-                'n': batch_size,
-                'h': 1,
-                'w': 1,
-                'c': int(fs[0])
-            }
-        elif weights is not None and len(weights.shape) == 2:
+        if weights is not None and len(weights.shape) == 2:
             correct_output_units = int(weights.shape[0])
             batch_size = int(output_shape[0]) if len(output_shape) >= 1 else int(input_shape[0])
 
@@ -1002,333 +907,3 @@ class OpFullyConnected(OperationBase):
             with open(cmake_path, 'w') as f:
                 f.write(cmake_content)
             return
-        
-        # Get scales as arrays for per-channel computation
-        input_scale = input_quant['scale']
-        if isinstance(input_scale, (list, np.ndarray)):
-            input_scale = float(input_scale[0])
-        else:
-            input_scale = float(input_scale)
-        
-        weight_scale = weight_quant_dict['scale']
-        output_scale = output_quant['scale']
-        force_per_tensor = bool(self.desc.get("hint", {}).get("force_per_tensor", False))
-        per_channel = bool(weight_quant_dict.get('per_channel', False)) and not force_per_tensor
-        
-        # Convert scales to numpy arrays for per-channel computation
-        if per_channel and isinstance(weight_scale, (list, np.ndarray)):
-            weight_scales = np.array(weight_scale, dtype=np.float64)
-        else:
-            if isinstance(weight_scale, (list, np.ndarray)):
-                weight_scales = np.array([float(weight_scale[0])], dtype=np.float64)
-            else:
-                weight_scales = np.array([float(weight_scale)], dtype=np.float64)
-        
-        if isinstance(output_scale, (list, np.ndarray)):
-            output_scale = float(output_scale[0])
-        else:
-            output_scale = float(output_scale)
-        
-        # Compute fixed-point multipliers and shifts
-        outputs_fp = self._compute_fixed_point_multipliers(
-            input_scale,
-            weight_scales,
-            output_scale
-        )
-        
-        # Build quantization parameters dict
-        if per_channel and len(outputs_fp) > 1:
-            multipliers = [fp['multiplier'] for fp in outputs_fp]
-            shifts = [fp['shift'] for fp in outputs_fp]
-            quant_params_dict = {
-                'multiplier': multipliers,
-                'shift': shifts,
-                'multiplier_array': ', '.join(map(str, multipliers)),
-                'shift_array': ', '.join(map(str, shifts)),
-                'per_channel': True
-            }
-        else:
-            # Per-tensor
-            if len(outputs_fp) > 0:
-                multiplier = outputs_fp[0]['multiplier']
-                shift = outputs_fp[0]['shift']
-            else:
-                # Fallback calculation
-                effective_scale = (input_scale * float(weight_scales[0])) / output_scale
-                from helia_core_tester.generation.utils.tflite_utils import calculate_per_channel_multiplier_shift
-                mults, shfts = calculate_per_channel_multiplier_shift(
-                    np.array([effective_scale]),
-                    reduce_to_q15=False
-                )
-                multiplier = int(mults[0])
-                shift = int(shfts[0])
-
-            quant_params_dict = {
-                'multiplier': multiplier,
-                'shift': shift,
-                'per_channel': False
-            }
-        
-        # Compute activation range
-        output_dtype = np.int16 if kernel_info["output_c_type"] == "int16_t" else np.int8
-        activation_min, activation_max = self._compute_activation_range(output_quant, output_dtype)
-        
-        # Build FC parameters
-        input_zp = self._get_zero_point(input_quant)
-        weight_zp = self._get_zero_point(weight_quant_dict)
-        output_zp = self._get_zero_point(output_quant)
-        extras = self.desc.get("hint", {}).get("extras", {})
-        filter_offset_override = extras.get("force_filter_offset")
-        if filter_offset_override is not None:
-            filter_offset_override = int(filter_offset_override)
-
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
-        weight_dtype = str(self.desc.get("weight_dtype", "S8")).upper()
-        if activation_dtype == 'S16':
-            # S16 uses symmetric quantization (zero points are 0)
-            fc_params = {
-                'input_offset': 0,
-                'filter_offset': 0,
-                'output_offset': 0,
-                'activation_min': activation_min,
-                'activation_max': activation_max,
-            }
-        elif weight_dtype == "S4":
-            fc_params = {
-                'input_offset': int(-input_zp),
-                'filter_offset': 0,
-                'output_offset': int(output_zp),
-                'activation_min': activation_min,
-                'activation_max': activation_max,
-            }
-        else:
-            # S8 uses zero points as offsets
-            fc_params = {
-                'input_offset': int(-input_zp),
-                'filter_offset': int(filter_offset_override) if filter_offset_override is not None else int(-weight_zp),
-                'output_offset': int(output_zp),
-                'activation_min': activation_min,
-                'activation_max': activation_max,
-            }
-        
-        # Compute weight sum if needed
-        weight_sum = None
-        has_weight_sum = False
-        folded_bias = None
-        if weight_dtype != "S4" and self._should_precompute_weight_sum(weights, output_dtype):
-            from helia_core_tester.generation.ops.ConvolutionFunctions.depthwise_conv import vector_sum_s8
-            
-            vector_rows = weights.shape[0]  # output_units
-            vector_cols = weights.shape[1]  # input_features
-
-            lhs_offset = -input_zp
-            rhs_offset = int(filter_offset_override) if filter_offset_override is not None else -weight_zp
-            
-            bias_data = None
-            if biases is not None and biases.size > 0:
-                if biases.dtype != np.int32:
-                    bias_data = biases.astype(np.int32)
-                else:
-                    bias_data = biases
-            
-            weight_sum = vector_sum_s8(
-                vector_data=weights,
-                vector_cols=vector_cols,
-                vector_rows=vector_rows,
-                lhs_offset=lhs_offset,
-                rhs_offset=rhs_offset,
-                bias_data=bias_data,
-            ).astype(np.int32)
-            
-            has_weight_sum = True
-            
-            # If weight_sum is precomputed, biases are consumed into it
-            if bias_data is not None:
-                folded_bias = bias_data
-                biases = None
-        
-        # Format arrays
-        if weight_dtype == "S4":
-            from helia_core_tester.generation.utils.litert_utils import get_tensor_data_packed_from_litert
-            packed_weights = None
-            for input_tensor_info in op_tensors['inputs']:
-                if input_tensor_info['data'] is not None and len(input_tensor_info['shape']) > 1:
-                    packed_weights = get_tensor_data_packed_from_litert(input_tensor_info['tensor'], model)
-                    break
-            if packed_weights is None:
-                raise ValueError("Packed S4 weights not found in LiteRT model")
-            weights = packed_weights.astype(np.int8)
-        weights_array_str = builder.format_array_as_c_literal(weights) if weights is not None else ""
-        
-        has_biases = False
-        biases_array_str = ""
-        if not has_weight_sum and weight_dtype != "S4":
-            has_biases = biases is not None and biases.size > 0
-            if has_biases:
-                # Convert biases to appropriate type
-                if kernel_info["bias_c_type"] == "int64_t":
-                    if biases.dtype != np.int64:
-                        biases = biases.astype(np.int64)
-                else:  # int32_t
-                    if biases.dtype != np.int32:
-                        biases = biases.astype(np.int32)
-                biases_array_str = builder.format_array_as_c_literal(biases)
-        elif weight_dtype == "S4":
-            has_biases = biases is not None and biases.size > 0
-            if has_biases and biases.dtype != np.int32:
-                biases = biases.astype(np.int32)
-            if has_biases:
-                biases_array_str = builder.format_array_as_c_literal(biases)
-
-        # A bias folded into the kernel sum still has to appear as an array in
-        # the header. The kernel keeps taking a NULL bias pointer, but the
-        # hardware bridge reads the bias back out of the header decl, and a
-        # NULL decl is indistinguishable there from a zero bias, so the bridge
-        # would rebuild the kernel sum without the bias term.
-        has_bias_array = has_biases
-        if has_weight_sum and folded_bias is not None:
-            biases_array_str = builder.format_array_as_c_literal(folded_bias.astype(np.int32))
-            has_bias_array = True
-
-        weight_sum_array_str = builder.format_array_as_c_literal(weight_sum) if weight_sum is not None else ""
-        
-        # Generate input data and run inference
-        rng_state = self.rng.__getstate__()
-        self.rng = np.random.default_rng(self.seed)
-        input_data = self.generate_input_data()
-        self.rng.__setstate__(rng_state)
-        
-        # Quantize input - keep original shape for inference (model has Flatten layer)
-        input_q = np.round(input_data / input_scale + input_zp).astype(np.int32)
-        if kernel_info["input_c_type"] == "int8_t":
-            input_q = np.clip(input_q, -128, 127).astype(np.int8)
-        else:  # int16_t
-            input_q = np.clip(input_q, -32768, 32767).astype(np.int16)
-        
-        # Run inference using LiteRT; fall back to numpy for S4 if LiteRT rejects scales.
-        from helia_core_tester.generation.utils.litert_utils import run_inference_litert
-        output_data = None
-        if weight_dtype == "S4":
-            try:
-                output_data = run_inference_litert(str(tflite_path), input_q, subgraph_index=0)
-            except Exception:
-                output_data = None
-        else:
-            output_data = run_inference_litert(str(tflite_path), input_q, subgraph_index=0)
-
-        # LiteRT golden output does not include descriptor-side filter offset overrides.
-        # Recompute expected output with CMSIS arithmetic when forced RHS offset is used.
-        if (
-            weight_dtype != "S4"
-            and kernel_info["output_c_type"] == "int8_t"
-            and filter_offset_override is not None
-        ):
-            output_data = self._compute_fc_reference_output_s8(
-                input_q=input_q,
-                weights=weights,
-                biases=biases_for_reference,
-                quant_params=quant_params_dict,
-                fc_params=fc_params,
-            )
-
-        if output_data is None and weight_dtype == "S4":
-            from helia_core_tester.generation.utils.tflite_utils import requantize_np
-            # Use unpacked weights from LiteRT extraction
-            weights_unpacked = op_tensors['weights']
-            if weights_unpacked is None:
-                raise ValueError("Unpacked S4 weights not found for fallback inference")
-            if weights_unpacked.dtype != np.int8:
-                weights_unpacked = weights_unpacked.astype(np.int8)
-            if biases is None:
-                biases = np.zeros((weights_unpacked.shape[0],), dtype=np.int32)
-            if biases.dtype != np.int32:
-                biases = biases.astype(np.int32)
-            multiplier = int(quant_params_dict['multiplier'])
-            shift = int(quant_params_dict['shift'])
-            input_offset = int(fc_params['input_offset'])
-            output_offset = int(fc_params['output_offset'])
-            batch = input_q.shape[0]
-            out_ch = weights_unpacked.shape[0]
-            in_feat = weights_unpacked.shape[1]
-            inp_flat = input_q.reshape(batch, in_feat).astype(np.int32)
-            out = np.zeros((batch, out_ch), dtype=np.int32)
-            for b in range(batch):
-                acc = (inp_flat[b] + input_offset).astype(np.int32)
-                # (out_ch, in_feat) dot (in_feat,)
-                prod = weights_unpacked.astype(np.int32) @ acc
-                prod = prod + biases
-                requant = requantize_np(prod, multiplier, shift)
-                requant = requant + output_offset
-                requant = np.clip(requant, -128, 127).astype(np.int8)
-                out[b, :] = requant.astype(np.int32)
-            output_data = out.astype(np.int8)
-        
-        # Format arrays - format_array_as_c_literal automatically flattens
-        input_data_array_str = builder.format_array_as_c_literal(input_q.flatten())
-        # Ensure output_data is properly shaped and flattened for C array
-        if kernel_info["output_c_type"] == "int16_t":
-            expected_output_array_str = builder.format_array_as_c_literal(output_data.flatten().astype(np.int16))
-        else:
-            expected_output_array_str = builder.format_array_as_c_literal(output_data.flatten().astype(np.int8))
-        
-        # Calculate buffer size max
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
-        is_s16 = (activation_dtype == 'S16' or kernel_info["input_c_type"] == "int16_t")
-        
-        if is_s16 and quant_params_dict.get('per_channel', False):
-            buffer_size_max = output_dims['c'] * 4  # sizeof(int32_t) = 4
-        else:
-            if weight_dtype == "S4":
-                buffer_size_max = 0
-            else:
-                buffer_size_max = builder.calculate_fc_buffer_size_max(
-                    filter_dims,
-                    output_dtype=activation_dtype
-                )
-        entry_scratch_bytes = kernel_info.get("entry_scratch_bytes")
-        if entry_scratch_bytes is not None:
-            buffer_size_max = max(buffer_size_max, int(entry_scratch_bytes))
-
-        # Build template context
-        context = {
-            'name': name,
-            'entry_family': kernel_info.get("entry_family"),
-            'entry_scratch_bytes': entry_scratch_bytes,
-            'entry_extra_sizers': kernel_info.get("entry_extra_sizers"),
-            'input_dims': input_dims,
-            'filter_dims': filter_dims,
-            'output_dims': output_dims,
-            'fc_params': fc_params,
-            'quant_params': quant_params_dict,
-            'weights_array': weights_array_str,
-            'biases_array': biases_array_str,
-            'has_biases': has_biases,
-            'has_bias_array': has_bias_array,
-            'input_data_array': input_data_array_str,
-            'expected_output_array': expected_output_array_str,
-            'input_dtype': kernel_info["input_c_type"],
-            'output_dtype': kernel_info["output_c_type"],
-            'bias_dtype': kernel_info["bias_c_type"],
-            'kernel_fn': kernel_info["kernel_fn"],
-            'kernel_get_buffer_size_fn': kernel_info["kernel_get_buffer_size_fn"],
-            'call_style': kernel_info.get("call_style", "baseline"),
-            'buffer_size_max': buffer_size_max,
-            'weight_sum_array': weight_sum_array_str,
-            'has_weight_sum': has_weight_sum,
-            'expected_status': self.expected_status(),
-            # The entry lives only on ns-cmsis-nn's MVE paths, so it declines on a build without them.
-            'autovectorize_declines': bool(self.desc.get("autovectorize_declines", False)),
-            'autovectorize_declines_if': autovectorize_declines_if(kernel_info["input_c_type"]),
-        }
-        self._render_fully_connected(output_dir, context)
-
-        cmake_context = {
-            'name': name,
-            'operator': self.desc.get('operator', 'FullyConnected'),
-            'operator_name': 'fully_connected'
-        }
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
-        cmake_path = output_dir / "CMakeLists.txt"
-        with open(cmake_path, 'w') as f:
-            f.write(cmake_content)
-        

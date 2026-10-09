@@ -274,6 +274,12 @@ def _manifest_entry(
         "path": str(test_dir),
         "relative_test_dir": str(test_dir.relative_to(generated_tests_dir)),
         "tflite": str(test_dir / f"{desc['name']}.tflite"),
+        # The provenance of a reference-kernel golden; None for cases still on the .tflite path.
+        "reference": (
+            str(test_dir / f"{desc['name']}.reference.json")
+            if (test_dir / f"{desc['name']}.reference.json").is_file()
+            else None
+        ),
         "c_sources": sorted(p.name for p in test_dir.glob("*.c")),
         "cpu": cpu,
         "reused": reused,
@@ -353,8 +359,10 @@ def generate_test(
     op = op_class(desc, seed, target_cpu=cpu)
     op.run_seed = int(run_seed)
     
-    # Build Keras model (skip for ops that generate LiteRT models directly)
-    if op.needs_keras_model():
+    uses_reference = op.uses_reference()
+    # Build Keras model (skip for ops that generate LiteRT models directly, and
+    # for reference-golden cases, which need neither a model nor a .tflite)
+    if not uses_reference and op.needs_keras_model():
         try:
             model = op.build_keras_model()
         except Exception as e:
@@ -377,8 +385,11 @@ def generate_test(
     # Convert to TFLite (some ops allow no-tflite fallback)
     tflite_path = test_dir / f"{name}.tflite"
     try:
-        op.convert_to_tflite(model, str(tflite_path), seed)
-        print(f"Generated TFLite model: {name}")
+        if uses_reference:
+            print(f"Reference-kernel golden: {name}")
+        else:
+            op.convert_to_tflite(model, str(tflite_path), seed)
+            print(f"Generated TFLite model: {name}")
     except Exception as e:
         if op.allow_no_tflite():
             print(f"INFO: Skipping TFLite generation for {name}: {e}")
@@ -412,6 +423,16 @@ def generate_test(
         op.generate_c_files(test_dir)
         op.assert_input_mode_consumed()
         check_case_golden(test_dir, desc)
+        if op.reference is not None:
+            from helia_core_tester.generation.reference.bindings import loaded_library_key
+
+            op.reference.to_json(
+                test_dir / f"{name}.reference.json",
+                seeds={"run_seed": int(run_seed), "case_seed": int(seed)},
+                library_key=loaded_library_key(),
+            )
+        elif uses_reference:
+            raise RuntimeError(f"{name}: uses_reference() but generate_c_files() recorded no reference call")
     except NotImplementedError:
         # Operator doesn't support C file generation yet
         print(f"INFO: {name} - C file generation not implemented")
