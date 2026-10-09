@@ -164,7 +164,7 @@ class OperationBase(ABC):
         """The ReferenceCall recorded by reference_golden(), or None."""
         return self._reference_call
 
-    def reference_golden(self, call) -> np.ndarray:
+    def reference_golden(self, call):
         """Run `call` on the C reference, record it as this case's golden, and return its output.
 
         Every golden of a reference-backed operator goes through here, so the
@@ -175,7 +175,8 @@ class OperationBase(ABC):
             raise TypeError(f"reference_golden takes a ReferenceCall, got {type(call).__name__}")
         if self._reference_call is not None:
             raise RuntimeError(f"{self.desc.get('name')}: a reference golden was already recorded for this case")
-        golden = call.output()
+        # A multi-output entry (Where: coordinates and a count) returns its outputs by name.
+        golden = call.output() if len(call.output_names) == 1 else call.run()
         self._reference_call = call
         self._golden = golden
         return golden

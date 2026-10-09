@@ -152,3 +152,52 @@ int32_t hct_unary_setup(const HctTensor *inputs, int32_t num_inputs, HctTensor *
     *count = n_in;
     return HCT_OK;
 }
+
+int32_t hct_dtype_size(int32_t dtype)
+{
+    switch (dtype)
+    {
+    case HCT_INT8:
+    case HCT_BOOL:
+        return 1;
+    case HCT_INT16:
+    case HCT_FLOAT16:
+        return 2;
+    case HCT_INT32:
+    case HCT_FLOAT32:
+        return 4;
+    case HCT_INT64:
+        return 8;
+    default:
+        return 0;
+    }
+}
+
+int32_t hct_check_tensor_any(const HctTensor *t, int64_t *count)
+{
+    if (t == NULL)
+    {
+        return HCT_E_NULL;
+    }
+    if (hct_dtype_size(t->dtype) == 0)
+    {
+        return HCT_E_DTYPE;
+    }
+    return hct_check_tensor(t, t->dtype, count);
+}
+
+int32_t hct_check_same_shape(const HctTensor *a, const HctTensor *b)
+{
+    if (a->rank != b->rank)
+    {
+        return HCT_E_SHAPE;
+    }
+    for (int32_t i = 0; i < a->rank; ++i)
+    {
+        if (a->dims[i] != b->dims[i])
+        {
+            return HCT_E_SHAPE;
+        }
+    }
+    return HCT_OK;
+}

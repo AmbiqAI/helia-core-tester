@@ -14,42 +14,9 @@ class OpSplit(OperationBase):
     Split operation - splits a tensor into multiple tensors.
     """
 
-    def needs_keras_model(self) -> bool:
-        return False
+    def uses_reference(self) -> bool:
+        return True
 
-    def build_keras_model(self):
-        raise NotImplementedError("Split uses LiteRT-only model generation.")
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        from helia_core_tester.generation.utils.litert_builder import build_split_op
-
-        activation_dtype = self._split_dtype()
-        if activation_dtype == "S8":
-            dtype = "int8"
-        elif activation_dtype == "S16":
-            dtype = "int16"
-        elif activation_dtype == "FP16":
-            dtype = "float16"
-        elif activation_dtype == "FP32":
-            dtype = "float32"
-        else:
-            raise NotImplementedError(f"Unsupported Split dtype: {activation_dtype}")
-
-        input_shape = tuple(self.desc["input_shape"])
-        axis = int(self.desc.get("axis", -1))
-        num_splits = self.desc.get("num_splits", None)
-        size_splits = self.desc.get("size_splits", None)
-
-        model_bytes = build_split_op(
-            input_shape=input_shape,
-            axis=axis,
-            num_splits=num_splits,
-            size_splits=size_splits,
-            dtype=dtype,
-        )
-        with open(out_path, "wb") as f:
-            f.write(model_bytes)
-    
     def _split_dtype(self) -> str:
         return self.tensor_dtype("input", default=str(self.desc.get("activation_dtype", "S8")))
 
@@ -96,10 +63,9 @@ class OpSplit(OperationBase):
         """
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
         
+        from helia_core_tester.generation.reference.call import ReferenceCall
+
         name = self.desc['name']
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
         
         # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_split_kernel()
@@ -156,11 +122,20 @@ class OpSplit(OperationBase):
 
         self.rng.__setstate__(rng_state)
 
-        if size_splits is not None:
-            indices = np.cumsum(split_dims)[:-1]
-            output_arrays = np.split(input_q, indices, axis=axis)
-        else:
-            output_arrays = np.split(input_q, int(num_splits), axis=axis)
+        if sum(split_dims) != int(input_shape[axis]):
+            raise ValueError(f"{name}: split sizes {split_dims} do not cover axis extent {input_shape[axis]}")
+        flat = self.reference_golden(ReferenceCall(
+            "split", {"axis": axis},
+            {"input": input_q, "extents": np.array(split_dims, dtype=np.int32)},
+            {"output": (int(input_q.size),)},
+        ))
+        output_arrays = []
+        offset = 0
+        for extent in split_dims:
+            slice_shape = tuple(int(extent) if d == axis else int(v) for d, v in enumerate(input_shape))
+            size = int(np.prod(slice_shape, dtype=np.int64))
+            output_arrays.append(flat[offset:offset + size].reshape(slice_shape))
+            offset += size
 
         outputs = []
         for idx, out_data in enumerate(output_arrays):

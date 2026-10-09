@@ -12,7 +12,8 @@
 #   int32_t hct_ref_<entry>(const <in> *in, <out> *out);
 #
 # Field types: int32, int64, float32, float64. Tensor dtypes: int8, int16, int32,
-# int64, float32, float16 (binary16 bits in uint16 storage), bool (uint8).
+# int64, float32, float16 (binary16 bits in uint16 storage), bool (uint8), or `any`: the
+# caller's dtype, checked by the entry; `any` outputs take the `any` inputs' common dtype.
 
 abi_version: 1
 max_rank: 8
@@ -449,6 +450,30 @@ structs:
       - [output_zero_point, int32]
       - [multiplier, int32]
       - [shift, int32]
+
+  HctPadParams:
+    doc: "mode: 0 CONSTANT (pad_value), 1 REFLECT (edge excluded), 2 SYMMETRIC (edge included)."
+    fields:
+      - [mode, int32]
+  HctBlockParams:
+    fields:
+      - [block_size, int32]
+  HctResizeParams:
+    fields:
+      - [align_corners, int32]
+      - [half_pixel_centers, int32]
+  HctStridedSliceParams:
+    doc: TFLite StridedSlice masks; ellipsis_mask and new_axis_mask must be 0.
+    fields:
+      - [begin_mask, int32]
+      - [end_mask, int32]
+      - [ellipsis_mask, int32]
+      - [new_axis_mask, int32]
+      - [shrink_axis_mask, int32]
+  HctReverseSequenceParams:
+    fields:
+      - [seq_dim, int32]
+      - [batch_dim, int32]
 
 prepare:
   quantize_multiplier:
@@ -992,3 +1017,88 @@ kernels:
     params: HctAxisParams
     inputs: {input: float16}
     outputs: {output: int32}
+  # Data movement: dtype-generic (`any`); the output keeps the input dtype.
+  concatenation:
+    params: HctAxisParams
+    inputs: {data: any, extents: int32}
+    outputs: {output: any}
+  split:
+    params: HctAxisParams
+    inputs: {input: any, extents: int32}
+    outputs: {output: any}
+  gather:
+    params: HctAxisParams
+    inputs: {input: any, indices: int32}
+    outputs: {output: any}
+  gather_nd:
+    params: HctNoParams
+    inputs: {input: any, indices: int32}
+    outputs: {output: any}
+  pad:
+    params: HctPadParams
+    inputs: {input: any, paddings: int32, pad_value: any}
+    outputs: {output: any}
+  reshape:
+    params: HctNoParams
+    inputs: {input: any}
+    outputs: {output: any}
+  batch_to_space_nd:
+    params: HctNoParams
+    inputs: {input: any, block_shape: int32, crops: int32}
+    outputs: {output: any}
+  space_to_batch_nd:
+    params: HctNoParams
+    inputs: {input: any, block_shape: int32, paddings: int32, pad_value: any}
+    outputs: {output: any}
+  depth_to_space:
+    params: HctBlockParams
+    inputs: {input: any}
+    outputs: {output: any}
+  space_to_depth:
+    params: HctBlockParams
+    inputs: {input: any}
+    outputs: {output: any}
+  resize_nearest_neighbor:
+    params: HctResizeParams
+    inputs: {input: any}
+    outputs: {output: any}
+  transpose:
+    params: HctNoParams
+    inputs: {input: any, perm: int32}
+    outputs: {output: any}
+  strided_slice:
+    params: HctStridedSliceParams
+    inputs: {input: any, begin: int32, end: int32, strides: int32}
+    outputs: {output: any}
+  tile:
+    params: HctNoParams
+    inputs: {input: any, multiples: int32}
+    outputs: {output: any}
+  broadcast_to:
+    params: HctNoParams
+    inputs: {input: any}
+    outputs: {output: any}
+  scatter_nd:
+    params: HctNoParams
+    inputs: {indices: int32, updates: any}
+    outputs: {output: any}
+  select_v2:
+    params: HctNoParams
+    inputs: {condition: bool, x: any, y: any}
+    outputs: {output: any}
+  where:
+    params: HctNoParams
+    inputs: {condition: any}
+    outputs: {coords: int64, count: int32}
+  reverse_sequence:
+    params: HctReverseSequenceParams
+    inputs: {input: any, seq_lengths: int32}
+    outputs: {output: any}
+  dynamic_update_slice:
+    params: HctNoParams
+    inputs: {operand: any, update: any, start: int32}
+    outputs: {output: any}
+  fill:
+    params: HctNoParams
+    inputs: {value: any}
+    outputs: {output: any}

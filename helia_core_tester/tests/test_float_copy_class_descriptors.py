@@ -3,9 +3,10 @@ any-rank arm_concatenation_f32/f16, arm_pack_f32/f16, arm_unpack_f32/f16 and
 arm_nn_fill_f32/f16.
 
 Every descriptor for them carries required_kernel_symbols so a checkout that predates the
-kernels skips the case instead of failing the build; the goldens are numpy, the kernels are
-bit copies, and the comparison is zero-tolerance. These tests pin the descriptor contract,
-the LiteRT topologies, and the shape of the emitted C for one case per kernel.
+kernels skips the case instead of failing the build; the split/concatenation/pack/unpack/fill
+goldens come from the C reference library, the kernels are bit copies, and the comparison is
+zero-tolerance. These tests pin the descriptor contract, the shape of the emitted C for one case
+per kernel, and that each emitted golden matches an independent numpy model of its inputs.
 """
 
 from __future__ import annotations
@@ -22,7 +23,6 @@ from helia_core_tester.core.discovery import find_descriptors_dir
 from helia_core_tester.generation.io.descriptors import load_all_descriptors
 from helia_core_tester.generation.ops.BasicMathFunctions.fill import parse_fill_value
 from helia_core_tester.generation.ops.catalog import get_operator_spec
-from helia_core_tester.generation.utils.litert_builder import build_fill_op, build_pack_op, build_unpack_op
 from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
 
@@ -64,6 +64,9 @@ REPRESENTATIVE_CASES = [
     ("fill_float_nan_block17_f16", "fill", ["arm_nn_fill_f16(", "_fill_value[0],"], True),
     ("dequantize_float_f16_widen_nonfinite_f32", "dequantize", ["arm_dequantize_f16_f32(", "40 /* block_size */"], True),
 ]
+
+
+REFERENCE_BACKED = {"pack", "unpack", "split", "concatenation", "fill"}
 
 
 @pytest.fixture(scope="module")
@@ -167,41 +170,6 @@ def test_parse_fill_value_nan_and_rejects_junk() -> None:
         parse_fill_value(True)
 
 
-def _output_shapes(model_bytes: bytes) -> list[tuple[int, ...]]:
-    from ai_edge_litert.interpreter import Interpreter
-
-    interpreter = Interpreter(model_content=model_bytes)
-    interpreter.allocate_tensors()
-    return [tuple(int(v) for v in detail["shape"]) for detail in interpreter.get_output_details()]
-
-
-def test_litert_topologies_match_numpy_shapes() -> None:
-    # Cross-checks the builders' own shape arithmetic against LiteRT's.
-    assert _output_shapes(build_pack_op(input_shape=[], num_inputs=8, axis=0)) == [(8,)]
-    assert _output_shapes(build_pack_op(input_shape=[2, 3], num_inputs=3, axis=2)) == [(2, 3, 3)]
-    assert _output_shapes(build_unpack_op(input_shape=[2, 5, 3], axis=1)) == [(2, 3)] * 5
-    assert _output_shapes(build_unpack_op(input_shape=[2, 5, 3], axis=1, dtype="float16")) == [(2, 3)] * 5
-    assert _output_shapes(build_fill_op(output_shape=[17], dtype="float16")) == [(17,)]
-    with pytest.raises(ValueError):
-        build_pack_op(input_shape=[2, 3], num_inputs=2, axis=3)
-    with pytest.raises(ValueError):
-        build_unpack_op(input_shape=[2, 0], axis=1)
-
-
-def test_float16_pack_model_is_provenance_only() -> None:
-    # LiteRT's reference PACK has no FLOAT16 registration, so the f16 pack model
-    # cannot be prepared. It does not have to be: the .tflite is a provenance
-    # artifact and nothing in the pipeline interprets it -- OpPack's golden is
-    # numpy.stack over its own emitted operands (asserted below). UNPACK and FILL
-    # do register FLOAT16, which is why only pack is called out here. If LiteRT
-    # ever gains the registration this test fails and the cross-check above can
-    # widen to cover it.
-    model = build_pack_op(input_shape=[], num_inputs=8, axis=0, dtype="float16")
-    assert model
-    with pytest.raises(RuntimeError, match="FLOAT16"):
-        _output_shapes(model)
-
-
 @pytest.fixture(scope="module")
 def emitted_cases(descriptors: dict[str, dict], tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
     out_dir = tmp_path_factory.mktemp("copy_class")
@@ -224,7 +192,11 @@ def test_representative_cases_emit_the_kernel_call(
     assert "HELIA_VALIDATE_OUTPUTS(" in source
     assert "        0.0f,\n        0.0f,\n" in source, "zero-tolerance comparison"
     # Every case carries its golden's provenance: a converted model, or a reference-call record.
-    assert (test_dir / f"{case_name}.tflite").exists() or (test_dir / f"{case_name}.reference.json").exists()
+    if op_suffix in REFERENCE_BACKED:
+        assert (test_dir / f"{case_name}.reference.json").exists()
+        assert not (test_dir / f"{case_name}.tflite").exists()
+    else:
+        assert (test_dir / f"{case_name}.tflite").exists() or (test_dir / f"{case_name}.reference.json").exists()
     assert (test_dir / f"{case_name}_{op_suffix}.sidecar.json").exists() is emits_sidecar
 
 
@@ -275,3 +247,80 @@ def test_dequantize_widening_golden_carries_the_tokens(emitted_cases: dict[str, 
     np.testing.assert_array_equal(data[3:], expected[3:])
     # The float16 literals widen exactly: every finite lane is a float16 value.
     assert np.array_equal(data[3:].astype(np.float16).astype(np.float32), data[3:])
+
+
+# Further reference-backed cases whose goldens are checked against numpy on the emitted inputs.
+NUMPY_MODEL_CASES = (
+    "split_float_zero_slice_v_f32",
+    "concatenation_axis_x_f32",
+    "concatenation_const_scalar_s8",
+    "concatenation_any_rank_zero_extent_f16",
+    "fill_float_nan_block17_f16",
+    "fill_float_negzero_block17_f32",
+    "fill_float_block0_noop_f32",
+)
+
+
+@pytest.fixture(scope="module")
+def numpy_model_cases(descriptors: dict[str, dict], tmp_path_factory: pytest.TempPathFactory) -> dict[str, str]:
+    out_dir = tmp_path_factory.mktemp("copy_class_numpy")
+    headers: dict[str, str] = {}
+    for case_name in NUMPY_MODEL_CASES:
+        desc = descriptors[case_name]
+        generation_module.generate_test(desc, str(out_dir), cpu="cortex-m55")
+        case_dir = out_dir / desc["_family"] / case_name
+        assert (case_dir / f"{case_name}.reference.json").exists(), case_name
+        (header,) = (case_dir / "includes").glob(f"{case_name}_*.h")
+        headers[case_name] = header.read_text()
+    return headers
+
+
+def test_split_golden_is_numpy_split_of_the_emitted_input(numpy_model_cases: dict[str, str]) -> None:
+    case = "split_float_zero_slice_v_f32"
+    header = numpy_model_cases[case]
+    data = _c_array(header, f"{case}_input").reshape(2, 3, 10, 5)
+    parts = np.split(data, np.cumsum([3, 0, 6, 1])[:-1], axis=2)
+    for index, part in enumerate(parts):
+        expected = _c_array(header, f"{case}_out_{index}_expected_output")
+        if part.size == 0:
+            # The empty slice keeps one element of storage; the case validates over 0 elements.
+            assert expected.size == 1
+            continue
+        np.testing.assert_array_equal(part.reshape(-1), expected)
+
+
+def test_per_axis_concatenation_golden_follows_the_wzyx_layout(numpy_model_cases: dict[str, str]) -> None:
+    # axis_x draws each operand as (W, Z, Y, X) and concatenates along X (numpy axis 3).
+    case = "concatenation_axis_x_f32"
+    header = numpy_model_cases[case]
+    shapes = [(1, 3, 2, 2), (1, 3, 2, 1), (1, 3, 2, 3)]
+    inputs = [_c_array(header, f"{case}_input{i + 1}").reshape(shape) for i, shape in enumerate(shapes)]
+    expected = _c_array(header, f"{case}_expected_output")
+    np.testing.assert_array_equal(np.concatenate(inputs, axis=3).reshape(-1), expected)
+
+
+def test_const_concatenation_appends_a_tensor_of_threes(numpy_model_cases: dict[str, str]) -> None:
+    case = "concatenation_const_scalar_s8"
+    header = numpy_model_cases[case]
+    variable = _c_array(header, f"{case}_input1").reshape(1, 3, 3, 2)
+    const = _c_array(header, f"{case}_input2").reshape(1, 3, 3, 1)
+    assert np.all(const == 3)
+    expected = _c_array(header, f"{case}_expected_output")
+    np.testing.assert_array_equal(np.concatenate([variable, const], axis=3).reshape(-1), expected)
+
+
+def test_zero_extent_operand_contributes_nothing(numpy_model_cases: dict[str, str]) -> None:
+    case = "concatenation_any_rank_zero_extent_f16"
+    header = numpy_model_cases[case]
+    second = _c_array(header, f"{case}_input2")
+    np.testing.assert_array_equal(second, _c_array(header, f"{case}_expected_output"))
+
+
+def test_fill_golden_repeats_the_value(numpy_model_cases: dict[str, str]) -> None:
+    nan = _c_array(numpy_model_cases["fill_float_nan_block17_f16"], "fill_float_nan_block17_f16_expected_output")
+    assert nan.size == 17 and np.isnan(nan).all()
+    negzero = _c_array(numpy_model_cases["fill_float_negzero_block17_f32"], "fill_float_negzero_block17_f32_expected_output")
+    assert negzero.size == 17 and np.all(negzero == 0.0) and np.all(np.signbit(negzero))
+    # block_size 0 writes nothing; the golden is the one element of untouched storage.
+    noop = _c_array(numpy_model_cases["fill_float_block0_noop_f32"], "fill_float_block0_noop_f32_expected_output")
+    assert noop.size == 1

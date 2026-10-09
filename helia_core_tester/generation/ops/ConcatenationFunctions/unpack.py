@@ -7,24 +7,20 @@ import numpy as np
 
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.ops.ConcatenationFunctions.slices import unpack_argument_pool
-from helia_core_tester.generation.utils.litert_builder import build_unpack_op
 
 
 _FLOAT_KERNELS: Dict[str, Dict[str, object]] = {
     # arm_unpack_f32/f16 (ns-cmsis-nn#475): bit copy, any rank >= 1, any axis.
-    "FP32": {"kernel_fn": "arm_unpack_f32", "c_type": "float", "np_dtype": np.float32, "litert": "float32"},
-    "FP16": {"kernel_fn": "arm_unpack_f16", "c_type": "float16_t", "np_dtype": np.float16, "litert": "float16"},
+    "FP32": {"kernel_fn": "arm_unpack_f32", "c_type": "float", "np_dtype": np.float32},
+    "FP16": {"kernel_fn": "arm_unpack_f16", "c_type": "float16_t", "np_dtype": np.float16},
 }
 
 
 class OpUnpack(OperationBase):
     """Unpack operation."""
 
-    def needs_keras_model(self) -> bool:
-        return False
-
-    def build_keras_model(self):
-        raise NotImplementedError("Unpack uses LiteRT-only model generation.")
+    def uses_reference(self) -> bool:
+        return True
 
     def _kernel(self) -> Dict[str, object]:
         dtype = self.tensor_dtype("input")
@@ -46,16 +42,8 @@ class OpUnpack(OperationBase):
             raise ValueError("Unpack axis must have at least one slice")
         return input_shape, axis
 
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        input_shape, axis = self._geometry()
-        model_bytes = build_unpack_op(
-            input_shape=input_shape,
-            axis=axis,
-            dtype=str(self._kernel()["litert"]),
-        )
-        self._write_tflite_bytes(out_path, model_bytes)
-
     def generate_c_files(self, output_dir: Path) -> None:
+        from helia_core_tester.generation.reference.call import ReferenceCall
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
         name = self.desc["name"]
@@ -65,10 +53,16 @@ class OpUnpack(OperationBase):
         builder = TemplateContextBuilder()
 
         input_data = self._sample_uniform(input_shape, dtype=np_dtype)
-        slices = [
-            np.ascontiguousarray(np.take(input_data, index, axis=axis)).astype(np_dtype)
-            for index in range(input_shape[axis])
-        ]
+        # UNPACK is a split into unit slices along `axis`, each with that axis dropped.
+        count = input_shape[axis]
+        flat = self.reference_golden(ReferenceCall(
+            "split", {"axis": axis},
+            {"input": input_data, "extents": np.ones(count, dtype=np.int32)},
+            {"output": (int(input_data.size),)},
+        ))
+        slice_shape = input_shape[:axis] + input_shape[axis + 1:]
+        slice_size = int(np.prod(slice_shape, dtype=np.int64))
+        slices = [flat[index * slice_size:(index + 1) * slice_size].reshape(slice_shape) for index in range(count)]
 
         outputs = []
         for index, slab in enumerate(slices):

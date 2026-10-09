@@ -1,9 +1,9 @@
-"""ResizeNearestNeighbor: the source index matches the kernel's float32 rule, and dtype dispatch (#127)."""
+"""ResizeNearestNeighbor: the C reference's source index matches the kernel's float32 rule, and
+float descriptors are refused (#127)."""
 
 import shutil
 import subprocess
 import textwrap
-from unittest import mock
 
 import numpy as np
 import pytest
@@ -11,8 +11,21 @@ import pytest
 from helia_core_tester.generation.ops.ReshapeFunctions.resize_nearest_neighbor import (
     OpResizeNearestNeighbor,
 )
+from helia_core_tester.generation.reference.call import ReferenceCall
 
-_index = OpResizeNearestNeighbor._nearest_index
+
+def nearest_indices(in_size: int, out_size: int, align_corners: bool, half_pixel_centers: bool) -> np.ndarray:
+    """Source index of every output row, read off the reference resize of an index column."""
+    column = np.arange(in_size, dtype=np.int16).reshape(1, in_size, 1, 1)
+    out = ReferenceCall(
+        "resize_nearest_neighbor",
+        {"align_corners": int(align_corners), "half_pixel_centers": int(half_pixel_centers)},
+        {"input": column}, {"output": (1, out_size, 1, 1)}).output()
+    return out.reshape(out_size).astype(int)
+
+
+def _index(out_idx, in_size, out_size, align_corners, half_pixel_centers):
+    return int(nearest_indices(in_size, out_size, align_corners, half_pixel_centers)[out_idx])
 
 # GetNearestNeighbor transcribed from ns-cmsis-nn Include/arm_nnsupportfunctions.h, with the scale
 # and offset setup of arm_resize_nearest_neighbor_s8.c lifted into main(), so the oracle is the
@@ -78,7 +91,7 @@ _KERNEL_HELPER_C = textwrap.dedent(
         # One output pixel with half-pixel centres samples the middle, not index 0.
         (False, True, 2, 1, 0, 1),
         (False, True, 5, 1, 0, 2),
-        (True, True, 4, 1, 0, 2),
+        # align_corners with half_pixel_centers is rejected by TFLite and by the reference.
     ],
 )
 def test_reference_matches_kernel_verified_points(align_corners, half_pixel_centers, in_size, out_size, out_idx, kernel):
@@ -107,53 +120,25 @@ def test_reference_matches_compiled_kernel_helper_exhaustively(tmp_path):
         check=True,
     )
     table = subprocess.run([str(exe), "48"], check=True, capture_output=True, text=True).stdout
-    mismatches = []
-    rows = 0
+    kernel = {}
     for line in table.splitlines():
-        ac, hp, in_size, out_size, out_idx, kernel = (int(v) for v in line.split())
-        rows += 1
-        ours = _index(out_idx, in_size, out_size, bool(ac), bool(hp))
-        if ours != kernel:
-            mismatches.append((ac, hp, in_size, out_size, out_idx, kernel, ours))
-    assert rows > 0
-    assert mismatches == []
-
-
-@pytest.mark.parametrize(
-    ("activation_dtype", "litert_dtype"),
-    [("S8", "int8"), ("S16", "int16"), ("FP32", "float32"), ("FP16", "float16")],
-)
-def test_convert_to_tflite_maps_every_supported_dtype(tmp_path, activation_dtype, litert_dtype):
-    op = OpResizeNearestNeighbor.__new__(OpResizeNearestNeighbor)
-    op.desc = {
-        "name": "resize_probe",
-        "activation_dtype": activation_dtype,
-        "input_shape": [1, 3, 3, 2],
-        "size": [5, 5],
-        "align_corners": True,
-    }
-    with mock.patch(
-        "helia_core_tester.generation.utils.litert_builder.build_resize_nearest_neighbor_op",
-        return_value=b"model",
-    ) as build:
-        op.convert_to_tflite(None, str(tmp_path / "m.tflite"), rep_seed=0)
-    assert build.call_args.kwargs["dtype"] == litert_dtype
-    assert (tmp_path / "m.tflite").read_bytes() == b"model"
-
-
-def test_convert_to_tflite_rejects_an_unknown_dtype(tmp_path):
-    op = OpResizeNearestNeighbor.__new__(OpResizeNearestNeighbor)
-    op.desc = {"name": "resize_probe", "activation_dtype": "S4", "input_shape": [1, 2, 2, 1], "size": [3, 3]}
-    with pytest.raises(NotImplementedError):
-        op.convert_to_tflite(None, str(tmp_path / "m.tflite"), rep_seed=0)
+        ac, hp, in_size, out_size, out_idx, idx = (int(v) for v in line.split())
+        if ac and hp:
+            continue  # TFLite (and the reference) reject the combination
+        kernel.setdefault((ac, hp, in_size, out_size), []).append(idx)
+    assert kernel
+    mismatches = [(key, want, list(nearest_indices(key[2], key[3], bool(key[0]), bool(key[1]))))
+                  for key, want in kernel.items()]
+    assert [m for m in mismatches if m[1] != m[2]] == []
 
 
 def test_generate_c_files_rejects_float_loudly_until_the_float_kernels_are_wired(tmp_path):
     # ValueError, not NotImplementedError: helia_core_tester/generation/test_ops.py swallows
     # NotImplementedError from this call with an INFO line, so a float descriptor would vanish
     # from the suite instead of failing the generation run.
-    op = OpResizeNearestNeighbor.__new__(OpResizeNearestNeighbor)
-    op.desc = {"name": "resize_probe", "activation_dtype": "FP32", "input_shape": [1, 2, 2, 1], "size": [3, 3]}
-    (tmp_path / "resize_probe.tflite").write_bytes(b"model")
-    with pytest.raises(ValueError):
-        op.generate_c_files(tmp_path)
+    for dtype in ("FP32", "FP16"):
+        op = OpResizeNearestNeighbor({"name": "resize_probe", "operator": "ResizeNearestNeighbor",
+                                      "activation_dtype": dtype, "input_shape": [1, 2, 2, 1], "size": [3, 3]})
+        with pytest.raises(ValueError, match="supports S8 and S16"):
+            op.generate_c_files(tmp_path)
+        assert op.reference is None

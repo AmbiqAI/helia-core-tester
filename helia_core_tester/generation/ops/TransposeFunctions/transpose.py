@@ -2,17 +2,28 @@
 Transpose operation implementation.
 """
 
-from typing import Dict, Any
+from typing import Dict
 import numpy as np
-import tensorflow as tf
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.base import OperationBase
+
+
+# The single-op models the old generator quantized the S8/S16 input with; the
+# input draw keeps them so the emitted values do not change.
+_PRESET_INPUT_QUANT = {"int8_t": (0.125, 0), "int16_t": (1.0 / 32768.0, 0)}
 
 
 class OpTranspose(OperationBase):
     """
     Transpose operation.
     """
+
+    def uses_reference(self) -> bool:
+        return not self.status_only()
+
+    def status_only(self) -> bool:
+        # An ARG_ERROR case asserts the kernel's rejection, so it has no golden.
+        return self.desc.get("expected_status", "ARM_CMSIS_NN_SUCCESS") != "ARM_CMSIS_NN_SUCCESS"
 
     def _resolved_permutation(self) -> list[int]:
         input_shape = self.desc['input_shape']
@@ -31,15 +42,6 @@ class OpTranspose(OperationBase):
             return [0]
         raise ValueError(f"Unsupported input rank for Transpose: {rank}")
     
-    def build_keras_model(self) -> tf.keras.Model:
-        """Build Keras model for Transpose operation."""
-        input_shape = self.desc['input_shape']
-        perm = self._resolved_permutation()
-        inputs = tf.keras.Input(shape=input_shape[1:], dtype=tf.float32, name='input')
-        x = tf.keras.layers.Lambda(lambda x: tf.transpose(x, perm=perm))(inputs)
-        model = tf.keras.Model(inputs=inputs, outputs=x)
-        return model
-
     def _select_cmsis_transpose_kernel(self) -> Dict[str, str]:
         """
         Select appropriate CMSIS-NN kernel function for Transpose operation.
@@ -76,96 +78,23 @@ class OpTranspose(OperationBase):
         else:
             raise NotImplementedError(f"Unsupported Transpose dtype: {activation_dtype}")
 
-    def needs_keras_model(self) -> bool:
-        return False
-
-    def allow_no_tflite(self) -> bool:
-        if self.desc.get("hint", {}).get("force_cmsis", False):
-            return True
-        if self.desc.get("expected_status") == "ARM_CMSIS_NN_ARG_ERROR":
-            return True
-        return False
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        if self.desc.get("hint", {}).get("force_cmsis", False):
-            raise RuntimeError("Transpose CMSIS-only test; skip TFLite generation.")
-        if self.desc.get("expected_status") == "ARM_CMSIS_NN_ARG_ERROR":
-            raise RuntimeError("Transpose expected error; skip TFLite generation.")
-
-        from helia_core_tester.generation.utils.litert_builder import build_transpose_op
-
-        model_bytes = build_transpose_op(
-            input_shape=tuple(self.desc['input_shape']),
-            permutation=self._resolved_permutation(),
-            dtype=self.tensor_litert_dtype("input"),
-        )
-        self._write_tflite_bytes(out_path, model_bytes)
-    
     def generate_c_files(self, output_dir: Path) -> None:
         """
         Generate C and H files from templates for Transpose operation.
         """
+        from helia_core_tester.generation.reference.call import ReferenceCall
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
-        
+
         name = self.desc['name']
         expected_status = self.desc.get('expected_status', 'ARM_CMSIS_NN_SUCCESS')
         force_cmsis = self.desc.get('hint', {}).get('force_cmsis', False)
         force_perm = self.desc.get('hint', {}).get('force_permutation')
 
-        if not force_cmsis and expected_status == "ARM_CMSIS_NN_SUCCESS":
-            tflite_path = output_dir / f"{name}.tflite"
-            if not tflite_path.exists():
-                raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
-        
-        # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_transpose_kernel()
         float_kernel = kernel_info["input_c_type"] in {"float", "float16_t"}
-        
-        if force_cmsis or expected_status != "ARM_CMSIS_NN_SUCCESS":
-            input_shape = tuple(self.desc['input_shape'])
-            output_shape = None
-            op_tensors = None
-            subgraph_input_indices = set()
-            subgraph_output_indices = set()
-        else:
-            # Load LiteRT model for shape extraction
-            from helia_core_tester.generation.utils.litert_utils import get_operator_tensors_from_litert
-            model, subgraph = self.load_litert_model(str(tflite_path))
-            op_tensors = get_operator_tensors_from_litert(model, subgraph, 0)
-            
-            # Extract shapes from LiteRT.
-            # Prefer subgraph I/O tensors to avoid picking the permutation tensor.
-            input_shape = None
-            output_shape = None
-            subgraph_input_indices = set(subgraph.inputs or [])
-            subgraph_output_indices = set(subgraph.outputs or [])
 
-            for input_tensor_info in op_tensors['inputs']:
-                tensor_idx = input_tensor_info.get('index', -1)
-                tensor_shape = input_tensor_info.get('shape')
-                if tensor_idx in subgraph_input_indices:
-                    input_shape = tensor_shape
-                    break
+        input_shape = tuple(int(d) for d in self.desc['input_shape'])
 
-            if input_shape is None and op_tensors['inputs']:
-                input_shape = op_tensors['inputs'][0]['shape']
-
-            for output_tensor_info in op_tensors['outputs']:
-                tensor_idx = output_tensor_info.get('index', -1)
-                tensor_shape = output_tensor_info.get('shape')
-                if tensor_idx in subgraph_output_indices:
-                    output_shape = tensor_shape
-                    break
-
-            if output_shape is None and op_tensors['outputs']:
-                output_shape = op_tensors['outputs'][0]['shape']
-        
-        # Ensure shapes are tuples
-        if input_shape is not None:
-            input_shape = tuple(input_shape)
-        if output_shape is not None:
-            output_shape = tuple(output_shape)
-        
         builder = TemplateContextBuilder()
         # Resolve permutation
         permutation = list(force_perm) if force_perm is not None else self._resolved_permutation()
@@ -188,18 +117,13 @@ class OpTranspose(OperationBase):
                 output_dims = {'n': int(out_shape[0]), 'h': int(out_shape[1]), 'w': int(out_shape[2]), 'c': 1}
         else:
             input_dims = builder.nhwc_to_cmsis_dims(input_shape)
-            if output_shape is None:
-                output_shape = tuple(int(input_shape[i]) for i in permutation)
-            output_dims = builder.nhwc_to_cmsis_dims(output_shape)
-        
-        # Generate input data and quantize
+            output_dims = builder.nhwc_to_cmsis_dims(tuple(int(input_shape[i]) for i in permutation))
+
         input_data = self._sample_uniform(input_shape)
 
-        # Quantize inputs
         if float_kernel:
             float_dtype = np.float16 if kernel_info["input_c_type"] == "float16_t" else np.float32
             input_q = input_data.astype(float_dtype)
-            output_data = np.transpose(input_q, permutation).astype(float_dtype)
         elif kernel_info["input_c_type"] == "int8_t":
             np_in_dtype = np.int8
             qmin, qmax = -128, 127
@@ -211,40 +135,22 @@ class OpTranspose(OperationBase):
 
         if float_kernel:
             pass
-        elif force_cmsis or expected_status != "ARM_CMSIS_NN_SUCCESS":
+        elif force_cmsis or self.status_only():
             input_q = self.rng.integers(qmin, qmax + 1, size=input_shape, dtype=np_in_dtype)
-            if expected_status == "ARM_CMSIS_NN_SUCCESS":
-                output_data = np.transpose(input_q, permutation)
-            else:
-                output_data = np.zeros((1,), dtype=np_in_dtype)
         else:
-            # Extract quantization from LiteRT (match the selected input tensor)
-            input_quant = op_tensors['inputs'][0]['quantization']
-            for input_tensor_info in op_tensors['inputs']:
-                tensor_idx = input_tensor_info.get('index', -1)
-                if tensor_idx in subgraph_input_indices:
-                    input_quant = input_tensor_info['quantization']
-                    break
-            input_scale = input_quant.get('scale', 1.0)
-            input_zp = input_quant.get('zero_point', 0)
-            if isinstance(input_scale, (list, np.ndarray)):
-                input_scale = float(input_scale[0]) if len(input_scale) > 0 else 1.0
-            if isinstance(input_zp, (list, np.ndarray)):
-                input_zp = int(input_zp[0]) if len(input_zp) > 0 else 0
-            input_scale = float(input_scale)
-            input_zp = int(input_zp)
-
+            input_scale, input_zp = _PRESET_INPUT_QUANT[kernel_info["input_c_type"]]
             input_q = np.round(input_data / float(input_scale) + float(input_zp)).astype(np.int32)
             input_q = np.clip(input_q, qmin, qmax).astype(np_in_dtype)
 
-            interpreter = self.load_litert_interpreter(str(tflite_path))
-            input_details = interpreter.get_input_details()
-            output_details = interpreter.get_output_details()
-            interpreter.set_tensor(input_details[0]['index'], input_q)
-            interpreter.invoke()
-            output_data = interpreter.get_tensor(output_details[0]['index'])
-            output_data = np.array(output_data)
-        
+        if self.status_only():
+            # Never compared: the kernel must reject the permutation before writing.
+            output_data = np.zeros((1,), dtype=input_q.dtype)
+        else:
+            output_data = self.reference_golden(ReferenceCall(
+                "transpose", {"unused": 0},
+                {"input": input_q, "perm": np.array(permutation, dtype=np.int32)},
+                {"output": tuple(input_shape[i] for i in permutation)}))
+
         # Format arrays
         input_array_str = builder.format_array_as_c_literal(input_q)
         expected_output_array_str = builder.format_array_as_c_literal(output_data)

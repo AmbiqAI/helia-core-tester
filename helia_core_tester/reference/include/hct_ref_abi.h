@@ -533,6 +533,39 @@ typedef struct
     int32_t shift;
 } HctMeanQuantizedParams;
 
+/* mode: 0 CONSTANT (pad_value), 1 REFLECT (edge excluded), 2 SYMMETRIC (edge included). */
+typedef struct
+{
+    int32_t mode;
+} HctPadParams;
+
+typedef struct
+{
+    int32_t block_size;
+} HctBlockParams;
+
+typedef struct
+{
+    int32_t align_corners;
+    int32_t half_pixel_centers;
+} HctResizeParams;
+
+/* TFLite StridedSlice masks; ellipsis_mask and new_axis_mask must be 0. */
+typedef struct
+{
+    int32_t begin_mask;
+    int32_t end_mask;
+    int32_t ellipsis_mask;
+    int32_t new_axis_mask;
+    int32_t shrink_axis_mask;
+} HctStridedSliceParams;
+
+typedef struct
+{
+    int32_t seq_dim;
+    int32_t batch_dim;
+} HctReverseSequenceParams;
+
 int32_t hct_ref_abi_version(void);
 
 int32_t hct_ref_quantize_multiplier(const HctQuantizeMultiplierIn *in, HctQuantizeMultiplierOut *out);
@@ -918,6 +951,69 @@ int32_t hct_ref_arg_min_f32(const HctAxisParams *params,
     const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
 /* inputs [input:float16] -> outputs [output:int32] */
 int32_t hct_ref_arg_min_f16(const HctAxisParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [data:any, extents:int32] -> outputs [output:any] */
+int32_t hct_ref_concatenation(const HctAxisParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:any, extents:int32] -> outputs [output:any] */
+int32_t hct_ref_split(const HctAxisParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:any, indices:int32] -> outputs [output:any] */
+int32_t hct_ref_gather(const HctAxisParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:any, indices:int32] -> outputs [output:any] */
+int32_t hct_ref_gather_nd(const HctNoParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:any, paddings:int32, pad_value:any] -> outputs [output:any] */
+int32_t hct_ref_pad(const HctPadParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:any] -> outputs [output:any] */
+int32_t hct_ref_reshape(const HctNoParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:any, block_shape:int32, crops:int32] -> outputs [output:any] */
+int32_t hct_ref_batch_to_space_nd(const HctNoParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:any, block_shape:int32, paddings:int32, pad_value:any] -> outputs [output:any] */
+int32_t hct_ref_space_to_batch_nd(const HctNoParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:any] -> outputs [output:any] */
+int32_t hct_ref_depth_to_space(const HctBlockParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:any] -> outputs [output:any] */
+int32_t hct_ref_space_to_depth(const HctBlockParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:any] -> outputs [output:any] */
+int32_t hct_ref_resize_nearest_neighbor(const HctResizeParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:any, perm:int32] -> outputs [output:any] */
+int32_t hct_ref_transpose(const HctNoParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:any, begin:int32, end:int32, strides:int32] -> outputs [output:any] */
+int32_t hct_ref_strided_slice(const HctStridedSliceParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:any, multiples:int32] -> outputs [output:any] */
+int32_t hct_ref_tile(const HctNoParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:any] -> outputs [output:any] */
+int32_t hct_ref_broadcast_to(const HctNoParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [indices:int32, updates:any] -> outputs [output:any] */
+int32_t hct_ref_scatter_nd(const HctNoParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [condition:bool, x:any, y:any] -> outputs [output:any] */
+int32_t hct_ref_select_v2(const HctNoParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [condition:any] -> outputs [coords:int64, count:int32] */
+int32_t hct_ref_where(const HctNoParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:any, seq_lengths:int32] -> outputs [output:any] */
+int32_t hct_ref_reverse_sequence(const HctReverseSequenceParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [operand:any, update:any, start:int32] -> outputs [output:any] */
+int32_t hct_ref_dynamic_update_slice(const HctNoParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [value:any] -> outputs [output:any] */
+int32_t hct_ref_fill(const HctNoParams *params,
     const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
 
 #if defined(__GNUC__)

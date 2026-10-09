@@ -7,7 +7,6 @@ import numpy as np
 from pathlib import Path
 from helia_core_tester.generation.io.dtypes import (
     descriptor_dtype_to_c_type,
-    descriptor_dtype_to_litert_dtype,
     get_resolved_tensor_dtype,
 )
 from helia_core_tester.generation.ops._shared.base import OperationBase
@@ -50,27 +49,12 @@ class OpGatherND(OperationBase):
             raise NotImplementedError(f"Unsupported GatherND dtype: {dtype}")
         return dtype
 
-    def needs_keras_model(self) -> bool:
-        return False
+    def uses_reference(self) -> bool:
+        return not self.status_only()
 
-    def build_keras_model(self):
-        raise NotImplementedError("GatherND uses LiteRT-only model generation.")
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        from helia_core_tester.generation.utils.litert_builder import build_gather_nd_op
-
-        dtype = descriptor_dtype_to_litert_dtype(self._element_dtype())
-
-        params_shape = tuple(self.desc["input_shape"])
-        indices_shape = tuple(self.desc["indices_shape"])
-
-        model_bytes = build_gather_nd_op(
-            params_shape=params_shape,
-            indices_shape=indices_shape,
-            dtype=dtype,
-        )
-        with open(out_path, "wb") as f:
-            f.write(model_bytes)
+    def status_only(self) -> bool:
+        # An ARG_ERROR case asserts the kernel's rejection, so it has no golden.
+        return str(self.desc.get("expected_status", "ARM_CMSIS_NN_SUCCESS")) == "ARM_CMSIS_NN_ARG_ERROR"
 
     def _select_cmsis_gather_nd_kernel(self) -> Dict[str, str]:
         dtype = self._element_dtype()
@@ -94,12 +78,10 @@ class OpGatherND(OperationBase):
         raise ValueError(f"Unsupported shape length: {len(shape)}")
 
     def generate_c_files(self, output_dir: Path) -> None:
+        from helia_core_tester.generation.reference.call import ReferenceCall
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
         name = self.desc["name"]
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
 
         kernel_info = self._select_cmsis_gather_nd_kernel()
         builder = TemplateContextBuilder()
@@ -188,16 +170,15 @@ class OpGatherND(OperationBase):
 
         self.rng.__setstate__(rng_state)
 
-        # Compute expected output
-        output_q = np.zeros(output_shape, dtype=np_in_dtype)
-        flat_indices = indices_q_for_output.reshape(-1, indices_nd)
-        flat_output = output_q.reshape(-1, *params_shape[indices_nd:])
-
-        for out_idx, idx_tuple in enumerate(flat_indices):
-            src = params_q[tuple(idx_tuple)]
-            flat_output[out_idx] = src
-
-        output_q = flat_output.reshape(output_shape)
+        if self.status_only():
+            # Never compared: the kernel must reject before writing. The array is the
+            # gather at the in-range indices drawn before the corruption, kept so the
+            # emitted case does not change.
+            flat_indices = indices_q_for_output.reshape(-1, indices_nd)
+            output_q = np.stack([params_q[tuple(idx)] for idx in flat_indices]).reshape(output_shape)
+        else:
+            output_q = self.reference_golden(ReferenceCall(
+                "gather_nd", {"unused": 0}, {"input": params_q, "indices": indices_q}, {"output": output_shape}))
 
         params_dims = self._shape_to_dims(params_shape)
         indices_dims = self._shape_to_dims(indices_shape)
