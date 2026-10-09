@@ -9,6 +9,7 @@ stays centralized and testable against the firmware's `HCT_KERNEL_ID_*` defines 
 
 from __future__ import annotations
 
+import functools
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -48,10 +49,20 @@ def _registry_path(project_root: Path) -> Path:
     return project_root / _REGISTRY_RELATIVE_PATH
 
 
+_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+
+
 def load_kernel_registry(project_root: Path) -> list[KernelEntry]:
     path = _registry_path(project_root)
-    data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    return [
+    stat = path.stat()
+    return list(_parse_registry(str(path), stat.st_mtime_ns, stat.st_size))
+
+
+@functools.lru_cache(maxsize=8)
+def _parse_registry(path: str, mtime_ns: int, size: int) -> tuple[KernelEntry, ...]:
+    """Parse once per file version."""
+    data = yaml.load(Path(path).read_text(encoding="utf-8"), Loader=_LOADER)
+    return tuple(
         KernelEntry(
             kernel_id=int(entry["kernel_id"]),
             family=entry.get("family"),
@@ -62,7 +73,7 @@ def load_kernel_registry(project_root: Path) -> list[KernelEntry]:
             direct_entry=bool(entry.get("direct_entry", False)),
         )
         for entry in data.get("kernels", [])
-    ]
+    )
 
 
 def lookup_kernel_id(
