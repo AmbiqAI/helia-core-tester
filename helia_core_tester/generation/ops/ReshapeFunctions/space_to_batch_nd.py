@@ -12,26 +12,9 @@ class OpSpaceToBatchND(OperationBase):
     SpaceToBatchND operation.
     """
 
-    def needs_keras_model(self) -> bool:
+    def needs_tflite(self) -> bool:
+        # The golden is computed in numpy; nothing reads a .tflite.
         return False
-
-    def build_keras_model(self):
-        raise NotImplementedError("SpaceToBatchND uses LiteRT-only model generation.")
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        from helia_core_tester.generation.utils.litert_builder import build_space_to_batch_nd_op
-
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
-        dtype = 'int16' if activation_dtype == 'S16' else 'int8'
-
-        model_bytes = build_space_to_batch_nd_op(
-            input_shape=self.desc['input_shape'],
-            block_shape=self.desc.get('block_shape', [1, 1]),
-            paddings=self.desc.get('paddings', [[0, 0], [0, 0]]),
-            dtype=dtype,
-        )
-        with open(out_path, "wb") as f:
-            f.write(model_bytes)
 
     @staticmethod
     def _space_to_batch_nd_numpy(input_np: np.ndarray, block_shape: list, paddings: list, pad_value: int) -> np.ndarray:
@@ -59,9 +42,6 @@ class OpSpaceToBatchND(OperationBase):
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
         name = self.desc['name']
-        tflite_path = Path(output_dir) / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
 
         activation_dtype = self.desc.get('activation_dtype', 'S8')
         if activation_dtype == 'S16':

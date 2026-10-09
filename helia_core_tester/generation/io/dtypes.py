@@ -179,9 +179,15 @@ _OPERATOR_TOLERANCE_OVERRIDES: Dict[str, int] = {
     # per dtype on the m0 and dsp host kernels; the cortex-m55 FVP suite for MVE).
     "Convolve": 0,
     "TransposeConv": 0,
-    # Kernel rounds 1 LSB off TFLite.
-    "Mean": 1,
-    "Quantize": 1,
+    # Bit-exact against the TFLM reference golden at tolerance 0 on the m0/dsp host
+    # kernels (two fresh seeds) and the cortex-m55 FVP (seed 777, all 978 int cases).
+    "Mean": 0,
+    "Quantize": 0,
+    "Softmax": 0,
+    "HardSwish": 0,
+    "MinMax": 0,
+    "Add": 0,
+    "Mul": 0,
     # Exact on MVE, DSP and pure C.
     "PReLU": 0,
     "FullyConnected": 0,
@@ -195,10 +201,6 @@ _OPERATOR_TOLERANCE_OVERRIDES: Dict[str, int] = {
     "ReduceMax": 0,
     "ReduceMin": 0,
     "Sub": 0,
-    # Unmeasured off MVE: keep 1 LSB.
-    "Softmax": 1,
-    "HardSwish": 1,
-    "MinMax": 1,
 }
 
 # Per-operator tolerance overrides that apply only when the resolved output

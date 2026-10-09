@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any, Dict
 
 import numpy as np
-import tensorflow as tf
 
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.ops._shared.recurrent_pool import recurrent_argument_pool
@@ -21,6 +20,10 @@ GRU_FRAGMENTS = "LSTMFunctions/gru_unidirectional"
 
 class OpGRUUnidirectional(OperationBase):
     """GRUUnidirectional operation (FP32/FP16, CMSIS-only)."""
+
+    def needs_tflite(self) -> bool:
+        # The golden is computed directly; nothing reads a .tflite.
+        return False
 
     FAULT_KINDS = (
         "null_input",
@@ -34,18 +37,6 @@ class OpGRUUnidirectional(OperationBase):
         "zero_batch_size",
         "negative_time_steps",
     )
-
-    def build_keras_model(self) -> tf.keras.Model:
-        raise RuntimeError("GRUUnidirectional is CMSIS-only; no Keras model is built.")
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        raise RuntimeError("GRUUnidirectional CMSIS-only test; skip TFLite generation.")
-
-    def needs_keras_model(self) -> bool:
-        return False
-
-    def allow_no_tflite(self) -> bool:
-        return True
 
     @staticmethod
     def _sigmoid(x: np.ndarray) -> np.ndarray:

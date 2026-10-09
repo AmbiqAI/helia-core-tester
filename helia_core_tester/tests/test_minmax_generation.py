@@ -7,10 +7,6 @@ from ai_edge_litert import schema_py_generated as litert
 
 from helia_core_tester.generation.ops.BasicMathFunctions.minmax import OpMinMax
 from helia_core_tester.generation.utils.litert_builder import LITERT_AVAILABLE
-from helia_core_tester.generation.utils.litert_utils import (
-    get_operator_tensors_from_litert,
-    load_litert_model,
-)
 
 
 @pytest.mark.parametrize(
@@ -47,21 +43,12 @@ def test_minmax_generates_direct_litert_model_and_c(
         "input_2_shape": list(input_2_shape),
     }
     op = OpMinMax(desc, seed=1, target_cpu="cortex-m55")
-    tflite_path = tmp_path / f"{name}.tflite"
-
+    # Shapes come from the descriptor and quantization is fixed: no model is built.
+    assert op.needs_tflite() is False
     assert op.needs_keras_model() is False
-    with pytest.raises(NotImplementedError, match="LiteRT-only"):
+    with pytest.raises(NotImplementedError):
         op.build_keras_model()
-
-    op.convert_to_tflite(None, str(tflite_path), 1)
-
-    model, subgraph = load_litert_model(str(tflite_path))
-    op_tensors = get_operator_tensors_from_litert(model, subgraph, 0)
-    assert len(subgraph.operators) == 1
-    assert model.operatorCodes[0].builtinCode == expected_builtin
-    assert tuple(op_tensors["inputs"][0]["shape"]) == input_1_shape
-    assert tuple(op_tensors["inputs"][1]["shape"]) == input_2_shape
-    assert tuple(op_tensors["outputs"][0]["shape"]) == (1, 2, 3, 4)
+    assert op._binary_shapes() == (input_1_shape, input_2_shape, (1, 2, 3, 4))
 
     op.generate_c_files(tmp_path)
     generated_c = tmp_path / f"{name}_minmax.c"
@@ -82,5 +69,5 @@ def test_minmax_rejects_unsupported_dtype(tmp_path: Path) -> None:
         target_cpu="cortex-m55",
     )
 
-    with pytest.raises(NotImplementedError, match="Unsupported MinMax dtype"):
-        op.convert_to_tflite(None, str(tmp_path / "maximum_s32.tflite"), 1)
+    with pytest.raises((NotImplementedError, ValueError), match="S32|Unsupported"):
+        op.generate_c_files(tmp_path)

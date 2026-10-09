@@ -11,11 +11,6 @@ from helia_core_tester.generation.ops.BasicMathFunctions.sqrt import (
     make_sqrt_lut_s16,
     make_sqrt_lut_s8,
 )
-from helia_core_tester.generation.utils.litert_builder import LITERT_AVAILABLE
-from helia_core_tester.generation.utils.litert_utils import (
-    get_operator_tensors_from_litert,
-    load_litert_model,
-)
 
 TESTER_ROOT = Path(__file__).resolve().parents[2]
 SQRT_DESCRIPTOR_PATH = TESTER_ROOT / "assets" / "descriptors" / "BasicMathFunctions" / "sqrt.yaml"
@@ -138,9 +133,6 @@ def test_sqrt_parity_descriptors_generate_litert_and_c(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    if not LITERT_AVAILABLE:
-        pytest.skip("ai_edge_litert is required for sqrt LiteRT generation")
-
     monkeypatch.setenv("CMSIS_NN_REPO_ROOT", str(TESTER_ROOT))
     desc = _sqrt_descriptor_map()[name]
     assert desc["activation_dtype"] == dtype
@@ -148,15 +140,13 @@ def test_sqrt_parity_descriptors_generate_litert_and_c(
     tflite_path = tmp_path / f"{name}.tflite"
 
     assert op.needs_keras_model() is False
-    with pytest.raises(NotImplementedError, match="LiteRT-only"):
+    with pytest.raises(NotImplementedError):
         op.build_keras_model()
 
-    op.convert_to_tflite(None, str(tflite_path), 1)
+    if op.needs_tflite() and not op.uses_reference():
+        op.convert_to_tflite(None, str(tflite_path), 1)
 
-    model, subgraph = load_litert_model(str(tflite_path))
-    op_tensors = get_operator_tensors_from_litert(model, subgraph, 0)
-    assert tuple(op_tensors["inputs"][0]["shape"]) == shape
-    assert tuple(op_tensors["outputs"][0]["shape"]) == shape
+    assert not op.needs_tflite()
 
     fake_output = np.zeros(shape, dtype=output_dtype)
     monkeypatch.setattr(op, "run_inference", lambda *_args, **_kwargs: fake_output)

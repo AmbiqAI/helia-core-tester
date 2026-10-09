@@ -13,48 +13,10 @@ class OpConcatenation(OperationBase):
     """
     Concatenation operation - concatenates tensors along an axis.
     """
-    
-    def needs_keras_model(self) -> bool:
+
+    def needs_tflite(self) -> bool:
+        # The golden is computed in numpy; nothing reads a .tflite.
         return False
-
-    def build_keras_model(self):
-        raise NotImplementedError("Concatenation uses LiteRT-only model generation.")
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        from helia_core_tester.generation.utils.litert_builder import build_concat_op
-
-        activation_dtype = self.tensor_dtype("input", default=str(self.desc.get("activation_dtype", "S8")))
-        if activation_dtype == "S8":
-            dtype = "int8"
-        elif activation_dtype == "S16":
-            dtype = "int16"
-        elif activation_dtype == "S32":
-            dtype = "int32"
-        elif activation_dtype == "FP32":
-            dtype = "float32"
-        elif activation_dtype == "FP16":
-            dtype = "float16"
-        else:
-            raise NotImplementedError(f"Unsupported Concatenation dtype: {activation_dtype}")
-
-        input_shapes = []
-        if "input_1_shape" in self.desc:
-            i = 1
-            while f"input_{i}_shape" in self.desc:
-                input_shapes.append(tuple(self.desc[f"input_{i}_shape"]))
-                i += 1
-        elif "input_shape" in self.desc:
-            input_shapes.append(tuple(self.desc["input_shape"]))
-
-        axis = int(self.desc.get("axis", -1))
-
-        model_bytes = build_concat_op(
-            input_shapes=input_shapes,
-            axis=axis,
-            dtype=dtype,
-        )
-        with open(out_path, "wb") as f:
-            f.write(model_bytes)
     
     def _axis_call_style(self, axis: int, input_rank: int) -> str:
         if axis < 0:
@@ -152,9 +114,6 @@ class OpConcatenation(OperationBase):
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
         
         name = self.desc['name']
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
         
         # Build input shapes from descriptor
         input_shapes = []

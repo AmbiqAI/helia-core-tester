@@ -31,32 +31,10 @@ class OpArgMin(OperationBase):
     ArgMin operation.
     """
 
-    def needs_keras_model(self) -> bool:
+    def needs_tflite(self) -> bool:
+        # The golden is computed in numpy; nothing reads a .tflite.
         return False
-    
-    def build_keras_model(self):
-        raise NotImplementedError("ArgMin uses LiteRT-only model generation.")
 
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        """Convert Keras model to TFLite with quantization."""
-        activation_dtype = self.tensor_dtype("input")
-        if activation_dtype == "S8":
-            dtype = "int8"
-        elif activation_dtype == "S16":
-            dtype = "int16"
-        elif activation_dtype in ("FP16", "FP32"):
-            float_arg_kernel(self, "min")
-            dtype = "float16" if activation_dtype == "FP16" else "float32"
-        else:
-            raise NotImplementedError(f"Unsupported ArgMin dtype: {activation_dtype}")
-        model_bytes = build_argmin_op(
-            input_shape=self.desc["input_shape"],
-            axis=self.desc.get("axis", -1),
-            dtype=dtype,
-        )
-        with open(out_path, "wb") as f:
-            f.write(model_bytes)
-    
     def _select_cmsis_argmin_kernel(self) -> Dict[str, str]:
         """
         Select appropriate CMSIS-NN kernel function for ArgMin operation.
@@ -94,9 +72,6 @@ class OpArgMin(OperationBase):
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
         
         name = self.desc['name']
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
         
         # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_argmin_kernel()

@@ -107,26 +107,9 @@ def _activation_reference(
 class OpNNActivationFloat(OperationBase):
     """Generate float activation parity tests."""
 
-    def build_keras_model(self) -> tf.keras.Model:
-        input_shape = tuple(self.desc["input_shape"])
-        activation_type = str(self.desc["activation_type"]).upper()
-        act_param = float(self.desc.get("act_param", 0.0))
-
-        inputs = tf.keras.Input(shape=input_shape[1:], dtype=tf.float32, name="input")
-        if activation_type in _ACTIVATION_LAYERS:
-            output = tf.keras.layers.Activation(_ACTIVATION_LAYERS[activation_type])(inputs)
-        elif activation_type == "ARM_NN_FLT_ACT_HARDSWISH":
-            output = tf.keras.layers.Lambda(lambda x: x * tf.nn.relu6(x + 3.0) / 6.0)(inputs)
-        elif activation_type == "ARM_NN_FLT_ACT_LEAKY_RELU":
-            output = tf.keras.layers.LeakyReLU(negative_slope=act_param)(inputs)
-        elif activation_type == "ARM_NN_FLT_ACT_RELU":
-            output = tf.keras.layers.Lambda(tf.nn.relu)(inputs)
-        elif activation_type == "ARM_NN_FLT_ACT_RELU6":
-            output = tf.keras.layers.Lambda(tf.nn.relu6)(inputs)
-        else:
-            raise ValueError(f"Unsupported float activation type: {activation_type}")
-
-        return tf.keras.Model(inputs=inputs, outputs=output)
+    def needs_tflite(self) -> bool:
+        # The golden is computed directly; nothing reads a .tflite.
+        return False
 
     def _activation_symbol(self) -> str:
         return str(self.desc["activation_type"]).upper()
@@ -135,9 +118,6 @@ class OpNNActivationFloat(OperationBase):
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
         name = self.desc["name"]
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
 
         input_shape = tuple(self.desc["input_shape"])
         activation_dtype = self.tensor_dtype("input", default="FP32")

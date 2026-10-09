@@ -12,26 +12,9 @@ class OpBatchToSpaceND(OperationBase):
     BatchToSpaceND operation.
     """
 
-    def needs_keras_model(self) -> bool:
+    def needs_tflite(self) -> bool:
+        # The golden is computed in numpy; nothing reads a .tflite.
         return False
-
-    def build_keras_model(self):
-        raise NotImplementedError("BatchToSpaceND uses LiteRT-only model generation.")
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        from helia_core_tester.generation.utils.litert_builder import build_batch_to_space_nd_op
-
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
-        dtype = 'int16' if activation_dtype == 'S16' else 'int8'
-
-        model_bytes = build_batch_to_space_nd_op(
-            input_shape=self.desc['input_shape'],
-            block_shape=self.desc.get('block_shape', [1, 1]),
-            crops=self.desc.get('crops', [[0, 0], [0, 0]]),
-            dtype=dtype,
-        )
-        with open(out_path, "wb") as f:
-            f.write(model_bytes)
 
     @staticmethod
     def _batch_to_space_nd_numpy(input_np: np.ndarray, block_shape: list, crops: list) -> np.ndarray:
@@ -46,23 +29,6 @@ class OpBatchToSpaceND(OperationBase):
         x = x[:, c0_lo : (h * b0 - c0_hi), c1_lo : (w * b1 - c1_hi), :]
         return x
 
-    @staticmethod
-    def _extract_quantization(details):
-        """Return (scale, zero_point) from interpreter tensor details."""
-        qp = details.get('quantization_parameters') or {}
-        scales = qp.get('scales') if isinstance(qp, dict) else None
-        zero_points = qp.get('zero_points') if isinstance(qp, dict) else None
-        if scales is not None and len(scales) > 0:
-            scale = float(scales[0])
-        else:
-            scale = details.get('quantization', (1.0, 0))[0]
-            scale = float(scale) if scale is not None else 1.0
-        if zero_points is not None and len(zero_points) > 0:
-            zero_point = int(zero_points[0])
-        else:
-            zero_point = details.get('quantization', (1.0, 0))[1]
-            zero_point = int(zero_point) if zero_point is not None else 0
-        return scale, zero_point
 
     def generate_c_files(self, output_dir) -> None:
         """
@@ -71,9 +37,6 @@ class OpBatchToSpaceND(OperationBase):
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
         name = self.desc['name']
-        tflite_path = Path(output_dir) / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
 
         activation_dtype = self.desc.get('activation_dtype', 'S8')
         if activation_dtype == 'S16':

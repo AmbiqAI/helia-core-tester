@@ -6,7 +6,7 @@ All operations inherit from this and implement build_keras_model().
 import json
 import numpy as np
 from typing import Callable, Dict, Any, List, Optional, Sequence, Tuple, Iterator
-from abc import ABC, abstractmethod
+from abc import ABC
 from pathlib import Path
 import jinja2
 
@@ -131,15 +131,14 @@ class OperationBase(ABC):
                 "Dequantize bit-pattern entry only"
             )
 
-    @abstractmethod
     def build_keras_model(self):
         """
-        Build the Keras model for this operation.
-        
+        Build the Keras model for this operation (converter-path cases only).
+
         Returns:
             Keras model ready for TFLite conversion
         """
-        pass
+        raise NotImplementedError(f"{type(self).__name__} builds no Keras model")
 
     def round_float16_weights(self, model) -> None:
         """Round an FP16 case's Keras weights and biases to float16 before conversion.
@@ -151,6 +150,12 @@ class OperationBase(ABC):
             return
         for layer in model.layers:
             layer.set_weights([w.astype(np.float16).astype(np.float32) for w in layer.get_weights()])
+
+    def needs_tflite(self) -> bool:
+        """False when nothing reads this case's .tflite: its golden is computed in
+        numpy or by a reference call, so the driver builds no model and converts
+        nothing for it."""
+        return True
 
     def uses_reference(self) -> bool:
         """True when this case's golden comes from the reference kernels, so the
@@ -188,13 +193,28 @@ class OperationBase(ABC):
             self._golden = run_reference(call)
         return self._golden
 
+    def reference_golden(self, call) -> np.ndarray:
+        """Record `call` as this case's reference and return its output."""
+        from helia_core_tester.generation.reference.run import run_reference
+
+        self._reference_call = call
+        self._golden = run_reference(call)
+        return self._golden
+
+    def activation_quant(self, role: str, data: np.ndarray, kind: str):
+        """The descriptor's explicit `quantization.<role>` block, else the policy over `data`."""
+        from helia_core_tester.generation.reference import policy
+
+        block = (self.desc.get("quantization") or {}).get(role)
+        return policy.descriptor_quant(block, kind) or policy.activation_quant(data, kind)
+
     def needs_keras_model(self) -> bool:
         """Return True if build_keras_model should be called for conversion."""
-        return True
+        return self.needs_tflite() and not self.uses_reference()
 
     def allow_no_tflite(self) -> bool:
         """Return True if this op can generate C/H without a .tflite."""
-        return False
+        return not self.needs_tflite() or self.uses_reference()
 
     def activation_name(self) -> str:
         """Return the normalized descriptor activation name."""

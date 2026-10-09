@@ -962,14 +962,34 @@ Keras/TFLiteConverter path; see `third_party/VENDOR.md` for the pinned commits a
 
 ### Reference goldens, host check and quantization policy
 
-Integer FullyConnected, Convolve, DepthwiseConv and TransposeConv cases (s8/s16 activations,
-s8/s4 weights) take their golden from those kernels instead of Keras + TFLiteConverter: no
-model is built and no `.tflite` is written. Each such case writes `<name>.reference.json`
-(kernel, parameters, tensor shapes/dtypes/sha256, seeds, library key) next to its sources, the
-sidecar gains a `reference` entry, and `manifest.json` points at the file. Float cases stay on
-the converter path for now.
+No integer case builds a Keras model or writes a `.tflite` (LSTM s8 excepted, until its
+flatbuffer route lands). A case whose golden comes from a reference kernel writes
+`<name>.reference.json` (kernel, parameters, tensor shapes/dtypes/sha256, seeds, library key)
+next to its sources, the sidecar gains a `reference` entry, and `manifest.json` points at the
+file. Float cases stay on the converter path for now. Where each integer golden comes from:
 
-How a case is quantized (`generation/reference/weighted.py`, `policy.py`):
+| Operators | Golden | Quantization |
+|---|---|---|
+| FullyConnected, Convolve, DepthwiseConv, TransposeConv | TFLM reference (`weighted.py`) | policy, below |
+| AvgPool, MaxPool | TFLM `AveragePool`/`MaxPool` | input over the `[-1, 1]` draw; output = input |
+| Add, Sub, Mul | TFLM add/sub/mul with broadcasting | fixed (s8 0.125/0, s16 2^-15/0) |
+| Softmax | TFLM `Softmax` / `SoftmaxInt16` (LUTs as TFLM populates them) | input over `[-1, 1]`; TFLite's fixed output |
+| Tanh, Logistic (s16) | TFLM integer kernels, parameters from the TFLM prepare | symmetric over the draw; output 2^-15 |
+| Relu, Relu6, LeakyRelu | TFLM `ReluQuantized` / `QuantizeLeakyRelu` | input over `[-1, 1]`, output over the activated range |
+| PReLU (s8), HardSwishCompat | TFLM `BroadcastPrelu4DSlow` / `HardSwish<int8>` | fixed (PReLU) / `[-8, 8]` -> `[-3/8, 8]` |
+| Mean | TFLM `QuantizedMeanOrSum`; the CMSIS multiplier is folded by 1/count exactly as TFLM folds it | input over the draw, output over the float mean |
+| BatchMatMul | TFLM `BatchMatMul` on the canonical `[M, K]` x `[N, K]` operands | inputs over `[-1, 1]`, output over the float product |
+| Quantize | TFLM `AffineQuantize` on the activated input | output over the activated `[-1, 1]` range |
+| Rsqrt | TFLite: int8 multiplier route, int16 `LUTPopulate` + `LUTLookup` | fixed |
+| Sqrt | s8 the TFLite float formula as a LUT; s16 the kernel's LUT interpolation, checked within 2 LSB of float sqrt above q = 1024 | fixed |
+| Abs, SquaredDifference, Comparison, ReduceMax/Min, Dequantize, PReLU s16, HardSwishPrecise, data movement | the TFLite formula / CMSIS port in numpy | fixed or preset |
+
+Every `quantization.<role>` block below overrides the defaults in this table. Relu-family
+cases draw half their elements negative, and weighted cases with a fused ReLU flip the weights
+of any output channel whose pre-activation is mostly negative, so no fresh seed collapses a
+golden onto the clamp.
+
+How a weighted case is quantized (`generation/reference/weighted.py`, `policy.py`):
 
 - input: the descriptor's `quantization.input`, else `calibration_range`, else `input_range`,
   else the draw range `[-32, 32]`; s8 is asymmetric (zero point nudged as TFLite does), s16

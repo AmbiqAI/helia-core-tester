@@ -87,7 +87,8 @@ def _generate(desc: dict, out_dir: Path, monkeypatch: pytest.MonkeyPatch) -> tup
     monkeypatch.setenv("CMSIS_NN_REPO_ROOT", str(TESTER_ROOT))
     op = OpSquaredDifference(desc, seed=1, target_cpu=CPU)
     tflite_path = out_dir / f"{desc['name']}.tflite"
-    op.convert_to_tflite(None, str(tflite_path), 1)
+    if op.needs_tflite() and not op.uses_reference():
+        op.convert_to_tflite(None, str(tflite_path), 1)
     op.generate_c_files(out_dir)
     op.assert_input_mode_consumed()
     name = desc["name"]
@@ -436,7 +437,8 @@ def test_fault_kinds_are_rejected_on_the_int_kernels(tmp_path: Path, monkeypatch
             "input_1_shape": [1, 2, 2, 3], "input_2_shape": [1, 2, 2, 3],
             "fault": "null_input_1", "expected_status": "ARM_CMSIS_NN_ARG_ERROR"}
     op = OpSquaredDifference(desc, seed=1, target_cpu=CPU)
-    op.convert_to_tflite(None, str(tmp_path / "int_fault.tflite"), 1)
+    if op.needs_tflite() and not op.uses_reference():
+        op.convert_to_tflite(None, str(tmp_path / "int_fault.tflite"), 1)
     with pytest.raises(ValueError, match="not covered by the float fault edits"):
         op.generate_c_files(tmp_path)
 

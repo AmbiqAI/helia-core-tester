@@ -14,38 +14,10 @@ class OpReshape(OperationBase):
     Reshape operation.
     """
 
-    def needs_keras_model(self) -> bool:
+    def needs_tflite(self) -> bool:
+        # The golden is computed in numpy; nothing reads a .tflite.
         return False
 
-    def build_keras_model(self):
-        raise NotImplementedError("Reshape uses LiteRT-only model generation.")
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        from helia_core_tester.generation.utils.litert_builder import build_reshape_op
-
-        activation_dtype = self.tensor_dtype("input")
-        if activation_dtype == 'S8':
-            dtype = "int8"
-        elif activation_dtype == 'FP32':
-            dtype = "float32"
-        elif activation_dtype == 'FP16':
-            dtype = "float16"
-        else:
-            raise NotImplementedError(f"Unsupported Reshape dtype: {activation_dtype}")
-
-        input_shape = tuple(self.desc['input_shape'])
-        target_shape = tuple(self.desc.get('target_shape'))
-        if target_shape is None:
-            raise ValueError("Reshape operation requires 'target_shape' in descriptor")
-
-        model_bytes = build_reshape_op(
-            input_shape=input_shape,
-            target_shape=target_shape,
-            dtype=dtype,
-        )
-        with open(out_path, "wb") as f:
-            f.write(model_bytes)
-    
     def _select_cmsis_reshape_kernel(self) -> Dict[str, str]:
         """
         Select appropriate CMSIS-NN kernel function for Reshape operation.
@@ -83,9 +55,6 @@ class OpReshape(OperationBase):
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
         
         name = self.desc['name']
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
         
         # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_reshape_kernel()

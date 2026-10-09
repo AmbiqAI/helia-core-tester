@@ -336,19 +336,9 @@ class OpChunkedEquivalence(OperationBase):
     calls over the same data.
     """
 
-    def needs_keras_model(self) -> bool:
+    def needs_tflite(self) -> bool:
+        # The golden is computed directly; nothing reads a .tflite.
         return False
-
-    def allow_no_tflite(self) -> bool:
-        return True
-
-    def build_keras_model(self):
-        raise NotImplementedError("ChunkedEquivalence is a kernel-property case; it has no model.")
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        raise NotImplementedError("ChunkedEquivalence needs no TFLite model: the full-length call is the reference.")
-
-    # ---------------------------------------------------------------- config
 
     def _kernel_key(self) -> Tuple[str, str]:
         kernel = str(self.desc.get("kernel", "")).strip().lower()

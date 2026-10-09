@@ -121,6 +121,6 @@ def test_floor_bundle_records_board_cpu(tmp_path: Path) -> None:
 def test_tanh_selector_rejects_s8() -> None:
     from helia_core_tester.generation.ops.ActivationFunctions.tanh import OpTanh
 
-    assert OpTanh({"activation_dtype": "S16"})._select_cmsis_tanh_kernel()["kernel_fn"] == "arm_tanh_s16"
+    assert OpTanh({"activation_dtype": "S16"})._kernel()["kernel_fn"] == "arm_tanh_s16"
     with pytest.raises(NotImplementedError, match="S8"):
-        OpTanh({"activation_dtype": "S8"})._select_cmsis_tanh_kernel()
+        OpTanh({"activation_dtype": "S8"})._kernel()

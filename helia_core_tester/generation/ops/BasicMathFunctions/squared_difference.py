@@ -2,11 +2,8 @@
 
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.binary_basic_math_base import BinaryBasicMathBase
-from helia_core_tester.generation.utils.litert_builder import build_binary_broadcast_op
 from typing import Any, Dict, Sequence, Tuple
 import numpy as np
-import tensorflow as tf
-from tensorflow.keras import layers
 
 
 # Storage dtype -> kernel suffix of the flat float entry point. ns-cmsis-nn#490
@@ -31,31 +28,6 @@ SQUARED_DIFFERENCE_QUANT_PRESETS = {
         "output_quant": ([1.0 / 32768.0], [0]),
     },
 }
-
-
-class QuantizedSquaredDifference(layers.Layer):
-    """SquaredDifference followed by int16 fake-quant simulation."""
-
-    def __init__(self, min_val: float = -32768.0, max_val: float = 32767.0, **kwargs):
-        super().__init__(**kwargs)
-        self.min_val = float(min_val)
-        self.max_val = float(max_val)
-
-    def call(self, inputs):
-        tensor_a, tensor_b = inputs
-        sq_diff = tf.math.squared_difference(tensor_a, tensor_b)
-        return tf.quantization.fake_quant_with_min_max_vars(
-            sq_diff,
-            min=self.min_val,
-            max=self.max_val,
-            num_bits=16,
-            narrow_range=False,
-        )
-
-    def get_config(self):
-        config = super().get_config()
-        config.update({"min_val": self.min_val, "max_val": self.max_val})
-        return config
 
 
 # A relu-shaped input range: the zero point sits at the bottom of the domain, so
@@ -86,21 +58,6 @@ def squared_difference_quant_preset(dtype: str, quant_preset: str = "default") -
         ) from None
 
 
-def build_squared_difference_op(
-    *, input_1_shape, input_2_shape, dtype: str = "int8", quant_preset: str = "default"
-) -> bytes:
-    quant = squared_difference_quant_preset(dtype, quant_preset)
-    return build_binary_broadcast_op(
-        op_name="SQUARED_DIFFERENCE",
-        input_1_shape=input_1_shape,
-        input_2_shape=input_2_shape,
-        dtype=dtype,
-        input_1_quant=quant["input_1_quant"],
-        input_2_quant=quant["input_2_quant"],
-        output_quant=quant["output_quant"],
-    )
-
-
 class OpSquaredDifference(BinaryBasicMathBase):
     """SquaredDifference operation."""
 
@@ -111,69 +68,14 @@ class OpSquaredDifference(BinaryBasicMathBase):
     # `block_size < 1`.
     FAULT_KINDS = ("null_input_1", "null_input_2", "null_output", "zero_block", "negative_block")
 
-    def needs_keras_model(self) -> bool:
-        return self._use_s16_fake_quant_keras_path()
+    def needs_tflite(self) -> bool:
+        # Quantization is the preset table and the golden the TFLite formula in numpy.
+        return False
 
-    def build_keras_model(self):
-        if not self._use_s16_fake_quant_keras_path():
-            raise NotImplementedError("SquaredDifference uses LiteRT-only model generation.")
-
-        input_1_shape = tuple(self.desc["input_1_shape"])
-        input_2_shape = tuple(self.desc["input_2_shape"])
-        min_val, max_val = self._s16_fake_quant_range()
-
-        input_a = tf.keras.Input(shape=input_1_shape[1:], dtype=tf.float32, name="input1")
-        input_b = tf.keras.Input(shape=input_2_shape[1:], dtype=tf.float32, name="input2")
-
-        output = QuantizedSquaredDifference(min_val=min_val, max_val=max_val, name="squared_difference")(
-            [input_a, input_b]
-        )
-        return tf.keras.Model(inputs=[input_a, input_b], outputs=output, name="SquaredDifferenceS16FakeQuant")
-
-    def _use_s16_fake_quant_keras_path(self) -> bool:
-        if self.desc.get("activation_dtype", "S8") != "S16":
-            return False
-
-        hint = self.desc.get("hint", {}) or {}
-        mode = str(hint.get("s16_builder", hint.get("generation_mode", ""))).strip().lower()
-        if mode in {"keras_fake_quant", "fake_quant", "keras"}:
-            return True
-
-        return bool(self.desc.get("s16_use_fake_quant", False))
-
-    def _s16_fake_quant_range(self) -> tuple[float, float]:
-        hint = self.desc.get("hint", {}) or {}
-        min_val = hint.get("s16_fake_quant_min", self.desc.get("s16_fake_quant_min", -32768.0))
-        max_val = hint.get("s16_fake_quant_max", self.desc.get("s16_fake_quant_max", 32767.0))
-        return float(min_val), float(max_val)
-
-    def _convert_with_litert_builder(self, out_path: str) -> None:
-        activation_dtype = self.tensor_dtype("input", default=str(self.desc.get("activation_dtype", "S8")))
-        if activation_dtype == "S8":
-            dtype = "int8"
-        elif activation_dtype == "S16":
-            dtype = "int16"
-        elif activation_dtype in FLOAT_KERNEL_SUFFIX:
-            # Float tensors carry no quantization; the builder's default quant is
-            # None for float tensor types.
-            model_bytes = build_binary_broadcast_op(
-                op_name="SQUARED_DIFFERENCE",
-                input_1_shape=tuple(self.desc["input_1_shape"]),
-                input_2_shape=tuple(self.desc["input_2_shape"]),
-                dtype="float16",
-            )
-            self._write_tflite_bytes(out_path, model_bytes)
-            return
-        else:
-            raise NotImplementedError(f"Unsupported SquaredDifference dtype: {activation_dtype}")
-
-        model_bytes = build_squared_difference_op(
-            input_1_shape=tuple(self.desc["input_1_shape"]),
-            input_2_shape=tuple(self.desc["input_2_shape"]),
-            dtype=dtype,
-            quant_preset=str(self.desc.get("quant_preset", "default")),
-        )
-        self._write_tflite_bytes(out_path, model_bytes)
+    def _preset_quant(self) -> Tuple[Tuple[float, int], Tuple[float, int], Tuple[float, int]]:
+        dtype = {"S8": "int8", "S16": "int16"}[self.desc.get("activation_dtype", "S8")]
+        quant = squared_difference_quant_preset(dtype, str(self.desc.get("quant_preset", "default")))
+        return tuple((float(quant[k][0][0]), int(quant[k][1][0])) for k in ("input_1_quant", "input_2_quant", "output_quant"))
 
     def _select_cmsis_squared_difference_kernel(self) -> Dict[str, str]:
         """
@@ -399,81 +301,19 @@ class OpSquaredDifference(BinaryBasicMathBase):
             cmake_context,
         )
 
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        if self._use_s16_fake_quant_keras_path():
-            if model is None:
-                raise ValueError("Expected Keras model for S16 FakeQuant SquaredDifference path.")
-
-            try:
-                converter = tf.lite.TFLiteConverter.from_keras_model(model)
-                converter.optimizations = [tf.lite.Optimize.DEFAULT]
-                converter.target_spec.supported_ops = [
-                    tf.lite.OpsSet.EXPERIMENTAL_TFLITE_BUILTINS_ACTIVATIONS_INT16_WEIGHTS_INT8
-                ]
-                converter.inference_input_type = tf.int16
-                converter.inference_output_type = tf.int16
-
-                rng = np.random.default_rng(rep_seed)
-                in1_shape = tuple(self.desc["input_1_shape"])
-                in2_shape = tuple(self.desc["input_2_shape"])
-
-                def representative_data_gen():
-                    for _ in range(100):
-                        x1 = rng.uniform(-1.0, 1.0, size=in1_shape).astype(np.float32)
-                        x2 = rng.uniform(-1.0, 1.0, size=in2_shape).astype(np.float32)
-                        yield [x1, x2]
-
-                converter.representative_dataset = representative_data_gen
-                tflite_model = converter.convert()
-                self._write_tflite_bytes(out_path, tflite_model)
-                return
-            except Exception:
-                hint = self.desc.get("hint", {}) or {}
-                if bool(hint.get("s16_builder_strict", self.desc.get("s16_builder_strict", False))):
-                    raise
-                # Converter support for 16x8 FakeQuant graphs can be incomplete.
-                # Fall back to explicit LiteRT construction to keep generation robust.
-                self._convert_with_litert_builder(out_path)
-                return
-
-        self._convert_with_litert_builder(out_path)
-
     def generate_c_files(self, output_dir: Path) -> None:
         """
         Generate C and H files from templates for SquaredDifference operation.
         """
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
         from helia_core_tester.generation.utils.tflite_utils import (
-            scalar_scale_zp,
             activation_bounds,
             elementwise_squared_difference_quant_params,
         )
         
         name = self.desc['name']
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
-        
-        # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_squared_difference_kernel()
-        
-        # Load LiteRT model for shape and quantization extraction
-        from helia_core_tester.generation.utils.litert_utils import get_operator_tensors_from_litert
-        model, subgraph = self.load_litert_model(str(tflite_path))
-        op_tensors = get_operator_tensors_from_litert(model, subgraph, 0)
-        
-        # Extract shapes from LiteRT (multi-input operator)
-        input1_shape = op_tensors['inputs'][0]['shape']
-        input2_shape = op_tensors['inputs'][1]['shape'] if len(op_tensors['inputs']) > 1 else input1_shape
-        output_shape = op_tensors['outputs'][0]['shape']
-        
-        # Ensure shapes are tuples
-        if input1_shape is not None:
-            input1_shape = tuple(input1_shape)
-        if input2_shape is not None:
-            input2_shape = tuple(input2_shape)
-        if output_shape is not None:
-            output_shape = tuple(output_shape)
+        input1_shape, input2_shape, output_shape = self._binary_shapes()
 
         if kernel_info["float_kernel"]:
             self._generate_float_c_files(
@@ -488,15 +328,8 @@ class OpSquaredDifference(BinaryBasicMathBase):
         if self.fault_kind():
             self._check_fault_reachable(self.fault_kind(), kernel_info)
         
-        # Extract quantization from LiteRT
-        input1_quant = op_tensors['inputs'][0]['quantization']
-        input2_quant = op_tensors['inputs'][1]['quantization'] if len(op_tensors['inputs']) > 1 else input1_quant
-        output_quant = op_tensors['outputs'][0]['quantization']
-        
-        input1_scale, input1_zp = scalar_scale_zp(input1_quant)
-        input2_scale, input2_zp = scalar_scale_zp(input2_quant)
-        output_scale, output_zp = scalar_scale_zp(output_quant)
-        
+        (input1_scale, input1_zp), (input2_scale, input2_zp), (output_scale, output_zp) = self._preset_quant()
+
         builder = TemplateContextBuilder()
         
         # Convert shapes to CMSIS dims
@@ -549,39 +382,24 @@ class OpSquaredDifference(BinaryBasicMathBase):
             steerable=("input_1", "input_2"),
         )
         
-        # Run inference using LiteRT interpreter when shapes match for int8.
-        # LiteRT does not currently invoke INT16 SQUARED_DIFFERENCE reliably,
-        # and broadcasting can abort in some runtimes, so use the local
-        # quantized simulation for those cases.
-        if input1_shape == input2_shape and activation_dtype != "S16":
-            interpreter = self.load_litert_interpreter(str(tflite_path))
-            input_details = interpreter.get_input_details()
-            output_details = interpreter.get_output_details()
+        output_data = self._simulate_squared_difference_quantized(
+            input1_q,
+            input2_q,
+            input1_offset=-int(input1_zp),
+            input2_offset=-int(input2_zp),
+            input1_mult=int(mult1),
+            input1_shift=int(shift1),
+            input2_mult=int(mult2),
+            input2_shift=int(shift2),
+            left_shift=int(left_shift),
+            out_offset=int(output_zp),
+            out_mult=int(output_mult),
+            out_shift=int(output_shift),
+            out_activation_min=int(activation_min),
+            out_activation_max=int(activation_max),
+            out_dtype=np_in_dtype,
+        ).reshape(output_shape)
 
-            interpreter.set_tensor(input_details[0]['index'], input1_q)
-            interpreter.set_tensor(input_details[1]['index'], input2_q)
-            interpreter.invoke()
-            output_data = interpreter.get_tensor(output_details[0]['index'])
-            output_data = np.array(output_data)
-        else:
-            output_data = self._simulate_squared_difference_quantized(
-                input1_q,
-                input2_q,
-                input1_offset=-int(input1_zp),
-                input2_offset=-int(input2_zp),
-                input1_mult=int(mult1),
-                input1_shift=int(shift1),
-                input2_mult=int(mult2),
-                input2_shift=int(shift2),
-                left_shift=int(left_shift),
-                out_offset=int(output_zp),
-                out_mult=int(output_mult),
-                out_shift=int(output_shift),
-                out_activation_min=int(activation_min),
-                out_activation_max=int(activation_max),
-                out_dtype=np_in_dtype,
-            )
-        
         # Format arrays
         input1_array_str = builder.format_array_as_c_literal(input1_q)
         input2_array_str = builder.format_array_as_c_literal(input2_q)

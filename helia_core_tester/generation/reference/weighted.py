@@ -187,6 +187,25 @@ def _float_call(spec: WeightedSpec, x: np.ndarray, w: np.ndarray, bias: Optional
     return run_reference(call)
 
 
+def _balance_clamped_channels(spec: WeightedSpec, x: np.ndarray, w: np.ndarray) -> np.ndarray:
+    """Negate the weights of every output channel whose pre-activation is mostly <= 0.
+
+    Under a fused ReLU those channels collapse onto the clamp (the int8 minimum when the
+    output zero point sits there), so a draw where most channels lean negative leaves a
+    saturated, uninformative golden. The weights are random draws either way; flipping a
+    channel only moves its pre-activations across zero."""
+    pre = _float_call(spec, x, w, None, -np.inf, np.inf)
+    per_channel = pre.reshape(-1, pre.shape[-1])
+    flip = np.mean(per_channel <= 0.0, axis=0) > 0.5
+    if not flip.any():
+        return w
+    shape = [1] * w.ndim
+    shape[spec.channel_axis] = -1
+    if w.shape[spec.channel_axis] != flip.size:
+        raise ReferenceCaseError(f"{w.shape[spec.channel_axis]} weight channels for {flip.size} output channels")
+    return np.where(flip.reshape(shape), -w, w).astype(w.dtype)
+
+
 def _output_quant(
     desc: Mapping[str, Any],
     spec: WeightedSpec,
@@ -261,6 +280,8 @@ def build_weighted_case(
 
     gain = float(desc.get("weight_gain", 1.0))
     w_f = draw.glorot_uniform(rng, spec.weight_shape, spec.fan_in, spec.fan_out, gain=gain)
+    if activation in ("RELU", "RELU6", "RELU_N1_TO_1") and spec.family != "tconv":
+        w_f = _balance_clamped_channels(spec, x_dq, w_f)
     explicit_w = block.get("weights") or {}
     wq = policy.weight_quant(w_f, "s8", axis=spec.channel_axis, per_channel=_per_channel(desc, block, spec.per_channel_default))
     if "scale" in explicit_w:

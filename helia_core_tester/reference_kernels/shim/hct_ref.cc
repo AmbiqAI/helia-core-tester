@@ -5,6 +5,7 @@
  * Thin C ABI over the vendored TFLM reference kernels. See hct_ref.h.
  */
 #include "hct_ref.h"
+#include "hct_ref_internal.h"
 
 #include <cmath>
 #include <cstddef>
@@ -32,102 +33,7 @@
 
 namespace {
 
-using tflite::RuntimeShape;
-
-#define HCT_TRY(expr)                                                                                                  \
-    do                                                                                                                 \
-    {                                                                                                                  \
-        const int32_t hct_status_ = (expr);                                                                            \
-        if (hct_status_ != HCT_REF_OK)                                                                                 \
-        {                                                                                                              \
-            return hct_status_;                                                                                        \
-        }                                                                                                              \
-    } while (0)
-
-// Largest element count any entry accepts; keeps index arithmetic in int.
-constexpr int64_t kMaxElements = int64_t{1} << 28;
-
-int32_t check_shape(const HctShape *shape, int32_t rank)
-{
-    if (shape == nullptr)
-    {
-        return HCT_REF_E_NULL;
-    }
-    if (shape->rank < 1 || shape->rank > HCT_REF_MAX_RANK || (rank > 0 && shape->rank != rank))
-    {
-        return HCT_REF_E_DIMS;
-    }
-    int64_t count = 1;
-    for (int32_t i = 0; i < shape->rank; ++i)
-    {
-        if (shape->dims[i] <= 0)
-        {
-            return HCT_REF_E_DIMS;
-        }
-        count *= shape->dims[i];
-        if (count > kMaxElements)
-        {
-            return HCT_REF_E_DIMS;
-        }
-    }
-    return HCT_REF_OK;
-}
-
-int64_t flat_size(const HctShape *shape)
-{
-    int64_t count = 1;
-    for (int32_t i = 0; i < shape->rank; ++i)
-    {
-        count *= shape->dims[i];
-    }
-    return count;
-}
-
-RuntimeShape to_runtime(const HctShape *shape)
-{
-    return RuntimeShape(shape->rank, shape->dims);
-}
-
-template <typename T> int32_t check_activation(const HctActivation &act)
-{
-    if (act.min > act.max || act.min < std::numeric_limits<T>::min() || act.max > std::numeric_limits<T>::max())
-    {
-        return HCT_REF_E_PARAM;
-    }
-    return HCT_REF_OK;
-}
-
-template <> int32_t check_activation<float>(const HctActivation &act)
-{
-    if (std::isnan(act.fmin) || std::isnan(act.fmax) || act.fmin > act.fmax)
-    {
-        return HCT_REF_E_PARAM;
-    }
-    return HCT_REF_OK;
-}
-
-// Zero points of 8-bit activations lie in [-128, 127]; 16-bit activations are
-// symmetric (zero point 0).
-template <typename T> int32_t check_offsets(int32_t input_offset, int32_t output_offset)
-{
-    if (sizeof(T) == 1)
-    {
-        if (input_offset < -127 || input_offset > 128 || output_offset < -128 || output_offset > 127)
-        {
-            return HCT_REF_E_PARAM;
-        }
-    }
-    else if (input_offset != 0 || output_offset != 0)
-    {
-        return HCT_REF_E_PARAM;
-    }
-    return HCT_REF_OK;
-}
-
-template <> int32_t check_offsets<float>(int32_t input_offset, int32_t output_offset)
-{
-    return (input_offset == 0 && output_offset == 0) ? HCT_REF_OK : HCT_REF_E_PARAM;
-}
+using namespace hct;
 
 // The int64 (16-bit activation) MultiplyByQuantizedMultiplier asserts a shift
 // below 8; everything else accepts any shift an int32 rescale can use.
@@ -412,16 +318,6 @@ tflite::PoolParams to_pool_params(const HctPoolParams *p)
     return params;
 }
 
-int32_t check_buffers(const void *a, const void *b, const void *c)
-{
-    return (a != nullptr && b != nullptr && c != nullptr) ? HCT_REF_OK : HCT_REF_E_NULL;
-}
-
-int32_t check_buffers(const void *a, const void *b)
-{
-    return (a != nullptr && b != nullptr) ? HCT_REF_OK : HCT_REF_E_NULL;
-}
-
 // Unpacks an int4 filter; returns nullptr on allocation failure.
 std::unique_ptr<int8_t[]> unpack_int4(const int8_t *packed, int64_t count)
 {
@@ -646,7 +542,17 @@ int32_t hct_ref_sizeof(const char *type_name)
         {"HctFcParams", sizeof(HctFcParams)},
         {"HctPoolParams", sizeof(HctPoolParams)},
         {"HctQuant", sizeof(HctQuant)},
+        {"HctBinaryParams", sizeof(HctBinaryParams)},
         {"HctPerChannelQuant", sizeof(HctPerChannelQuant)},
+        {"HctSoftmaxParams", sizeof(HctSoftmaxParams)},
+        {"HctLutActParams", sizeof(HctLutActParams)},
+        {"HctLeakyReluParams", sizeof(HctLeakyReluParams)},
+        {"HctPreluParams", sizeof(HctPreluParams)},
+        {"HctHardSwishParams", sizeof(HctHardSwishParams)},
+        {"HctReluParams", sizeof(HctReluParams)},
+        {"HctMeanParams", sizeof(HctMeanParams)},
+        {"HctRsqrtParams", sizeof(HctRsqrtParams)},
+        {"HctBmmParams", sizeof(HctBmmParams)},
     };
     for (const Entry &entry : entries)
     {

@@ -6,13 +6,7 @@ import pytest
 from helia_core_tester.generation.io.descriptors import load_descriptor
 from helia_core_tester.generation.ops.BasicMathFunctions.squared_difference import (
     OpSquaredDifference,
-    build_squared_difference_op,
     squared_difference_quant_preset,
-)
-from helia_core_tester.generation.utils.litert_builder import LITERT_AVAILABLE
-from helia_core_tester.generation.utils.litert_utils import (
-    get_operator_tensors_from_litert,
-    load_litert_model,
 )
 from helia_core_tester.generation.utils.tflite_utils import (
     elementwise_squared_difference_quant_params,
@@ -96,12 +90,7 @@ def test_squared_difference_descriptors_match_unit_test_parity() -> None:
         assert desc["weight_dtype"] == "S8"
         assert tuple(desc["input_1_shape"]) == input_1_shape
         assert tuple(desc["input_2_shape"]) == input_2_shape
-        # squared_difference_ident_s16 opts into the Keras fake-quant S16
-        # builder; every other case has no descriptor-level hint.
-        if name == "squared_difference_ident_s16":
-            assert desc.get("hint", {}) == {"s16_builder": "keras_fake_quant"}
-        else:
-            assert desc.get("hint", {}) == {}
+        assert desc.get("hint", {}) == {}
 
 
 def test_squared_difference_quant_params_s8_match_expected_shape() -> None:
@@ -132,46 +121,41 @@ def test_squared_difference_quant_params_s16_match_expected_shape() -> None:
     assert params["out_shift"] == -12
 
 
-def test_squared_difference_builder_uses_explicit_quantization(tmp_path: Path) -> None:
-    if not LITERT_AVAILABLE:
-        pytest.skip("ai_edge_litert is required for squared difference LiteRT generation")
-
-    model_bytes = build_squared_difference_op(
-        input_1_shape=(1, 2, 2, 3),
-        input_2_shape=(1, 2, 2, 3),
-        dtype="int8",
-    )
-    tflite_path = tmp_path / "sqdiff_s8.tflite"
-    tflite_path.write_bytes(model_bytes)
-
-    model, subgraph = load_litert_model(str(tflite_path))
-    op_tensors = get_operator_tensors_from_litert(model, subgraph, 0)
-
-    input1_quant = op_tensors["inputs"][0]["quantization"]
-    input2_quant = op_tensors["inputs"][1]["quantization"]
-    output_quant = op_tensors["outputs"][0]["quantization"]
-
+def test_squared_difference_uses_preset_quantization() -> None:
+    op = OpSquaredDifference(_sqdiff_desc("sqdiff_s8", "S8"), seed=1, target_cpu="cortex-m55")
+    (s1, zp1), (s2, zp2), (so, zpo) = op._preset_quant()
     # A moderate asymmetric input zero point: -128 would pin every lane to a
     # non-negative post-offset value and hide the sign-dependent kernel paths,
     # 0 would leave the input offset term dead in every s8 case. Only the
     # output, non-negative by definition, keeps -128 (hct#81).
-    assert input1_quant["scale"] == pytest.approx(1.0 / 128.0)
-    assert input1_quant["zero_point"] == -40
-    assert input2_quant["scale"] == pytest.approx(1.0 / 256.0)
-    assert input2_quant["zero_point"] == -40
-    assert output_quant["scale"] == pytest.approx(1.0 / 64.0)
-    assert output_quant["zero_point"] == -128
+    assert (s1, zp1) == (pytest.approx(1.0 / 128.0), -40)
+    assert (s2, zp2) == (pytest.approx(1.0 / 256.0), -40)
+    assert (so, zpo) == (pytest.approx(1.0 / 64.0), -128)
+    assert not op.needs_tflite()
+
+
+def test_squared_difference_golden_is_the_tflite_formula() -> None:
+    a = np.array([-128, -40, 0, 127], dtype=np.int8)
+    b = np.array([127, -40, 5, -128], dtype=np.int8)
+    params = elementwise_squared_difference_quant_params(
+        input1_scale=1.0 / 128.0, input2_scale=1.0 / 256.0, output_scale=1.0 / 64.0, activation_dtype="S8"
+    )
+    out = OpSquaredDifference._simulate_squared_difference_quantized(
+        a, b, input1_offset=40, input2_offset=40, input1_mult=params["input1_mult"],
+        input1_shift=params["input1_shift"], input2_mult=params["input2_mult"], input2_shift=params["input2_shift"],
+        left_shift=params["left_shift"], out_offset=-128, out_mult=params["out_mult"], out_shift=params["out_shift"],
+        out_activation_min=-128, out_activation_max=127, out_dtype=np.int8,
+    )
+    real = ((a.astype(float) + 40) / 128.0 - (b.astype(float) + 40) / 256.0) ** 2
+    assert out.dtype == np.int8
+    assert out[1] == -128
+    np.testing.assert_allclose(out.astype(float), np.clip(np.round(real * 64) - 128, -128, 127), atol=1)
 
 
 def test_squared_difference_s8_generates_expected_c_params(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    if not LITERT_AVAILABLE:
-        pytest.skip("ai_edge_litert is required for squared difference LiteRT generation")
-
     monkeypatch.setenv("CMSIS_NN_REPO_ROOT", str(TESTER_ROOT))
     desc = _sqdiff_desc("sqdiff_s8", "S8")
     op = OpSquaredDifference(desc, seed=1, target_cpu="cortex-m55")
-    tflite_path = tmp_path / "sqdiff_s8.tflite"
-    op.convert_to_tflite(None, str(tflite_path), 1)
     op.generate_c_files(tmp_path)
 
     c_path = tmp_path / "sqdiff_s8_squared_difference.c"
@@ -202,9 +186,6 @@ def test_squared_difference_parity_descriptors_generate_wrapper_c(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    if not LITERT_AVAILABLE:
-        pytest.skip("ai_edge_litert is required for squared difference LiteRT generation")
-
     monkeypatch.setenv("CMSIS_NN_REPO_ROOT", str(TESTER_ROOT))
     desc = _sqdiff_descriptor_map()[name]
     assert desc["activation_dtype"] == dtype
@@ -212,31 +193,6 @@ def test_squared_difference_parity_descriptors_generate_wrapper_c(
     assert tuple(desc["input_2_shape"]) == input_2_shape
 
     op = OpSquaredDifference(desc, seed=1, target_cpu="cortex-m55")
-    tflite_path = tmp_path / f"{name}.tflite"
-    keras_model = op.build_keras_model() if op.needs_keras_model() else None
-    op.convert_to_tflite(keras_model, str(tflite_path), 1)
-
-    if dtype == "S16" and input_1_shape == input_2_shape:
-        fake_output = np.zeros(input_1_shape, dtype=np.int16)
-
-        class _FakeInterpreter:
-            def get_input_details(self):
-                return [{"index": 0}, {"index": 1}]
-
-            def get_output_details(self):
-                return [{"index": 0}]
-
-            def set_tensor(self, index, value):
-                del index, value
-
-            def invoke(self):
-                return None
-
-            def get_tensor(self, index):
-                del index
-                return fake_output
-
-        monkeypatch.setattr(op, "load_litert_interpreter", lambda _: _FakeInterpreter())
 
     op.generate_c_files(tmp_path)
 
@@ -254,35 +210,9 @@ def test_squared_difference_s16_elementwise_generates_expected_c_params(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    if not LITERT_AVAILABLE:
-        pytest.skip("ai_edge_litert is required for squared difference LiteRT generation")
-
     monkeypatch.setenv("CMSIS_NN_REPO_ROOT", str(TESTER_ROOT))
     desc = _sqdiff_desc("sqdiff_s16", "S16", call_style="elementwise")
     op = OpSquaredDifference(desc, seed=1, target_cpu="cortex-m55")
-    tflite_path = tmp_path / "sqdiff_s16.tflite"
-    op.convert_to_tflite(None, str(tflite_path), 1)
-
-    fake_output = np.zeros((1, 2, 2, 3), dtype=np.int16)
-
-    class _FakeInterpreter:
-        def get_input_details(self):
-            return [{"index": 0}, {"index": 1}]
-
-        def get_output_details(self):
-            return [{"index": 0}]
-
-        def set_tensor(self, index, value):
-            del index, value
-
-        def invoke(self):
-            return None
-
-        def get_tensor(self, index):
-            del index
-            return fake_output
-
-    monkeypatch.setattr(op, "load_litert_interpreter", lambda _: _FakeInterpreter())
     op.generate_c_files(tmp_path)
 
     c_path = tmp_path / "sqdiff_s16_squared_difference.c"

@@ -1,4 +1,4 @@
-"""Boundary-sensitive integer inputs; goldens still come from LiteRT."""
+"""Boundary-sensitive integer inputs and the selection golden for integer reduce max/min."""
 
 import numpy as np
 
@@ -24,29 +24,16 @@ def boundary_inputs(shape, axes, dtype, kind):
     return data
 
 
-def resize_integer_interpreter(interpreter, shape):
-    """Honor descriptor batch size and require selection without requantization."""
-    interpreter.resize_tensor_input(
-        interpreter.get_input_details()[0]["index"], shape, strict=True
-    )
-    interpreter.allocate_tensors()
-    input_details = interpreter.get_input_details()
-    output_details = interpreter.get_output_details()
-    if tuple(input_details[0]["shape"]) != tuple(shape):
-        raise ValueError("LiteRT input shape differs from descriptor")
-    if input_details[0]["dtype"] != output_details[0]["dtype"]:
-        raise ValueError("Reduce extrema requires matching tensor dtypes")
-    for key in ("scales", "zero_points"):
-        # Raw-code selection supports per-tensor quantization only. Comparing
-        # per-axis arrays alone would ignore which dimensions they describe.
-        if any(
-            np.asarray(details[0]["quantization_parameters"][key]).size != 1
-            for details in (input_details, output_details)
-        ):
-            raise ValueError("Reduce extrema requires per-tensor quantization")
-        if not np.array_equal(
-            input_details[0]["quantization_parameters"][key],
-            output_details[0]["quantization_parameters"][key],
-        ):
-            raise ValueError("Reduce extrema requires matching quantization")
-    return input_details, output_details
+def reduce_extrema_golden(data, axes, kind, *, keepdims):
+    """Max/min over `axes` on the raw codes: exact whenever input and output share
+    quantization, which TFLite requires of REDUCE_MAX/MIN on integer tensors."""
+    if kind not in ("min", "max"):
+        raise ValueError("Expected min or max")
+    if not axes:
+        raise ValueError("Reduce extrema needs at least one axis")
+    rank = data.ndim
+    if any(not -rank <= int(a) < rank for a in axes):
+        raise ValueError(f"axes {list(axes)} out of range for rank {rank}")
+    resolved = tuple(sorted({int(a) % rank for a in axes}))
+    reduce = np.max if kind == "max" else np.min
+    return reduce(data, axis=resolved, keepdims=keepdims).astype(data.dtype)

@@ -10,45 +10,9 @@ from helia_core_tester.generation.ops._shared.base import OperationBase
 class OpReverseSequence(OperationBase):
     """ReverseSequence operation."""
 
-    def needs_keras_model(self) -> bool:
+    def needs_tflite(self) -> bool:
+        # The golden is computed in numpy; nothing reads a .tflite.
         return False
-
-    def build_keras_model(self):
-        raise NotImplementedError("ReverseSequence uses LiteRT-only model generation.")
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        from helia_core_tester.generation.utils.litert_builder import (
-            LiteRtSingleOpBuilder, TensorSpec, _default_quant,
-        )
-        import ai_edge_litert.schema_py_generated as litert
-
-        activation_dtype = self.desc.get("activation_dtype", "S8")
-        tensor_type = litert.TensorType.INT16 if activation_dtype == "S16" else litert.TensorType.INT8
-        input_shape = tuple(self.desc["input_shape"])
-        seq_lengths = self.desc["seq_lengths"]
-        seq_dim = int(self.desc["seq_dim"])
-        batch_dim = int(self.desc["batch_dim"])
-        batch_size = input_shape[batch_dim]
-
-        builder = LiteRtSingleOpBuilder(op_name="REVERSE_SEQUENCE")
-        input_idx = builder.add_tensor(TensorSpec(
-            name="input", shape=input_shape, tensor_type=tensor_type, is_input=True,
-            quantization=_default_quant(tensor_type),
-        ))
-        seq_len_idx = builder.add_tensor(TensorSpec(
-            name="seq_lengths", shape=(batch_size,), tensor_type=litert.TensorType.INT32, is_input=True,
-        ))
-        output_idx = builder.add_tensor(TensorSpec(
-            name="output", shape=input_shape, tensor_type=tensor_type, is_output=True,
-            quantization=_default_quant(tensor_type),
-        ))
-
-        opts = litert.ReverseSequenceOptionsT()
-        opts.seqDim = seq_dim
-        opts.batchDim = batch_dim
-        builder.add_operator("REVERSE_SEQUENCE", inputs=[input_idx, seq_len_idx],
-            outputs=[output_idx], options=opts, options_type=litert.BuiltinOptions.ReverseSequenceOptions)
-        self._write_tflite_bytes(out_path, builder.build())
 
     def _select_kernel(self) -> Dict[str, str]:
         activation_dtype = self.desc.get("activation_dtype", "S8")
@@ -71,34 +35,7 @@ class OpReverseSequence(OperationBase):
         np_dtype = np.int16 if ki["np_dtype"] == "int16" else np.int8
         input_data = rng.integers(ki["qmin"], ki["qmax"] + 1, size=input_shape, dtype=np_dtype)
 
-        # Use TFLite interpreter with INT32 model (runtime doesn't support INT8/INT16 for this op)
-        from ai_edge_litert.interpreter import Interpreter
-        from helia_core_tester.generation.utils.litert_builder import LiteRtSingleOpBuilder, TensorSpec
-        import ai_edge_litert.schema_py_generated as litert
-
-        ref_builder = LiteRtSingleOpBuilder(op_name="REVERSE_SEQUENCE")
-        inp_idx = ref_builder.add_tensor(TensorSpec(
-            name="input", shape=tuple(input_shape), tensor_type=litert.TensorType.INT32, is_input=True,
-        ))
-        seq_idx = ref_builder.add_tensor(TensorSpec(
-            name="seq_lengths", shape=(input_shape[batch_dim],), tensor_type=litert.TensorType.INT32, is_input=True,
-        ))
-        out_idx = ref_builder.add_tensor(TensorSpec(
-            name="output", shape=tuple(input_shape), tensor_type=litert.TensorType.INT32, is_output=True,
-        ))
-        opts = litert.ReverseSequenceOptionsT()
-        opts.seqDim = seq_dim
-        opts.batchDim = batch_dim
-        ref_builder.add_operator("REVERSE_SEQUENCE", inputs=[inp_idx, seq_idx], outputs=[out_idx],
-            options=opts, options_type=litert.BuiltinOptions.ReverseSequenceOptions)
-        interp = Interpreter(model_content=bytes(ref_builder.build()))
-        interp.allocate_tensors()
-        inp_details = interp.get_input_details()
-        out_details = interp.get_output_details()
-        interp.set_tensor(inp_details[0]["index"], input_data.astype(np.int32))
-        interp.set_tensor(inp_details[1]["index"], np.array(seq_lengths, dtype=np.int32))
-        interp.invoke()
-        output_data = interp.get_tensor(out_details[0]["index"]).astype(np_dtype)
+        output_data = reverse_sequence(input_data, seq_lengths, seq_dim=seq_dim, batch_dim=batch_dim)
 
         builder = TemplateContextBuilder()
         context = {
@@ -125,6 +62,26 @@ class OpReverseSequence(OperationBase):
 
 
 from helia_core_tester.generation.harness.simple import shaped_case_pool  # noqa: E402
+
+
+def reverse_sequence(data: np.ndarray, seq_lengths, *, seq_dim: int, batch_dim: int) -> np.ndarray:
+    """TFLite REVERSE_SEQUENCE: for each index b along batch_dim, reverse the first
+    seq_lengths[b] elements along seq_dim and leave the rest in place."""
+    rank = data.ndim
+    if not (0 <= seq_dim < rank and 0 <= batch_dim < rank) or seq_dim == batch_dim:
+        raise ValueError(f"invalid seq_dim {seq_dim} / batch_dim {batch_dim} for rank {rank}")
+    if len(seq_lengths) != data.shape[batch_dim]:
+        raise ValueError(f"{len(seq_lengths)} seq_lengths for batch extent {data.shape[batch_dim]}")
+    out = data.copy()
+    axis = seq_dim - (1 if seq_dim > batch_dim else 0)
+    for b, length in enumerate(int(v) for v in seq_lengths):
+        if not 0 <= length <= data.shape[seq_dim]:
+            raise ValueError(f"seq_lengths[{b}] = {length} outside [0, {data.shape[seq_dim]}]")
+        index = [slice(None)] * rank
+        index[batch_dim] = b
+        index[seq_dim] = slice(0, length)
+        out[tuple(index)] = np.flip(data[tuple(index)], axis=axis)
+    return out
 
 
 def reverse_sequence_argument_pool(context):

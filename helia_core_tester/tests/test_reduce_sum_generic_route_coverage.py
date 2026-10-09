@@ -154,27 +154,24 @@ def _c_floats(source: str, symbol: str) -> np.ndarray:
         "reduce_sum_float_axis_w_rows_tail_f32",
     ),
 )
-def test_shipped_golden_agrees_with_the_real_interpreter(tmp_path, name):
-    """Runs the generated model through LiteRT on the generated input and compares against the
-    generated golden, so what is pinned is the artefact the suite ships rather than a second
-    statement of the same formula. That only holds with the seed the suite itself generates
-    with, hence default_seed_for_case. Float32 only: the emitted model is float32 while an f16
-    golden is rounded to half, so the two are not directly comparable."""
-    pytest.importorskip("ai_edge_litert.interpreter")
+def test_shipped_golden_agrees_with_a_float64_reduction(tmp_path, name):
+    """Recomputes the reduction in float64 on the generated input and compares it with the
+    generated golden, so what is pinned is the artefact the suite ships. That only holds with
+    the seed the suite itself generates with, hence default_seed_for_case. Float32 only: an
+    f16 golden is rounded to half."""
     from helia_core_tester.generation.ops.BasicMathFunctions.reduce_sum import OpReduceSum
     from helia_core_tester.generation.test_ops import default_seed_for_case
-    from helia_core_tester.generation.utils.litert_utils import run_inference_litert
 
     desc = _descriptors()[name]
     op = OpReduceSum(desc, default_seed_for_case(name))
-    model_path = tmp_path / f"{name}.tflite"
-    op.convert_to_tflite(op.build_keras_model(), str(model_path), 0)
+    assert not op.needs_tflite()
     op.generate_c_files(tmp_path)
 
     header = next(tmp_path.rglob(f"{name}_reduce_sum.h")).read_text()
     inputs = _c_floats(header, f"{name}_input").reshape(desc["input_shape"])
     golden = _c_floats(header, f"{name}_expected_output")
 
-    actual = np.asarray(run_inference_litert(str(model_path), inputs)).reshape(-1)
+    axes = tuple(int(a) % inputs.ndim for a in desc["axes"])
+    actual = inputs.astype(np.float64).sum(axis=axes).reshape(-1)
     assert actual.size == golden.size
     assert actual == pytest.approx(golden, abs=5e-5, rel=2e-5)

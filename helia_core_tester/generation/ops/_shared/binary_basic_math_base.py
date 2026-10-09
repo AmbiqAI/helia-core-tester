@@ -1,6 +1,6 @@
 """Shared helpers for binary basic-math operators."""
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 
@@ -17,6 +17,58 @@ class BinaryBasicMathBase(OperationBase):
 
     # s8 draw reach, in quantized units.
     S8_REACH = 128
+
+    # The (scale, zero point) every tensor of these operators has carried since the
+    # one-op LiteRT builder fixed them; kept so their goldens do not move.
+    FIXED_QUANT: Dict[str, Tuple[float, int]] = {"S8": (0.125, 0), "S16": (1.0 / 32768.0, 0)}
+
+    def needs_tflite(self) -> bool:
+        # Shapes come from the descriptor, quantization is FIXED_QUANT, and the
+        # golden is a reference call (int) or numpy (float).
+        return False
+
+    def _binary_shapes(self) -> Tuple[Tuple[int, ...], Tuple[int, ...], Tuple[int, ...]]:
+        shape_1 = tuple(int(d) for d in self.desc["input_1_shape"])
+        shape_2 = tuple(int(d) for d in self.desc["input_2_shape"])
+        try:
+            output = tuple(int(d) for d in np.broadcast_shapes(shape_1, shape_2))
+        except ValueError as exc:
+            raise ValueError(f"{self.desc.get('name')}: {shape_1} and {shape_2} do not broadcast") from exc
+        return shape_1, shape_2, output
+
+    def _fixed_quant(self) -> Tuple[float, int]:
+        dtype = self.tensor_dtype("input")
+        try:
+            return self.FIXED_QUANT[dtype]
+        except KeyError as exc:
+            raise ValueError(f"{self.desc.get('name')}: no fixed quantization for {dtype}") from exc
+
+    def _reference_binary(
+        self,
+        op: str,
+        input1_q: np.ndarray,
+        input2_q: np.ndarray,
+        output_shape: Tuple[int, ...],
+        params: Dict[str, int],
+        act_min: int,
+        act_max: int,
+        quant: Dict[str, Any],
+    ) -> np.ndarray:
+        """Run the TFLM reference add/sub/mul for an integer case and record the call."""
+        from helia_core_tester.generation.reference.case import ReferenceCall
+        from helia_core_tester.generation.reference.run import run_reference
+
+        kind = "s16" if input1_q.dtype == np.int16 else "s8"
+        call = ReferenceCall(
+            f"{op}_{kind}",
+            {**{k: int(v) for k, v in params.items()}, "act": {"min": int(act_min), "max": int(act_max)}},
+            {"input1": np.ascontiguousarray(input1_q), "input2": np.ascontiguousarray(input2_q)},
+            output_shape,
+            input1_q.dtype.name,
+            quant=quant,
+        )
+        self._reference_call = call
+        return run_reference(call)
 
     def _widen_s8(self, unit: np.ndarray, scale: float, c_type: str) -> np.ndarray:
         """Stretch [-1, 1] draws over s8."""

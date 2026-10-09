@@ -10,51 +10,9 @@ from helia_core_tester.generation.ops._shared.base import OperationBase
 class OpScatterNd(OperationBase):
     """ScatterNd operation."""
 
-    def needs_keras_model(self) -> bool:
+    def needs_tflite(self) -> bool:
+        # The golden is computed in numpy; nothing reads a .tflite.
         return False
-
-    def build_keras_model(self):
-        raise NotImplementedError("ScatterNd uses LiteRT-only model generation.")
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        from helia_core_tester.generation.utils.litert_builder import (
-            LiteRtSingleOpBuilder, TensorSpec, _default_quant,
-        )
-        import ai_edge_litert.schema_py_generated as litert
-
-        activation_dtype = self.desc.get("activation_dtype", "S8")
-        tensor_type = litert.TensorType.INT16 if activation_dtype == "S16" else litert.TensorType.INT8
-
-        output_shape = tuple(self.desc["input_shape"])
-        indices = np.array(self.desc["indices"], dtype=np.int32)
-        updates_raw = self.desc["updates"]
-        np_dtype = np.int16 if activation_dtype == "S16" else np.int8
-        updates = np.array(updates_raw, dtype=np_dtype)
-
-        num_updates = indices.shape[0]
-        index_depth = indices.shape[1] if indices.ndim > 1 else 1
-        indices_shape = (num_updates, index_depth) if indices.ndim > 1 else (num_updates,)
-        updates_shape = tuple(updates.shape)
-
-        builder = LiteRtSingleOpBuilder(op_name="SCATTER_ND")
-        indices_idx = builder.add_tensor(TensorSpec(
-            name="indices", shape=indices_shape, tensor_type=litert.TensorType.INT32, is_input=True,
-        ))
-        updates_idx = builder.add_tensor(TensorSpec(
-            name="updates", shape=updates_shape, tensor_type=tensor_type, is_input=True,
-            quantization=_default_quant(tensor_type),
-        ))
-        shape_idx = builder.add_tensor(TensorSpec(
-            name="shape", shape=(len(output_shape),), tensor_type=litert.TensorType.INT32,
-            is_input=False, data=np.array(output_shape, dtype=np.int32),
-        ))
-        output_idx = builder.add_tensor(TensorSpec(
-            name="output", shape=output_shape, tensor_type=tensor_type, is_output=True,
-            quantization=_default_quant(tensor_type),
-        ))
-        builder.add_operator("SCATTER_ND", inputs=[indices_idx, updates_idx, shape_idx],
-            outputs=[output_idx], options=None, options_type=litert.BuiltinOptions.NONE)
-        self._write_tflite_bytes(out_path, builder.build())
 
     def _select_kernel(self) -> Dict[str, str]:
         activation_dtype = self.desc.get("activation_dtype", "S8")
@@ -85,36 +43,7 @@ class OpScatterNd(OperationBase):
         for d in range(index_depth):
             output_strides.append(int(np.prod(output_shape[d + 1:])))
 
-        # Use TFLite interpreter for reference output; fall back to INT32 model if type unsupported
-        tflite_path = str(output_dir / f"{name}.tflite")
-        try:
-            interpreter = self.load_litert_interpreter(tflite_path)
-            input_details = interpreter.get_input_details()
-            output_details = interpreter.get_output_details()
-            interpreter.set_tensor(input_details[0]["index"], indices)
-            interpreter.set_tensor(input_details[1]["index"], updates)
-            interpreter.invoke()
-            output_data = np.array(interpreter.get_tensor(output_details[0]["index"]))
-        except (ValueError, RuntimeError):
-            # Rebuild with INT32 updates (SCATTER_ND doesn't support INT16)
-            from ai_edge_litert.interpreter import Interpreter
-            from helia_core_tester.generation.utils.litert_builder import LiteRtSingleOpBuilder, TensorSpec
-            import ai_edge_litert.schema_py_generated as litert
-            b = LiteRtSingleOpBuilder(op_name="SCATTER_ND")
-            i_idx = b.add_tensor(TensorSpec(name="indices", shape=indices.shape, tensor_type=litert.TensorType.INT32, is_input=True))
-            u_idx = b.add_tensor(TensorSpec(name="updates", shape=updates.shape, tensor_type=litert.TensorType.INT32, is_input=True))
-            s_idx = b.add_tensor(TensorSpec(name="shape", shape=(len(output_shape),), tensor_type=litert.TensorType.INT32,
-                is_input=False, data=np.array(output_shape, dtype=np.int32)))
-            o_idx = b.add_tensor(TensorSpec(name="output", shape=tuple(output_shape), tensor_type=litert.TensorType.INT32, is_output=True))
-            b.add_operator("SCATTER_ND", inputs=[i_idx, u_idx, s_idx], outputs=[o_idx], options=None, options_type=litert.BuiltinOptions.NONE)
-            interp = Interpreter(model_content=bytes(b.build()))
-            interp.allocate_tensors()
-            inp_d = interp.get_input_details()
-            out_d = interp.get_output_details()
-            interp.set_tensor(inp_d[0]["index"], indices)
-            interp.set_tensor(inp_d[1]["index"], updates.astype(np.int32))
-            interp.invoke()
-            output_data = interp.get_tensor(out_d[0]["index"]).astype(np_dtype)
+        output_data = scatter_nd(indices, updates, output_shape)
 
         builder = TemplateContextBuilder()
         context = {
@@ -140,6 +69,21 @@ class OpScatterNd(OperationBase):
 
 
 from helia_core_tester.generation.harness.simple import shaped_case_pool  # noqa: E402
+
+
+def scatter_nd(indices: np.ndarray, updates: np.ndarray, shape) -> np.ndarray:
+    """TFLite SCATTER_ND: zero output, updates added at each index (duplicates accumulate,
+    wrapping in the tensor type)."""
+    idx = indices.reshape(indices.shape[0], -1)
+    depth = idx.shape[1]
+    if depth > len(shape) or updates.shape[0] != idx.shape[0]:
+        raise ValueError(f"indices {indices.shape} / updates {updates.shape} do not fit output {list(shape)}")
+    if np.any(idx < 0) or np.any(idx >= np.asarray(shape[:depth])):
+        raise ValueError(f"scatter index outside output {list(shape)}")
+    out = np.zeros(shape, dtype=np.int64)
+    for row, update in zip(idx, updates.astype(np.int64)):
+        out[tuple(row)] += update
+    return out.astype(updates.dtype)
 
 
 def scatter_nd_argument_pool(context):

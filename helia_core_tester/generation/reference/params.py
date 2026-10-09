@@ -201,6 +201,29 @@ def addsub_params(
     return AddSubParams(left_shift, -int(input1_zp), m1, sh1, -int(input2_zp), m2, sh2, int(output_zp), mo, sho)
 
 
+def sub_params(
+    dtype: str,
+    input1_scale: float,
+    input1_zp: int,
+    input2_scale: float,
+    input2_zp: int,
+    output_scale: float,
+    output_zp: int,
+) -> AddSubParams:
+    """CalculateOpDataSub: like Add, except the doubled max scale and the three
+    ratios are formed in float32 before widening to double."""
+    left_shift = {"s8": 20, "s16": 15}.get(dtype.lower())
+    if left_shift is None:
+        raise ValueError(f"sub params are defined for s8/s16, got {dtype!r}")
+    s1, s2, so = (np.float32(_f32(v)) for v in (input1_scale, input2_scale, output_scale))
+    twice_max = np.float32(2) * max(s1, s2)
+    m1, sh1 = quantize_multiplier_smaller_than_one_exp(float(np.float32(s1 / twice_max)))
+    m2, sh2 = quantize_multiplier_smaller_than_one_exp(float(np.float32(s2 / twice_max)))
+    out = np.float32(twice_max / (np.float32(1 << left_shift) * so))
+    mo, sho = quantize_multiplier_smaller_than_one_exp(float(out))
+    return AddSubParams(left_shift, -int(input1_zp), m1, sh1, -int(input2_zp), m2, sh2, int(output_zp), mo, sho)
+
+
 def mul_params(input1_scale: float, input2_scale: float, output_scale: float) -> Tuple[int, int]:
     """CalculateOpDataMul: QuantizeMultiplier(s1 * s2 / so)."""
     return quantize_multiplier(_f32(input1_scale) * _f32(input2_scale) / _f32(output_scale))

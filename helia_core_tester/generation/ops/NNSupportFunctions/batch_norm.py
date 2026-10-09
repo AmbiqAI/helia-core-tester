@@ -20,17 +20,9 @@ def batch_norm_argument_pool(context: dict) -> ArgumentPool:
 class OpBatchNorm(OperationBase):
     """Generate float batch normalization parity tests."""
 
-    def allow_no_tflite(self) -> bool:
-        return True
-
-    def needs_keras_model(self) -> bool:
+    def needs_tflite(self) -> bool:
+        # The golden is computed directly; nothing reads a .tflite.
         return False
-
-    def build_keras_model(self):
-        raise NotImplementedError("BatchNorm uses direct CMSIS-NN generated tests.")
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        raise NotImplementedError("BatchNorm does not produce a TFLite model.")
 
     def generate_c_files(self, output_dir: Path) -> None:
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder

@@ -51,127 +51,65 @@ def _dequantize_desc(name: str, activation: str, dtype: str) -> dict:
     }
 
 
-def test_quantize_fails_without_tflite(tmp_path: Path) -> None:
-    """Quantize has no explicit descriptor quant params, so when no converted
-    TFLite model is available, generation must fail loudly (COR-008) rather
-    than silently substitute a hardcoded default output scale/zero-point."""
-    desc = _quantize_desc("quantize_fp32_to_s8_basic", "NONE", "S8")
-    op = OpQuantize(desc, seed=1, target_cpu="cortex-m55")
-    with pytest.raises(RuntimeError, match="no converted TFLite model"):
-        op.generate_c_files(tmp_path)
+def _array(text: str, name: str) -> np.ndarray:
+    import re
+
+    body = re.search(rf"{name}\[[^]]*\]\s*=\s*\{{([^}}]+)", text).group(1)
+    return np.array([float(v.strip().rstrip("f")) for v in body.replace("\n", " ").split(",") if v.strip()])
 
 
-def test_dequantize_fails_without_tflite(tmp_path: Path) -> None:
-    """Dequantize has no explicit descriptor quant params, so when no converted
-    TFLite model is available, generation must fail loudly (COR-008) rather
-    than silently substitute a hardcoded default input scale/zero-point."""
-    desc = _dequantize_desc("dequantize_s8_to_fp32_basic", "NONE", "S8")
-    op = OpDequantize(desc, seed=1, target_cpu="cortex-m55")
-    with pytest.raises(RuntimeError, match="no converted TFLite model"):
-        op.generate_c_files(tmp_path)
+def _render(op, tmp_path: Path, stem: str) -> str:
+    op.generate_c_files(tmp_path)
+    name = op.desc["name"]
+    return (tmp_path / f"{name}_{stem}.c").read_text() + (tmp_path / "includes" / f"{name}_{stem}.h").read_text()
 
 
-def test_dequantize_name_does_not_drive_activation() -> None:
-    desc = _dequantize_desc("dequantize_relu_name_only_s8", "NONE", "S8")
-    op = OpDequantize(desc, seed=1, target_cpu="cortex-m55")
-
-    model = op.build_keras_model()
-
-    assert all(layer.__class__.__name__ != "ReLU" for layer in model.layers)
-
-
-class _FakeQuantizeInterpreter:
-    def __init__(self, *, input_shape, output_shape, output_data, scales, zero_points):
-        self._input_details = [{"shape": np.array(input_shape), "index": 0}]
-        self._output_details = [
-            {
-                "shape": np.array(output_shape),
-                "index": 1,
-                "quantization_parameters": {
-                    "scales": scales,
-                    "zero_points": zero_points,
-                },
-            }
-        ]
-        self._output_data = np.array(output_data)
-        self._input_tensor = None
-
-    def get_input_details(self):
-        return self._input_details
-
-    def get_output_details(self):
-        return self._output_details
-
-    def set_tensor(self, index, value):
-        self._input_tensor = (index, value)
-
-    def invoke(self):
-        return None
-
-    def get_tensor(self, index):
-        return self._output_data
+def test_quantize_and_dequantize_need_no_model() -> None:
+    for op in (OpQuantize(_quantize_desc("q", "NONE", "S8"), seed=1, target_cpu="cortex-m55"),
+               OpDequantize(_dequantize_desc("d", "NONE", "S8"), seed=1, target_cpu="cortex-m55")):
+        assert not op.needs_tflite()
+        assert not op.needs_keras_model()
 
 
 @pytest.mark.parametrize(
     ("name", "activation", "dtype", "scale", "zero_point"),
     [
-        ("quantize_relu_s8", "RELU", "S8", np.array([0.0625], dtype=np.float32), np.array([3], dtype=np.int32)),
-        ("quantize_relu_s16", "RELU", "S16", np.array([0.00390625], dtype=np.float32), np.array([0], dtype=np.int32)),
-        ("quantize_relu6_vec_s8", "RELU6", "S8", np.array([0.125], dtype=np.float32), np.array([-5], dtype=np.int32)),
-        ("quantize_relu_tail_vec31_s8", "RELU", "S8", np.array([0.03125], dtype=np.float32), np.array([7], dtype=np.int32)),
+        ("quantize_relu_s8", "RELU", "S8", 0.0625, 3),
+        ("quantize_relu_s16", "RELU", "S16", 0.00390625, 0),
+        ("quantize_relu6_vec_s8", "RELU6", "S8", 0.125, -5),
+        ("quantize_none_s8", "NONE", "S8", 0.03125, 7),
     ],
 )
-def test_quantize_extracts_scalar_params_from_numpy_metadata(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    name: str,
-    activation: str,
-    dtype: str,
-    scale: np.ndarray,
-    zero_point: np.ndarray,
-) -> None:
-    desc = _quantize_desc(name, activation, dtype)
-    op = OpQuantize(desc, seed=1, target_cpu="cortex-m55")
-
-    tflite_path = tmp_path / f"{name}.tflite"
-    tflite_path.write_bytes(b"")
-
-    output_dtype = np.int8 if dtype == "S8" else np.int16
-    fake_interpreter = _FakeQuantizeInterpreter(
-        input_shape=(1, 4),
-        output_shape=(1, 4),
-        output_data=np.array([[1, 2, 3, 4]], dtype=output_dtype),
-        scales=scale,
-        zero_points=zero_point,
-    )
-    monkeypatch.setattr(op, "load_litert_interpreter", lambda _: fake_interpreter)
-
-    op.generate_c_files(tmp_path)
-
-    source = (tmp_path / f"{name}_quantize.c").read_text()
-    assert f"{int(zero_point[0])}," in source
-    assert f"{float(scale[0])}f" in source
+def test_quantize_golden_is_affine_quantize_of_the_activated_input(tmp_path, name, activation, dtype, scale, zero_point):
+    desc = {**_quantize_desc(name, activation, dtype), "quantization": {"output": {"scale": scale, "zero_point": zero_point}}}
+    text = _render(OpQuantize(desc, seed=1, target_cpu="cortex-m55"), tmp_path, "quantize")
+    assert f"{zero_point}," in text and f"{scale}f" in text
+    x = _array(text, f"{name}_input").astype(np.float32)
+    if activation != "NONE":
+        x = np.clip(x, 0.0, 6.0 if activation == "RELU6" else np.inf).astype(np.float32)
+    info = np.iinfo(np.int8 if dtype == "S8" else np.int16)
+    q = x / np.float32(scale)
+    expected = np.clip(np.sign(q) * np.floor(np.abs(q) + 0.5) + zero_point, info.min, info.max)
+    np.testing.assert_array_equal(_array(text, f"{name}_expected_output"), expected)
 
 
-def test_quantize_rejects_empty_per_tensor_quantization_metadata(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    name = "quantize_empty_quant_params_s8"
-    desc = _quantize_desc(name, "NONE", "S8")
-    op = OpQuantize(desc, seed=1, target_cpu="cortex-m55")
+def test_quantize_rejects_a_malformed_quantization_block(tmp_path) -> None:
+    desc = {**_quantize_desc("quantize_bad_block_s8", "NONE", "S8"),
+            "quantization": {"output": {"scale": 0.1, "range": [-1.0, 1.0]}}}
+    with pytest.raises(ValueError, match="exactly one of"):
+        OpQuantize(desc, seed=1, target_cpu="cortex-m55").generate_c_files(tmp_path)
 
-    tflite_path = tmp_path / f"{name}.tflite"
-    tflite_path.write_bytes(b"")
 
-    fake_interpreter = _FakeQuantizeInterpreter(
-        input_shape=(1, 4),
-        output_shape=(1, 4),
-        output_data=np.array([[1, 2, 3, 4]], dtype=np.int8),
-        scales=np.array([], dtype=np.float32),
-        zero_points=np.array([0], dtype=np.int32),
-    )
-    monkeypatch.setattr(op, "load_litert_interpreter", lambda _: fake_interpreter)
+def test_dequantize_honours_explicit_input_quantization(tmp_path) -> None:
+    name = "dequantize_explicit_s8"
+    desc = {**_dequantize_desc(name, "NONE", "S8"), "quantization": {"input": {"scale": 0.05, "zero_point": -9}}}
+    text = _render(OpDequantize(desc, seed=1, target_cpu="cortex-m55"), tmp_path, "dequantize")
+    q = _array(text, f"{name}_input")
+    np.testing.assert_allclose(_array(text, f"{name}_expected_output"), (q + 9) * np.float32(0.05), rtol=1e-6)
 
-    with pytest.raises(ValueError, match="missing per-tensor scale"):
-        op.generate_c_files(tmp_path)
+
+def test_dequantize_name_does_not_drive_activation(tmp_path) -> None:
+    name = "dequantize_relu_name_only_s8"
+    text = _render(OpDequantize(_dequantize_desc(name, "NONE", "S8"), seed=1, target_cpu="cortex-m55"),
+                   tmp_path, "dequantize")
+    assert (_array(text, f"{name}_expected_output") < 0).any()

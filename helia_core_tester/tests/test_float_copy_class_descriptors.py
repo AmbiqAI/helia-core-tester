@@ -223,7 +223,8 @@ def test_representative_cases_emit_the_kernel_call(
         assert needle in source, (case_name, needle)
     assert "HELIA_VALIDATE_OUTPUTS(" in source
     assert "        0.0f,\n        0.0f,\n" in source, "zero-tolerance comparison"
-    assert (test_dir / f"{case_name}.tflite").exists()
+    # Copy-class goldens are numpy; no model is built.
+    assert not (test_dir / f"{case_name}.tflite").exists()
     assert (test_dir / f"{case_name}_{op_suffix}.sidecar.json").exists() is emits_sidecar
 
 

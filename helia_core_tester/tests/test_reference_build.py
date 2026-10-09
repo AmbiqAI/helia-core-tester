@@ -175,3 +175,19 @@ def test_toolchain_report_never_raises(monkeypatch) -> None:
     report = host_compiler.describe_host_toolchain()
     assert report["cc"] is None and report["cxx"] is None and report["flatc"] is None
     assert "cc_error" in report and "flatc_error" in report
+
+
+def test_library_exports_only_the_c_abi(library) -> None:
+    # A second TFLite in the process (TensorFlow, ai_edge_litert) must not bind to the
+    # vendored tflite:: code, nor it to theirs: on Linux that interposition corrupted the heap.
+    import subprocess
+
+    nm = shutil.which("nm")
+    if nm is None:
+        pytest.skip("nm is not available")
+    flags = ["-gU"] if sys.platform == "darwin" else ["-D", "--defined-only"]
+    out = subprocess.run([nm, *flags, str(library.path)], check=True, capture_output=True, text=True).stdout
+    names = [line.split()[-1].lstrip("_") for line in out.splitlines() if line.strip()]
+    exported = [n for n in names if n.startswith("hct_ref_")]
+    assert exported and "hct_ref_abi_version" in exported
+    assert not [n for n in names if "tflite" in n or "gemmlowp" in n]

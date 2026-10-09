@@ -2,7 +2,6 @@
 
 from typing import Dict, Tuple
 import numpy as np
-import tensorflow as tf
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.harness.simple import tensor_case_pool
@@ -29,69 +28,37 @@ class HardSwishFamilyBase(OperationBase):
     VARIANT = "precise"
     OPERATOR_NAME = "HardSwishPrecise"
     
-    def build_keras_model(self) -> tf.keras.Model:
-        """Build Keras model for HardSwish operation."""
-        input_shape = self.desc['input_shape']
-        
-        # Build model with float32 inputs (will be quantized later)
-        inputs = tf.keras.Input(shape=input_shape[1:], dtype=tf.float32, name='input')
-        
-        output = tf.keras.layers.Activation('hard_swish')(inputs)
-            
-        model = tf.keras.Model(inputs=[inputs], outputs=output)
-        return model
+    # The converter calibrated on [-8, 8]; hard_swish maps that onto [-3/8, 8].
+    INPUT_RANGE = (-8.0, 8.0)
+    OUTPUT_RANGE = (-0.375, 8.0)
 
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        """Convert Keras model to TFLite with quantization (plain float for FP32/FP16)."""
-        activation_dtype = self.tensor_dtype("input", default="S8")
-        if self.variant_name() == "compat" and str(activation_dtype).upper() != "S8":
-            raise NotImplementedError("HardSwishCompat is only supported for S8.")
-        if str(activation_dtype).upper() in ("FP32", "FP16"):
-            # arm_hard_swish_f32/f16 parity cases: plain float model, no
-            # quantization (mirrors the other float-suite conversions).
-            converter = tf.lite.TFLiteConverter.from_keras_model(model)
-            tflite_model = converter.convert()
-            self._write_tflite_bytes(out_path, tflite_model)
-            return
-        if self.variant_name() == "precise" and str(activation_dtype).upper() == "S16":
-            # TFLite quantization for HARD_SWISH int16 is not supported.
-            # Skip TFLite generation and rely on descriptor-provided scales.
-            return
-        # Create converter
-        converter = tf.lite.TFLiteConverter.from_keras_model(model)
-        
-        # Apply quantization based on the resolved activation dtype
-        if activation_dtype == 'S8':
-            converter.optimizations = [tf.lite.Optimize.DEFAULT]
-            converter.target_spec.supported_types = [tf.int8]
-            converter.inference_input_type = tf.int8
-            converter.inference_output_type = tf.int8
-        elif activation_dtype == 'S16':
-            converter.optimizations = [tf.lite.Optimize.DEFAULT]
-            converter.target_spec.supported_ops = [
-                tf.lite.OpsSet.EXPERIMENTAL_TFLITE_BUILTINS_ACTIVATIONS_INT16_WEIGHTS_INT8
-            ]
-            converter.inference_input_type = tf.int16
-            converter.inference_output_type = tf.int16
+    def needs_tflite(self) -> bool:
+        return False
 
-        
-        # Generate representative dataset
-        def representative_data_gen():
-            rng = np.random.default_rng(rep_seed)
-            for _ in range(100):
-                if 'input_shape' in self.desc:
-                    inputs = rng.uniform(-8.0, 8.0, size=self.desc['input_shape']).astype(np.float32)
-                    yield [inputs]
-                elif 'input_1_shape' in self.desc and 'input_2_shape' in self.desc:
-                    inputs1 = rng.uniform(-8.0, 8.0, size=self.desc['input_1_shape']).astype(np.float32)
-                    inputs2 = rng.uniform(-8.0, 8.0, size=self.desc['input_2_shape']).astype(np.float32)
-                    yield [inputs1, inputs2]
-        
-        converter.representative_dataset = representative_data_gen
-        
-        # Convert and save
-        tflite_model = converter.convert()
-        self._write_tflite_bytes(out_path, tflite_model)
+    def uses_reference(self) -> bool:
+        # Compat is TFLite's int8 HardSwish, so the TFLM reference is its oracle; the
+        # precise kernels are a different algorithm and keep their fixed-point port.
+        return self.variant_name() == "compat" and str(self.tensor_dtype("input", default="S8")).upper() == "S8"
+
+    def _int_quant(self, kind: str):
+        """Input/output (scale, zero point): explicit `quantization:` blocks, else the
+        calibration ranges; s16 precise reads the descriptor's hint extras (TFLite has no
+        int16 HardSwish to calibrate)."""
+        extras = self.desc.get("hint", {}).get("extras", {}) or {}
+        if kind == "s16":
+            input_scale = float(extras.get("input_scale", 1.0))
+            output_scale = float(extras.get("output_scale", input_scale))
+            return (input_scale, int(extras.get("input_zero_point", 0)),
+                    output_scale, int(extras.get("output_zero_point", 0)))
+        in_q = self.activation_quant("input", np.array(self.INPUT_RANGE, dtype=np.float32), kind)
+        out_q = self.activation_quant("output", np.array(self.OUTPUT_RANGE, dtype=np.float32), kind)
+        input_scale, input_zp, output_scale, output_zp = in_q.scale, in_q.zero_point, out_q.scale, out_q.zero_point
+        if self.variant_name() == "compat":
+            input_scale = float(extras.get("input_scale", input_scale))
+            output_scale = float(extras.get("output_scale", output_scale))
+            input_zp = int(extras.get("input_zero_point", input_zp))
+            output_zp = int(extras.get("output_zero_point", output_zp))
+        return input_scale, input_zp, output_scale, output_zp
 
     def variant_name(self) -> str:
         return self.VARIANT
@@ -331,7 +298,6 @@ class HardSwishFamilyBase(OperationBase):
         import math
         
         name = self.desc['name']
-        tflite_path = output_dir / f"{name}.tflite"
         
         # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_hard_swish_kernel()
@@ -341,52 +307,10 @@ class HardSwishFamilyBase(OperationBase):
             self._generate_float_c_files(output_dir, kernel_info)
             return
         
-        input_shape = tuple(self.desc['input_shape'])
-        output_shape = input_shape
-        input_scale = None
-        input_zp = None
-        output_scale = None
-        output_zp = None
+        input_shape = output_shape = tuple(int(d) for d in self.desc['input_shape'])
+        kind = "s16" if kernel_info["input_c_type"] == "int16_t" else "s8"
+        input_scale, input_zp, output_scale, output_zp = self._int_quant(kind)
 
-        if tflite_path.exists():
-            op_tensors = self.load_primary_operator_tensors(str(tflite_path))
-
-            # Extract shapes from LiteRT
-            input_shape = op_tensors['inputs'][0]['shape']
-            output_shape = op_tensors['outputs'][0]['shape']
-
-            # Ensure shapes are tuples
-            if input_shape is not None:
-                input_shape = tuple(input_shape)
-            if output_shape is not None:
-                output_shape = tuple(output_shape)
-
-            # Extract quantization from LiteRT
-            input_quant = op_tensors['inputs'][0]['quantization']
-            output_quant = op_tensors['outputs'][0]['quantization']
-
-            input_scale = float(self._quant_param_scalar(input_quant, 'scale', 1.0))
-            input_zp = int(self._quant_param_scalar(input_quant, 'zero_point', 0))
-            output_scale = float(self._quant_param_scalar(output_quant, 'scale', 1.0))
-            output_zp = int(self._quant_param_scalar(output_quant, 'zero_point', 0))
-
-            extras = self.desc.get("hint", {}).get("extras", {})
-            if variant == "compat" and extras:
-                if "input_scale" in extras:
-                    input_scale = float(extras["input_scale"])
-                if "output_scale" in extras:
-                    output_scale = float(extras["output_scale"])
-                if "input_zero_point" in extras:
-                    input_zp = int(extras["input_zero_point"])
-                if "output_zero_point" in extras:
-                    output_zp = int(extras["output_zero_point"])
-        else:
-            extras = self.desc.get("hint", {}).get("extras", {})
-            input_scale = float(extras.get("input_scale", 1.0))
-            output_scale = float(extras.get("output_scale", input_scale))
-            input_zp = int(extras.get("input_zero_point", 0))
-            output_zp = int(extras.get("output_zero_point", 0))
-        
         builder = TemplateContextBuilder()
         
         # Convert shapes to CMSIS dims
@@ -460,17 +384,9 @@ class HardSwishFamilyBase(OperationBase):
             compat_relu_fp = int(relu_q15)
             compat_relu_exp = int(relu_exp)
 
-        # Compute expected output using CMSIS-NN-compatible emulation
+        # Compat: the TFLM reference; precise: the CMSIS-NN fixed-point emulation.
         if variant == "compat":
-            output_data = self._simulate_compat_s8(
-                input_q,
-                int(input_zp),
-                int(output_zp),
-                int(compat_out_fp),
-                int(compat_out_exp),
-                int(compat_relu_fp),
-                int(compat_relu_exp),
-            )
+            output_data = self._reference_compat_s8(input_q, input_scale, input_zp, output_scale, output_zp)
         else:
             if np_in_dtype == np.int16:
                 output_data = self._simulate_precise_s16(
@@ -539,6 +455,18 @@ class HardSwishFamilyBase(OperationBase):
             validation_key=validation_key, label="HardSwish", operator=self.OPERATOR_NAME, sidecar=True,
         )
         
+
+    def _reference_compat_s8(self, input_q, input_scale, input_zp, output_scale, output_zp):
+        from helia_core_tester.generation.reference import bindings as b
+        from helia_core_tester.generation.reference.case import ReferenceCall
+
+        params = b.struct_to_dict(b.get_bindings().hard_swish_prepare(input_scale, input_zp, output_scale, output_zp))
+        call = ReferenceCall(
+            "hard_swish_s8", params, {"input": np.ascontiguousarray(input_q)}, input_q.shape, "int8",
+            quant={"input": {"scale": input_scale, "zero_point": input_zp},
+                   "output": {"scale": output_scale, "zero_point": output_zp}},
+        )
+        return self.reference_golden(call)
 
     def _generate_float_c_files(self, output_dir: Path, kernel_info: Dict[str, str]) -> None:
         """

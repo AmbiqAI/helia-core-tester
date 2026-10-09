@@ -9,41 +9,9 @@ from helia_core_tester.generation.ops._shared.base import OperationBase
 class OpTile(OperationBase):
     """Tile operation."""
 
-    def needs_keras_model(self) -> bool:
+    def needs_tflite(self) -> bool:
+        # The golden is computed in numpy; nothing reads a .tflite.
         return False
-
-    def build_keras_model(self):
-        raise NotImplementedError("Tile uses LiteRT-only model generation.")
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        from helia_core_tester.generation.utils.litert_builder import (
-            build_shape_transform_op, TensorSpec,
-        )
-        import ai_edge_litert.schema_py_generated as litert
-
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
-        dtype = 'int16' if activation_dtype == 'S16' else 'int8'
-
-        input_shape = tuple(self.desc['input_shape'])
-        multiples = tuple(self.desc['multiples'])
-        output_shape = tuple(s * m for s, m in zip(input_shape, multiples))
-
-        multiples_tensor = TensorSpec(
-            name="multiples",
-            shape=(len(multiples),),
-            tensor_type=litert.TensorType.INT32,
-            is_input=False,
-            data=np.array(multiples, dtype=np.int32),
-        )
-
-        model_bytes = build_shape_transform_op(
-            op_name="TILE",
-            input_shape=input_shape,
-            output_shape=output_shape,
-            dtype=dtype,
-            extra_input_tensors=[multiples_tensor],
-        )
-        self._write_tflite_bytes(out_path, model_bytes)
 
     def _select_kernel(self) -> Dict[str, str]:
         activation_dtype = self.desc.get('activation_dtype', 'S8')
@@ -65,32 +33,9 @@ class OpTile(OperationBase):
         np_dtype = np.int16 if ki['np_dtype'] == 'int16' else np.int8
         input_data = rng.integers(ki['qmin'], ki['qmax'] + 1, size=input_shape, dtype=np_dtype)
 
-        # Use TFLite interpreter for reference output; fall back to INT32 model if type unsupported
-        tflite_path = str(output_dir / f"{name}.tflite")
-        try:
-            interpreter = self.load_litert_interpreter(tflite_path)
-            input_details = interpreter.get_input_details()
-            output_details = interpreter.get_output_details()
-            interpreter.set_tensor(input_details[0]["index"], input_data)
-            interpreter.invoke()
-            output_data = np.array(interpreter.get_tensor(output_details[0]["index"]))
-        except (ValueError, RuntimeError):
-            # Rebuild with INT32 (TILE doesn't support INT16 but result is type-independent)
-            from ai_edge_litert.interpreter import Interpreter
-            from helia_core_tester.generation.utils.litert_builder import LiteRtSingleOpBuilder, TensorSpec
-            import ai_edge_litert.schema_py_generated as litert
-            b = LiteRtSingleOpBuilder(op_name="TILE")
-            i_idx = b.add_tensor(TensorSpec(name="input", shape=tuple(input_shape), tensor_type=litert.TensorType.INT32, is_input=True))
-            m_idx = b.add_tensor(TensorSpec(name="multiples", shape=(rank,), tensor_type=litert.TensorType.INT32, is_input=False, data=np.array(multiples, dtype=np.int32)))
-            o_idx = b.add_tensor(TensorSpec(name="output", shape=tuple(output_shape), tensor_type=litert.TensorType.INT32, is_output=True))
-            b.add_operator("TILE", inputs=[i_idx, m_idx], outputs=[o_idx], options=None, options_type=litert.BuiltinOptions.NONE)
-            interp = Interpreter(model_content=bytes(b.build()))
-            interp.allocate_tensors()
-            inp_d = interp.get_input_details()
-            out_d = interp.get_output_details()
-            interp.set_tensor(inp_d[0]["index"], input_data.astype(np.int32))
-            interp.invoke()
-            output_data = interp.get_tensor(out_d[0]["index"]).astype(np_dtype)
+        if len(multiples) != rank or any(m < 1 for m in multiples):
+            raise ValueError(f"{name}: multiples {multiples} do not fit input rank {rank}")
+        output_data = np.tile(input_data, multiples)
 
         builder = TemplateContextBuilder()
         context = {

@@ -162,3 +162,19 @@ hint:
 input_shape: [2, 2, 3, 7]
 axes: [0]
 keepdims: false
+---
+operator: Mean
+name: mean_nonzero_zp_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [1, 7, 5, 3]
+axes: [1, 2]
+keepdims: true
+# Input zero point near -64 and a nonzero output zero point: the kernel's
+# input_offset must be -zp (it accumulates sum + input_offset * count).
+quantization:
+  input: {range: [-1.0, 3.0]}
+  output: {scale: 0.004, zero_point: 37}

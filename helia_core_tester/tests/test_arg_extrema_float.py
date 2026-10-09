@@ -171,8 +171,6 @@ def test_float_dispatch_rejects_integer_input():
     "legacy,effective", [(None, "S16"), ("S8", "S16"), ("S16", "S8")]
 )
 def test_integer_arg_emitted_dtype_precedence(tmp_path, kind, legacy, effective):
-    from tensorflow.lite.python import schema_py_generated as schema
-
     name = f"arg{kind}_dtype"
     desc = dict(
         name=name,
@@ -185,12 +183,8 @@ def test_integer_arg_emitted_dtype_precedence(tmp_path, kind, legacy, effective)
         desc["activation_dtype"] = legacy
     generate_test(desc, str(tmp_path), seed=500)
     case = tmp_path / "BasicMathFunctions" / name
-    model = schema.Model.GetRootAsModel((case / f"{name}.tflite").read_bytes(), 0)
-    graph = model.Subgraphs(0)
     width = 16 if effective == "S16" else 8
-    expected_type = schema.TensorType.INT16 if width == 16 else schema.TensorType.INT8
-    assert graph.Tensors(graph.Inputs(0)).Type() == expected_type
-    assert graph.Tensors(graph.Outputs(0)).Type() == schema.TensorType.INT32
+    assert not (case / f"{name}.tflite").exists()
     source = (case / f"{name}_arg{kind}.c").read_text()
     header = (case / "includes" / f"{name}_arg{kind}.h").read_text()
     assert f"arm_arg{kind}_s{width}(" in source

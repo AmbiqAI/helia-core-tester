@@ -29,17 +29,9 @@ class OpClamp(OperationBase):
     Clamp operation.
     """
 
-    def build_keras_model(self):
-        raise NotImplementedError("Clamp does not use a Keras model.")
-
-    def needs_keras_model(self) -> bool:
+    def needs_tflite(self) -> bool:
+        # The golden is computed directly; nothing reads a .tflite.
         return False
-
-    def allow_no_tflite(self) -> bool:
-        return True
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        raise NotImplementedError("Clamp does not generate TFLite models.")
 
     def _select_cmsis_clamp_kernel(self) -> Dict[str, str]:
         activation_dtype = self.desc.get('activation_dtype', 'S8')

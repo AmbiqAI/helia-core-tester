@@ -2,31 +2,10 @@
 Add operation implementation.
 """
 
-from typing import Dict, Any
+from typing import Dict
 import numpy as np
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.binary_basic_math_base import BinaryBasicMathBase
-from helia_core_tester.generation.utils.litert_builder import build_binary_broadcast_op
-
-
-def build_add_op(
-    *,
-    input_1_shape,
-    input_2_shape,
-    dtype: str = "int8",
-) -> bytes:
-    from ai_edge_litert import schema_py_generated as litert
-
-    options = litert.AddOptionsT()
-    options.fusedActivationFunction = litert.ActivationFunctionType.NONE
-    return build_binary_broadcast_op(
-        op_name="ADD",
-        input_1_shape=input_1_shape,
-        input_2_shape=input_2_shape,
-        dtype=dtype,
-        options=options,
-        options_type=litert.BuiltinOptions.AddOptions,
-    )
 
 
 class OpAdd(BinaryBasicMathBase):
@@ -36,35 +15,6 @@ class OpAdd(BinaryBasicMathBase):
 
     SIGN_SPAN_OPERANDS = ("input_1", "input_2")
     
-    def needs_keras_model(self) -> bool:
-        return False
-
-    def build_keras_model(self):
-        raise NotImplementedError("Add uses LiteRT-only model generation.")
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        activation_dtype = self.tensor_dtype("input")
-        if activation_dtype == "S8":
-            dtype = "int8"
-        elif activation_dtype == "S16":
-            dtype = "int16"
-        elif activation_dtype == "FP32":
-            dtype = "float32"
-        elif activation_dtype == "FP16":
-            dtype = "float16"
-        else:
-            raise NotImplementedError(f"Unsupported Add dtype: {activation_dtype}")
-
-        input_1_shape = tuple(self.desc["input_1_shape"])
-        input_2_shape = tuple(self.desc["input_2_shape"])
-
-        model_bytes = build_add_op(
-            input_1_shape=input_1_shape,
-            input_2_shape=input_2_shape,
-            dtype=dtype,
-        )
-        self._write_tflite_bytes(out_path, model_bytes)
-
     def _select_cmsis_add_kernel(self) -> Dict[str, str]:
         """
         Select appropriate CMSIS-NN kernel function for Add operation.
@@ -125,31 +75,13 @@ class OpAdd(BinaryBasicMathBase):
         Generate C and H files from templates for Add operation.
         """
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
-        from helia_core_tester.generation.utils.tflite_utils import (
-            scalar_scale_zp,
-            activation_bounds,
-            elementwise_addsub_quant_params,
-        )
+        from helia_core_tester.generation.utils.tflite_utils import activation_bounds
         
         name = self.desc['name']
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
-        
         # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_add_kernel()
-        
-        # Load LiteRT model for shape and quantization extraction
-        from helia_core_tester.generation.utils.litert_utils import get_operator_tensors_from_litert
-        model, subgraph = self.load_litert_model(str(tflite_path))
-        op_tensors = get_operator_tensors_from_litert(model, subgraph, 0)
-        
-        input1_shape = self._ensure_shape_tuple(op_tensors['inputs'][0]['shape'])
-        input2_shape = self._ensure_shape_tuple(
-            op_tensors['inputs'][1]['shape'] if len(op_tensors['inputs']) > 1 else op_tensors['inputs'][0]['shape']
-        )
-        output_shape = self._ensure_shape_tuple(op_tensors['outputs'][0]['shape'])
-        
+        input1_shape, input2_shape, output_shape = self._binary_shapes()
+
         builder = TemplateContextBuilder()
         input1_dims = builder.nhwc_to_cmsis_dims(input1_shape)
         input2_dims = builder.nhwc_to_cmsis_dims(input2_shape)
@@ -179,28 +111,20 @@ class OpAdd(BinaryBasicMathBase):
             mult1 = shift1 = mult2 = shift2 = output_mult = output_shift = left_shift = 0
             input1_zp = input2_zp = output_zp = 0
         else:
-            input1_quant = op_tensors['inputs'][0]['quantization']
-            input2_quant = op_tensors['inputs'][1]['quantization'] if len(op_tensors['inputs']) > 1 else input1_quant
-            output_quant = op_tensors['outputs'][0]['quantization']
+            from helia_core_tester.generation.reference import params as ref_params
 
-            input1_scale, input1_zp = scalar_scale_zp(input1_quant)
-            input2_scale, input2_zp = scalar_scale_zp(input2_quant)
-            output_scale, output_zp = scalar_scale_zp(output_quant)
+            scale, zero_point = self._fixed_quant()
+            input1_scale = input2_scale = output_scale = scale
+            input1_zp = input2_zp = output_zp = zero_point
 
             activation_min, activation_max = activation_bounds(activation_dtype)
-            addsub_qparams = elementwise_addsub_quant_params(
-                input1_scale=float(input1_scale),
-                input2_scale=float(input2_scale),
-                output_scale=float(output_scale),
-                activation_dtype=activation_dtype,
+            p = ref_params.addsub_params(
+                activation_dtype, input1_scale, input1_zp, input2_scale, input2_zp, output_scale, output_zp
             )
-            mult1 = addsub_qparams["input1_mult"]
-            shift1 = addsub_qparams["input1_shift"]
-            mult2 = addsub_qparams["input2_mult"]
-            shift2 = addsub_qparams["input2_shift"]
-            output_mult = addsub_qparams["out_mult"]
-            output_shift = addsub_qparams["out_shift"]
-            left_shift = addsub_qparams["left_shift"]
+            mult1, shift1 = p.input1_multiplier, p.input1_shift
+            mult2, shift2 = p.input2_multiplier, p.input2_shift
+            output_mult, output_shift = p.output_multiplier, p.output_shift
+            left_shift = p.left_shift
 
             # Draw both operands from one RNG stream: reseeding per call would
             # make input1 == input2 and weaken/vacuously pass the golden.
@@ -218,34 +142,13 @@ class OpAdd(BinaryBasicMathBase):
                 (("input_1", input1_q, input1_zp), ("input_2", input2_q, input2_zp)),
                 steerable=("input_1", "input_2"),
             )
+            output_data = self._reference_binary(
+                "add", input1_q, input2_q, output_shape, p.__dict__, activation_min, activation_max,
+                quant={"input1": {"scale": input1_scale, "zero_point": input1_zp},
+                       "input2": {"scale": input2_scale, "zero_point": input2_zp},
+                       "output": {"scale": output_scale, "zero_point": output_zp}},
+            )
 
-            if input1_shape == input2_shape:
-                interpreter = self.load_litert_interpreter(str(tflite_path))
-                input_details = interpreter.get_input_details()
-                output_details = interpreter.get_output_details()
-                interpreter.set_tensor(input_details[0]['index'], input1_q)
-                interpreter.set_tensor(input_details[1]['index'], input2_q)
-                interpreter.invoke()
-                output_data = np.array(interpreter.get_tensor(output_details[0]['index']))
-            else:
-                output_data = self._simulate_add_quantized(
-                    input1_q,
-                    input2_q,
-                    input1_offset=-int(input1_zp),
-                    input2_offset=-int(input2_zp),
-                    input1_mult=int(mult1),
-                    input1_shift=int(shift1),
-                    input2_mult=int(mult2),
-                    input2_shift=int(shift2),
-                    left_shift=int(left_shift),
-                    out_offset=int(output_zp),
-                    out_mult=int(output_mult),
-                    out_shift=int(output_shift),
-                    out_activation_min=int(activation_min),
-                    out_activation_max=int(activation_max),
-                    out_dtype=np_in_dtype,
-                )
-        
         # Format arrays
         input1_array_str = builder.format_array_as_c_literal(input1_q)
         input2_array_str = builder.format_array_as_c_literal(input2_q)
@@ -306,36 +209,6 @@ class OpAdd(BinaryBasicMathBase):
             'operator_name': 'add',
         }
         self._write_op_outputs(output_dir, "add", "BasicMathFunctions/add/add.h.j2", "BasicMathFunctions/add/add.c.j2", context, cmake_context)
-
-    @classmethod
-    def _simulate_add_quantized(
-        cls,
-        input1_q: np.ndarray,
-        input2_q: np.ndarray,
-        *,
-        input1_offset: int,
-        input2_offset: int,
-        input1_mult: int,
-        input1_shift: int,
-        input2_mult: int,
-        input2_shift: int,
-        left_shift: int,
-        out_offset: int,
-        out_mult: int,
-        out_shift: int,
-        out_activation_min: int,
-        out_activation_max: int,
-        out_dtype: np.dtype,
-    ) -> np.ndarray:
-        a = (input1_q.astype(np.int32) + int(input1_offset)) << int(left_shift)
-        b = (input2_q.astype(np.int32) + int(input2_offset)) << int(left_shift)
-        a = cls._requantize_np(a, int(input1_mult), int(input1_shift))
-        b = cls._requantize_np(b, int(input2_mult), int(input2_shift))
-        s = a + b
-        s = cls._requantize_np(s, int(out_mult), int(out_shift))
-        s = s + int(out_offset)
-        s = np.clip(s, int(out_activation_min), int(out_activation_max))
-        return s.astype(out_dtype)
 
 
 from helia_core_tester.generation.harness.registry import harness_pool  # noqa: E402

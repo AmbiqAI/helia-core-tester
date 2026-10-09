@@ -95,12 +95,11 @@ def test_depthwise_batch_case_rejected_without_truncation(tmp_path: Path) -> Non
         _bridge(tmp_path, "ConvolutionFunctions", "depthwise_conv_mult_batches_s8")
 
 
-def test_pool_batch_padded_case_truncates_to_header_dims(tmp_path: Path) -> None:
-    manifest = _bridge(tmp_path, "PoolingFunctions", "avg_pool_valid_pool1x1_stride1x2_s16")
-    blobs = {blob["role"]: blob for blob in manifest["blob_roles"]}
-    assert blobs["input_0"]["dimensions"] == [1, 1, 9, 2]
-    assert blobs["input_0"]["byte_length"] == 36
-    assert manifest["expected_output"]["byte_length"] == 20
+def test_pool_real_batch_case_is_refused_by_the_bridge(tmp_path: Path) -> None:
+    # The reference pool keeps the descriptor's batch of 3 (the converter collapsed it to 1),
+    # and the firmware dispatches one batch.
+    with pytest.raises(UnsupportedGeneratedTestError, match="batch size 3 > 1"):
+        _bridge(tmp_path, "PoolingFunctions", "avg_pool_valid_pool1x1_stride1x2_s16")
 
 
 def test_fp16_pooling_expected_output_manifest_uses_fp16(tmp_path: Path) -> None:

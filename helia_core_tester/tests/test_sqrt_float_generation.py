@@ -83,7 +83,8 @@ def test_generate_every_float_descriptor(tmp_path, operator, cls):
         out = tmp_path / desc["name"]
         out.mkdir()
         op = cls(desc, seed=500, target_cpu="cortex-m55")
-        op.convert_to_tflite(None, str(out / (desc["name"] + ".tflite")), 500)
+        if op.needs_tflite() and not op.uses_reference():
+            op.convert_to_tflite(None, str(out / (desc["name"] + ".tflite")), 500)
         op.generate_c_files(out)
         source = (out / (desc["name"] + "_" + operator + ".c")).read_text()
         assert desc["required_kernel_symbols"][0] in source

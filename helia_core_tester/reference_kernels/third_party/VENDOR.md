@@ -15,7 +15,7 @@ replant. The gemmlowp commit is the one tflite-micro pins in
 upstream only: never from the helia-rt tree, whose root license restricts it to
 Ambiq CPUs.
 
-39 files, each hashed in `manifest.json` (checked by
+55 files, each hashed in `manifest.json` (checked by
 `helia_core_tester/tests/test_reference_vendor.py`). Only the include closure of
 `shim/*.cc` is vendored, plus the companion `.cc` of each header that has one;
 nothing from `tensorflow/lite/micro`, ruy, flatbuffers or the schema.

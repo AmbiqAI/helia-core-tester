@@ -4,11 +4,10 @@ ReduceMax operation implementation.
 
 from typing import Dict, Any
 import numpy as np
-import tensorflow as tf
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.ops._shared.reduce_extrema_integer import (
-    boundary_inputs, resize_integer_interpreter,
+    boundary_inputs, reduce_extrema_golden,
 )
 from helia_core_tester.generation.io.dtypes import descriptor_dtype_to_c_type
 from helia_core_tester.generation.ops._shared.reduce_extrema_float import generate_reduce_extrema_float
@@ -35,35 +34,11 @@ class OpReduceMax(OperationBase):
             raise NotImplementedError(f"Unsupported reduce extrema dtype: {dtype}")
         return dtype
 
-    def build_keras_model(self) -> tf.keras.Model:
-        """Build Keras model for ReduceMax operation."""
-        input_shape = self.desc['input_shape']
-        inputs = tf.keras.Input(
-            shape=input_shape[1:], dtype=tf.float32, name='input',
-            batch_size=input_shape[0] if self._element_dtype() in ("FP32", "FP16") else None,
-        )
-        
-        # Get axes and keepdims from descriptor
-        axes = self.desc.get('axes', [1, 2])  # Default to spatial dimensions
-        keepdims = self.desc.get('keepdims', True)
-        
-        # ReduceMax operation
-        x = tf.keras.layers.Lambda(
-            lambda x: tf.reduce_max(x, axis=axes, keepdims=keepdims),
-            name='reduce_max'
-        )(inputs)
-        
-        model = tf.keras.Model(inputs=inputs, outputs=x)
-        return model
+    def needs_tflite(self) -> bool:
+        # Input and output share quantization, so the golden is a selection over
+        # the raw codes (numpy); the float path has its own numpy golden.
+        return False
 
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        """Convert to TFLite, quantizing only integer element types."""
-        if self._element_dtype() in ("FP32", "FP16"):
-            converter = tf.lite.TFLiteConverter.from_keras_model(model)
-            self._write_tflite_bytes(out_path, converter.convert())
-            return
-        super().convert_to_tflite(model, out_path, rep_seed)
-    
     def _select_cmsis_reduce_max_kernel(self) -> Dict[str, str]:
         """
         Select appropriate CMSIS-NN kernel function for ReduceMax operation.
@@ -92,23 +67,10 @@ class OpReduceMax(OperationBase):
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
         
         name = self.desc['name']
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
-        
-        # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_reduce_max_kernel()
-        
-        # Load interpreter
-        interpreter = self.load_litert_interpreter(str(tflite_path))
-        
-        # Dynamic LiteRT batches allocate at one until explicitly resized.
-        input_details, output_details = resize_integer_interpreter(
-            interpreter, self.desc["input_shape"]
-        )
-        
-        input_shape = tuple(input_details[0]['shape'])
-        
+        input_shape = tuple(int(d) for d in self.desc["input_shape"])
+        np_dtype = np.int16 if self._element_dtype() == "S16" else np.int8
+
         builder = TemplateContextBuilder()
         
         # Convert input shape to CMSIS dims
@@ -129,14 +91,9 @@ class OpReduceMax(OperationBase):
         )
         
         # Work in integer codes so boundary separation survives quantization.
-        input_q = boundary_inputs(input_shape, axes, input_details[0]["dtype"], "max")
-        
-        # Run inference
-        interpreter.set_tensor(input_details[0]['index'], input_q)
-        interpreter.invoke()
-        output_data = interpreter.get_tensor(output_details[0]['index'])
-        output_data = np.array(output_data)
-        
+        input_q = boundary_inputs(input_shape, axes, np_dtype, "max")
+        output_data = reduce_extrema_golden(input_q, axes, "max", keepdims=bool(self.desc.get('keepdims', True)))
+
         # Format arrays
         input_array_str = builder.format_array_as_c_literal(input_q)
         expected_output_array_str = builder.format_array_as_c_literal(output_data)

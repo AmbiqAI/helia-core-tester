@@ -3,7 +3,6 @@
 import shutil
 import subprocess
 import textwrap
-from unittest import mock
 
 import numpy as np
 import pytest
@@ -119,33 +118,10 @@ def test_reference_matches_compiled_kernel_helper_exhaustively(tmp_path):
     assert mismatches == []
 
 
-@pytest.mark.parametrize(
-    ("activation_dtype", "litert_dtype"),
-    [("S8", "int8"), ("S16", "int16"), ("FP32", "float32"), ("FP16", "float16")],
-)
-def test_convert_to_tflite_maps_every_supported_dtype(tmp_path, activation_dtype, litert_dtype):
+def test_resize_nearest_needs_no_model():
     op = OpResizeNearestNeighbor.__new__(OpResizeNearestNeighbor)
-    op.desc = {
-        "name": "resize_probe",
-        "activation_dtype": activation_dtype,
-        "input_shape": [1, 3, 3, 2],
-        "size": [5, 5],
-        "align_corners": True,
-    }
-    with mock.patch(
-        "helia_core_tester.generation.utils.litert_builder.build_resize_nearest_neighbor_op",
-        return_value=b"model",
-    ) as build:
-        op.convert_to_tflite(None, str(tmp_path / "m.tflite"), rep_seed=0)
-    assert build.call_args.kwargs["dtype"] == litert_dtype
-    assert (tmp_path / "m.tflite").read_bytes() == b"model"
-
-
-def test_convert_to_tflite_rejects_an_unknown_dtype(tmp_path):
-    op = OpResizeNearestNeighbor.__new__(OpResizeNearestNeighbor)
-    op.desc = {"name": "resize_probe", "activation_dtype": "S4", "input_shape": [1, 2, 2, 1], "size": [3, 3]}
-    with pytest.raises(NotImplementedError):
-        op.convert_to_tflite(None, str(tmp_path / "m.tflite"), rep_seed=0)
+    op.desc = {"name": "resize_probe", "activation_dtype": "S8", "input_shape": [1, 3, 3, 2], "size": [5, 5]}
+    assert not op.needs_tflite()
 
 
 def test_generate_c_files_rejects_float_loudly_until_the_float_kernels_are_wired(tmp_path):

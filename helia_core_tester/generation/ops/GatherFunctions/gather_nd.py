@@ -7,7 +7,6 @@ import numpy as np
 from pathlib import Path
 from helia_core_tester.generation.io.dtypes import (
     descriptor_dtype_to_c_type,
-    descriptor_dtype_to_litert_dtype,
     get_resolved_tensor_dtype,
 )
 from helia_core_tester.generation.ops._shared.base import OperationBase
@@ -29,6 +28,10 @@ class OpGatherND(OperationBase):
     GatherND operation - gathers slices from params using indices.
     """
 
+    def needs_tflite(self) -> bool:
+        # The golden is computed in numpy; nothing reads a .tflite.
+        return False
+
     def _element_dtype(self) -> str:
         """The resolved element dtype, which for a copy operator is input and output alike.
 
@@ -49,28 +52,6 @@ class OpGatherND(OperationBase):
         if dtype not in _GATHER_ND_KERNEL_BY_DTYPE:
             raise NotImplementedError(f"Unsupported GatherND dtype: {dtype}")
         return dtype
-
-    def needs_keras_model(self) -> bool:
-        return False
-
-    def build_keras_model(self):
-        raise NotImplementedError("GatherND uses LiteRT-only model generation.")
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        from helia_core_tester.generation.utils.litert_builder import build_gather_nd_op
-
-        dtype = descriptor_dtype_to_litert_dtype(self._element_dtype())
-
-        params_shape = tuple(self.desc["input_shape"])
-        indices_shape = tuple(self.desc["indices_shape"])
-
-        model_bytes = build_gather_nd_op(
-            params_shape=params_shape,
-            indices_shape=indices_shape,
-            dtype=dtype,
-        )
-        with open(out_path, "wb") as f:
-            f.write(model_bytes)
 
     def _select_cmsis_gather_nd_kernel(self) -> Dict[str, str]:
         dtype = self._element_dtype()
@@ -97,9 +78,6 @@ class OpGatherND(OperationBase):
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
         name = self.desc["name"]
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
 
         kernel_info = self._select_cmsis_gather_nd_kernel()
         builder = TemplateContextBuilder()

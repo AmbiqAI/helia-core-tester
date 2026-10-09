@@ -30,4 +30,4 @@ def test_where_uses_int64_coordinates() -> None:
     golden = next(d for d in pool.header if d.name == "w_expected_output")
     assert golden.ctype == "int64_t" and pool.output_ctype == "int64_t"
     assert '"output_c_type": "int64_t"' in op_source
-    assert "dtype=np.int64" in op_source
+    assert "np.int64" in op_source

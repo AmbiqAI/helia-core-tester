@@ -14,42 +14,10 @@ class OpSplit(OperationBase):
     Split operation - splits a tensor into multiple tensors.
     """
 
-    def needs_keras_model(self) -> bool:
+    def needs_tflite(self) -> bool:
+        # The golden is computed in numpy; nothing reads a .tflite.
         return False
 
-    def build_keras_model(self):
-        raise NotImplementedError("Split uses LiteRT-only model generation.")
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        from helia_core_tester.generation.utils.litert_builder import build_split_op
-
-        activation_dtype = self._split_dtype()
-        if activation_dtype == "S8":
-            dtype = "int8"
-        elif activation_dtype == "S16":
-            dtype = "int16"
-        elif activation_dtype == "FP16":
-            dtype = "float16"
-        elif activation_dtype == "FP32":
-            dtype = "float32"
-        else:
-            raise NotImplementedError(f"Unsupported Split dtype: {activation_dtype}")
-
-        input_shape = tuple(self.desc["input_shape"])
-        axis = int(self.desc.get("axis", -1))
-        num_splits = self.desc.get("num_splits", None)
-        size_splits = self.desc.get("size_splits", None)
-
-        model_bytes = build_split_op(
-            input_shape=input_shape,
-            axis=axis,
-            num_splits=num_splits,
-            size_splits=size_splits,
-            dtype=dtype,
-        )
-        with open(out_path, "wb") as f:
-            f.write(model_bytes)
-    
     def _split_dtype(self) -> str:
         return self.tensor_dtype("input", default=str(self.desc.get("activation_dtype", "S8")))
 
@@ -97,9 +65,6 @@ class OpSplit(OperationBase):
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
         
         name = self.desc['name']
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
         
         # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_split_kernel()

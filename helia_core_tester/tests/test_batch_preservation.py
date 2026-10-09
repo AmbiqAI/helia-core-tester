@@ -69,7 +69,9 @@ def _golden_shapes(case, name):
     record_path = case / f"{name}.reference.json"
     if record_path.is_file():
         record = json.loads(record_path.read_text())
-        return [record["tensors"]["input"]["shape"]], record["output"]["shape"]
+        tensors = record["tensors"]
+        roles = ["lhs", "rhs"] if "lhs" in tensors else ["input"]
+        return [tensors[r]["shape"] for r in roles], record["output"]["shape"]
     from ai_edge_litert.interpreter import Interpreter
 
     interpreter = Interpreter(model_path=str(case / f"{name}.tflite"))
@@ -88,7 +90,9 @@ def test_declared_batches_reach_emitted_data(tmp_path, family, desc):
         else [desc["input_1_shape"], desc["input_2_shape"]]
     )
     model_inputs, output_shape = _golden_shapes(case, desc["name"])
-    assert model_inputs == shapes
+    # BatchMatMul records its operands in canonical [M, K] x [N, K] form: same batch and size.
+    assert [s[0] for s in model_inputs] == [s[0] for s in shapes]
+    assert [int(np.prod(s)) for s in model_inputs] == [int(np.prod(s)) for s in shapes]
     batch = shapes[0][0]
     assert output_shape[0] == batch
 

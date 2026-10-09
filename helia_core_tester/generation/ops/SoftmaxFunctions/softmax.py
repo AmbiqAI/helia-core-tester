@@ -2,10 +2,8 @@
 Softmax operation implementation for Helia-Core Tester.
 """
 
-import math
 from typing import Dict, Any, Tuple
 import numpy as np
-import tensorflow as tf
 from pathlib import Path
 from helia_core_tester.generation.harness import ArgumentPool, ArrayLiteral, Declaration
 from helia_core_tester.generation.harness.simple import dims_count, tensor_case_pool
@@ -33,22 +31,6 @@ class OpSoftmax(OperationBase):
     """
     Softmax operation.
     """
-    
-    def build_keras_model(self) -> tf.keras.Model:
-        """Build Keras model for Softmax operation."""
-        input_shape = self.desc['input_shape']
-        
-        inputs = tf.keras.Input(shape=input_shape[1:], dtype=tf.float32, name='input')
-        
-        # Softmax operation
-        output = tf.keras.layers.Softmax()(inputs)
-        
-        model = tf.keras.Model(inputs=inputs, outputs=output)
-        return model
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        """Convert Keras model to TFLite with quantization."""
-        super().convert_to_tflite(model, out_path, rep_seed)
     
     def _select_cmsis_softmax_kernel(self) -> Dict[str, str]:
         """
@@ -86,15 +68,15 @@ class OpSoftmax(OperationBase):
         else:
             raise NotImplementedError(f"Unsupported Softmax dtype: {activation_dtype}")
 
-    def needs_keras_model(self) -> bool:
+    def needs_tflite(self) -> bool:
+        # Shapes come from the descriptor; the golden is a reference call (int),
+        # the CMSIS fixed-point port (force_cmsis) or numpy (float).
+        return False
+
+    def uses_reference(self) -> bool:
         if self.desc.get("hint", {}).get("force_cmsis", False):
             return False
-        return True
-
-    def allow_no_tflite(self) -> bool:
-        if self.desc.get("hint", {}).get("force_cmsis", False):
-            return True
-        return False
+        return self.tensor_dtype("input") in ("S8", "S16")
 
     @staticmethod
     def _to_int32(value: int) -> int:
@@ -284,111 +266,45 @@ class OpSoftmax(OperationBase):
         Generate C and H files from templates for Softmax operation.
         """
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
-        from helia_core_tester.generation.utils.tflite_utils import calculate_multiplier_shift
         
         name = self.desc['name']
         force_cmsis = self.desc.get("hint", {}).get("force_cmsis", False)
-        tflite_path = output_dir / f"{name}.tflite"
-        if not force_cmsis and not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
-        
+
         # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_softmax_kernel()
         float_kernel = kernel_info["input_c_type"] in {"float", "float16_t"}
         if force_cmsis and kernel_info["input_c_type"] != "int8_t":
             raise ValueError("CMSIS-only softmax currently supports int8 input only.")
-        
-        if force_cmsis:
-            input_shape = tuple(self.desc["input_shape"])
-            output_shape = input_shape
-            input_scale = float(self.desc.get("hint", {}).get("input_scale", 1.0 / 128.0))
-            input_zp = 0
-            output_scale = input_scale
-            output_zp = 0
-        else:
-            # Load LiteRT model for shape and quantization extraction
-            from helia_core_tester.generation.utils.litert_utils import get_operator_tensors_from_litert
-            model, subgraph = self.load_litert_model(str(tflite_path))
-            op_tensors = get_operator_tensors_from_litert(model, subgraph, 0)
-            
-            # Extract shapes from LiteRT
-            input_shape = op_tensors['inputs'][0]['shape']
-            output_shape = op_tensors['outputs'][0]['shape']
-        
-        # Ensure shapes are tuples
-        if input_shape is not None:
-            input_shape = tuple(input_shape)
-        if output_shape is not None:
-            output_shape = tuple(output_shape)
-        
-        if not force_cmsis and not float_kernel:
-            # Extract quantization from LiteRT
-            input_quant = op_tensors['inputs'][0]['quantization']
-            output_quant = op_tensors['outputs'][0]['quantization']
-            
-            input_scale = input_quant.get('scale', 1.0)
-            input_zp = input_quant.get('zero_point', 0)
-            output_scale = output_quant.get('scale', 1.0)
-            output_zp = output_quant.get('zero_point', 0)
-        
-        if not float_kernel:
-            if isinstance(input_scale, (list, np.ndarray)):
-                input_scale = float(input_scale[0])
-            if isinstance(input_zp, (list, np.ndarray)):
-                input_zp = int(input_zp[0])
-            if isinstance(output_scale, (list, np.ndarray)):
-                output_scale = float(output_scale[0])
-            if isinstance(output_zp, (list, np.ndarray)):
-                output_zp = int(output_zp[0])
 
-            input_scale = float(input_scale)
-            input_zp = int(input_zp)
-            output_scale = float(output_scale)
-            output_zp = int(output_zp)
-        
+        input_shape = tuple(int(d) for d in self.desc["input_shape"])
+        if not input_shape or any(d < 1 for d in input_shape):
+            raise ValueError(f"{name}: invalid input_shape {input_shape}")
+        output_shape = input_shape
+        kind = {"int8_t": "s8", "int16_t": "s16"}.get(kernel_info["input_c_type"])
+        if force_cmsis:
+            input_scale = float(self.desc.get("hint", {}).get("input_scale", 1.0 / 128.0))
+        elif not float_kernel:
+            # The [-1, 1] calibration range the converter used.
+            input_quant = self.activation_quant("input", np.array([-1.0, 1.0], dtype=np.float32), kind)
+            input_scale = input_quant.scale
+
         builder = TemplateContextBuilder()
         
         # Convert shapes to CMSIS dims
         input_dims = builder.nhwc_to_cmsis_dims(input_shape)
         output_dims = builder.nhwc_to_cmsis_dims(output_shape)
         
-        # Calculate multipliers and shifts for softmax
-        # - For S8: use preprocess_softmax_scaling: beta * input_scale * (1 << 26)
-        # - For S16: use input_scale_beta_rescale = beta * input_scale / (10.0 / 65535.0)
-        softmax_input_integer_bits = 5  # scaled_diff_integer_bits, matches ns-cmsis-nn
-        beta = 1.0  # softmax beta parameter (typically 1.0)
-        
+        # CalculateSoftmaxParams (TFLM prepare), beta 1.
+        from helia_core_tester.generation.reference import params as ref_params
+
         if float_kernel:
             mult = shift = diff_min = 0
-        elif kernel_info["input_c_type"] == "int8_t":
-            # S8: preprocess_softmax_scaling
-            # input_beta_real_multiplier = min(beta * input_scale * (1 << (31 - scaled_diff_integer_bits)), max)
-            max_real_multiplier = (1 << 31) - 1
-            input_real_multiplier = min(beta * input_scale * (1 << (31 - softmax_input_integer_bits)), max_real_multiplier)
+        elif kind == "s8":
+            sp = ref_params.softmax_params_s8(input_scale)
+            mult, shift, diff_min = sp.input_multiplier, sp.input_left_shift, sp.diff_min
         else:
-            # S16: input_scale_beta_rescale
-            # input_scale_beta_rescale = beta * input_scale / (10.0 / 65535.0)
-            input_scale_beta_rescale = beta * input_scale / (10.0 / 65535.0)
-            input_real_multiplier = input_scale_beta_rescale
-        
-        if not float_kernel:
-            mult, shift = calculate_multiplier_shift(input_real_multiplier)
-        
-        # Calculate diff_min for s8 softmax
-        # diff_min = -1.0 * calculate_input_radius(input_integer_bits, input_left_shift, total_signed_bits=31)
-        # where calculate_input_radius = floor(max_val * (1 << (31 - input_integer_bits)) / (1 << input_left_shift))
-        # Note: input_left_shift can be negative, so we handle division properly
-        if kernel_info["input_c_type"] == "int8_t":
-            # calculate_input_radius equivalent
-            max_val = (1 << softmax_input_integer_bits) - 1
-            if shift >= 0:
-                max_input_rescaled = max_val * (1 << (31 - softmax_input_integer_bits)) / (1 << shift)
-            else:
-                # When shift is negative, (1 << shift) would be fractional, so we multiply instead
-                max_input_rescaled = max_val * (1 << (31 - softmax_input_integer_bits)) * (1 << (-shift))
-            diff_min = -int(math.floor(max_input_rescaled))
-        else:
-            diff_min = 0  # Not used for s16
+            sp = ref_params.softmax_params_s16(input_scale)
+            mult, shift, diff_min = sp.input_multiplier, sp.input_left_shift, 0
         # Calculate num_rows and row_size
         # Softmax operates on the last dimension (row_size)
         # num_rows is the product of all dimensions except the last
@@ -447,16 +363,19 @@ class OpSoftmax(OperationBase):
                 int16_output,
             )
         else:
-            # Run inference using LiteRT interpreter
-            interpreter = self.load_litert_interpreter(str(tflite_path))
-            input_details = interpreter.get_input_details()
-            output_details = interpreter.get_output_details()
-            
-            interpreter.set_tensor(input_details[0]['index'], input_q)
-            interpreter.invoke()
-            output_data = interpreter.get_tensor(output_details[0]['index'])
-            output_data = np.array(output_data)
-        
+            from helia_core_tester.generation.reference.case import ReferenceCall
+
+            out_quant = {"scale": 1.0 / 256.0, "zero_point": -128} if kind == "s8" else {"scale": 1.0 / 32768.0, "zero_point": 0}
+            call = ReferenceCall(
+                f"softmax_{kind}",
+                {"input_multiplier": int(mult), "input_left_shift": int(shift), "diff_min": int(diff_min)},
+                {"input": np.ascontiguousarray(input_q)},
+                input_shape,
+                input_q.dtype.name,
+                quant={"input": input_quant.to_json(), "output": out_quant},
+            )
+            output_data = self.reference_golden(call)
+
         # Format arrays
         if float_kernel:
             output_data, nonfinite_context = self.apply_nonfinite_policy(

@@ -5,7 +5,6 @@ ResizeNearestNeighbor operation implementation.
 from typing import Dict
 import numpy as np
 from pathlib import Path
-from helia_core_tester.generation.io.dtypes import descriptor_dtype_to_litert_dtype
 from helia_core_tester.generation.ops._shared.base import OperationBase
 
 
@@ -14,37 +13,12 @@ class OpResizeNearestNeighbor(OperationBase):
     ResizeNearestNeighbor operation.
     """
 
-    # Dtypes the LiteRT model side can build. The harness side is narrower; see generate_c_files.
-    SUPPORTED_MODEL_DTYPES = ('S8', 'S16', 'FP32', 'FP16')
-
-    def needs_keras_model(self) -> bool:
+    def needs_tflite(self) -> bool:
+        # The golden is computed in numpy; nothing reads a .tflite.
         return False
 
-    def build_keras_model(self):
-        raise NotImplementedError("ResizeNearestNeighbor uses LiteRT-only model generation.")
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        from helia_core_tester.generation.utils.litert_builder import build_resize_nearest_neighbor_op
-
-        activation_dtype = str(self.desc.get('activation_dtype', 'S8')).upper()
-        if activation_dtype not in self.SUPPORTED_MODEL_DTYPES:
-            raise NotImplementedError(f"Unsupported ResizeNearestNeighbor dtype: {activation_dtype}")
-        dtype = descriptor_dtype_to_litert_dtype(activation_dtype)
-
-        input_shape = tuple(self.desc['input_shape'])
-        new_size = self.desc.get('size')
-        if new_size is None:
-            raise ValueError("ResizeNearestNeighbor requires 'size' in descriptor")
-
-        model_bytes = build_resize_nearest_neighbor_op(
-            input_shape=input_shape,
-            new_size=new_size,
-            align_corners=bool(self.desc.get('align_corners', False)),
-            half_pixel_centers=bool(self.desc.get('half_pixel_centers', False)),
-            dtype=dtype,
-        )
-        with open(out_path, "wb") as f:
-            f.write(model_bytes)
+    # Dtypes the LiteRT model side can build. The harness side is narrower; see generate_c_files.
+    SUPPORTED_MODEL_DTYPES = ('S8', 'S16', 'FP32', 'FP16')
 
     @staticmethod
     def _nearest_index(out_idx: int, in_size: int, out_size: int, align_corners: bool, half_pixel_centers: bool) -> int:
@@ -96,9 +70,6 @@ class OpResizeNearestNeighbor(OperationBase):
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
         name = self.desc['name']
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
 
         activation_dtype = str(self.desc.get('activation_dtype', 'S8')).upper()
         if activation_dtype == 'S16':

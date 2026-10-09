@@ -4,7 +4,6 @@ Squeeze operation implementation.
 
 from typing import Dict
 import numpy as np
-import tensorflow as tf
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.ops._shared.copy_pool import copy_argument_pool
@@ -15,53 +14,10 @@ class OpSqueeze(OperationBase):
     Squeeze operation - removes dimensions of size 1.
     """
     
-    def build_keras_model(self) -> tf.keras.Model:
-        """Build Keras model for Squeeze operation."""
-        input_shape = self.desc['input_shape']
-        axes = self.desc.get('axes', None)
-        
-        inputs = tf.keras.Input(shape=input_shape[1:], dtype=tf.float32, name='input')
-        
-        # Squeeze operation
-        # Calculate output shape by removing dimensions of size 1
-        output_shape_list = []
-        if axes is not None:
-            # Squeeze specific axes
-            axes_adjusted = [a - 1 if a > 0 else a for a in axes]
-            for i, dim in enumerate(input_shape[1:]):
-                if i not in axes_adjusted or dim != 1:
-                    output_shape_list.append(dim)
-        else:
-            # Squeeze all dimensions of size 1
-            for dim in input_shape[1:]:
-                if dim != 1:
-                    output_shape_list.append(dim)
-        
-        output_shape = tuple(output_shape_list) if output_shape_list else (1,)
-        
-        if axes is not None:
-            # Adjust axes to account for batch dimension removal
-            axes_adjusted = [a - 1 if a > 0 else a for a in axes]
-            x = tf.keras.layers.Lambda(
-                lambda x: tf.squeeze(x, axis=axes_adjusted),
-                output_shape=output_shape,
-                name='squeeze'
-            )(inputs)
-        else:
-            # Squeeze all dimensions of size 1
-            x = tf.keras.layers.Lambda(
-                lambda x: tf.squeeze(x),
-                output_shape=output_shape,
-                name='squeeze'
-            )(inputs)
-        
-        model = tf.keras.Model(inputs=inputs, outputs=x)
-        return model
+    def needs_tflite(self) -> bool:
+        # A squeeze is a copy: the golden is the reshaped input, quantized from its own range.
+        return False
 
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        """Convert Keras model to TFLite with quantization."""
-        super().convert_to_tflite(model, out_path, rep_seed)
-    
     def _select_cmsis_squeeze_kernel(self) -> Dict[str, str]:
         """
         Select appropriate CMSIS-NN kernel function for Squeeze operation.
@@ -94,64 +50,22 @@ class OpSqueeze(OperationBase):
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
         
         name = self.desc['name']
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
-        
         # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_squeeze_kernel()
         
-        # Load LiteRT model for shape extraction
-        from helia_core_tester.generation.utils.litert_utils import get_operator_tensors_from_litert
-        model, subgraph = self.load_litert_model(str(tflite_path))
-        op_tensors = get_operator_tensors_from_litert(model, subgraph, 0)
-        
-        # Extract shapes from LiteRT.
-        # Prefer subgraph I/O tensors to avoid selecting a shape/axes tensor.
-        input_shape = None
-        output_shape = None
-        subgraph_input_indices = set(subgraph.inputs or [])
-        subgraph_output_indices = set(subgraph.outputs or [])
+        input_shape = tuple(int(d) for d in self.desc['input_shape'])
+        # tf.squeeze semantics: no axes drops every size-1 axis; explicit axes index the
+        # full shape but never the batch axis.
+        axes = self.desc.get('axes', None)
+        rank = len(input_shape)
+        if axes is None:
+            squeezed = {i for i in range(rank) if input_shape[i] == 1}
+        else:
+            squeezed = {int(a) % rank for a in axes}
+            if 0 in squeezed or any(input_shape[a] != 1 for a in squeezed):
+                raise ValueError(f"{name}: cannot squeeze axes {axes} of {input_shape}")
+        output_shape = tuple(d for i, d in enumerate(input_shape) if i not in squeezed) or (1,)
 
-        for input_tensor_info in op_tensors['inputs']:
-            tensor_idx = input_tensor_info.get('index', -1)
-            tensor_shape = input_tensor_info.get('shape')
-            if tensor_idx in subgraph_input_indices:
-                input_shape = tensor_shape
-                break
-
-        if input_shape is None and op_tensors['inputs']:
-            input_shape = op_tensors['inputs'][0]['shape']
-
-        for output_tensor_info in op_tensors['outputs']:
-            tensor_idx = output_tensor_info.get('index', -1)
-            tensor_shape = output_tensor_info.get('shape')
-            if tensor_idx in subgraph_output_indices:
-                output_shape = tensor_shape
-                break
-
-        if output_shape is None and op_tensors['outputs']:
-            output_shape = op_tensors['outputs'][0]['shape']
-        
-        # Ensure shapes are tuples
-        if input_shape is not None:
-            input_shape = tuple(input_shape)
-        if output_shape is not None:
-            output_shape = tuple(output_shape)
-
-        # Fallback: compute output_shape if LiteRT didn't provide it
-        if output_shape is None:
-            axes = self.desc.get('axes', None)
-            if axes is not None:
-                axes_adjusted = [a - 1 if a > 0 else a for a in axes]
-                output_shape_list = []
-                for i, dim in enumerate(input_shape[1:]):
-                    if i not in axes_adjusted or dim != 1:
-                        output_shape_list.append(dim)
-            else:
-                output_shape_list = [dim for dim in input_shape[1:] if dim != 1]
-            output_shape = tuple(output_shape_list) if output_shape_list else (1,)
-        
         builder = TemplateContextBuilder()
         
         # Convert shapes to CMSIS dims
@@ -169,25 +83,12 @@ class OpSqueeze(OperationBase):
         
         self.rng.__setstate__(rng_state)
         
-        # Extract quantization from LiteRT (match the selected input tensor)
-        input_quant = op_tensors['inputs'][0]['quantization']
-        for input_tensor_info in op_tensors['inputs']:
-            tensor_idx = input_tensor_info.get('index', -1)
-            if tensor_idx in subgraph_input_indices:
-                input_quant = input_tensor_info['quantization']
-                break
-        input_scale = input_quant.get('scale', 1.0)
-        input_zp = input_quant.get('zero_point', 0)
-        
-        # Handle per-channel quantization (convert to scalar)
-        if isinstance(input_scale, (list, np.ndarray)):
-            input_scale = float(input_scale[0]) if len(input_scale) > 0 else 1.0
-        if isinstance(input_zp, (list, np.ndarray)):
-            input_zp = int(input_zp[0]) if len(input_zp) > 0 else 0
-        
-        input_scale = float(input_scale)
-        input_zp = int(input_zp)
-        
+        from helia_core_tester.generation.reference import policy
+
+        quant = policy.descriptor_quant(self.desc.get("quantization", {}).get("input"), "s8")
+        quant = quant or policy.activation_quant(input_data, "s8")
+        input_scale, input_zp = quant.scale, quant.zero_point
+
         # Quantize inputs
         if kernel_info["input_c_type"] == "int8_t":
             np_in_dtype = np.int8
@@ -198,19 +99,8 @@ class OpSqueeze(OperationBase):
         input_q = np.round(input_data / float(input_scale) + float(input_zp)).astype(np.int32)
         input_q = np.clip(input_q, qmin, qmax).astype(np_in_dtype)
         
-        # Run inference using LiteRT interpreter when possible; otherwise reshape locally.
-        try:
-            interpreter = self.load_litert_interpreter(str(tflite_path))
-            input_details = interpreter.get_input_details()
-            output_details = interpreter.get_output_details()
-            
-            interpreter.set_tensor(input_details[0]['index'], input_q)
-            interpreter.invoke()
-            output_data = interpreter.get_tensor(output_details[0]['index'])
-            output_data = np.array(output_data)
-        except Exception:
-            output_data = np.reshape(input_q, output_shape)
-        
+        output_data = np.reshape(input_q, output_shape)
+
         # Format arrays
         input_array_str = builder.format_array_as_c_literal(input_q)
         expected_output_array_str = builder.format_array_as_c_literal(output_data)

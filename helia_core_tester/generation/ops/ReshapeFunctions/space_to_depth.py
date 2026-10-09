@@ -12,26 +12,9 @@ class OpSpaceToDepth(OperationBase):
     SpaceToDepth operation.
     """
 
-    def needs_keras_model(self) -> bool:
+    def needs_tflite(self) -> bool:
+        # The golden is computed in numpy; nothing reads a .tflite.
         return False
-    
-    def build_keras_model(self):
-        raise NotImplementedError("SpaceToDepth uses LiteRT-only model generation.")
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        """Convert model to LiteRT (single-op) to avoid TF/TFLite dependency."""
-        from helia_core_tester.generation.utils.litert_builder import build_space_to_depth_op
-
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
-        dtype = 'int16' if activation_dtype == 'S16' else 'int8'
-        model_bytes = build_space_to_depth_op(
-            input_shape=self.desc['input_shape'],
-            block_size=int(self.desc.get('block_size', 2)),
-            dtype=dtype,
-        )
-        with open(out_path, "wb") as f:
-            f.write(model_bytes)
-
 
     def generate_c_files(self, output_dir) -> None:
         """
@@ -40,9 +23,6 @@ class OpSpaceToDepth(OperationBase):
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
         name = self.desc['name']
-        tflite_path = Path(output_dir) / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
 
         activation_dtype = self.desc.get('activation_dtype', 'S8')
         if activation_dtype == 'S16':

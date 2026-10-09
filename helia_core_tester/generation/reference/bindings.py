@@ -18,7 +18,7 @@ from typing import Callable, Dict, Optional, Sequence, Tuple
 
 import numpy as np
 
-ABI_VERSION = 1
+ABI_VERSION = 3
 MAX_RANK = 6
 
 OK = 0
@@ -111,6 +111,73 @@ class HctPerChannelQuant(ctypes.Structure):
     _fields_ = [("multiplier", c_int32_p), ("shift", c_int32_p), ("count", c_int32)]
 
 
+class HctBinaryParams(ctypes.Structure):
+    _fields_ = [
+        ("left_shift", c_int32),
+        ("input1_offset", c_int32),
+        ("input1_multiplier", c_int32),
+        ("input1_shift", c_int32),
+        ("input2_offset", c_int32),
+        ("input2_multiplier", c_int32),
+        ("input2_shift", c_int32),
+        ("output_offset", c_int32),
+        ("output_multiplier", c_int32),
+        ("output_shift", c_int32),
+        ("act", HctActivation),
+    ]
+
+
+
+def _int_struct(name: str, fields: Sequence[str]) -> type:
+    return type(name, (ctypes.Structure,), {"_fields_": [(f, c_int32) for f in fields]})
+
+
+HctSoftmaxParams = _int_struct("HctSoftmaxParams", ("input_multiplier", "input_left_shift", "diff_min"))
+HctLutActParams = _int_struct(
+    "HctLutActParams", ("input_zero_point", "input_range_radius", "input_multiplier", "input_left_shift")
+)
+HctLeakyReluParams = _int_struct(
+    "HctLeakyReluParams",
+    ("input_zero_point", "output_zero_point", "multiplier_alpha", "shift_alpha", "multiplier_identity", "shift_identity"),
+)
+HctPreluParams = _int_struct(
+    "HctPreluParams",
+    ("input_offset", "alpha_offset", "output_offset", "multiplier_1", "shift_1", "multiplier_2", "shift_2"),
+)
+HctHardSwishParams = _int_struct(
+    "HctHardSwishParams",
+    (
+        "input_zero_point", "output_zero_point", "reluish_multiplier_fixedpoint_int16", "reluish_multiplier_exponent",
+        "output_multiplier_fixedpoint_int16", "output_multiplier_exponent",
+    ),
+)
+
+HctReluParams = _int_struct(
+    "HctReluParams",
+    ("input_zero_point", "output_zero_point", "output_multiplier", "output_shift", "act_min", "act_max"),
+)
+
+HctMeanParams = _int_struct("HctMeanParams", ("input_zero_point", "output_zero_point", "multiplier", "shift", "keep_dims"))
+
+HctRsqrtParams = _int_struct("HctRsqrtParams", ("input_zero_point", "output_zero_point", "multiplier", "shift"))
+
+
+class HctBmmParams(ctypes.Structure):
+    _fields_ = [
+        ("lhs_offset", c_int32),
+        ("rhs_offset", c_int32),
+        ("output_offset", c_int32),
+        ("output_multiplier", c_int32),
+        ("output_shift", c_int32),
+        ("act", HctActivation),
+    ]
+
+
+def struct_to_dict(struct: ctypes.Structure) -> Dict[str, int]:
+    """The integer fields of a flat params struct, for provenance and harness contexts."""
+    return {name: int(getattr(struct, name)) for name, _ in struct._fields_}
+
+
 STRUCTS = {
     "HctShape": HctShape,
     "HctActivation": HctActivation,
@@ -120,6 +187,16 @@ STRUCTS = {
     "HctPoolParams": HctPoolParams,
     "HctQuant": HctQuant,
     "HctPerChannelQuant": HctPerChannelQuant,
+    "HctBinaryParams": HctBinaryParams,
+    "HctSoftmaxParams": HctSoftmaxParams,
+    "HctLutActParams": HctLutActParams,
+    "HctLeakyReluParams": HctLeakyReluParams,
+    "HctPreluParams": HctPreluParams,
+    "HctHardSwishParams": HctHardSwishParams,
+    "HctReluParams": HctReluParams,
+    "HctMeanParams": HctMeanParams,
+    "HctRsqrtParams": HctRsqrtParams,
+    "HctBmmParams": HctBmmParams,
 }
 
 _P = ctypes.POINTER
@@ -152,9 +229,55 @@ for _family in ("conv", "dwconv", "fc", "tconv"):
     for _kind in _kinds:
         _ENTRIES[f"hct_ref_{_family}_{_kind}"] = _QUANT_SIG
     _ENTRIES[f"hct_ref_{_family}_f32"] = _FLOAT_SIG
+_BINARY_SIG = [_P(HctBinaryParams), _P(HctShape), c_void_p, _P(HctShape), c_void_p, _P(HctShape), c_void_p]
+for _op in ("add", "sub", "mul"):
+    for _kind in ("s8", "s16"):
+        _ENTRIES[f"hct_ref_{_op}_{_kind}"] = _BINARY_SIG
 for _pool in ("avgpool", "maxpool"):
     for _kind in ("s8", "s16", "f32"):
         _ENTRIES[f"hct_ref_{_pool}_{_kind}"] = _POOL_SIG
+_c_float = ctypes.c_float
+_ENTRIES.update({
+    "hct_ref_softmax_s8": [_P(HctSoftmaxParams), _P(HctShape), c_void_p, c_void_p],
+    "hct_ref_softmax_s16": [_P(HctSoftmaxParams), _P(HctShape), c_void_p, c_void_p],
+    "hct_ref_tanh_logistic_s16_prepare": [c_int32, _c_float, _c_float, _P(HctLutActParams)],
+    "hct_ref_tanh_s16": [_P(HctLutActParams), _P(HctShape), c_void_p, c_void_p],
+    "hct_ref_logistic_s16": [_P(HctLutActParams), _P(HctShape), c_void_p, c_void_p],
+    "hct_ref_leaky_relu_prepare": [_c_float, c_int32, _c_float, _c_float, c_int32, _P(HctLeakyReluParams)],
+    "hct_ref_leaky_relu_s8": [_P(HctLeakyReluParams), _P(HctShape), c_void_p, c_void_p],
+    "hct_ref_leaky_relu_s16": [_P(HctLeakyReluParams), _P(HctShape), c_void_p, c_void_p],
+    "hct_ref_prelu_prepare": [_c_float, c_int32, _c_float, c_int32, _c_float, c_int32, _P(HctPreluParams)],
+    "hct_ref_prelu_s8": [_P(HctPreluParams), _P(HctShape), c_void_p, _P(HctShape), c_void_p, _P(HctShape), c_void_p],
+    "hct_ref_hard_swish_prepare": [_c_float, c_int32, _c_float, c_int32, _P(HctHardSwishParams)],
+    "hct_ref_hard_swish_s8": [_P(HctHardSwishParams), _P(HctShape), c_void_p, c_void_p],
+    "hct_ref_relu_prepare": [_c_float, c_int32, _c_float, c_int32, _c_float, _c_float, c_int32, c_int32, _P(HctReluParams)],
+    "hct_ref_relu_s8": [_P(HctReluParams), _P(HctShape), c_void_p, c_void_p],
+    "hct_ref_relu_s16": [_P(HctReluParams), _P(HctShape), c_void_p, c_void_p],
+    "hct_ref_rsqrt_prepare": [_c_float, c_int32, _c_float, c_int32, _P(HctRsqrtParams)],
+    "hct_ref_rsqrt_s8": [_P(HctRsqrtParams), _P(HctShape), c_void_p, c_void_p],
+    "hct_ref_rsqrt_s16": [_P(HctRsqrtParams), _c_float, _c_float, _P(HctShape), c_void_p, c_void_p],
+    "hct_ref_quantize_f32_s8": [_c_float, c_int32, _P(HctShape), c_void_p, c_void_p],
+    "hct_ref_quantize_f32_s16": [_c_float, c_int32, _P(HctShape), c_void_p, c_void_p],
+    "hct_ref_bmm_s8": [_P(HctBmmParams), _P(HctShape), c_void_p, _P(HctShape), c_void_p, _P(HctShape), c_void_p],
+    "hct_ref_bmm_s16": [_P(HctBmmParams), _P(HctShape), c_void_p, _P(HctShape), c_void_p, _P(HctShape), c_void_p],
+    "hct_ref_mean_fold": [c_int32, c_int32, ctypes.c_int64, _P(HctQuant)],
+    "hct_ref_mean_s8": [_P(HctMeanParams), _P(HctShape), c_void_p, c_int32_p, c_int32, _P(HctShape), c_void_p],
+    "hct_ref_mean_s16": [_P(HctMeanParams), _P(HctShape), c_void_p, c_int32_p, c_int32, _P(HctShape), c_void_p],
+})
+
+# Elementwise unary entries: (params struct, element dtype).
+UNARY_ENTRIES: Dict[str, Tuple[type, type]] = {
+    "softmax_s8": (HctSoftmaxParams, np.int8),
+    "softmax_s16": (HctSoftmaxParams, np.int16),
+    "tanh_s16": (HctLutActParams, np.int16),
+    "logistic_s16": (HctLutActParams, np.int16),
+    "leaky_relu_s8": (HctLeakyReluParams, np.int8),
+    "leaky_relu_s16": (HctLeakyReluParams, np.int16),
+    "hard_swish_s8": (HctHardSwishParams, np.int8),
+    "relu_s8": (HctReluParams, np.int8),
+    "relu_s16": (HctReluParams, np.int16),
+    "rsqrt_s8": (HctRsqrtParams, np.int8),
+}
 
 
 def make_shape(shape: Sequence[int]) -> HctShape:
@@ -281,6 +404,50 @@ class Bindings:
         self._check(entry, self._fn(entry)(int(multiplier), ctypes.byref(out)))
         return int(out.value)
 
+    def _prepare(self, entry: str, struct_type: type, *args) -> ctypes.Structure:
+        out = struct_type()
+        self._check(entry, self._fn(entry)(*args, ctypes.byref(out)))
+        return out
+
+    def tanh_logistic_s16_prepare(self, logistic: bool, input_scale: float, output_scale: float):
+        return self._prepare(
+            "hct_ref_tanh_logistic_s16_prepare", HctLutActParams, int(bool(logistic)), float(input_scale), float(output_scale)
+        )
+
+    def leaky_relu_prepare(self, input_scale: float, input_zp: int, alpha: float, output_scale: float, output_zp: int):
+        return self._prepare(
+            "hct_ref_leaky_relu_prepare", HctLeakyReluParams,
+            float(input_scale), int(input_zp), float(alpha), float(output_scale), int(output_zp),
+        )
+
+    def prelu_prepare(self, input_scale: float, input_zp: int, alpha_scale: float, alpha_zp: int, output_scale: float, output_zp: int):
+        return self._prepare(
+            "hct_ref_prelu_prepare", HctPreluParams,
+            float(input_scale), int(input_zp), float(alpha_scale), int(alpha_zp), float(output_scale), int(output_zp),
+        )
+
+    def hard_swish_prepare(self, input_scale: float, input_zp: int, output_scale: float, output_zp: int):
+        return self._prepare(
+            "hct_ref_hard_swish_prepare", HctHardSwishParams, float(input_scale), int(input_zp), float(output_scale), int(output_zp)
+        )
+
+    def relu_prepare(self, input_scale: float, input_zp: int, output_scale: float, output_zp: int,
+                     act_min_real: float, act_max_real: float, qmin: int, qmax: int):
+        return self._prepare(
+            "hct_ref_relu_prepare", HctReluParams, float(input_scale), int(input_zp), float(output_scale),
+            int(output_zp), float(act_min_real), float(act_max_real), int(qmin), int(qmax),
+        )
+
+    def rsqrt_prepare(self, input_scale: float, input_zp: int, output_scale: float, output_zp: int):
+        return self._prepare(
+            "hct_ref_rsqrt_prepare", HctRsqrtParams, float(input_scale), int(input_zp), float(output_scale), int(output_zp)
+        )
+
+    def mean_fold(self, multiplier: int, shift: int, count: int) -> Tuple[int, int]:
+        out = HctQuant()
+        self._check("hct_ref_mean_fold", self._fn("hct_ref_mean_fold")(int(multiplier), int(shift), int(count), ctypes.byref(out)))
+        return int(out.multiplier), int(out.shift)
+
     # ---- kernels ----
     def _weighted(
         self,
@@ -354,6 +521,25 @@ class Bindings:
     def tconv(self, kind: str, params: HctConvParams, quant: Optional[PerChannel], input: np.ndarray, filter: np.ndarray, bias: Optional[np.ndarray], output_shape: Sequence[int]) -> np.ndarray:
         return self._weighted("tconv", kind, params, quant, input, filter, bias, output_shape)
 
+    def binary(self, op: str, kind: str, params: HctBinaryParams, input1: np.ndarray, input2: np.ndarray, output_shape: Sequence[int]) -> np.ndarray:
+        """add/sub/mul with TFLM broadcasting; output_shape is the broadcast shape."""
+        if op not in ("add", "sub", "mul"):
+            raise ValueError(f"unknown binary op {op!r}")
+        dtype = {"s8": np.int8, "s16": np.int16}.get(kind)
+        if dtype is None:
+            raise ValueError(f"unknown binary kind {kind!r}")
+        entry = f"hct_ref_{op}_{kind}"
+        _require(input1, dtype, "input1")
+        _require(input2, dtype, "input2")
+        output = np.zeros(tuple(int(d) for d in output_shape), dtype=dtype)
+        shapes = [make_shape(a.shape) for a in (input1, input2, output)]
+        code = self._fn(entry)(
+            ctypes.byref(params), ctypes.byref(shapes[0]), _ptr(input1), ctypes.byref(shapes[1]), _ptr(input2),
+            ctypes.byref(shapes[2]), _ptr(output),
+        )
+        self._check(entry, code)
+        return output
+
     def pool(self, op: str, kind: str, params: HctPoolParams, input: np.ndarray, output_shape: Sequence[int]) -> np.ndarray:
         if op not in ("avgpool", "maxpool"):
             raise ValueError(f"unknown pool {op!r}")
@@ -365,6 +551,96 @@ class Bindings:
         output = np.zeros(tuple(int(d) for d in output_shape), dtype=dtype)
         in_shape, o_shape = make_shape(input.shape), make_shape(output.shape)
         self._check(entry, self._fn(entry)(ctypes.byref(params), ctypes.byref(in_shape), _ptr(input), ctypes.byref(o_shape), _ptr(output)))
+        return output
+
+    def unary(self, name: str, params: ctypes.Structure, input: np.ndarray) -> np.ndarray:
+        """An elementwise entry of UNARY_ENTRIES; the output has the input's shape and dtype."""
+        try:
+            struct_type, dtype = UNARY_ENTRIES[name]
+        except KeyError as exc:
+            raise ValueError(f"unknown unary entry {name!r}") from exc
+        if not isinstance(params, struct_type):
+            raise TypeError(f"{name} takes {struct_type.__name__}, got {type(params).__name__}")
+        entry = f"hct_ref_{name}"
+        _require(input, dtype, "input")
+        output = np.zeros(input.shape, dtype=dtype)
+        shape = make_shape(input.shape)
+        self._check(entry, self._fn(entry)(ctypes.byref(params), ctypes.byref(shape), _ptr(input), _ptr(output)))
+        return output
+
+    def mean(self, kind: str, params: ctypes.Structure, input: np.ndarray, axes: Sequence[int], output_shape: Sequence[int]) -> np.ndarray:
+        dtype = {"s8": np.int8, "s16": np.int16}.get(kind)
+        if dtype is None:
+            raise ValueError(f"unknown mean kind {kind!r}")
+        if not isinstance(params, HctMeanParams):
+            raise TypeError(f"mean takes HctMeanParams, got {type(params).__name__}")
+        entry = f"hct_ref_mean_{kind}"
+        _require(input, dtype, "input")
+        axis_arr = np.ascontiguousarray(axes, dtype=np.int32)
+        if axis_arr.ndim != 1 or axis_arr.size == 0:
+            raise ValueError("axes must be a non-empty 1-D sequence")
+        output = np.zeros(tuple(int(d) for d in output_shape), dtype=dtype)
+        in_shape, o_shape = make_shape(input.shape), make_shape(output.shape)
+        code = self._fn(entry)(
+            ctypes.byref(params), ctypes.byref(in_shape), _ptr(input),
+            axis_arr.ctypes.data_as(c_int32_p), int(axis_arr.size), ctypes.byref(o_shape), _ptr(output),
+        )
+        self._check(entry, code)
+        return output
+
+    def rsqrt_s16(self, params: ctypes.Structure, input_scale: float, output_scale: float, input: np.ndarray) -> np.ndarray:
+        if not isinstance(params, HctRsqrtParams):
+            raise TypeError(f"rsqrt_s16 takes HctRsqrtParams, got {type(params).__name__}")
+        entry = "hct_ref_rsqrt_s16"
+        _require(input, np.int16, "input")
+        output = np.zeros(input.shape, dtype=np.int16)
+        shape = make_shape(input.shape)
+        code = self._fn(entry)(ctypes.byref(params), float(input_scale), float(output_scale), ctypes.byref(shape), _ptr(input), _ptr(output))
+        self._check(entry, code)
+        return output
+
+    def quantize_f32(self, kind: str, scale: float, zero_point: int, input: np.ndarray) -> np.ndarray:
+        dtype = {"s8": np.int8, "s16": np.int16}.get(kind)
+        if dtype is None:
+            raise ValueError(f"unknown quantize kind {kind!r}")
+        entry = f"hct_ref_quantize_f32_{kind}"
+        _require(input, np.float32, "input")
+        output = np.zeros(input.shape, dtype=dtype)
+        shape = make_shape(input.shape)
+        self._check(entry, self._fn(entry)(float(scale), int(zero_point), ctypes.byref(shape), _ptr(input), _ptr(output)))
+        return output
+
+    def bmm(self, kind: str, params: ctypes.Structure, lhs: np.ndarray, rhs: np.ndarray, output_shape: Sequence[int]) -> np.ndarray:
+        dtype = {"s8": np.int8, "s16": np.int16}.get(kind)
+        if dtype is None:
+            raise ValueError(f"unknown bmm kind {kind!r}")
+        if not isinstance(params, HctBmmParams):
+            raise TypeError(f"bmm takes HctBmmParams, got {type(params).__name__}")
+        entry = f"hct_ref_bmm_{kind}"
+        _require(lhs, dtype, "lhs")
+        _require(rhs, dtype, "rhs")
+        output = np.zeros(tuple(int(d) for d in output_shape), dtype=dtype)
+        shapes = [make_shape(a.shape) for a in (lhs, rhs, output)]
+        code = self._fn(entry)(
+            ctypes.byref(params), ctypes.byref(shapes[0]), _ptr(lhs), ctypes.byref(shapes[1]), _ptr(rhs),
+            ctypes.byref(shapes[2]), _ptr(output),
+        )
+        self._check(entry, code)
+        return output
+
+    def prelu_s8(self, params: ctypes.Structure, input: np.ndarray, alpha: np.ndarray) -> np.ndarray:
+        if not isinstance(params, HctPreluParams):
+            raise TypeError(f"prelu_s8 takes HctPreluParams, got {type(params).__name__}")
+        entry = "hct_ref_prelu_s8"
+        _require(input, np.int8, "input")
+        _require(alpha, np.int8, "alpha")
+        output = np.zeros(input.shape, dtype=np.int8)
+        shapes = [make_shape(a.shape) for a in (input, alpha, output)]
+        code = self._fn(entry)(
+            ctypes.byref(params), ctypes.byref(shapes[0]), _ptr(input), ctypes.byref(shapes[1]), _ptr(alpha),
+            ctypes.byref(shapes[2]), _ptr(output),
+        )
+        self._check(entry, code)
         return output
 
 

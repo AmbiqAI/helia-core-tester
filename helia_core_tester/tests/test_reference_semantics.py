@@ -494,7 +494,7 @@ def test_reference_call_validates_itself() -> None:
 
 def test_run_reference_rejects_unknown_kernels_and_missing_tensors() -> None:
     with pytest.raises(ValueError, match="no reference entry"):
-        run_reference(ReferenceCall("softmax_s8", {}, {}, (1,), "int8"))
+        run_reference(ReferenceCall("nosuch_s8", {}, {}, (1,), "int8"))
     with pytest.raises(KeyError, match="input"):
         run_reference(ReferenceCall("maxpool_s8", {"stride": [1, 1], "filter": [1, 1], "pad": [0, 0], "act": {"min": -128, "max": 127}}, {}, (1, 1, 1, 1), "int8"))
 

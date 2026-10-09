@@ -83,6 +83,13 @@ class PoolFamilyBase(OperationBase):
         if kind in ("null_input", "null_output") and not float_kernel:
             raise self.fault_unreachable(kind, f"{kernel_fn} does not check {kind}")
 
+    def _int_kind(self):
+        return {"S8": "s8", "S16": "s16"}.get(self.tensor_dtype("input").upper())
+
+    def uses_reference(self) -> bool:
+        # Integer cases take their golden from the TFLM reference pools; float stays on the converter path.
+        return self._int_kind() is not None
+
     def build_keras_model(self) -> tf.keras.Model:
         """Build Keras model for Pooling operation."""
         input_shape = self.desc['input_shape']
@@ -197,6 +204,49 @@ class PoolFamilyBase(OperationBase):
         else:
             raise ValueError(f"Unsupported pooling kind: {self.POOL_KIND}")
     
+    def _pool_geometry(self, in_hw):
+        from helia_core_tester.generation.reference import params as ref_params
+
+        pool = self.desc.get('pool_size', [2, 2])
+        pool_hw = (int(pool), int(pool)) if isinstance(pool, (int, float)) else (int(pool[0]), int(pool[1]))
+        strides = self.desc.get('strides', [1, 1])
+        stride_hw = (int(strides), int(strides)) if isinstance(strides, (int, float)) else (int(strides[0]), int(strides[1]))
+        padding = str(self.desc.get('padding') or 'valid').upper()
+        return pool_hw, stride_hw, ref_params.conv_geometry(padding, in_hw, pool_hw, stride_hw)
+
+    def _int_shapes(self):
+        """NHWC input and output shapes from the descriptor, as TFLite's pool prepare sizes them."""
+        input_shape = tuple(int(d) for d in self.desc['input_shape'])
+        if len(input_shape) != 4 or any(d < 1 for d in input_shape):
+            raise ValueError(f"{self.desc['name']}: pooling needs a positive NHWC input_shape, got {input_shape}")
+        _, _, ((out_h, out_w), _, _) = self._pool_geometry(input_shape[1:3])
+        return input_shape, (input_shape[0], out_h, out_w, input_shape[3])
+
+    def _int_golden(self, kind, input_shape, output_shape, pool_hw, pool_params):
+        """Quantized input and the TFLM reference pool output. Pools keep the input
+        quantization on the output, so the clamp is the kernel's activation range."""
+        from helia_core_tester.generation.reference import policy
+        from helia_core_tester.generation.reference.case import ReferenceCall
+
+        # Match the [-1, 1] calibration range.
+        input_data = self._sample_uniform(input_shape)
+        quant = self.activation_quant("input", input_data, kind)
+        input_q = policy.quantize(input_data, quant)
+        _, stride_hw, (_, pad_h, pad_w) = self._pool_geometry(input_shape[1:3])
+        call = ReferenceCall(
+            f"{'avgpool' if self.POOL_KIND == 'AVERAGE' else 'maxpool'}_{kind}",
+            {
+                "stride": list(stride_hw), "filter": list(pool_hw), "pad": [pad_h.pad, pad_w.pad],
+                "pad_offset": [pad_h.offset, pad_w.offset],
+                "act": {"min": int(pool_params["activation_min"]), "max": int(pool_params["activation_max"])},
+            },
+            {"input": input_q},
+            output_shape,
+            input_q.dtype.name,
+            quant={"input": quant.to_json(), "output": quant.to_json()},
+        )
+        return input_q, self.reference_golden(call)
+
     def generate_c_files(self, output_dir: Path) -> None:
         """
         Generate C and H files from templates for Pooling operation.
@@ -204,31 +254,22 @@ class PoolFamilyBase(OperationBase):
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
         
         name = self.desc['name']
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
-        
         kernel_info = self._select_cmsis_pooling_kernel()
         pooling_type = self.POOL_KIND
-        
-        op_tensors = self.load_primary_operator_tensors(str(tflite_path))
-        
-        # Extract shapes from LiteRT
-        input_shape = op_tensors['inputs'][0]['shape']
-        output_shape = op_tensors['outputs'][0]['shape']
-        
-        # Ensure shapes are tuples
-        if input_shape is not None:
-            input_shape = tuple(input_shape)
-        if output_shape is not None:
-            output_shape = tuple(output_shape)
-        
-        # Extract quantization from LiteRT
-        quant_params = {
-            'input': op_tensors['inputs'][0]['quantization'],
-            'output': op_tensors['outputs'][0]['quantization']
-        }
-        
+        kind = self._int_kind()
+
+        if kind is None:
+            tflite_path = output_dir / f"{name}.tflite"
+            if not tflite_path.exists():
+                raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
+            op_tensors = self.load_primary_operator_tensors(str(tflite_path))
+            input_shape = tuple(op_tensors['inputs'][0]['shape'])
+            output_shape = tuple(op_tensors['outputs'][0]['shape'])
+            output_quant = op_tensors['outputs'][0]['quantization']
+        else:
+            input_shape, output_shape = self._int_shapes()
+            output_quant = None
+
         builder = TemplateContextBuilder()
         
         # Convert shapes to CMSIS dims
@@ -256,40 +297,16 @@ class PoolFamilyBase(OperationBase):
             input_shape,
             (pool_h, pool_w),
             output_shape,
-            quant_params['output']
+            output_quant
         )
         
-        float_kernel = kernel_info["input_c_type"] in {"float", "float16_t"}
-        if float_kernel:
-            input_data = self.generate_input_data()
-        else:
-            # Match the [-1, 1] calibration range.
-            input_data = self._sample_uniform(self.desc.get('input_shape', [1, 1, 1, 1]))
-        
+        float_kernel = kind is None
         if float_kernel:
             float_dtype = np.float16 if kernel_info["input_c_type"] == "float16_t" else np.float32
             # The sweep lands after the narrowing so the tokens are written in the
             # kernel's own width; generate_input_data() draws integers, which have no
             # non-finite image to narrow.
-            input_q = self._maybe_apply_input_mode(input_data.astype(float_dtype))
-        else:
-            input_scale = float(self._quant_param_scalar(quant_params['input'], 'scale', 1.0))
-            input_zp = int(self._quant_param_scalar(quant_params['input'], 'zero_point', 0))
-
-        if kernel_info["input_c_type"] == "int8_t":
-            qmin, qmax = -128, 127
-            np_in_dtype = np.int8
-        elif kernel_info["input_c_type"] == "int16_t":
-            qmin, qmax = -32768, 32767
-            np_in_dtype = np.int16
-        elif not float_kernel:
-            raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
-        
-        if not float_kernel:
-            input_q = np.round(input_data / float(input_scale) + float(input_zp)).astype(np.int32)
-            input_q = np.clip(input_q, qmin, qmax).astype(np_in_dtype)
-        
-        if float_kernel:
+            input_q = self._maybe_apply_input_mode(self.generate_input_data().astype(float_dtype))
             interpreter_input_dtype = self.load_litert_interpreter(str(tflite_path)).get_input_details()[0]['dtype']
 
             def float_reference(operands, _dtype=float_dtype, _in_dtype=interpreter_input_dtype):
@@ -299,8 +316,8 @@ class PoolFamilyBase(OperationBase):
 
             output_data = float_reference([input_q])
         else:
-            output_data = self.run_inference(str(tflite_path), input_q)
-        
+            input_q, output_data = self._int_golden(kind, input_shape, output_shape, (pool_h, pool_w), pool_params)
+
         # Format input and output arrays
         if float_kernel:
             output_data, nonfinite_context = self.apply_nonfinite_policy(

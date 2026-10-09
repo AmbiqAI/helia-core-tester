@@ -18,16 +18,16 @@ def sqrt_argument_pool(context):
     table = Declaration("sqrt_lut", context["lut_c_type"], ArrayLiteral(rows), storage="static", array=True,
                         extent=str(context["lut_size"]))
     return tensor_case_pool(context, {"sqrt_lut": "sqrt_lut"}, dims=("input_dims",), extra_header=(table,))
-from helia_core_tester.generation.utils.litert_builder import build_unary_same_shape_op
-from helia_core_tester.generation.utils.litert_utils import (
-    get_operator_tensors_from_litert,
-    load_litert_model,
-)
 
 
 SQRT_S16_LUT_SIZE = 513
 SQRT_S16_SLOT_SHIFT = 7
 SQRT_S16_SLOT_HALF_STEP = 1 << (SQRT_S16_SLOT_SHIFT - 1)
+# Below eight LUT slots the chord of sqrt sags too far for a 2 LSB bound (503 LSB at q = 29).
+SQRT_S16_SANITY_FLOOR = 8 << SQRT_S16_SLOT_SHIFT
+SQRT_S16_SANITY_LSB = 2
+# The (scale, zero point) the one-op LiteRT builder gave input and output.
+SQRT_FIXED_QUANT = {"S8": (0.125, 0), "S16": (1.0 / 32768.0, 0)}
 
 
 def clamp_f32(x, min_val, max_val):
@@ -120,55 +120,46 @@ def make_sqrt_lut(input_scale, input_zp, output_scale, output_zp, activation_dty
     raise NotImplementedError(f"Unsupported Sqrt dtype: {activation_dtype}")
 
 
-def build_sqrt_op(
-    *,
-    input_shape,
-    dtype: str = "int8",
-) -> bytes:
-    return build_unary_same_shape_op(
-        op_name="SQRT",
-        input_shape=input_shape,
-        dtype=dtype,
-    )
+def sqrt_s8_golden(input_q: np.ndarray, lut: np.ndarray) -> np.ndarray:
+    """arm_sqrt_s8 / TFLite's int8 SQRT: a 256-entry table indexed by the uint8 bit pattern."""
+    if lut.shape != (256,) or lut.dtype != np.int8:
+        raise ValueError(f"sqrt s8 LUT must be 256 int8 entries, got {lut.shape} {lut.dtype}")
+    return lut[input_q.astype(np.uint8)]
+
+
+def sqrt_s16_golden(input_q: np.ndarray, lut: np.ndarray) -> np.ndarray:
+    """arm_sqrt_s16's interpolation, exactly: TFLite has no int16 SQRT and TFLM no integer
+    one, so the kernel's own arithmetic is the oracle (bounded by check_sqrt_s16_golden)."""
+    if lut.shape != (SQRT_S16_LUT_SIZE,):
+        raise ValueError(f"sqrt s16 LUT must have {SQRT_S16_LUT_SIZE} entries, got {lut.shape}")
+    value = input_q.astype(np.int32)
+    index = 256 + (value >> SQRT_S16_SLOT_SHIFT)
+    offset = value & 0x7F
+    base = lut.astype(np.int32)[index]
+    slope = lut.astype(np.int32)[index + 1] - base
+    return (base + ((slope * offset + 64) >> 7)).astype(np.int16)
+
+
+def check_sqrt_s16_golden(input_q: np.ndarray, golden: np.ndarray, input_scale: float, output_scale: float) -> None:
+    """Fail when the interpolated golden strays more than SQRT_S16_SANITY_LSB from float sqrt
+    anywhere at or above SQRT_S16_SANITY_FLOOR."""
+    q = input_q.astype(np.int64).ravel()
+    keep = q >= SQRT_S16_SANITY_FLOOR
+    real = np.sqrt(q[keep] * float(input_scale)) / float(output_scale)
+    expected = np.clip(np.floor(real + 0.5), -32768, 32767)
+    worst = np.abs(golden.ravel()[keep].astype(np.int64) - expected).max(initial=0)
+    if worst > SQRT_S16_SANITY_LSB:
+        raise ValueError(f"sqrt s16 golden is {int(worst)} LSB from float sqrt (bound {SQRT_S16_SANITY_LSB})")
+
 
 class OpSqrt(OperationBase):
     """
     Sqrt operation.
     """
 
-    def needs_keras_model(self) -> bool:
+    def needs_tflite(self) -> bool:
         return False
-    
-    def build_keras_model(self):
-        raise NotImplementedError("Sqrt uses LiteRT-only model generation.")
 
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        """Convert Keras model to TFLite with quantization."""
-        if self.tensor_dtype("input") in ("FP16", "FP32"):
-            self._write_tflite_bytes(
-                out_path,
-                build_sqrt_op(
-                    input_shape=tuple(self.desc["input_shape"]),
-                    dtype=self.tensor_litert_dtype("input"),
-                ),
-            )
-            return
-        activation_dtype = self.desc.get("activation_dtype", "S8")
-        if activation_dtype == "S8":
-            dtype = "int8"
-        elif activation_dtype == "S16":
-            dtype = "int16"
-        else:
-            raise NotImplementedError(f"Unsupported Sqrt dtype: {activation_dtype}")
-
-        input_shape = tuple(self.desc["input_shape"])
-        model_bytes = build_sqrt_op(
-            input_shape=input_shape,
-            dtype=dtype,
-        )
-        with open(out_path, "wb") as f:
-            f.write(model_bytes)
-    
     def _select_cmsis_sqrt_kernel(self) -> Dict[str, str]:
         """
         Select appropriate CMSIS-NN kernel function for Sqrt operation.
@@ -210,10 +201,6 @@ class OpSqrt(OperationBase):
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
         
         name = self.desc['name']
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
-        
         # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_sqrt_kernel()
         
@@ -240,37 +227,19 @@ class OpSqrt(OperationBase):
         input_q = self.rng.integers(0, qmax + 1, size=input_shape, dtype=np_in_dtype)
         self.rng.__setstate__(rng_state)
 
-        model, subgraph = load_litert_model(str(tflite_path))
-        
-        # Get operator tensors (first operator)
-        if len(subgraph.operators) == 0:
-            raise ValueError("No operators found in model")
-        
-        op_tensors = get_operator_tensors_from_litert(model, subgraph, 0)
-
-        input_quant = op_tensors['inputs'][0]['quantization']
-        output_quant = op_tensors['outputs'][0]['quantization']
-
-        # Compute expected output directly
-        output_data = self.run_inference(str(tflite_path), input_q)
+        activation_dtype = self.desc.get("activation_dtype", "S8")
+        input_scale, input_zp = output_scale, output_zp = SQRT_FIXED_QUANT[activation_dtype]
+        sqrt_lut = make_sqrt_lut(input_scale, input_zp, output_scale, output_zp, activation_dtype)
+        if activation_dtype == "S8":
+            output_data = sqrt_s8_golden(input_q, sqrt_lut)
+        else:
+            output_data = sqrt_s16_golden(input_q, sqrt_lut)
+            check_sqrt_s16_golden(input_q, output_data, input_scale, output_scale)
         output_shape = tuple(output_data.shape)
-        input_scale = input_quant['scale']
-        input_zp = input_quant['zero_point']
-        output_scale = output_quant['scale']
-        output_zp = output_quant['zero_point'] 
         # Format arrays
         input_array_str = builder.format_array_as_c_literal(input_q)
         expected_output_array_str = builder.format_array_as_c_literal(output_data)
 
-
-        activation_dtype = self.desc.get("activation_dtype", "S8")
-        sqrt_lut = make_sqrt_lut(
-            input_scale=input_scale,
-            input_zp=input_zp,
-            output_scale=output_scale,
-            output_zp=output_zp,
-            activation_dtype=activation_dtype,
-        )
 
         # Build template context
         context = {

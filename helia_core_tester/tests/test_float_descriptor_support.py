@@ -38,7 +38,8 @@ def test_legacy_quantize_descriptor_resolves_float_io_foundation(tmp_path: Path)
     desc = load_descriptor(str(path))[0]
 
     assert desc["resolved_tensor_dtypes"] == {"input": "FP32", "output": "S8", "weights": "S8"}
-    assert desc["resolved_comparison"] == {"mode": "tolerant_int", "tolerance": 1}
+    # Quantize is bit-exact against TFLM's AffineQuantize (dtypes.py).
+    assert desc["resolved_comparison"] == {"mode": "exact_int"}
     # The quantized side names the case.
     assert descriptor_matches_dtype_filter(desc, "FP32") is False
     assert descriptor_matches_dtype_filter(desc, "S8") is True

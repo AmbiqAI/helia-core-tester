@@ -13,39 +13,10 @@ class OpPad(OperationBase):
     Pad operation.
     """
 
-    def needs_keras_model(self) -> bool:
+    def needs_tflite(self) -> bool:
+        # The golden is computed in numpy; nothing reads a .tflite.
         return False
 
-    def build_keras_model(self):
-        raise NotImplementedError("Pad uses LiteRT-only model generation.")
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        """Convert model to LiteRT (single-op)."""
-        from helia_core_tester.generation.utils.litert_builder import build_pad_op
-
-        activation_dtype = self.tensor_dtype("input")
-        if activation_dtype == "S16":
-            dtype = "int16"
-        elif activation_dtype == "FP32":
-            dtype = "float32"
-        elif activation_dtype == "FP16":
-            dtype = "float16"
-        else:
-            dtype = "int8"
-
-        input_shape = tuple(self.desc['input_shape'])
-        paddings = self.desc.get('paddings')
-        if paddings is None:
-            raise ValueError("Pad requires paddings")
-
-        model_bytes = build_pad_op(
-            input_shape=input_shape,
-            paddings=paddings,
-            dtype=dtype,
-        )
-        with open(out_path, "wb") as f:
-            f.write(model_bytes)
-    
     def _select_cmsis_pad_kernel(self) -> Dict[str, str]:
         """
         Select appropriate CMSIS-NN kernel function for Pad operation.
@@ -89,9 +60,6 @@ class OpPad(OperationBase):
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
         
         name = self.desc['name']
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
         
         # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_pad_kernel()

@@ -13,12 +13,11 @@ from typing import Any, Dict
 import numpy as np
 
 from helia_core_tester.generation.ops._shared.base import OperationBase
-from helia_core_tester.generation.utils.litert_builder import build_fill_op
 
 
 _FLOAT_KERNELS: Dict[str, Dict[str, object]] = {
-    "FP32": {"kernel_fn": "arm_nn_fill_f32", "c_type": "float", "np_dtype": np.float32, "litert": "float32"},
-    "FP16": {"kernel_fn": "arm_nn_fill_f16", "c_type": "float16_t", "np_dtype": np.float16, "litert": "float16"},
+    "FP32": {"kernel_fn": "arm_nn_fill_f32", "c_type": "float", "np_dtype": np.float32},
+    "FP16": {"kernel_fn": "arm_nn_fill_f16", "c_type": "float16_t", "np_dtype": np.float16},
 }
 
 # Descriptor spellings of the non-finite and signed-zero fill values. YAML's own
@@ -54,11 +53,9 @@ def parse_fill_value(raw: Any) -> float:
 class OpFill(OperationBase):
     """Fill operation."""
 
-    def needs_keras_model(self) -> bool:
+    def needs_tflite(self) -> bool:
+        # The golden is computed in numpy; nothing reads a .tflite.
         return False
-
-    def build_keras_model(self):
-        raise NotImplementedError("Fill uses LiteRT-only model generation.")
 
     def _kernel(self) -> Dict[str, object]:
         dtype = self.tensor_dtype("output")
@@ -72,13 +69,6 @@ class OpFill(OperationBase):
         if any(dim < 0 for dim in shape):
             raise ValueError(f"Fill output_shape must be non-negative, got {shape}")
         return shape
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        model_bytes = build_fill_op(
-            output_shape=self._output_shape(),
-            dtype=str(self._kernel()["litert"]),
-        )
-        self._write_tflite_bytes(out_path, model_bytes)
 
     def generate_c_files(self, output_dir: Path) -> None:
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder

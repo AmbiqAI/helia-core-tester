@@ -6,19 +6,17 @@ from typing import Dict, Any
 import numpy as np
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.base import OperationBase
-from helia_core_tester.generation.utils.litert_builder import build_unary_same_shape_op
 
 
-def build_abs_op(
-    *,
-    input_shape,
-    dtype: str = "int8",
-) -> bytes:
-    return build_unary_same_shape_op(
-        op_name="ABS",
-        input_shape=input_shape,
-        dtype=dtype,
-    )
+def abs_golden(input_q: np.ndarray, input_zp: int, output_zp: int, mult: int, shift: int, rescale: bool) -> np.ndarray:
+    """TFLite's integer ABS: |x - zp_in|, requantized when the scales differ, plus zp_out, saturated."""
+    from helia_core_tester.generation.utils.tflite_utils import requantize_np
+
+    info = np.iinfo(input_q.dtype)
+    value = np.abs(input_q.astype(np.int64) - int(input_zp))
+    if rescale:
+        value = requantize_np(value, int(mult), int(shift)).astype(np.int64)
+    return np.clip(value + int(output_zp), info.min, info.max).astype(input_q.dtype)
 
 
 class OpAbs(OperationBase):
@@ -28,29 +26,12 @@ class OpAbs(OperationBase):
 
     SIGN_SPAN_OPERANDS = ("input",)
 
-    def needs_keras_model(self) -> bool:
+    # The (scale, zero point) the one-op LiteRT builder gave input and output; kept so
+    # the goldens do not move.
+    FIXED_QUANT = {"S8": (0.125, 0), "S16": (1.0 / 32768.0, 0)}
+
+    def needs_tflite(self) -> bool:
         return False
-
-    def build_keras_model(self):
-        raise NotImplementedError("Abs uses LiteRT-only model generation.")
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        activation_dtype = self.desc.get("activation_dtype", "S8")
-        if activation_dtype == "S8":
-            dtype = "int8"
-        elif activation_dtype == "S16":
-            dtype = "int16"
-        elif activation_dtype == "FP32":
-            dtype = "float32"
-        elif activation_dtype == "FP16":
-            dtype = "float16"
-        else:
-            raise NotImplementedError(f"Unsupported Abs dtype: {activation_dtype}")
-
-        input_shape = tuple(self.desc["input_shape"])
-        model_bytes = build_abs_op(input_shape=input_shape, dtype=dtype)
-        with open(out_path, "wb") as f:
-            f.write(model_bytes)
 
     def _select_cmsis_abs_kernel(self) -> Dict[str, str]:
         activation_dtype = self.desc.get("activation_dtype", "S8")
@@ -88,23 +69,12 @@ class OpAbs(OperationBase):
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
         from helia_core_tester.generation.utils.tflite_utils import (
             calculate_multiplier_shift,
-            scalar_scale_zp,
             activation_bounds,
         )
-        from helia_core_tester.generation.utils.litert_utils import get_operator_tensors_from_litert
 
         name = self.desc["name"]
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
-
         kernel_info = self._select_cmsis_abs_kernel()
-
-        model, subgraph = self.load_litert_model(str(tflite_path))
-        op_tensors = get_operator_tensors_from_litert(model, subgraph, 0)
-
-        input_shape = self._ensure_shape_tuple(op_tensors["inputs"][0]["shape"])
-        output_shape = self._ensure_shape_tuple(op_tensors["outputs"][0]["shape"])
+        input_shape = output_shape = tuple(int(d) for d in self.desc["input_shape"])
 
         builder = TemplateContextBuilder()
         input_dims = builder.nhwc_to_cmsis_dims(input_shape)
@@ -125,11 +95,7 @@ class OpAbs(OperationBase):
             input_zp = output_zp = output_mult = output_shift = needs_rescale = 0
             activation_min = activation_max = 0
         else:
-            input_quant = op_tensors["inputs"][0]["quantization"]
-            output_quant = op_tensors["outputs"][0]["quantization"]
-
-            input_scale, input_zp = scalar_scale_zp(input_quant)
-            output_scale, output_zp = scalar_scale_zp(output_quant)
+            input_scale, input_zp = output_scale, output_zp = self.FIXED_QUANT[activation_dtype]
 
             activation_min, activation_max = activation_bounds(activation_dtype)
 
@@ -156,14 +122,7 @@ class OpAbs(OperationBase):
                 steerable=("input",),
             )
 
-            interpreter = self.load_litert_interpreter(str(tflite_path))
-            input_details = interpreter.get_input_details()
-            output_details = interpreter.get_output_details()
-
-            interpreter.set_tensor(input_details[0]["index"], input_q)
-            interpreter.invoke()
-            output_data = interpreter.get_tensor(output_details[0]["index"])
-            output_data = np.array(output_data)
+            output_data = abs_golden(input_q, input_zp, output_zp, output_mult, output_shift, bool(needs_rescale))
 
         if kernel_info["float_kernel"]:
             output_data, nonfinite_context = self.apply_nonfinite_policy(

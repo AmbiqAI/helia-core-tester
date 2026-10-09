@@ -137,12 +137,8 @@ def test_ops_use_grouped_template_paths_directly() -> None:
 def test_selected_ops_define_local_litert_wrappers() -> None:
     ops_root = _repo_root() / "helia_core_tester" / "generation" / "ops" / "BasicMathFunctions"
     expected_wrappers = {
-        "abs.py": "build_abs_op",
-        "add.py": "build_add_op",
         "argmax.py": "build_argmax_op",
         "argmin.py": "build_argmin_op",
-        "rsqrt.py": "build_rsqrt_op",
-        "sqrt.py": "build_sqrt_op",
     }
 
     for filename, wrapper_name in expected_wrappers.items():

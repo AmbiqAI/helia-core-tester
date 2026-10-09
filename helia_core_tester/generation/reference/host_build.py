@@ -43,6 +43,10 @@ CXXFLAGS = (
     # Keep a*b+c as two rounded operations: the float entries must not change
     # with the host's FMA support.
     "-ffp-contract=off",
+    # Export only the hct_ref_* entries (hct_ref.h): the vendored tflite:: code must not
+    # bind to, or be bound by, another TFLite in the process.
+    "-fvisibility=hidden",
+    "-fvisibility-inlines-hidden",
     "-DTF_LITE_STATIC_MEMORY",
     "-DTF_LITE_STRIP_ERROR_STRINGS",
 )

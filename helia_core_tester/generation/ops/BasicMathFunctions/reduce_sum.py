@@ -9,7 +9,6 @@ matching the kernels' documented accumulation semantics.
 
 from typing import Dict, Any
 import numpy as np
-import tensorflow as tf
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.base import OperationBase
 
@@ -19,32 +18,9 @@ class OpReduceSum(OperationBase):
     ReduceSum operation (FP32/FP16).
     """
 
-    def build_keras_model(self) -> tf.keras.Model:
-        """Build Keras model for ReduceSum operation."""
-        input_shape = self.desc['input_shape']
-        inputs = tf.keras.Input(shape=input_shape[1:], dtype=tf.float32, name='input')
-
-        axes = self.desc.get('axes', [1, 2])
-        keepdims = self.desc.get('keepdims', True)
-
-        x = tf.keras.layers.Lambda(
-            lambda x: tf.reduce_sum(x, axis=axes, keepdims=keepdims),
-            name='reduce_sum'
-        )(inputs)
-
-        model = tf.keras.Model(inputs=inputs, outputs=x)
-        return model
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        """Convert to a plain float32 TFLite model (no quantization)."""
-        activation_dtype = self.tensor_dtype("input", default="FP32")
-        if activation_dtype not in ('FP32', 'FP16'):
-            raise NotImplementedError(
-                f"Unsupported ReduceSum dtype: {activation_dtype} (float-only kernels)")
-
-        converter = tf.lite.TFLiteConverter.from_keras_model(model)
-        tflite_model = converter.convert()
-        self._write_tflite_bytes(out_path, tflite_model)
+    def needs_tflite(self) -> bool:
+        # The golden is computed in numpy; nothing reads a .tflite.
+        return False
 
     def _select_cmsis_reduce_sum_kernel(self) -> Dict[str, str]:
         """
@@ -77,9 +53,6 @@ class OpReduceSum(OperationBase):
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
         name = self.desc['name']
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
 
         kernel_info = self._select_cmsis_reduce_sum_kernel()
         float_dtype = np.float16 if kernel_info["input_c_type"] == "float16_t" else np.float32

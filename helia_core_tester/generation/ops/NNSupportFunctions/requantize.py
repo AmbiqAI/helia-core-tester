@@ -23,17 +23,9 @@ class OpRequantize(QuantizationFamilyBase):
     Requantize operation (int8->int8, int16->int16).
     """
 
-    def allow_no_tflite(self) -> bool:
-        return True
-
-    def needs_keras_model(self) -> bool:
+    def needs_tflite(self) -> bool:
+        # The golden is computed directly; nothing reads a .tflite.
         return False
-
-    def build_keras_model(self):
-        raise NotImplementedError("Requantize uses CMSIS-NN kernel directly; no model required.")
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        raise NotImplementedError("Requantize does not produce a TFLite model.")
 
     def _select_cmsis_requantize_kernel(self) -> Dict[str, str]:
         activation_dtype = self.desc.get("activation_dtype", "S8")

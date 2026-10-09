@@ -11,7 +11,6 @@ from typing import Any, Dict, Tuple
 import numpy as np
 
 from helia_core_tester.generation.ops._shared.base import OperationBase
-from helia_core_tester.generation.utils.litert_builder import build_unary_same_shape_op
 from helia_core_tester.generation.harness import ArgumentPool, ArrayLiteral, Declaration
 from helia_core_tester.generation.harness.simple import dims_count, tensor_case_pool
 
@@ -108,45 +107,14 @@ def derive_rsqrt_universal_quant_params(output_scale: float) -> Dict[str, int]:
     }
 
 
-def build_rsqrt_op(
-    *,
-    input_shape,
-    dtype: str = "int16",
-) -> bytes:
-    return build_unary_same_shape_op(
-        op_name="RSQRT",
-        input_shape=input_shape,
-        dtype=dtype,
-        input_scale=RSQRT_INPUT_SCALE if dtype == "int16" else None,
-    )
-
-
 class OpRsqrt(OperationBase):
     """Rsqrt operation."""
 
-    def needs_keras_model(self) -> bool:
+    def needs_tflite(self) -> bool:
         return False
 
-    def build_keras_model(self):
-        raise NotImplementedError("Rsqrt uses LiteRT-only model generation.")
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        if self.tensor_dtype("input") in ("FP16", "FP32"):
-            self._write_tflite_bytes(
-                out_path,
-                build_rsqrt_op(
-                    input_shape=tuple(self.desc["input_shape"]),
-                    dtype=self.tensor_litert_dtype("input"),
-                ),
-            )
-            return
-        activation_dtype = self.desc.get("activation_dtype", "S16")
-        if activation_dtype != "S16":
-            raise NotImplementedError(f"Unsupported Rsqrt dtype: {activation_dtype}")
-
-        input_shape = tuple(self.desc["input_shape"])
-        model_bytes = build_rsqrt_op(input_shape=input_shape, dtype="int16")
-        self._write_tflite_bytes(out_path, model_bytes)
+    def uses_reference(self) -> bool:
+        return self.tensor_dtype("input") == "S16" and not self.desc.get("hint", {}).get("force_negative_input_case", False)
 
     def _variant(self) -> str:
         call_style = str(self.desc.get("hint", {}).get("call_style", "per_op"))
@@ -201,26 +169,17 @@ class OpRsqrt(OperationBase):
             generate_sqrt_float(self, output_dir, reciprocal=True)
             return
 
-        from helia_core_tester.generation.utils.litert_utils import get_operator_tensors_from_litert
+        from helia_core_tester.generation.reference import bindings as b
+        from helia_core_tester.generation.reference.case import ReferenceCall
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
-        from helia_core_tester.generation.utils.tflite_utils import activation_bounds, scalar_scale_zp
+        from helia_core_tester.generation.utils.tflite_utils import activation_bounds
 
         name = self.desc["name"]
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
-
         kernel_info = self._select_cmsis_rsqrt_kernel()
-
-        model, subgraph = self.load_litert_model(str(tflite_path))
-        op_tensors = get_operator_tensors_from_litert(model, subgraph, 0)
-
-        input_shape = self._ensure_shape_tuple(op_tensors["inputs"][0]["shape"])
-        output_shape = self._ensure_shape_tuple(op_tensors["outputs"][0]["shape"])
-        input_quant = op_tensors["inputs"][0]["quantization"]
-        output_quant = op_tensors["outputs"][0]["quantization"]
-        input_scale, input_zp = scalar_scale_zp(input_quant)
-        output_scale, output_zp = scalar_scale_zp(output_quant)
+        input_shape = output_shape = tuple(int(d) for d in self.desc["input_shape"])
+        # The quantization the one-op LiteRT builder gave the int16 model.
+        input_scale, input_zp = RSQRT_INPUT_SCALE, 0
+        output_scale, output_zp = RSQRT_CANONICAL_OUTPUT_SCALE, 0
 
         builder = TemplateContextBuilder()
         input_dims = builder.nhwc_to_cmsis_dims(input_shape)
@@ -237,12 +196,14 @@ class OpRsqrt(OperationBase):
             input_q = self._quantize_input(input_data, input_scale, input_zp)
             self._ensure_positive_domain_input(input_q, input_zp)
 
-            interpreter = self.load_litert_interpreter(str(tflite_path))
-            input_details = interpreter.get_input_details()
-            output_details = interpreter.get_output_details()
-            interpreter.set_tensor(input_details[0]["index"], input_q)
-            interpreter.invoke()
-            output_data = np.array(interpreter.get_tensor(output_details[0]["index"]))
+            params = b.struct_to_dict(b.get_bindings().rsqrt_prepare(input_scale, input_zp, output_scale, output_zp))
+            call = ReferenceCall(
+                "rsqrt_s16", {**params, "input_scale": input_scale, "output_scale": output_scale},
+                {"input": input_q}, output_shape, "int16",
+                quant={"input": {"scale": input_scale, "zero_point": input_zp},
+                       "output": {"scale": output_scale, "zero_point": output_zp}},
+            )
+            output_data = self.reference_golden(call)
             expected_status = "ARM_CMSIS_NN_SUCCESS"
 
         input_array_str = builder.format_array_as_c_literal(input_q)

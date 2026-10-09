@@ -2,7 +2,7 @@
 Multiply (elementwise) operation implementation for Helia-Core Tester.
 """
 
-from typing import Dict, Any
+from typing import Dict
 import numpy as np
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.binary_basic_math_base import BinaryBasicMathBase 
@@ -17,37 +17,6 @@ class OpMul(BinaryBasicMathBase):
     # Keeps about a fifth saturated.
     S8_REACH = 48
     
-    def needs_keras_model(self) -> bool:
-        return False
-
-    def build_keras_model(self):
-        raise NotImplementedError("Mul uses LiteRT-only model generation.")
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        from helia_core_tester.generation.utils.litert_builder import build_mul_op
-
-        activation_dtype = self.tensor_dtype("input")
-        if activation_dtype == "S8":
-            dtype = "int8"
-        elif activation_dtype == "S16":
-            dtype = "int16"
-        elif activation_dtype == "FP32":
-            dtype = "float32"
-        elif activation_dtype == "FP16":
-            dtype = "float16"
-        else:
-            raise NotImplementedError(f"Unsupported Mul dtype: {activation_dtype}")
-
-        input_1_shape = tuple(self.desc["input_1_shape"])
-        input_2_shape = tuple(self.desc["input_2_shape"])
-
-        model_bytes = build_mul_op(
-            input_1_shape=input_1_shape,
-            input_2_shape=input_2_shape,
-            dtype=dtype,
-        )
-        self._write_tflite_bytes(out_path, model_bytes)
-
     def _select_cmsis_mul_kernel(self) -> Dict[str, str]:
         """
         Select appropriate CMSIS-NN kernel function for Mul operation.
@@ -95,31 +64,13 @@ class OpMul(BinaryBasicMathBase):
         Generate C and H files from templates for Mul operation.
         """
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
-        from helia_core_tester.generation.utils.tflite_utils import (
-    calculate_multiplier_shift,
-    scalar_scale_zp,
-    activation_bounds,
-)
+        from helia_core_tester.generation.utils.tflite_utils import activation_bounds
         
         name = self.desc['name']
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
-        
         # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_mul_kernel()
-        
-        # Load LiteRT model for shape and quantization extraction
-        from helia_core_tester.generation.utils.litert_utils import get_operator_tensors_from_litert
-        model, subgraph = self.load_litert_model(str(tflite_path))
-        op_tensors = get_operator_tensors_from_litert(model, subgraph, 0)
-        
-        input1_shape = self._ensure_shape_tuple(op_tensors['inputs'][0]['shape'])
-        input2_shape = self._ensure_shape_tuple(
-            op_tensors['inputs'][1]['shape'] if len(op_tensors['inputs']) > 1 else op_tensors['inputs'][0]['shape']
-        )
-        output_shape = self._ensure_shape_tuple(op_tensors['outputs'][0]['shape'])
-        
+        input1_shape, input2_shape, output_shape = self._binary_shapes()
+
         builder = TemplateContextBuilder()
         input1_dims = builder.nhwc_to_cmsis_dims(input1_shape)
         input2_dims = builder.nhwc_to_cmsis_dims(input2_shape)
@@ -147,16 +98,10 @@ class OpMul(BinaryBasicMathBase):
             activation_max_literal = builder.format_float_literal(activation_max)
             input1_zp = input2_zp = output_zp = output_mult = output_shift = 0
         else:
-            input1_quant = op_tensors['inputs'][0]['quantization']
-            input2_quant = op_tensors['inputs'][1]['quantization'] if len(op_tensors['inputs']) > 1 else input1_quant
-            output_quant = op_tensors['outputs'][0]['quantization']
+            from helia_core_tester.generation.reference import params as ref_params
 
-            input1_scale, input1_zp = scalar_scale_zp(input1_quant)
-            input2_scale, input2_zp = scalar_scale_zp(input2_quant)
-            output_scale, output_zp = scalar_scale_zp(output_quant)
-
-            effective_scale = (float(input1_scale) * float(input2_scale)) / float(output_scale)
-            output_mult, output_shift = calculate_multiplier_shift(effective_scale)
+            input1_scale, input1_zp = input2_scale, input2_zp = output_scale, output_zp = self._fixed_quant()
+            output_mult, output_shift = ref_params.mul_params(input1_scale, input2_scale, output_scale)
             activation_min, activation_max = activation_bounds(activation_dtype)
             input1_data, input2_data = self._sample_dual_uniform_inputs(input1_shape, input2_shape)
             input1_data = self._widen_s8(input1_data, input1_scale, kernel_info["input_c_type"])
@@ -173,28 +118,16 @@ class OpMul(BinaryBasicMathBase):
                 steerable=("input_1", "input_2"),
             )
 
-            # Always compute the golden via the CMSIS-NN-matching fixed-point simulation
-            # (_simulate_mul_quantized), not the TFLite interpreter, even when the two
-            # input shapes happen to be equal: TFLite's internal requantize rounds
-            # half-to-even, while CMSIS-NN's arm_nn_requantize rounds half-away-from-zero
-            # (single 31-bit doubling-high-mult shift). The two disagree exactly at exact
-            # tie-boundary products (product % 8 == +-4 for this shift), which real
-            # Apollo510 hardware then flags as byte-exact mismatches against a
-            # TFLite-derived golden -- see mul_default_s8_hw_generated's 19/160 mismatch
-            # investigation.
-            output_data = self._simulate_mul_quantized(
-                input1_q,
-                input2_q,
-                input1_offset=-int(input1_zp),
-                input2_offset=-int(input2_zp),
-                out_offset=int(output_zp),
-                out_mult=int(output_mult),
-                out_shift=int(output_shift),
-                out_activation_min=int(activation_min),
-                out_activation_max=int(activation_max),
-                out_dtype=np_in_dtype,
+            output_data = self._reference_binary(
+                "mul", input1_q, input2_q, output_shape,
+                {"input1_offset": -int(input1_zp), "input2_offset": -int(input2_zp), "output_offset": int(output_zp),
+                 "output_multiplier": int(output_mult), "output_shift": int(output_shift)},
+                activation_min, activation_max,
+                quant={"input1": {"scale": input1_scale, "zero_point": input1_zp},
+                       "input2": {"scale": input2_scale, "zero_point": input2_zp},
+                       "output": {"scale": output_scale, "zero_point": output_zp}},
             )
-        
+
         # Format arrays
         input1_array_str = builder.format_array_as_c_literal(input1_q)
         input2_array_str = builder.format_array_as_c_literal(input2_q)
@@ -251,29 +184,6 @@ class OpMul(BinaryBasicMathBase):
             'operator_name': 'mul',
         }
         self._write_op_outputs(output_dir, "mul", "BasicMathFunctions/mul/mul.h.j2", "BasicMathFunctions/mul/mul.c.j2", context, cmake_context)
-
-    @classmethod
-    def _simulate_mul_quantized(
-        cls,
-        input1_q: np.ndarray,
-        input2_q: np.ndarray,
-        *,
-        input1_offset: int,
-        input2_offset: int,
-        out_offset: int,
-        out_mult: int,
-        out_shift: int,
-        out_activation_min: int,
-        out_activation_max: int,
-        out_dtype: np.dtype,
-    ) -> np.ndarray:
-        a = input1_q.astype(np.int32) + int(input1_offset)
-        b = input2_q.astype(np.int32) + int(input2_offset)
-        prod = a * b
-        prod = cls._requantize_np(prod, int(out_mult), int(out_shift))
-        prod = prod + int(out_offset)
-        prod = np.clip(prod, int(out_activation_min), int(out_activation_max))
-        return prod.astype(out_dtype)
 
 
 from helia_core_tester.generation.harness.registry import harness_pool  # noqa: E402

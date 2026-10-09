@@ -61,7 +61,8 @@ def _generate(name: str, out_dir: Path, target_cpu: str, seed: int = _SEED) -> s
     op = op_cls(desc, seed=seed, target_cpu=target_cpu)
     if not op.uses_reference():
         model = op.build_keras_model() if op.needs_keras_model() else None
-        op.convert_to_tflite(model, str(out_dir / f"{name}.tflite"), seed)
+        if op.needs_tflite() and not op.uses_reference():
+            op.convert_to_tflite(model, str(out_dir / f"{name}.tflite"), seed)
     op.generate_c_files(out_dir)
     return (out_dir / "includes").glob(f"{name}_*.h").__next__().read_text()
 

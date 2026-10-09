@@ -168,6 +168,101 @@ class OpBatchMatMul(OperationBase):
         converter.representative_dataset = self._representative_dataset_gen
         self._write_tflite_bytes(out_path, converter.convert())
     
+    def _int_kind(self):
+        return {"S8": "s8", "S16": "s16"}.get(
+            str(self.tensor_dtype("input", default=self.desc.get("activation_dtype", "S8"))).upper())
+
+    def uses_reference(self) -> bool:
+        # Integer cases take their golden from the TFLM reference BatchMatMul; float stays on
+        # the converter path until the float suites move.
+        return self._int_kind() is not None
+
+    def _generate_int_c_files(self, output_dir: Path, kind: str) -> None:
+        """Integer BMM: policy quantization over the [-1, 1] draws, the output quantized over
+        the float product's range, and the TFLM reference golden on the canonical operands
+        (LHS [..., M, K], RHS [..., N, K]) the CMSIS harness also stores."""
+        from helia_core_tester.generation.reference import params as ref_params
+        from helia_core_tester.generation.reference import policy
+        from helia_core_tester.generation.reference.case import ReferenceCall
+        from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
+
+        name = self.desc['name']
+        np_dtype = np.int8 if kind == "s8" else np.int16
+        kernel_info = self._select_cmsis_matmul_kernel(np_dtype, np_dtype, np_dtype)
+        lhs_shape = tuple(int(d) for d in self.desc["input_1_shape"])
+        rhs_shape = tuple(int(d) for d in self.desc["input_2_shape"])
+        if len(lhs_shape) != 3 or len(rhs_shape) != 3:
+            raise ValueError(f"{name}: BatchMatMul cases are rank 3, got {lhs_shape} x {rhs_shape}")
+        adj_x = bool(self.desc.get('adj_x', False))
+        adj_y = bool(self.desc.get('adj_y', False))
+
+        rng_state = self.rng.__getstate__()
+        self.rng = np.random.default_rng(self.seed)
+        lhs_data = self._maybe_apply_input_mode(self.rng.uniform(-1.0, 1.0, size=lhs_shape).astype(np.float32))
+        rhs_data = self.rng.uniform(-1.0, 1.0, size=rhs_shape).astype(np.float32)
+        self.rng.__setstate__(rng_state)
+
+        # Canonical operands: LHS [B, M, K], RHS [B, N, K].
+        lhs_c = np.transpose(lhs_data, (0, 2, 1)) if adj_x else lhs_data
+        rhs_c = rhs_data if adj_y else np.transpose(rhs_data, (0, 2, 1))
+        if lhs_c.shape[2] != rhs_c.shape[2]:
+            raise ValueError(f"{name}: depth {lhs_c.shape[2]} vs {rhs_c.shape[2]} (adj_x={adj_x}, adj_y={adj_y})")
+        try:
+            batch = int(np.broadcast_shapes((lhs_c.shape[0],), (rhs_c.shape[0],))[0])
+        except ValueError as exc:
+            raise ValueError(f"{name}: batches {lhs_c.shape[0]} and {rhs_c.shape[0]} do not broadcast") from exc
+        output_shape = (batch, lhs_c.shape[1], rhs_c.shape[1])
+
+        draw_range = np.array([-1.0, 1.0], dtype=np.float32)
+        lhs_quant = self.activation_quant("input_1", draw_range, kind)
+        rhs_quant = self.activation_quant("input_2", draw_range, kind)
+        float_out = np.matmul(lhs_c.astype(np.float64), np.transpose(rhs_c, (0, 2, 1)).astype(np.float64))
+        out_quant = self.activation_quant("output", float_out, kind)
+        lhs_q = np.ascontiguousarray(policy.quantize(lhs_c, lhs_quant))
+        rhs_q = np.ascontiguousarray(policy.quantize(rhs_c, rhs_quant))
+
+        builder = TemplateContextBuilder()
+        as_dict = lambda q: {"scale": [q.scale], "zero_point": [q.zero_point]}  # noqa: E731
+        fc_params = builder.build_fc_params(self.desc, as_dict(lhs_quant), as_dict(rhs_quant), as_dict(out_quant))
+        multiplier, shift = ref_params.quantize_multiplier(lhs_quant.scale * rhs_quant.scale / out_quant.scale)
+        call = ReferenceCall(
+            f"bmm_{kind}",
+            {"lhs_offset": fc_params["input_offset"], "rhs_offset": fc_params["filter_offset"],
+             "output_offset": fc_params["output_offset"], "output_multiplier": multiplier, "output_shift": shift,
+             "act": {"min": int(fc_params["activation_min"]), "max": int(fc_params["activation_max"])}},
+            {"lhs": lhs_q, "rhs": rhs_q}, output_shape, np.dtype(np_dtype).name,
+            quant={"lhs": lhs_quant.to_json(), "rhs": rhs_quant.to_json(), "output": out_quant.to_json()},
+        )
+        output_data = self.reference_golden(call)
+
+        input_lhs_dims = builder.nhwc_to_cmsis_dims(lhs_q.shape)
+        input_rhs_dims = builder.nhwc_to_cmsis_dims(rhs_q.shape)
+        output_dims = builder.nhwc_to_cmsis_dims(output_shape)
+        # CMSIS-NN's adj_y is the inverse of TFLite's: true means RHS is stored as [N, K].
+        bmm_params = {'adj_x': adj_x, 'adj_y': not adj_y, 'fc_params': fc_params}
+        filter_dims_for_buffer = {'n': int(rhs_q.shape[2]), 'h': 1, 'w': 1, 'c': int(rhs_q.shape[1])}
+        context = {
+            'name': name,
+            'input_lhs_dims': input_lhs_dims,
+            'input_rhs_dims': input_rhs_dims,
+            'output_dims': output_dims,
+            'bmm_params': bmm_params,
+            'quant_params': {'multiplier': int(multiplier), 'shift': int(shift), 'per_channel': False},
+            'input_lhs_array': builder.format_array_as_c_literal(lhs_q),
+            'input_rhs_array': builder.format_array_as_c_literal(rhs_q),
+            'expected_output_array': builder.format_array_as_c_literal(output_data),
+            'input_dtype': kernel_info["input_lhs_c_type"],
+            'input_rhs_dtype': kernel_info["input_rhs_c_type"],
+            'output_dtype': kernel_info["output_c_type"],
+            'kernel_fn': kernel_info["kernel_fn"],
+            'kernel_get_buffer_size_fn': kernel_info["kernel_get_buffer_size_fn"],
+            'buffer_size_max': builder.calculate_fc_buffer_size_max(
+                filter_dims_for_buffer, output_dtype=self.desc.get('activation_dtype', 'S8')),
+        }
+        self._render_batch_matmul(output_dir, context)
+        cmake_context = {'name': name, 'operator': self.desc.get('operator', 'BatchMatMul'), 'operator_name': 'batch_matmul'}
+        (output_dir / "CMakeLists.txt").write_text(self.render_template("common/CMakeLists.txt.j2", cmake_context))
+
     def _numpy_dtype_to_c_type(self, np_dtype: np.dtype) -> str:
         """Map numpy dtype to C type string."""
         if np_dtype == np.int8:
@@ -240,9 +335,11 @@ class OpBatchMatMul(OperationBase):
         """
         from pathlib import Path
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
-        from helia_core_tester.generation.utils.tflite_utils import calculate_multiplier_shift
         
         name = self.desc['name']
+        if self._int_kind() is not None:
+            self._generate_int_c_files(Path(output_dir), self._int_kind())
+            return
         tflite_path = output_dir / f"{name}.tflite"
         if not tflite_path.exists():
             raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
@@ -373,43 +470,6 @@ class OpBatchMatMul(OperationBase):
                 'fc_params': fc_params
             }
         
-        # Extract scales and zero points for effective scale calculation
-        if float_kernel:
-            quant_params_dict = None
-        else:
-            input_lhs_scale = input_lhs_quant.get('scale', 1.0)
-            if isinstance(input_lhs_scale, (list, np.ndarray)):
-                input_lhs_scale = float(input_lhs_scale[0])
-            else:
-                input_lhs_scale = float(input_lhs_scale)
-            
-            input_rhs_scale = input_rhs_quant.get('scale', 1.0)
-            if isinstance(input_rhs_scale, (list, np.ndarray)):
-                input_rhs_scale = float(input_rhs_scale[0])
-            else:
-                input_rhs_scale = float(input_rhs_scale)
-            
-            output_scale = output_quant.get('scale', 1.0)
-            if isinstance(output_scale, (list, np.ndarray)):
-                output_scale = float(output_scale[0])
-            else:
-                output_scale = float(output_scale)
-            
-            # Effective scale: (input_lhs_scale * input_rhs_scale) / output_scale
-            effective_scale = (input_lhs_scale * input_rhs_scale) / output_scale
-            effective_scale = float(effective_scale)
-            
-            effective_quant = {
-                'scale': effective_scale,
-                'zero_point': output_quant.get('zero_point', 0),
-                'per_channel': False
-            }
-            quant_params_dict = builder.build_quant_params(effective_quant, per_channel=False)
-        
-        # NOTE: Do NOT reduce multiplier here for S16 batch matmul.
-        # arm_batch_matmul_s16 internally applies REDUCE_MULTIPLIER on the Q31 multiplier.
-        # Reducing here would zero-out the multiplier and produce all-zero outputs.
-        
         # Generate input data and quantize
         rng_state = self.rng.__getstate__()
         self.rng = np.random.default_rng(self.seed)
@@ -485,120 +545,3 @@ class OpBatchMatMul(OperationBase):
             with open(cmake_path, 'w') as f:
                 f.write(cmake_content)
             return
-
-        # Extract LHS quantization parameters
-        input_lhs_scale_val = input_lhs_quant.get('scale', 1.0)
-        input_lhs_zp_val = input_lhs_quant.get('zero_point', 0)
-        if isinstance(input_lhs_scale_val, (list, np.ndarray)):
-            input_lhs_scale_val = float(input_lhs_scale_val[0])
-        if isinstance(input_lhs_zp_val, (list, np.ndarray)):
-            input_lhs_zp_val = int(input_lhs_zp_val[0])
-        
-        # Extract RHS quantization parameters
-        input_rhs_scale_val = input_rhs_quant.get('scale', 1.0)
-        input_rhs_zp_val = input_rhs_quant.get('zero_point', 0)
-        if isinstance(input_rhs_scale_val, (list, np.ndarray)):
-            input_rhs_scale_val = float(input_rhs_scale_val[0])
-        if isinstance(input_rhs_zp_val, (list, np.ndarray)):
-            input_rhs_zp_val = int(input_rhs_zp_val[0])
-        
-        # Determine quantization limits and numpy dtypes from TFLite dtypes
-        def get_quantization_params(np_dtype):
-            if np_dtype == np.int8:
-                return np.int8, -128, 127
-            elif np_dtype == np.int16:
-                return np.int16, -32768, 32767
-            else:
-                raise ValueError(f"Unsupported numpy dtype: {np_dtype}")
-        
-        input_lhs_np_dtype, input_lhs_qmin, input_lhs_qmax = get_quantization_params(input_lhs_dtype)
-        input_rhs_np_dtype, input_rhs_qmin, input_rhs_qmax = get_quantization_params(input_rhs_dtype)
-        
-        # Quantize LHS
-        input_lhs_q = np.round(input_lhs_data / float(input_lhs_scale_val) + float(input_lhs_zp_val)).astype(np.int32)
-        input_lhs_q = np.clip(input_lhs_q, input_lhs_qmin, input_lhs_qmax).astype(input_lhs_np_dtype)
-        
-        # Quantize RHS
-        input_rhs_q = np.round(input_rhs_data / float(input_rhs_scale_val) + float(input_rhs_zp_val)).astype(np.int32)
-        input_rhs_q = np.clip(input_rhs_q, input_rhs_qmin, input_rhs_qmax).astype(input_rhs_np_dtype)
-        
-        # Run TFLite inference (use dtypes as extracted from TFLite)
-        interpreter.set_tensor(input_details[0]['index'], input_lhs_q)
-        interpreter.set_tensor(input_details[1]['index'], input_rhs_q)
-        interpreter.invoke()
-        output_data = interpreter.get_tensor(output_details[0]['index'])
-        output_data = np.array(output_data)
-        
-        # Ensure output dtype matches TFLite output dtype
-        if output_data.dtype != output_dtype:
-            output_data = output_data.astype(output_dtype)
-        
-        # Transpose RHS for CMSIS-NN if adj_y is False
-        # CMSIS-NN expects RHS to be transposed: [batch, K, N] -> [batch, N, K]
-        # if not adj_y, transpose RHS
-        input_rhs_q_for_cmsis = input_rhs_q.copy()
-        if not adj_y and len(input_rhs_shape) == 3:
-            # Transpose last two dimensions: [batch, K, N] -> [batch, N, K]
-            input_rhs_q_for_cmsis = np.transpose(input_rhs_q_for_cmsis, (0, 2, 1))
-
-        # Transpose LHS for CMSIS-NN if adj_x is True
-        # CMSIS-NN expects LHS to be already transposed: [batch, M, K] -> [batch, K, M]
-        input_lhs_q_for_cmsis = input_lhs_q.copy()
-        if adj_x and len(input_lhs_shape) == 3:
-            input_lhs_q_for_cmsis = np.transpose(input_lhs_q_for_cmsis, (0, 2, 1))
-        
-        # Format arrays (use transposed LHS/RHS for CMSIS-NN if required)
-        input_lhs_array_str = builder.format_array_as_c_literal(input_lhs_q_for_cmsis)
-        input_rhs_array_str = builder.format_array_as_c_literal(input_rhs_q_for_cmsis)
-        expected_output_array_str = builder.format_array_as_c_literal(output_data)
-        
-        # Calculate buffer size max (use RHS dims as filter_dims for buffer size calculation)
-        # For batch matmul, buffer size is similar to fully connected
-        # Use RHS shape as "filter" for buffer size calculation
-        if len(input_rhs_shape) == 3:
-            # [batch, K, N] -> filter_dims: n=K, c=N, h=1, w=1
-            filter_dims_for_buffer = {
-                'n': int(input_rhs_shape[1]),  # K
-                'h': 1,
-                'w': 1,
-                'c': int(input_rhs_shape[2])   # N
-            }
-        else:
-            raise ValueError(f"Unsupported RHS shape for buffer size: {input_rhs_shape}")
-        
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
-        buffer_size_max = builder.calculate_fc_buffer_size_max(
-            filter_dims_for_buffer,
-            output_dtype=activation_dtype
-        )
-        
-        # Build template context
-        context = {
-            'name': name,
-            'input_lhs_dims': input_lhs_dims,
-            'input_rhs_dims': input_rhs_dims,
-            'output_dims': output_dims,
-            'bmm_params': bmm_params,
-            'quant_params': quant_params_dict,
-            'input_lhs_array': input_lhs_array_str,
-            'input_rhs_array': input_rhs_array_str,
-            'expected_output_array': expected_output_array_str,
-            'input_dtype': kernel_info["input_lhs_c_type"],  # LHS dtype from TFLite
-            'input_rhs_dtype': kernel_info["input_rhs_c_type"],  # RHS dtype from TFLite
-            'output_dtype': kernel_info["output_c_type"],  # Output dtype from TFLite
-            'kernel_fn': kernel_info["kernel_fn"],
-            'kernel_get_buffer_size_fn': kernel_info["kernel_get_buffer_size_fn"],
-            'buffer_size_max': buffer_size_max,
-        }
-        self._render_batch_matmul(output_dir, context)
-
-        cmake_context = {
-            'name': name,
-            'operator': self.desc.get('operator', 'BatchMatMul'),
-            'operator_name': 'batch_matmul'
-        }
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
-        cmake_path = output_dir / "CMakeLists.txt"
-        with open(cmake_path, 'w') as f:
-            f.write(cmake_content)
-        

@@ -15,17 +15,9 @@ class OpNNActivationS16(OperationBase):
     NN activation (sigmoid/tanh) for int16.
     """
 
-    def build_keras_model(self):
-        raise NotImplementedError("NNActivationS16 does not use a Keras model.")
-
-    def needs_keras_model(self) -> bool:
+    def needs_tflite(self) -> bool:
+        # The golden is computed directly; nothing reads a .tflite.
         return False
-
-    def allow_no_tflite(self) -> bool:
-        return True
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        raise NotImplementedError("NNActivationS16 does not generate TFLite models.")
 
     def _load_sigmoid_table(self) -> List[int]:
         # The same checkout the firmware compiles (CMSIS_NN_ROOT / --cmsis-nn-root);

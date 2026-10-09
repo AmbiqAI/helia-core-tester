@@ -360,9 +360,10 @@ def generate_test(
     op.run_seed = int(run_seed)
     
     uses_reference = op.uses_reference()
-    # Build Keras model (skip for ops that generate LiteRT models directly, and
-    # for reference-golden cases, which need neither a model nor a .tflite)
-    if not uses_reference and op.needs_keras_model():
+    # Reference-golden and numpy-golden cases need neither a model nor a .tflite.
+    needs_tflite = not uses_reference and op.needs_tflite()
+    # Build Keras model (skip for ops that generate LiteRT models directly)
+    if needs_tflite and op.needs_keras_model():
         try:
             model = op.build_keras_model()
         except Exception as e:
@@ -387,6 +388,8 @@ def generate_test(
     try:
         if uses_reference:
             print(f"Reference-kernel golden: {name}")
+        elif not needs_tflite:
+            print(f"Golden computed without a model: {name}")
         else:
             op.convert_to_tflite(model, str(tflite_path), seed)
             print(f"Generated TFLite model: {name}")

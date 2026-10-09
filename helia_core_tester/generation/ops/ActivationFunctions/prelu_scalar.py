@@ -66,17 +66,9 @@ class _ScalarInputPreluReference(tf.keras.layers.Layer):
 class OpPReLUScalar(OperationBase):
     """Generate direct scalar-input arm_prelu_scalar_s8/arm_prelu_scalar_s16 tests."""
 
-    def allow_no_tflite(self) -> bool:
-        return True
-
-    def needs_keras_model(self) -> bool:
+    def needs_tflite(self) -> bool:
+        # The golden is computed directly; nothing reads a .tflite.
         return False
-
-    def build_keras_model(self):
-        raise NotImplementedError("PReLUScalar uses direct-kernel generation.")
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        raise NotImplementedError("PReLUScalar does not require a .tflite model.")
 
     @staticmethod
     def _resolve_alpha_values(alpha_shape: tuple[int, ...], values: Iterable[float] | None) -> np.ndarray:

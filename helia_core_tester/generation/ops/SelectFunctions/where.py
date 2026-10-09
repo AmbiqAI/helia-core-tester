@@ -10,36 +10,9 @@ from helia_core_tester.generation.ops._shared.base import OperationBase
 class OpWhere(OperationBase):
     """Where operation - returns coordinates of non-zero elements."""
 
-    def needs_keras_model(self) -> bool:
+    def needs_tflite(self) -> bool:
+        # The golden is computed in numpy; nothing reads a .tflite.
         return False
-
-    def build_keras_model(self):
-        raise NotImplementedError("Where uses LiteRT-only model generation.")
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        from helia_core_tester.generation.utils.litert_builder import (
-            LiteRtSingleOpBuilder, TensorSpec, _default_quant,
-        )
-        import ai_edge_litert.schema_py_generated as litert
-
-        activation_dtype = self.desc.get("activation_dtype", "S8")
-        tensor_type = litert.TensorType.INT16 if activation_dtype == "S16" else litert.TensorType.INT8
-        input_shape = tuple(self.desc["input_shape"])
-        total_elements = int(np.prod(input_shape))
-        rank = len(input_shape)
-
-        builder = LiteRtSingleOpBuilder(op_name="WHERE")
-        input_idx = builder.add_tensor(TensorSpec(
-            name="condition", shape=input_shape, tensor_type=tensor_type, is_input=True,
-            quantization=_default_quant(tensor_type),
-        ))
-        # Output is dynamic: max shape is [total_elements, rank]
-        output_idx = builder.add_tensor(TensorSpec(
-            name="output", shape=(total_elements, rank), tensor_type=litert.TensorType.INT64, is_output=True,
-        ))
-        builder.add_operator("WHERE", inputs=[input_idx], outputs=[output_idx],
-            options=None, options_type=litert.BuiltinOptions.NONE)
-        self._write_tflite_bytes(out_path, builder.build())
 
     def _select_kernel(self) -> Dict[str, str]:
         activation_dtype = self.desc.get("activation_dtype", "S8")
@@ -61,31 +34,8 @@ class OpWhere(OperationBase):
         # Generate condition with ~50% non-zero
         condition = rng.integers(-5, 6, size=input_shape, dtype=np_dtype)
 
-        # Use TFLite interpreter for reference output; fall back to INT32 model if type unsupported
-        tflite_path = str(output_dir / f"{name}.tflite")
-        try:
-            interpreter = self.load_litert_interpreter(tflite_path)
-            input_details = interpreter.get_input_details()
-            output_details = interpreter.get_output_details()
-            interpreter.set_tensor(input_details[0]["index"], condition)
-            interpreter.invoke()
-            output_data = np.array(interpreter.get_tensor(output_details[0]["index"]), dtype=np.int64)
-        except (ValueError, RuntimeError):
-            # Rebuild with INT32 condition (WHERE doesn't support INT16)
-            from ai_edge_litert.interpreter import Interpreter
-            from helia_core_tester.generation.utils.litert_builder import LiteRtSingleOpBuilder, TensorSpec
-            import ai_edge_litert.schema_py_generated as litert
-            b = LiteRtSingleOpBuilder(op_name="WHERE")
-            i_idx = b.add_tensor(TensorSpec(name="condition", shape=tuple(input_shape), tensor_type=litert.TensorType.INT32, is_input=True))
-            o_idx = b.add_tensor(TensorSpec(name="output", shape=(total_elements, rank), tensor_type=litert.TensorType.INT64, is_output=True))
-            b.add_operator("WHERE", inputs=[i_idx], outputs=[o_idx], options=None, options_type=litert.BuiltinOptions.NONE)
-            interp = Interpreter(model_content=bytes(b.build()))
-            interp.allocate_tensors()
-            inp_d = interp.get_input_details()
-            out_d = interp.get_output_details()
-            interp.set_tensor(inp_d[0]["index"], condition.astype(np.int32))
-            interp.invoke()
-            output_data = np.array(interp.get_tensor(out_d[0]["index"]), dtype=np.int64)
+        # Row-major coordinates of the non-zero elements, as TFLite WHERE emits them.
+        output_data = np.argwhere(condition).astype(np.int64)
         num_true = output_data.shape[0]
         max_output_size = total_elements * rank  # worst case all true
 
