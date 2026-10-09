@@ -275,13 +275,17 @@ def test_reference_case_writes_provenance_and_no_model(tmp_path) -> None:
     assert entry["reference"] == str(case / f"{desc['name']}.reference.json")
 
 
-def test_float_cases_stay_on_the_converter_path() -> None:
+def test_int_and_float_cases_use_the_reference() -> None:
     from helia_core_tester.generation.ops.ConvolutionFunctions.convolve import OpConvolve
     from helia_core_tester.generation.ops.FullyConnectedFunctions.fully_connected import OpFullyConnected
 
-    assert OpConvolve({**CONV, "activation_dtype": "S16"}, seed=1).uses_reference()
-    assert not OpConvolve({**CONV, "activation_dtype": "FP32", "weight_dtype": "FP32"}, seed=1).uses_reference()
-    assert not OpFullyConnected({"name": "f", "activation_dtype": "FP16", "weight_dtype": "FP16"}, seed=1).uses_reference()
+    for op in (
+        OpConvolve({**CONV, "activation_dtype": "S16"}, seed=1),
+        OpConvolve({**CONV, "activation_dtype": "FP32", "weight_dtype": "FP32"}, seed=1),
+        OpFullyConnected({"name": "f", "activation_dtype": "FP16", "weight_dtype": "FP16"}, seed=1),
+    ):
+        assert op.uses_reference()
+        assert not op.needs_keras_model()
 
 
 def test_reference_rng_streams_are_independent_of_the_input_draw() -> None:

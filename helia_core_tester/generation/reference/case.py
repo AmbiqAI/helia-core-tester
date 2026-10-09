@@ -82,8 +82,9 @@ def _jsonable(value: Any) -> Any:
         return [_jsonable(v) for v in value.tolist()]
     if isinstance(value, np.integer):
         return int(value)
-    if isinstance(value, np.floating):
-        return float(value)
+    if isinstance(value, (float, np.floating)):
+        # Strict JSON has no inf/nan; an unbounded float activation records as "inf".
+        return float(value) if np.isfinite(value) else str(float(value))
     if hasattr(value, "to_json"):
         return _jsonable(value.to_json())
     return value

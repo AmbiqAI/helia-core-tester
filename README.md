@@ -954,18 +954,28 @@ uv run helia_core_tester full --cpu cortex-m55 --skip-host-check         # bypas
 (`tensorflow/lite/kernels/internal/reference/{,integer_ops}`) from upstream google/tflite-micro
 behind a C ABI shim (`shim/hct_ref.h`), built once per environment with the host C++ compiler
 into `artifacts/host_ref/<key>/libhct_ref.{so,dylib}` and called from Python through ctypes
-(`generation/reference/`). It is the golden oracle the generators move onto from the
-Keras/TFLiteConverter path; see `third_party/VENDOR.md` for the pinned commits and
+(`generation/reference/`). It is the golden oracle for every weighted, pooling and
+recurrent case, integer and float; see `third_party/VENDOR.md` for the pinned commits and
 `scripts/vendor_tflm_reference.py` to refresh them. Every vendored file is hashed in
 `third_party/manifest.json` and verified before a build; the compiler is `HCT_HOST_CXX`, else
 `c++`/`g++`/`clang++`.
 
 ### Reference goldens, host check and quantization policy
 
-No integer case builds a Keras model or writes a `.tflite`. A case whose golden comes from a reference kernel writes
+No case builds a Keras model or writes a `.tflite`. A case whose golden comes from a reference kernel writes
 `<name>.reference.json` (kernel, parameters, tensor shapes/dtypes/sha256, seeds, library key)
 next to its sources, the sidecar gains a `reference` entry, and `manifest.json` points at the
-file. Float cases stay on the converter path for now. Where each integer golden comes from:
+file; an unbounded float activation records its bounds as the strings `"-inf"`/`"inf"`, so the
+file stays strict JSON.
+
+Float cases: FullyConnected, Convolve, DepthwiseConv and TransposeConv draw Glorot weights
+(`weight_gain`) and a `U(-0.25, 0.25)` bias and take the TFLM f32 kernel's output
+(`weighted.build_float_case`); AvgPool, MaxPool and BatchMatMul run the TFLM f32 pools and
+`BatchMatMul` (canonical `[M, K]` x `[N, K]`, as for the integer cases). The fused activation
+and `activation_min/max` clamp the reference; with none it is unbounded, so non-finite inputs
+propagate for the nonfinite policy. FP16 cases round their operands to half, the reference
+computes in f32, and the golden is cast back to half once. The other float operators keep their
+numpy goldens. Where each integer golden comes from:
 
 | Operators | Golden | Quantization |
 |---|---|---|

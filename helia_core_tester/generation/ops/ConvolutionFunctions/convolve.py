@@ -4,10 +4,7 @@ from typing import Dict, Any
 from pathlib import Path
 import os
 import numpy as np
-import tensorflow as tf
 from helia_core_tester.generation.ops._shared.base import OperationBase
-from helia_core_tester.generation.ops._shared.fixed_batch import converter_for_batched_model
-from helia_core_tester.generation.ops._shared.quant_knobs import kernel_init
 from helia_core_tester.generation.harness import ArgumentPool, ArrayLiteral, Declaration, GuardedBuffer, Provider
 from helia_core_tester.generation.harness.faults import common_fault, null_context_buffer, struct_copy, with_fault
 from helia_core_tester.generation.entry import check_entry_fault, resolve_entry
@@ -247,9 +244,8 @@ class OpConvolve(OperationBase):
         return packed.reshape(-1)
 
     def uses_reference(self) -> bool:
-        # Integer cases take their golden from the TFLM reference kernels; float
-        # cases stay on the converter path until the float suites move.
-        return str(self.desc.get("activation_dtype", "S8")).upper() in {"S8", "S16"}
+        # Every case takes its golden from the TFLM reference kernels (f32 for float cases).
+        return True
 
     def _bias_is_struct(self, kernel_info: Dict[str, Any]):
         """(bias passed as cmsis_nn_bias_data, contract decl or None): an entry gets the
@@ -362,103 +358,6 @@ class OpConvolve(OperationBase):
         )
         (output_dir / "CMakeLists.txt").write_text(cmake_content)
 
-    def needs_keras_model(self) -> bool:
-        return True
-    
-    def build_keras_model(self) -> tf.keras.Model:
-        input_shape = self.desc['input_shape']
-        filter_shape = self.desc['filter_shape']
-        groups = int(self.desc.get('groups', 1))
-        
-        tf.keras.utils.set_random_seed(17)
-        
-        padding = self.desc.get('padding', 'valid')
-        if padding is not None:
-            padding = str(padding).lower()
-        else:
-            padding = 'valid'
-        
-        activation = self.desc.get('activation', 'NONE')
-        act = None if activation in (None, 'NONE', 'none') else activation.lower()
-        
-        dilation = self.desc.get('dilation', [1, 1])
-        if isinstance(dilation, (int, float)):
-            dilation = [int(dilation), int(dilation)]
-        elif isinstance(dilation, (list, tuple)):
-            if len(dilation) != 2:
-                raise ValueError(f"Invalid dilation: {dilation}. Must be 2 integers or a single integer")
-            dilation = [int(dilation[0]), int(dilation[1])]
-        
-        if any(d <= 0 for d in dilation):
-            raise ValueError(f"Invalid dilation values: {dilation}. Must be positive integers")
-
-        if len(input_shape) != 4:
-            raise ValueError(f"Convolve input_shape must be NHWC rank-4, got: {input_shape}")
-        if len(filter_shape) != 4:
-            raise ValueError(f"Convolve filter_shape must be HWIO rank-4, got: {filter_shape}")
-        if groups <= 0:
-            raise ValueError(f"Convolve groups must be > 0, got: {groups}")
-
-        input_channels = int(input_shape[3])
-        output_filters = int(filter_shape[3])
-        if input_channels % groups != 0:
-            raise ValueError(
-                f"Convolve input channels ({input_channels}) must be divisible by groups ({groups})"
-            )
-        if output_filters % groups != 0:
-            raise ValueError(
-                f"Convolve output filters ({output_filters}) must be divisible by groups ({groups})"
-            )
-        
-        x = tf.keras.Input(
-            shape=input_shape[1:],
-            batch_size=input_shape[0] if len(input_shape) > 0 else None,
-            dtype=tf.float32,
-            name='input'
-        )
-        
-        use_bias = self.desc.get('use_bias', True)
-        # Float cases only (integer cases use the reference kernels). A zero bias
-        # would be folded away by the converter and leave the bias-add untested.
-        if use_bias:
-            bias_initializer = tf.keras.initializers.RandomUniform(minval=-0.25, maxval=0.25, seed=self.seed)
-        else:
-            bias_initializer = 'zeros'
-
-        conv = tf.keras.layers.Conv2D(
-            filters=output_filters,
-            kernel_size=tuple(filter_shape[0:2]),
-            strides=tuple(self.desc.get('strides', [1, 1])),
-            dilation_rate=tuple(dilation),
-            padding=padding,
-            groups=groups,
-            use_bias=use_bias,
-            activation=act,
-            kernel_initializer=kernel_init(self.desc, 1234),
-            bias_initializer=bias_initializer,
-            name='conv_2d'
-        )(x)
-        
-        model = tf.keras.Model(inputs=[x], outputs=conv, name='conv_2d')
-        return model
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        """Convert Keras model to TFLite with quantization."""
-        activation_dtype = str(self.desc.get('activation_dtype', 'S8')).upper()
-        self.round_float16_weights(model)
-
-        converter = converter_for_batched_model(model, [self.desc['input_shape']])
-
-        if activation_dtype == 'FP16':
-            converter.optimizations = []
-            converter.target_spec.supported_types = [tf.float16]
-        elif activation_dtype == 'FP32':
-            converter.optimizations = []
-        
-        tflite_model = converter.convert()
-        with open(out_path, 'wb') as f:
-            f.write(tflite_model)
-
     def _select_cmsis_convolve_kernel(self) -> Dict[str, str]:
         info = resolve_convolve_kernel(
             activation_dtype=self.desc.get("activation_dtype", "S8"),
@@ -537,229 +436,40 @@ class OpConvolve(OperationBase):
             self._generate_int_reference(output_dir, kernel_info, weight_c_type)
             return
 
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
+        from helia_core_tester.generation.reference import weighted
 
-        # Load LiteRT model for tensor extraction
-        from helia_core_tester.generation.utils.litert_utils import (
-            load_litert_model,
-            get_operator_tensors_from_litert,
-            get_tensor_shape_from_litert,
-            get_tensor_quantization_from_litert,
-        )
-        
-        model, subgraph = load_litert_model(str(tflite_path))
-        
-        # Get operator tensors from the actual CONV_2D op.
-        # Dilated graphs can be lowered as SpaceToBatch -> Conv2D -> BatchToSpace,
-        # so selecting op index 0 can bind to the wrong tensors.
-        if len(subgraph.operators) == 0:
-            raise ValueError("No operators found in model")
-        
-        conv_op_index = 0
-        bts_op_index = None
-        hoisted_bias_data = None
-        try:
-            from ai_edge_litert import schema_py_generated as litert
+        spec = weighted.conv_spec(self.desc)
+        input_shape, output_shape = spec.input_shape, spec.output_shape
 
-            found_conv = False
-            for i, op in enumerate(subgraph.operators):
-                opcode = model.operatorCodes[op.opcodeIndex]
-                if not found_conv and opcode.builtinCode == litert.BuiltinOperator.CONV_2D:
-                    conv_op_index = i
-                    found_conv = True
-                if opcode.builtinCode == litert.BuiltinOperator.BATCH_TO_SPACE_ND:
-                    bts_op_index = i
+        def draw_input():
+            rng_state = self.rng.__getstate__()
+            self.rng = np.random.default_rng(self.seed)
+            data = self._sample_uniform(input_shape)
+            self.rng.__setstate__(rng_state)
+            return data
 
-            # Dilated graphs lower to SpaceToBatchND -> Conv2D -> BatchToSpaceND.
-            # TF's MLIR converter hoists the bias-add out of CONV_2D in this
-            # pattern: the CONV_2D op keeps only a zero-filled placeholder
-            # bias, and the real bias is applied via a separate ADD op after
-            # BatchToSpaceND. If we naively pull "biases" from the CONV_2D
-            # op's own inputs (as done above via get_operator_tensors_from_litert),
-            # we get that zero placeholder instead of the bias the golden
-            # output was actually computed with. Find the hoisted bias, if
-            # this pattern is present, so the CMSIS kernel is called with the
-            # same bias the golden reflects.
-            #
-            # Scoped to float kernels only: the same ADD-after-BatchToSpaceND
-            # shape exists in quantized (S8/S16) graphs too, but there the
-            # hoisted ADD operates in the quantized output domain (its
-            # operand is not a plain int32 accumulator bias), so reusing this
-            # extraction for quantized dtypes would silently substitute the
-            # wrong tensor. Those cases instead get an accumulator-scale bias
-            # written into the placeholder at conversion time by
-            # inject_hoisted_dilation_bias, and the placeholder read above is
-            # then the right tensor.
-            if float_kernel and bts_op_index is not None:
-                from helia_core_tester.generation.utils.litert_utils import get_tensor_data_from_litert
-
-                bts_outs = subgraph.operators[bts_op_index].outputs
-                bts_output_idx = int(bts_outs[0]) if bts_outs is not None and len(bts_outs) > 0 else None
-                if bts_output_idx is not None:
-                    for i in range(bts_op_index + 1, len(subgraph.operators)):
-                        op = subgraph.operators[i]
-                        opcode = model.operatorCodes[op.opcodeIndex]
-                        if opcode.builtinCode != litert.BuiltinOperator.ADD:
-                            continue
-                        if bts_output_idx not in list(op.inputs):
-                            continue
-                        for input_idx in op.inputs:
-                            if int(input_idx) == bts_output_idx:
-                                continue
-                            candidate = subgraph.tensors[int(input_idx)]
-                            candidate_data = get_tensor_data_from_litert(candidate, model)
-                            # Adversarial-review hardening: the quantized graph's
-                            # hoisted ADD operand clears the opcode/constness/ndim
-                            # gates too (dtype int16, quantized-output domain) --
-                            # only dtype and exact per-channel length make this
-                            # extraction safe. A broadcast scalar (shape (1,))
-                            # would otherwise be emitted and read out of bounds
-                            # by the kernel (output_dims.c elements).
-                            if (
-                                candidate_data is not None
-                                and candidate_data.ndim == 1
-                                and candidate_data.dtype.kind == "f"
-                                and candidate_data.shape[0] == int(self.desc["filter_shape"][3])
-                            ):
-                                hoisted_bias_data = candidate_data
-                                break
-                        break
-        except Exception:
-            conv_op_index = 0
-            bts_op_index = None
-            hoisted_bias_data = None
-
-        op_tensors = get_operator_tensors_from_litert(model, subgraph, conv_op_index)
-        
-        # Extract shapes from LiteRT
-        if not op_tensors['inputs']:
-            raise ValueError("No input tensors found")
-        if not op_tensors['outputs']:
-            raise ValueError("No output tensors found")
-        
-        input_tensor = None
-        output_tensor = None
-        if subgraph.inputs is not None and len(subgraph.inputs) > 0:
-            input_tensor = subgraph.tensors[int(subgraph.inputs[0])]
-        if subgraph.outputs is not None and len(subgraph.outputs) > 0:
-            output_tensor = subgraph.tensors[int(subgraph.outputs[0])]
-
-        expected_tensor = None
-        if bts_op_index is not None:
-            bts_outs = subgraph.operators[bts_op_index].outputs
-            if bts_outs is not None and len(bts_outs) > 0:
-                expected_tensor = subgraph.tensors[int(bts_outs[0])]
-
-        input_shape = get_tensor_shape_from_litert(input_tensor) if input_tensor is not None else None
-        output_shape = (
-            get_tensor_shape_from_litert(expected_tensor)
-            if expected_tensor is not None
-            else (get_tensor_shape_from_litert(output_tensor) if output_tensor is not None else None)
-        )
-        if input_shape is None:
-            input_shape = op_tensors['inputs'][0]['shape']
-        if output_shape is None:
-            output_shape = op_tensors['outputs'][0]['shape']
-
-        input_shape = tuple(input_shape)
-        output_shape = tuple(output_shape)
-        
-        # Extract quantization parameters from LiteRT
-        if expected_tensor is not None:
-            input_quant = (
-                get_tensor_quantization_from_litert(input_tensor)
-                if input_tensor is not None
-                else op_tensors['inputs'][0]['quantization']
-            )
-            output_quant = get_tensor_quantization_from_litert(expected_tensor)
-        elif input_tensor is not None and output_tensor is not None:
-            input_quant = get_tensor_quantization_from_litert(input_tensor)
-            output_quant = get_tensor_quantization_from_litert(output_tensor)
-        else:
-            input_quant = op_tensors['inputs'][0]['quantization']
-            output_quant = op_tensors['outputs'][0]['quantization']
-        
-        # Find weight quantization (from weight tensor in inputs)
-        weight_quant = None
-        for input_tensor_info in op_tensors['inputs']:
-            if input_tensor_info['data'] is not None and len(input_tensor_info['shape']) > 1:
-                weight_quant = input_tensor_info['quantization']
-                break
-        
-        quant_params = {
-            'input': input_quant or {'scale': 1.0, 'zero_point': 0, 'per_channel': False},
-            'output': output_quant or {'scale': 1.0, 'zero_point': 0, 'per_channel': False},
-            'weight': weight_quant or input_quant or {'scale': 1.0, 'zero_point': 0, 'per_channel': False}
-        }
-        
-        # Extract weights and biases from LiteRT
-        weights = op_tensors['weights']
-        biases = op_tensors['biases']
-        if hoisted_bias_data is not None:
-            # See the SpaceToBatchND/BatchToSpaceND comment above: this
-            # dilated-conv graph applies its real bias via a post-BatchToSpace
-            # ADD op, not inside CONV_2D. Use that bias instead of the zero
-            # placeholder CONV_2D carries, so the kernel call matches the
-            # golden's bias.
-            biases = hoisted_bias_data
-        # Weight tensor for TFLite Conv2D is OHWI in practice; shape will be (O, H, W, I)
-        if weights is not None:
-            filter_shape = tuple(weights.shape)
-        else:
-            # Fallback: descriptor is HWIO (kh, kw, in, out)
-            fs = tuple(self.desc['filter_shape'])
-            filter_shape = (fs[3], fs[0], fs[1], fs[2])  # OHWI
+        case = weighted.build_float_case(self.desc, spec, self.reference_rng("weights"), draw_input, float_dtype)
+        self._reference_call = case.call
+        input_q, weights, biases = case.input, case.weights, case.bias
+        float_reference = case.reference
+        output_data = case.output
+        filter_shape = tuple(weights.shape)  # OHWI
 
         builder = TemplateContextBuilder()
         input_dims = builder.nhwc_to_cmsis_dims(input_shape)
         output_dims = builder.nhwc_to_cmsis_dims(output_shape)
-
-        # CMSIS expects OHWI dims; for grouped convolutions filter c is input_ch / groups,
-        # and CMSIS derives groups = input_ch / filter_ch.
+        # CMSIS derives groups = input_ch / filter_ch.
         filter_dims = {
             'n': int(filter_shape[0]),
             'h': int(filter_shape[1]),
             'w': int(filter_shape[2]),
-            'c': int(filter_shape[3]),  # Use full input channels, NOT divided by groups
+            'c': int(filter_shape[3]),
         }
-
-        # Correct kernel size for padding math
         kernel_hw = (filter_dims['h'], filter_dims['w'])
-
-        # Build convolution parameters (fix SAME padding + offsets)
-        conv_params = builder.build_conv_params(
-            self.desc,
-            input_shape,
-            kernel_hw,
-            output_shape,
-            quant_params['input'],
-            quant_params['output']
-        )
-
-        # Generate input data and quantize to the interpreter's real input dtype
-        # IMPORTANT: Reset RNG to seed to ensure input data matches what was used
-        # during TFLite conversion (representative dataset generation may have advanced RNG)
-        rng_state = self.rng.__getstate__()
-        self.rng = np.random.default_rng(self.seed)
-        input_data = self._sample_uniform(input_shape)
-        self.rng.__setstate__(rng_state)
-        input_q = np.asarray(input_data, dtype=float_dtype)
-        interpreter_input_dtype = self.load_litert_interpreter(str(tflite_path)).get_input_details()[0]['dtype']
-
-        def float_reference(operands, _dtype=float_dtype, _in_dtype=interpreter_input_dtype):
-            return self.run_inference(
-                str(tflite_path), operands[0].astype(_in_dtype)
-            ).astype(_dtype)
-
-        output_data = float_reference([input_q])
-        has_biases = biases is not None and getattr(biases, "size", 0) > 0
+        unquantized = {'scale': 1.0, 'zero_point': 0, 'per_channel': False}
+        conv_params = builder.build_conv_params(self.desc, input_shape, kernel_hw, output_shape, unquantized, unquantized)
+        has_biases = biases is not None
         bias_dtype = kernel_info["bias_c_type"]
-        if has_biases and biases.dtype != float_dtype:
-            biases = biases.astype(float_dtype)
-        if weights is not None and weights.dtype != float_dtype:
-            weights = weights.astype(float_dtype)
 
         weight_format_macro = "ARM_NN_WEIGHT_FORMAT_STANDARD"
         weight_format = str(self._hint().get("weight_format", "STANDARD")).upper()

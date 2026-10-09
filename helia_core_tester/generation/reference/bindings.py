@@ -18,7 +18,7 @@ from typing import Callable, Dict, Optional, Sequence, Tuple
 
 import numpy as np
 
-ABI_VERSION = 4
+ABI_VERSION = 5
 MAX_RANK = 6
 
 OK = 0
@@ -291,6 +291,7 @@ _ENTRIES.update({
     "hct_ref_quantize_f32_s16": [_c_float, c_int32, _P(HctShape), c_void_p, c_void_p],
     "hct_ref_bmm_s8": [_P(HctBmmParams), _P(HctShape), c_void_p, _P(HctShape), c_void_p, _P(HctShape), c_void_p],
     "hct_ref_bmm_s16": [_P(HctBmmParams), _P(HctShape), c_void_p, _P(HctShape), c_void_p, _P(HctShape), c_void_p],
+    "hct_ref_bmm_f32": [_P(HctBmmParams), _P(HctShape), c_void_p, _P(HctShape), c_void_p, _P(HctShape), c_void_p],
     "hct_ref_lstm_s8": [_P(HctLstmParams), c_void_p, ctypes.POINTER(c_void_p), ctypes.POINTER(c_void_p), c_void_p],
     "hct_ref_lstm_s16": [_P(HctLstmParams), c_void_p, ctypes.POINTER(c_void_p), ctypes.POINTER(c_void_p), c_void_p],
     "hct_ref_svdf_s8": [_P(HctSvdfParams), c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, c_void_p],
@@ -646,7 +647,7 @@ class Bindings:
         return output
 
     def bmm(self, kind: str, params: ctypes.Structure, lhs: np.ndarray, rhs: np.ndarray, output_shape: Sequence[int]) -> np.ndarray:
-        dtype = {"s8": np.int8, "s16": np.int16}.get(kind)
+        dtype = {"s8": np.int8, "s16": np.int16, "f32": np.float32}.get(kind)
         if dtype is None:
             raise ValueError(f"unknown bmm kind {kind!r}")
         if not isinstance(params, HctBmmParams):

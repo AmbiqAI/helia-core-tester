@@ -3,10 +3,7 @@
 from typing import Dict, Any, Optional
 from pathlib import Path
 import numpy as np
-import tensorflow as tf
 from helia_core_tester.generation.ops._shared.base import OperationBase
-from helia_core_tester.generation.ops._shared.fixed_batch import converter_for_batched_model
-from helia_core_tester.generation.ops._shared.quant_knobs import kernel_init
 from helia_core_tester.generation.entry import check_entry_fault, resolve_entry
 from helia_core_tester.generation.harness import (
     ArgumentPool,
@@ -291,9 +288,8 @@ class OpDepthwiseConv(OperationBase):
         )
 
     def uses_reference(self) -> bool:
-        # Integer cases take their golden from the TFLM reference kernels; float
-        # cases stay on the converter path until the float suites move.
-        return str(self.desc.get("activation_dtype", "S8")).upper() in {"S8", "S16"}
+        # Every case takes its golden from the TFLM reference kernels (f32 for float cases).
+        return True
 
     def _generate_int_reference(self, output_dir: Path, kernel_info: Dict[str, Any], weight_c_type: str) -> None:
         """Render an s8/s16 (s8 or s4 weights) case whose golden comes from the
@@ -399,93 +395,6 @@ class OpDepthwiseConv(OperationBase):
         )
         (output_dir / "CMakeLists.txt").write_text(cmake_content)
 
-    def needs_keras_model(self) -> bool:
-        return True
-    
-    def build_keras_model(self) -> tf.keras.Model:
-        """Build Keras model for DepthwiseConv2D operation."""
-        input_shape = self.desc['input_shape']
-        filter_shape = self.desc['filter_shape']
-        
-        # Build model with float32 inputs (will be quantized later)
-        inputs = tf.keras.Input(shape=input_shape[1:], dtype=tf.float32, name='input')
-        
-        # Normalize padding (match reference implementation)
-        padding = self.desc.get('padding', 'valid')
-        if padding is not None:
-            padding = str(padding).lower()
-        else:
-            padding = 'valid'
-        
-        dwconv_kwargs = {
-            'kernel_size': filter_shape[0:2],
-            'strides': self.desc.get('strides', [1, 1]),
-            'padding': padding,
-            'depth_multiplier': self.desc.get('depth_multiplier', 1),
-            'use_bias': self.desc.get('use_bias', True),
-            # Fixed seeds keep the weights a function of the descriptor alone, so the
-            # goldens reproduce regardless of case order or the Keras global RNG state
-            # the process happens to be in.
-            'depthwise_initializer': kernel_init(self.desc, 1234),
-            'name': 'depthwise_conv'
-        }
-        
-        if 'dilation' in self.desc:
-            dilation = self.desc['dilation']
-            if isinstance(dilation, (int, float)):
-                dilation = [int(dilation), int(dilation)]
-            elif isinstance(dilation, (list, tuple)):
-                if len(dilation) != 2:
-                    raise ValueError(f"Invalid dilation: {dilation}. Must be 2 integers or a single integer")
-                dilation = [int(dilation[0]), int(dilation[1])]
-            else:
-                raise ValueError(f"Invalid dilation type: {type(dilation)}. Must be int or list/tuple of 2 ints")
-            
-            if any(d <= 0 for d in dilation):
-                raise ValueError(f"Invalid dilation values: {dilation}. Must be positive integers")
-            
-            dwconv_kwargs['dilation_rate'] = tuple(dilation)
-        
-        if dwconv_kwargs['use_bias']:
-            # Float cases only: integer cases use the reference kernels.
-            dwconv_kwargs['bias_initializer'] = tf.keras.initializers.RandomUniform(minval=-1.0, maxval=1.0, seed=4321)
-        
-        dwconv = tf.keras.layers.DepthwiseConv2D(**dwconv_kwargs)
-        x = dwconv(inputs)
-        
-        activation = self.desc.get('activation', 'NONE')
-        if activation == 'RELU':
-            x = tf.keras.layers.ReLU()(x)
-        elif activation == 'RELU6':
-            x = tf.keras.layers.ReLU(max_value=6)(x)
-        elif activation == 'TANH':
-            x = tf.keras.layers.Activation('tanh')(x)
-        elif activation == 'SIGMOID':
-            x = tf.keras.layers.Activation('sigmoid')(x)
-        elif activation != 'NONE':
-            raise ValueError(f"Unsupported activation: {activation}")
-            
-        model = tf.keras.Model(inputs=inputs, outputs=x)
-        return model
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        """Convert Keras model to TFLite with quantization."""
-        self.round_float16_weights(model)
-        converter = converter_for_batched_model(model, [self.desc['input_shape']])
-        
-        activation_dtype = str(self.desc.get('activation_dtype', 'S8')).upper()
-        
-        if activation_dtype == 'FP16':
-            converter.optimizations = []
-            converter.target_spec.supported_types = [tf.float16]
-        elif activation_dtype == 'FP32':
-            converter.optimizations = []
-
-        
-        tflite_model = converter.convert()
-        with open(out_path, 'wb') as f:
-            f.write(tflite_model)
-
     def _select_cmsis_depthwise_conv_kernel(self) -> Dict[str, str]:
         info = resolve_depthwise_conv_kernel(
             activation_dtype=self.desc.get("activation_dtype", "S8"),
@@ -547,316 +456,28 @@ class OpDepthwiseConv(OperationBase):
             self._generate_int_reference(output_dir, kernel_info, weight_c_type)
             return
 
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
-        
-        # Load LiteRT model for tensor extraction
-        from helia_core_tester.generation.utils.litert_utils import (
-            load_litert_model,
-            get_operator_tensors_from_litert,
-            get_tensor_shape_from_litert,
-            get_tensor_quantization_from_litert,
-            run_inference_litert_tensor,
-        )
-        
-        model, subgraph = load_litert_model(str(tflite_path))
-        
-        # Get operator tensors.
-        if len(subgraph.operators) == 0:
-            raise ValueError("No operators found in model")
+        from helia_core_tester.generation.reference import weighted
 
-        dw_op_index = 0
-        bts_op_index = None
-        try:
-            from ai_edge_litert import schema_py_generated as litert
-
-            found_dw = False
-            for i, op in enumerate(subgraph.operators):
-                opcode = model.operatorCodes[op.opcodeIndex]
-                if not found_dw and opcode.builtinCode == litert.BuiltinOperator.DEPTHWISE_CONV_2D:
-                    dw_op_index = i
-                    found_dw = True
-                if opcode.builtinCode == litert.BuiltinOperator.BATCH_TO_SPACE_ND:
-                    bts_op_index = i
-        except Exception:
-            # Fallback to first op if we cannot inspect opcodes.
-            dw_op_index = 0
-            bts_op_index = None
-
-        op_tensors = get_operator_tensors_from_litert(model, subgraph, dw_op_index)
-        
-        # Extract shapes from LiteRT
-        if not op_tensors['inputs']:
-            raise ValueError("No input tensors found")
-        if not op_tensors['outputs']:
-            raise ValueError("No output tensors found")
-        
-        # Prefer model I/O tensors when available for input quantization.
-        input_tensor = None
-        output_tensor = None
-        if subgraph.inputs is not None and len(subgraph.inputs) > 0:
-            input_tensor = subgraph.tensors[int(subgraph.inputs[0])]
-        if subgraph.outputs is not None and len(subgraph.outputs) > 0:
-            output_tensor = subgraph.tensors[int(subgraph.outputs[0])]
-
-        # Get shapes from LiteRT.
-        # Use model input/output shapes when available so CMSIS parameters map to
-        # the true external tensor contract, not internal lowered tensors.
-        input_shape = get_tensor_shape_from_litert(input_tensor) if input_tensor is not None else None
-        output_shape = get_tensor_shape_from_litert(output_tensor) if output_tensor is not None else None
-        if input_shape is None:
-            input_shape = op_tensors['inputs'][0]['shape']
-        if output_shape is None:
-            output_shape = op_tensors['outputs'][0]['shape']
-
-        # If BatchToSpaceND exists, use its output tensor shape.
-        # This matches the dilated depthwise output
-        # (SpaceToBatch -> Depthwise -> BatchToSpace), which CMSIS should match.
-        expected_tensor = None
-        if bts_op_index is not None:
-            bts_outs = subgraph.operators[bts_op_index].outputs
-            if bts_outs is not None and len(bts_outs) > 0:
-                expected_tensor = subgraph.tensors[int(bts_outs[0])]
-                expected_shape = get_tensor_shape_from_litert(expected_tensor)
-                if expected_shape is not None:
-                    output_shape = expected_shape
-        
-        # Ensure shapes are tuples
-        if input_shape is not None:
-            input_shape = tuple(input_shape)
-        if output_shape is not None:
-            output_shape = tuple(output_shape)
-        
-        if input_shape is None:
-            raise ValueError("Unable to resolve input shape from model I/O or depthwise op tensor")
-        if output_shape is None:
-            raise ValueError("Unable to resolve output shape from model I/O or selected expected tensor")
-
-        # Ensure shapes are 4D (NHWC)
-        if len(input_shape) < 4:
-            input_shape = (1,) + input_shape if len(input_shape) == 3 else input_shape
-        if len(output_shape) < 4:
-            output_shape = (1,) + output_shape if len(output_shape) == 3 else output_shape
-        
-        # For depthwise conv with dilation, LiteRT may return incorrect output channels
-        # Calculate correct output_channels from descriptor and fix output_shape if needed
-        depth_multiplier = self.desc.get('depth_multiplier', 1)
-        input_channels = input_shape[3] if len(input_shape) > 3 else 1
-        expected_output_channels = input_channels * depth_multiplier
-        if len(output_shape) > 3 and output_shape[3] != expected_output_channels:
-            # Fix output_shape to use correct output channels
-            output_shape = tuple(list(output_shape[:3]) + [expected_output_channels])
-        
-        # Extract quantization parameters.
-        # Use model I/O quantization when available, unless we explicitly target
-        # BatchToSpaceND output for dilated depthwise lowering.
-        if expected_tensor is not None:
-            input_quant = (
-                get_tensor_quantization_from_litert(input_tensor)
-                if input_tensor is not None
-                else op_tensors['inputs'][0]['quantization']
-            )
-            output_quant = get_tensor_quantization_from_litert(expected_tensor)
-        elif input_tensor is not None and output_tensor is not None:
-            input_quant = get_tensor_quantization_from_litert(input_tensor)
-            output_quant = get_tensor_quantization_from_litert(output_tensor)
-        else:
-            input_quant = op_tensors['inputs'][0]['quantization']
-            output_quant = op_tensors['outputs'][0]['quantization']
-        
-        # Find weight quantization (from weight tensor in inputs)
-        weight_quant = None
-        for input_tensor_info in op_tensors['inputs']:
-            if input_tensor_info['data'] is not None and len(input_tensor_info['shape']) > 1:
-                weight_quant = input_tensor_info['quantization']
-                break
-        
-        quant_params = {
-            'input': input_quant or {'scale': 1.0, 'zero_point': 0, 'per_channel': False},
-            'output': output_quant or {'scale': 1.0, 'zero_point': 0, 'per_channel': False},
-            'weight': weight_quant or input_quant or {'scale': 1.0, 'zero_point': 0, 'per_channel': False}
-        }
-        
-        # Extract weights and biases from LiteRT
-        weights = op_tensors['weights']
-        biases = op_tensors['biases']
-        # Calculate expected output_channels to validate bias size
-        depth_multiplier = self.desc.get('depth_multiplier', 1)
-        input_channels = input_shape[3] if len(input_shape) > 3 else 1
-        expected_output_channels = input_channels * depth_multiplier
-        
-        # Validate and fix biases if needed
-        # For depthwise conv with dilation, LiteRT may extract wrong bias tensor
-        if biases is not None:
-            bias_shape = biases.shape if hasattr(biases, 'shape') else None
-            if bias_shape is not None:
-                # If bias is 2D (like (2, 2) for dilation params), it's wrong
-                if len(bias_shape) > 1:
-                    print(f"Warning: Biases have wrong shape {bias_shape}, searching for correct 1D bias tensor...")
-                    biases = None  # Reset to search for correct one
-                # If bias is 1D but wrong size, search for correct one
-                elif len(bias_shape) == 1 and bias_shape[0] != expected_output_channels:
-                    print(f"Warning: Biases have wrong size {bias_shape[0]} (expected {expected_output_channels}), searching for correct bias tensor...")
-                    biases = None  # Reset to search for correct one
-        
-        # If biases are still wrong or None, search all tensors for correct bias
-        if biases is None or (hasattr(biases, 'shape') and len(biases.shape) == 1 and biases.shape[0] != expected_output_channels):
-            from helia_core_tester.generation.utils.litert_utils import get_tensor_data_from_litert, get_tensor_shape_from_litert
-            op = subgraph.operators[dw_op_index]
-            input_indices = set(subgraph.inputs)
-            output_indices = set(subgraph.outputs)
-            
-            # Search all tensors for a 1D tensor matching expected_output_channels
-            for tensor_idx, tensor in enumerate(subgraph.tensors):
-                if tensor_idx in input_indices or tensor_idx in output_indices:
-                    continue
-                if tensor_idx in op.inputs and tensor_idx != op.inputs[0]:  # Skip input tensor
-                    continue
-                
-                tensor_data = get_tensor_data_from_litert(tensor, model)
-                tensor_shape = get_tensor_shape_from_litert(tensor)
-                
-                if tensor_data is not None and tensor_shape is not None:
-                    # Look for 1D tensor with correct size (bias tensor)
-                    if len(tensor_shape) == 1 and tensor_shape[0] == expected_output_channels:
-                        biases = tensor_data
-                        print(f"Found correct bias tensor: shape={tensor_shape}, size={tensor_data.size}")
-                        break
-        
-        
-        # Weight tensor for TFLite DepthwiseConv2D can be in different formats:
-        # - TFLite format: [1, H, W, C_OUT] where C_OUT = input_channels * depth_multiplier
-        # - Descriptor format: [H, W, I, M] where I=input_channels, M=depth_multiplier
-        # CMSIS expects filter_dims: n=depth_multiplier, h=H, w=W, c=output_channels
-        # Note: filter_dims.c must be output_channels (not input_channels) because CMSIS-NN
-        # uses it as the first dimension in the transposed filter: {filter_dims->c, h, w, n}
-        # A descriptor shape can start with 1 (kernel height 1), so only a shape taken from the
-        # model's weights may be read as TFLite format.
-        descriptor_filter_shape = True
-        if weights is not None:
-            filter_shape = tuple(weights.shape)
-            descriptor_filter_shape = False
-        else:
-            # Fallback: descriptor is [H, W, I, M]
-            fs = tuple(self.desc['filter_shape'])
-            filter_shape = fs
-        
         builder = TemplateContextBuilder()
+        spec = weighted.dwconv_spec(self.desc)
+        input_shape, output_shape = spec.input_shape, spec.output_shape
+        case = weighted.build_float_case(
+            self.desc, spec, self.reference_rng("weights"),
+            lambda: self._sample_uniform(input_shape, dtype=float_dtype), float_dtype,
+        )
+        self._reference_call = case.call
+        input_data, weights, biases = case.input, case.weights, case.bias
+        has_biases = biases is not None
+        _, kh, kw, out_ch = spec.weight_shape
         input_dims = builder.nhwc_to_cmsis_dims(input_shape)
         output_dims = builder.nhwc_to_cmsis_dims(output_shape)
-        
-        # For depthwise conv, CMSIS expects:
-        # filter_dims.n = depth_multiplier (usually 1)
-        # filter_dims.h = kernel_h
-        # filter_dims.w = kernel_w
-        # filter_dims.c = output_channels 
-        input_channels = input_shape[3]
-        
-        # For depthwise conv, output_channels = input_channels * depth_multiplier
-        # Use descriptor depth_multiplier to calculate correct output_channels
-        # (LiteRT may return incorrect output shape for dilated depthwise conv)
-        depth_multiplier = self.desc.get('depth_multiplier', 1)
-        output_channels = input_channels * depth_multiplier
-        
-        # Validate against LiteRT output shape if available (for debugging)
-        if output_shape[3] != output_channels:
-            print(f"Warning: LiteRT output_channels ({output_shape[3]}) != calculated ({output_channels}). Using calculated value.")
-    
-        
-        if len(filter_shape) == 4:
-            # Check if TFLite format [1, H, W, C_OUT] or descriptor format [H, W, I, M]
-            is_tflite_format = not descriptor_filter_shape and filter_shape[0] == 1
-            if is_tflite_format:
-                # TFLite format: [1, H, W, C_OUT]
-                # Extract H and W from indices 1 and 2
-                # Note: filter_dims.n should be 1 (not depth_multiplier)
-                # The depth_multiplier is stored in dw_conv_params.ch_mult
-                filter_dims = {
-                    'n': 1,  # Always 1 for depthwise conv 
-                    'h': int(filter_shape[1]),   # kernel_h (from index 1)
-                    'w': int(filter_shape[2]),   # kernel_w (from index 2)
-                    'c': int(output_channels),   # output_channels (C_OUT from index 3)
-                }
-            else:
-                # Descriptor format: [H, W, I, M]
-                # Note: filter_dims.n should be 1 (not depth_multiplier) - 
-                # The depth_multiplier is stored in dw_conv_params.ch_mult
-                filter_dims = {
-                    'n': 1,  # Always 1 for depthwise conv
-                    'h': int(filter_shape[0]),   # kernel_h
-                    'w': int(filter_shape[1]),   # kernel_w
-                    'c': int(output_channels),   # output_channels 
-                }
-        elif len(filter_shape) == 3:
-            # Format: [H, W, I] (depth_multiplier=1)
-            filter_dims = {
-                'n': 1,  # Always 1 for depthwise conv 
-                'h': int(filter_shape[0]),
-                'w': int(filter_shape[1]),
-                'c': int(output_channels),  # output_channels
-            }
-        elif len(filter_shape) < 3:
-            # Fallback: use descriptor filter_shape if available
-            if 'filter_shape' in self.desc:
-                desc_filter = self.desc['filter_shape']
-                if isinstance(desc_filter, (list, tuple)) and len(desc_filter) >= 2:
-                    filter_dims = {
-                        'n': 1,
-                        'h': int(desc_filter[0]),
-                        'w': int(desc_filter[1]),
-                        'c': int(output_channels),
-                    }
-                else:
-                    raise ValueError(f"Unsupported filter shape from descriptor: {desc_filter}")
-            else:
-                raise ValueError(f"Unsupported filter shape: {filter_shape} (and no descriptor filter_shape available)")
-        else:
-            raise ValueError(f"Unsupported filter shape: {filter_shape}")
-        
-        
-        # Correct kernel size for padding math
-        kernel_hw = (filter_dims['h'], filter_dims['w'])
-        
-        # Build depthwise convolution parameters
-        dw_conv_params = builder.build_dw_conv_params(
-            self.desc,
-            input_shape,
-            kernel_hw,
-            output_shape,
-            quant_params['input'],
-            quant_params['output']
-        )
+        # filter_dims.n is 1; the depth multiplier travels in dw_conv_params.ch_mult.
+        filter_dims = {"n": 1, "h": kh, "w": kw, "c": out_ch}
+        unquantized = {'scale': 1.0, 'zero_point': 0, 'per_channel': False}
+        dw_conv_params = builder.build_dw_conv_params(self.desc, input_shape, (kh, kw), output_shape, unquantized, unquantized)
         if float_kernel:
-            if weights is not None and weights.dtype != float_dtype:
-                weights = weights.astype(float_dtype)
-            has_biases = biases is not None and getattr(biases, "size", 0) > 0
-            if has_biases and biases.dtype != float_dtype:
-                biases = biases.astype(float_dtype)
-
-            input_data = self._sample_uniform(input_shape, dtype=float_dtype)
-
-            dw_out_tensor_idx = int(subgraph.operators[dw_op_index].outputs[0])
-            if bts_op_index is not None:
-                bts_outs = subgraph.operators[bts_op_index].outputs
-                out_tensor_idx = int(bts_outs[0]) if bts_outs is not None and len(bts_outs) > 0 else dw_out_tensor_idx
-            else:
-                out_tensor_idx = dw_out_tensor_idx
-            interpreter_input_dtype = self.load_litert_interpreter(str(tflite_path)).get_input_details()[0]['dtype']
-            def float_reference(
-                operands,
-                _dtype=float_dtype,
-                _in_dtype=interpreter_input_dtype,
-                _out_idx=out_tensor_idx,
-            ):
-                return run_inference_litert_tensor(
-                    str(tflite_path), operands[0].astype(_in_dtype), _out_idx
-                ).astype(_dtype)
-
-            output_data = float_reference([input_data])
-
             output_data, nonfinite_context = self.apply_nonfinite_policy(
-                output_data, reference=float_reference, inputs=[input_data]
+                case.output, reference=case.reference, inputs=[input_data]
             )
 
             weights_array_str = builder.format_array_as_c_literal(weights) if weights is not None else ""

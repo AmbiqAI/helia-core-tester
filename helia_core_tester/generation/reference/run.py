@@ -164,10 +164,11 @@ def run_reference(call: ReferenceCall, lib: Optional[b.Bindings] = None) -> np.n
         if out.dtype != np.dtype(call.output_dtype) or tuple(out.shape) != tuple(call.output_shape):
             raise TypeError(f"{call.kernel} produced {out.dtype}{out.shape}, call expects {call.output_dtype}{call.output_shape}")
         return out
-    if call.kernel in ("bmm_s8", "bmm_s16"):
+    if call.kernel in ("bmm_s8", "bmm_s16", "bmm_f32"):
         p = call.params
         params = b.HctBmmParams(
-            *(int(p[k]) for k in ("lhs_offset", "rhs_offset", "output_offset", "output_multiplier", "output_shift")),
+            *(int(p.get(k, 0) if call.kernel == "bmm_f32" else p[k])
+              for k in ("lhs_offset", "rhs_offset", "output_offset", "output_multiplier", "output_shift")),
             _activation(p),
         )
         out = lib.bmm(call.kernel[4:], params, _tensor(call.tensors, "lhs"), _tensor(call.tensors, "rhs"), call.output_shape)

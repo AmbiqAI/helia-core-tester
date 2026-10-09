@@ -48,15 +48,15 @@ static const cmsis_nn_fc_params_f16 fully_connected_float_default_f16_fc_params 
 
 // Weights
 static const float16_t fully_connected_float_default_f16_weights[] = {
-    (float16_t)0.287109375f, (float16_t)-0.342529297f, (float16_t)-0.026535034f, (float16_t)-0.272705078f, (float16_t)0.510253906f, (float16_t)0.150390625f, (float16_t)0.467041016f, (float16_t)-0.188354492f, (float16_t)-0.520996094f, (float16_t)-0.51171875f, (float16_t)0.390136719f, (float16_t)0.430664062f, (float16_t)0.560546875f, (float16_t)-0.037384033f, (float16_t)0.084106445f, (float16_t)0.14050293f,
-    (float16_t)0.347167969f, (float16_t)0.122924805f, (float16_t)0.545410156f, (float16_t)-0.418212891f, (float16_t)-0.110351562f, (float16_t)-5.90133667e-03f, (float16_t)-0.254394531f, (float16_t)0.541992188f, (float16_t)-0.352539062f, (float16_t)0.579589844f, (float16_t)-0.234985352f, (float16_t)-0.061340332f, (float16_t)0.212402344f, (float16_t)-0.354003906f, (float16_t)-0.119384766f, (float16_t)0.294677734f,
-    (float16_t)0.585449219f, (float16_t)0.505371094f, (float16_t)0.519042969f, (float16_t)0.258056641f, (float16_t)0.33984375f, (float16_t)0.568847656f, (float16_t)0.368652344f, (float16_t)0.391113281f, (float16_t)-0.232543945f, (float16_t)0.247802734f, (float16_t)0.560058594f, (float16_t)-0.173461914f, (float16_t)0.052185059f, (float16_t)-0.027099609f, (float16_t)0.182617188f, (float16_t)0.366210938f,
-    (float16_t)-0.095214844f, (float16_t)-0.336181641f, (float16_t)-0.098449707f, (float16_t)0.30859375f, (float16_t)0.517578125f, (float16_t)-0.035003662f, (float16_t)0.044342041f, (float16_t)-0.016281128f, (float16_t)0.040222168f, (float16_t)0.092712402f, (float16_t)-0.248901367f, (float16_t)-0.2578125f
+    (float16_t)-0.561035156f, (float16_t)-0.055908203f, (float16_t)-0.297851562f, (float16_t)0.559570312f, (float16_t)-0.373535156f, (float16_t)-0.448242188f, (float16_t)0.580566406f, (float16_t)0.489990234f, (float16_t)-0.493896484f, (float16_t)0.017593384f, (float16_t)0.349121094f, (float16_t)0.590820312f, (float16_t)-6.649017334e-03f, (float16_t)-0.201904297f, (float16_t)0.165527344f, (float16_t)-0.16809082f,
+    (float16_t)-0.194213867f, (float16_t)-0.321289062f, (float16_t)0.060791016f, (float16_t)0.249267578f, (float16_t)0.261474609f, (float16_t)-0.169799805f, (float16_t)-0.190917969f, (float16_t)0.135620117f, (float16_t)-0.01574707f, (float16_t)0.486572266f, (float16_t)-0.317871094f, (float16_t)-0.298828125f, (float16_t)0.515136719f, (float16_t)-0.561035156f, (float16_t)-0.120117188f, (float16_t)-0.509765625f,
+    (float16_t)-0.06463623f, (float16_t)-0.436035156f, (float16_t)0.188598633f, (float16_t)0.308837891f, (float16_t)0.522460938f, (float16_t)-0.160400391f, (float16_t)-0.575195312f, (float16_t)-0.414550781f, (float16_t)0.345458984f, (float16_t)-0.257080078f, (float16_t)0.180419922f, (float16_t)0.286376953f, (float16_t)-0.160522461f, (float16_t)-0.497314453f, (float16_t)-0.185302734f, (float16_t)0.179321289f,
+    (float16_t)0.575195312f, (float16_t)0.395263672f, (float16_t)0.447021484f, (float16_t)0.059143066f, (float16_t)-0.486816406f, (float16_t)0.424072266f, (float16_t)0.078125f, (float16_t)-0.154663086f, (float16_t)-0.09375f, (float16_t)0.459960938f, (float16_t)-0.536621094f, (float16_t)-0.015472412f
 };
 
 // Biases
 static const float16_t fully_connected_float_default_f16_biases[] = {
-    (float16_t)0.080871582f, (float16_t)-0.224975586f, (float16_t)0.219482422f, (float16_t)0.21472168f, (float16_t)0.221557617f
+    (float16_t)-0.003479004f, (float16_t)-0.027450562f, (float16_t)0.10760498f, (float16_t)0.244995117f, (float16_t)-0.12310791f
 };
 
 // Input data (for testing)
@@ -66,7 +66,7 @@ static const float16_t fully_connected_float_default_f16_input[] = {
 
 // Expected output (golden)
 static const float16_t fully_connected_float_default_f16_expected_output[] = {
-    (float16_t)0.150878906f, (float16_t)-0.185668945f, (float16_t)-0.841308594f, (float16_t)1.377929688f, (float16_t)-0.284179688f
+    (float16_t)0.213256836f, (float16_t)-0.217041016f, (float16_t)-0.024047852f, (float16_t)0.295654297f, (float16_t)0.817382812f
 };
 
 #endif

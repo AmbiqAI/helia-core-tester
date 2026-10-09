@@ -3,15 +3,17 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * BatchMatMul entries of the hct_ref shim (see hct_ref.h), called as TFLM's micro
- * EvalInt8/EvalInt16 call reference_ops::BatchMatMul: RHS first, both operands
- * with the accumulation depth innermost.
+ * EvalInt8/EvalInt16/EvalFloat call reference_ops::BatchMatMul: RHS first, both
+ * operands with the accumulation depth innermost.
  */
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <limits>
 
 #include "hct_ref.h"
 #include "hct_ref_internal.h"
+#include "tensorflow/lite/kernels/internal/common.h"
 #include "tensorflow/lite/kernels/internal/reference/batch_matmul.h"
 #include "tensorflow/lite/kernels/internal/types.h"
 
@@ -55,6 +57,16 @@ int32_t check_bmm_shapes(const HctShape *lhs, const HctShape *rhs, const HctShap
     return HCT_REF_OK;
 }
 
+// BatchMatMulEval hands the LHS over with its row/column dims swapped (SwapRowColumnDims)
+// while its data stays [M, K]; the RHS goes as [N, K], data and shape alike.
+HctShape swap_lhs(const HctShape *lhs_shape)
+{
+    HctShape swapped = *lhs_shape;
+    swapped.dims[swapped.rank - 2] = lhs_shape->dims[lhs_shape->rank - 1];
+    swapped.dims[swapped.rank - 1] = lhs_shape->dims[lhs_shape->rank - 2];
+    return swapped;
+}
+
 template <typename T, typename AccumT>
 int32_t bmm(const HctBmmParams *params,
             const HctShape *lhs_shape,
@@ -95,11 +107,7 @@ int32_t bmm(const HctBmmParams *params,
     p.output_shift = params->output_shift;
     p.quantized_activation_min = params->act.min;
     p.quantized_activation_max = params->act.max;
-    // BatchMatMulEval hands the LHS over with its row/column dims swapped (SwapRowColumnDims)
-    // while its data stays [M, K]; the RHS goes as [N, K], data and shape alike.
-    HctShape lhs_swapped = *lhs_shape;
-    lhs_swapped.dims[lhs_swapped.rank - 2] = lhs_shape->dims[lhs_shape->rank - 1];
-    lhs_swapped.dims[lhs_swapped.rank - 1] = lhs_shape->dims[lhs_shape->rank - 2];
+    const HctShape lhs_swapped = swap_lhs(lhs_shape);
     tflite::reference_ops::BatchMatMul<T, AccumT>(p, to_runtime(rhs_shape), rhs, to_runtime(&lhs_swapped), lhs,
                                                   to_runtime(output_shape), output);
     return HCT_REF_OK;
@@ -129,6 +137,45 @@ int32_t hct_ref_bmm_s16(const HctBmmParams *params,
                         int16_t *output)
 {
     return bmm<int16_t, int64_t>(params, lhs_shape, lhs, rhs_shape, rhs, output_shape, output);
+}
+
+int32_t hct_ref_bmm_f32(const HctBmmParams *params,
+                        const HctShape *lhs_shape,
+                        const float *lhs,
+                        const HctShape *rhs_shape,
+                        const float *rhs,
+                        const HctShape *output_shape,
+                        float *output)
+{
+    if (params == nullptr)
+    {
+        return HCT_REF_E_NULL;
+    }
+    HCT_TRY(check_bmm_shapes(lhs_shape, rhs_shape, output_shape));
+    HCT_TRY(check_buffers(lhs, rhs, output));
+    HCT_TRY(check_activation<float>(params->act));
+    if (params->lhs_offset != 0 || params->rhs_offset != 0 || params->output_offset != 0 ||
+        params->output_multiplier != 0 || params->output_shift != 0)
+    {
+        return HCT_REF_E_PARAM;
+    }
+    const HctShape lhs_swapped = swap_lhs(lhs_shape);
+    tflite::reference_ops::BatchMatMul<float, float, float>(to_runtime(rhs_shape), rhs, to_runtime(&lhs_swapped), lhs,
+                                                            to_runtime(output_shape), output);
+    // TFLM's BATCH_MATMUL has no fused activation; a finite bound clamps as the CMSIS kernel does.
+    if (std::isfinite(params->act.fmin) || std::isfinite(params->act.fmax))
+    {
+        int64_t count = 1;
+        for (int32_t i = 0; i < output_shape->rank; ++i)
+        {
+            count *= output_shape->dims[i];
+        }
+        for (int64_t i = 0; i < count; ++i)
+        {
+            output[i] = tflite::ActivationFunctionWithMinMax(output[i], params->act.fmin, params->act.fmax);
+        }
+    }
+    return HCT_REF_OK;
 }
 
 } // extern "C"

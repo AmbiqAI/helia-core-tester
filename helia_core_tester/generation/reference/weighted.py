@@ -314,6 +314,64 @@ def build_weighted_case(
                         weights_offset, call)
 
 
+@dataclass
+class FloatWeightedCase:
+    """One float case: operands in the kernel's float dtype and the f32 reference."""
+
+    input: np.ndarray
+    weights: np.ndarray  # kernel layout
+    bias: Optional[np.ndarray]
+    output: np.ndarray
+    reference: Callable[[Any], np.ndarray]  # operands [input] -> golden, for the non-finite policy
+    call: ReferenceCall
+
+
+def float_bounds(desc: Mapping[str, Any]) -> Tuple[float, float]:
+    """Fused activation range, narrowed by the descriptor's activation_min/max."""
+    fmin, fmax = params.float_activation_range(str(desc.get("activation", "NONE")))
+    fmin = max(fmin, float(desc.get("activation_min", -np.inf)))
+    fmax = min(fmax, float(desc.get("activation_max", np.inf)))
+    if not fmin <= fmax:
+        raise ReferenceCaseError(f"{desc.get('name')}: activation range [{fmin}, {fmax}] is empty")
+    return fmin, fmax
+
+
+def build_float_case(
+    desc: Mapping[str, Any],
+    spec: WeightedSpec,
+    rng: np.random.Generator,
+    draw_input: Callable[[], np.ndarray],
+    float_dtype: type,
+) -> FloatWeightedCase:
+    """Draw a float case (Glorot weights, a +/-0.25 bias, the operator's input draw) and
+    run the TFLM f32 kernel for the golden. FP16 operands are rounded to half first; the
+    reference computes in f32 and the golden is cast back once, as the f16 kernels do."""
+    if float_dtype not in (np.float32, np.float16):
+        raise ReferenceCaseError(f"{desc.get('name')}: float cases are f32 or f16, got {float_dtype}")
+    gain = float(desc.get("weight_gain", 1.0))
+    w = draw.glorot_uniform(rng, spec.weight_shape, spec.fan_in, spec.fan_out, gain=gain).astype(float_dtype)
+    channels = spec.weight_shape[spec.channel_axis]
+    bias = rng.uniform(-0.25, 0.25, size=(channels,)).astype(float_dtype) if desc.get("use_bias", True) else None
+    x = np.asarray(draw_input()).astype(float_dtype).reshape(spec.input_shape)
+    fmin, fmax = float_bounds(desc)
+    p = dict(spec.params)
+    p["act"] = {"min": 0, "max": 0, "fmin": fmin, "fmax": fmax}
+
+    def call_for(x_in: np.ndarray) -> ReferenceCall:
+        return ReferenceCall(
+            f"{spec.family}_f32", p,
+            {"input": np.ascontiguousarray(x_in, dtype=np.float32), "filter": w.astype(np.float32),
+             "bias": None if bias is None else bias.astype(np.float32)},
+            spec.output_shape, "float32",
+        )
+
+    def reference(operands) -> np.ndarray:
+        return run_reference(call_for(np.asarray(operands[0]).reshape(spec.input_shape))).astype(float_dtype)
+
+    call = call_for(x)
+    return FloatWeightedCase(x, w, bias, run_reference(call).astype(float_dtype), reference, call)
+
+
 def _quantized_call(kernel, spec, x_q, w_q, bias_q, requant, in_q, out_q, act_min, act_max, weights_offset, quant, filter_shape=None, w_store=None):
     p = dict(spec.params)
     p.update(

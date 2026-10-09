@@ -1,3 +1,8 @@
+# f16 tolerance note: arm_batch_matmul_f16 accumulates in fp16 lanes, so its error grows with
+# the depth K, not with |output|. Emulating sequential fp16 accumulation over U(-1, 1) operands
+# (2e5 draws per K) reaches 0.98x the FP16 default (1e-3/1e-3) at K 3-4, 1.6x at K 8 and 2.2x at
+# K 9; fresh seeds pushed batch_matmul_float_nonfinite_nan_f16 1.17x over on the FVP. The f16
+# cases therefore set 2e-3 (K <= 4) or 3e-3 (K 8-9), both under 0.75x of the emulated worst case.
 operator: BatchMatMul
 name: batch_matmul_float_default_f32
 suite: float
@@ -87,6 +92,10 @@ input_2_shape:
 - 2
 adj_x: false
 adj_y: false
+# fp16 accumulation over K=3: see the f16 tolerance note at the top of this file.
+comparison:
+  atol: 0.002
+  rtol: 0.002
 ---
 operator: BatchMatMul
 name: batch_matmul_float_batched_f16
@@ -107,6 +116,10 @@ input_2_shape:
 - 5
 adj_x: false
 adj_y: false
+# fp16 accumulation over K=3: see the f16 tolerance note at the top of this file.
+comparison:
+  atol: 0.002
+  rtol: 0.002
 ---
 operator: BatchMatMul
 name: batch_matmul_float_adj_y_f16
@@ -127,6 +140,10 @@ input_2_shape:
 - 4
 adj_x: false
 adj_y: true
+# fp16 accumulation over K=4: see the f16 tolerance note at the top of this file.
+comparison:
+  atol: 0.002
+  rtol: 0.002
 ---
 operator: BatchMatMul
 name: batch_matmul_float_adj_x_f16
@@ -147,6 +164,10 @@ input_2_shape:
 - 2
 adj_x: true
 adj_y: false
+# fp16 accumulation over K=3: see the f16 tolerance note at the top of this file.
+comparison:
+  atol: 0.002
+  rtol: 0.002
 ---
 operator: BatchMatMul
 name: batch_matmul_float_adj_x_adj_y_f16
@@ -167,6 +188,10 @@ input_2_shape:
 - 3
 adj_x: true
 adj_y: true
+# fp16 accumulation over K=3: see the f16 tolerance note at the top of this file.
+comparison:
+  atol: 0.002
+  rtol: 0.002
 ---
 operator: BatchMatMul
 name: batch_matmul_float_vector8_f32
@@ -209,6 +234,10 @@ input_1_shape: [1, 8, 8]
 input_2_shape: [1, 8, 8]
 adj_x: false
 adj_y: false
+# fp16 accumulation over K=8: see the f16 tolerance note at the top of this file.
+comparison:
+  atol: 0.003
+  rtol: 0.003
 ---
 operator: BatchMatMul
 name: batch_matmul_float_tail9_f16
@@ -223,6 +252,10 @@ input_1_shape: [1, 5, 9]
 input_2_shape: [1, 9, 7]
 adj_x: false
 adj_y: false
+# fp16 accumulation over K=9: see the f16 tolerance note at the top of this file.
+comparison:
+  atol: 0.003
+  rtol: 0.003
 ---
 operator: BatchMatMul
 name: batch_matmul_float_batched_adj_x_f32
@@ -265,6 +298,10 @@ input_1_shape: [2, 3, 4]
 input_2_shape: [2, 3, 5]
 adj_x: true
 adj_y: false
+# fp16 accumulation over K=3: see the f16 tolerance note at the top of this file.
+comparison:
+  atol: 0.002
+  rtol: 0.002
 ---
 operator: BatchMatMul
 name: batch_matmul_float_batched_adj_y_f16
@@ -279,6 +316,10 @@ input_1_shape: [2, 4, 3]
 input_2_shape: [2, 5, 3]
 adj_x: false
 adj_y: true
+# fp16 accumulation over K=3: see the f16 tolerance note at the top of this file.
+comparison:
+  atol: 0.002
+  rtol: 0.002
 ---
 operator: BatchMatMul
 name: batch_matmul_float_mve_scalar_rhs_stride_f16
@@ -293,6 +334,10 @@ input_1_shape: [1, 1, 2]
 input_2_shape: [1, 2, 9363]
 adj_x: false
 adj_y: false
+# fp16 accumulation over K=2: see the f16 tolerance note at the top of this file.
+comparison:
+  atol: 0.002
+  rtol: 0.002
 ---
 operator: BatchMatMul
 name: batch_matmul_float_mve_scalar_lhs_stride_f16
@@ -307,6 +352,10 @@ input_1_shape: [1, 2, 9363]
 input_2_shape: [1, 1, 2]
 adj_x: true
 adj_y: true
+# fp16 accumulation over K=2: see the f16 tolerance note at the top of this file.
+comparison:
+  atol: 0.002
+  rtol: 0.002
 ---
 operator: BatchMatMul
 name: batch_matmul_float_mve_scalar_both_lhs_stride_f16
@@ -321,6 +370,10 @@ input_1_shape: [1, 2, 9363]
 input_2_shape: [1, 2, 1]
 adj_x: true
 adj_y: false
+# fp16 accumulation over K=2: see the f16 tolerance note at the top of this file.
+comparison:
+  atol: 0.002
+  rtol: 0.002
 ---
 operator: BatchMatMul
 name: batch_matmul_float_mve_scalar_both_rhs_stride_f16
@@ -335,6 +388,10 @@ input_1_shape: [1, 2, 1]
 input_2_shape: [1, 2, 9363]
 adj_x: true
 adj_y: false
+# fp16 accumulation over K=2: see the f16 tolerance note at the top of this file.
+comparison:
+  atol: 0.002
+  rtol: 0.002
 ---
 operator: BatchMatMul
 name: batch_matmul_float_h_broadcast_lhs_f16
@@ -349,6 +406,10 @@ input_1_shape: [1, 1, 2, 2]
 input_2_shape: [1, 2, 2, 3]
 adj_x: false
 adj_y: false
+# fp16 accumulation over K=2: see the f16 tolerance note at the top of this file.
+comparison:
+  atol: 0.002
+  rtol: 0.002
 ---
 operator: BatchMatMul
 name: batch_matmul_float_h_broadcast_rhs_f16
@@ -363,6 +424,10 @@ input_1_shape: [1, 2, 2, 2]
 input_2_shape: [1, 1, 2, 3]
 adj_x: false
 adj_y: false
+# fp16 accumulation over K=2: see the f16 tolerance note at the top of this file.
+comparison:
+  atol: 0.002
+  rtol: 0.002
 ---
 # K 40 reaches the large-K row groups of the NT_T matmul from BatchMatMul (ns-cmsis-nn#417).
 operator: BatchMatMul
@@ -480,6 +545,10 @@ adj_y: false
 input_mode: nonfinite_sweep
 nonfinite_tokens: [nan]
 nonfinite_policy: mask
+# fp16 accumulation over K=8: see the f16 tolerance note at the top of this file.
+comparison:
+  atol: 0.003
+  rtol: 0.003
 ---
 operator: BatchMatMul
 name: batch_matmul_float_nonfinite_inf_f16
@@ -497,6 +566,10 @@ adj_y: false
 input_mode: nonfinite_sweep
 nonfinite_tokens: [inf]
 nonfinite_policy: mask
+# fp16 accumulation over K=8: see the f16 tolerance note at the top of this file.
+comparison:
+  atol: 0.003
+  rtol: 0.003
 ---
 operator: BatchMatMul
 name: batch_matmul_float_nonfinite_neginf_f16
@@ -514,6 +587,10 @@ adj_y: false
 input_mode: nonfinite_sweep
 nonfinite_tokens: [-inf]
 nonfinite_policy: mask
+# fp16 accumulation over K=8: see the f16 tolerance note at the top of this file.
+comparison:
+  atol: 0.003
+  rtol: 0.003
 ---
 operator: BatchMatMul
 name: batch_matmul_fault_null_input_f32

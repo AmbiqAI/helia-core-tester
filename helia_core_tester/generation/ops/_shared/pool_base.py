@@ -3,7 +3,6 @@
 from typing import Dict
 from pathlib import Path
 import numpy as np
-import tensorflow as tf
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.harness import ArgumentPool, ArrayLiteral, Declaration
 from helia_core_tester.generation.harness.faults import common_fault, struct_copy, with_fault
@@ -87,43 +86,8 @@ class PoolFamilyBase(OperationBase):
         return {"S8": "s8", "S16": "s16"}.get(self.tensor_dtype("input").upper())
 
     def uses_reference(self) -> bool:
-        # Integer cases take their golden from the TFLM reference pools; float stays on the converter path.
-        return self._int_kind() is not None
+        return True
 
-    def build_keras_model(self) -> tf.keras.Model:
-        """Build Keras model for Pooling operation."""
-        input_shape = self.desc['input_shape']
-        
-        # Build model with float32 inputs (will be quantized later)
-        inputs = tf.keras.Input(shape=input_shape[1:], dtype=tf.float32, name='input')
-        
-        # Normalize padding to lowercase
-        padding = self.desc.get('padding', 'valid')
-        if isinstance(padding, str):
-            padding = padding.lower()
-        
-        if self.POOL_KIND == 'AVERAGE':
-            x = tf.keras.layers.AveragePooling2D(
-                pool_size=self.desc.get('pool_size', [2, 2]),
-                strides=self.desc.get('strides', [2, 2]),
-                padding=padding
-            )(inputs)
-        elif self.POOL_KIND == 'MAX':
-            x = tf.keras.layers.MaxPooling2D(
-                pool_size=self.desc.get('pool_size', [2, 2]),
-                strides=self.desc.get('strides', [2, 2]),
-                padding=padding
-            )(inputs)
-        else:
-            raise ValueError(f"Unsupported pooling kind: {self.POOL_KIND}")
-            
-        model = tf.keras.Model(inputs=inputs, outputs=x)
-        return model
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        """Convert Keras model to TFLite with quantization."""
-        super().convert_to_tflite(model, out_path, rep_seed)
-    
     def _select_cmsis_pooling_kernel(self) -> Dict[str, str]:
         """
         Select appropriate CMSIS-NN pooling kernel function.
@@ -214,7 +178,7 @@ class PoolFamilyBase(OperationBase):
         padding = str(self.desc.get('padding') or 'valid').upper()
         return pool_hw, stride_hw, ref_params.conv_geometry(padding, in_hw, pool_hw, stride_hw)
 
-    def _int_shapes(self):
+    def _shapes(self):
         """NHWC input and output shapes from the descriptor, as TFLite's pool prepare sizes them."""
         input_shape = tuple(int(d) for d in self.desc['input_shape'])
         if len(input_shape) != 4 or any(d < 1 for d in input_shape):
@@ -222,29 +186,54 @@ class PoolFamilyBase(OperationBase):
         _, _, ((out_h, out_w), _, _) = self._pool_geometry(input_shape[1:3])
         return input_shape, (input_shape[0], out_h, out_w, input_shape[3])
 
+    def _pool_call(self, kind, input_data, output_shape, pool_hw, act, quant=None):
+        from helia_core_tester.generation.reference.case import ReferenceCall
+
+        _, stride_hw, (_, pad_h, pad_w) = self._pool_geometry(input_data.shape[1:3])
+        return ReferenceCall(
+            f"{'avgpool' if self.POOL_KIND == 'AVERAGE' else 'maxpool'}_{kind}",
+            {
+                "stride": list(stride_hw), "filter": list(pool_hw), "pad": [pad_h.pad, pad_w.pad],
+                "pad_offset": [pad_h.offset, pad_w.offset], "act": act,
+            },
+            {"input": input_data},
+            output_shape,
+            input_data.dtype.name,
+            quant=quant,
+        )
+
+    def _float_golden(self, float_dtype, input_shape, output_shape, pool_hw):
+        """The operator's input draw and the TFLM f32 pool; f16 operands are rounded to
+        half first and the golden cast back once."""
+        from helia_core_tester.generation.reference import weighted
+        from helia_core_tester.generation.reference.run import run_reference
+
+        fmin, fmax = weighted.float_bounds(self.desc)
+        act = {"min": 0, "max": 0, "fmin": fmin, "fmax": fmax}
+
+        def reference(operands):
+            x = np.ascontiguousarray(np.asarray(operands[0]).reshape(input_shape), dtype=np.float32)
+            return run_reference(self._pool_call("f32", x, output_shape, pool_hw, act)).astype(float_dtype)
+
+        # The sweep lands after the narrowing so the tokens are written in the
+        # kernel's own width; generate_input_data() draws integers, which have no
+        # non-finite image to narrow.
+        input_data = self._maybe_apply_input_mode(self.generate_input_data().astype(float_dtype))
+        call = self._pool_call("f32", np.ascontiguousarray(input_data, dtype=np.float32), output_shape, pool_hw, act)
+        return input_data, self.reference_golden(call).astype(float_dtype), reference
+
     def _int_golden(self, kind, input_shape, output_shape, pool_hw, pool_params):
         """Quantized input and the TFLM reference pool output. Pools keep the input
         quantization on the output, so the clamp is the kernel's activation range."""
         from helia_core_tester.generation.reference import policy
-        from helia_core_tester.generation.reference.case import ReferenceCall
 
         # Match the [-1, 1] calibration range.
         input_data = self._sample_uniform(input_shape)
         quant = self.activation_quant("input", input_data, kind)
         input_q = policy.quantize(input_data, quant)
-        _, stride_hw, (_, pad_h, pad_w) = self._pool_geometry(input_shape[1:3])
-        call = ReferenceCall(
-            f"{'avgpool' if self.POOL_KIND == 'AVERAGE' else 'maxpool'}_{kind}",
-            {
-                "stride": list(stride_hw), "filter": list(pool_hw), "pad": [pad_h.pad, pad_w.pad],
-                "pad_offset": [pad_h.offset, pad_w.offset],
-                "act": {"min": int(pool_params["activation_min"]), "max": int(pool_params["activation_max"])},
-            },
-            {"input": input_q},
-            output_shape,
-            input_q.dtype.name,
-            quant={"input": quant.to_json(), "output": quant.to_json()},
-        )
+        act = {"min": int(pool_params["activation_min"]), "max": int(pool_params["activation_max"])}
+        call = self._pool_call(kind, input_q, output_shape, pool_hw, act,
+                               quant={"input": quant.to_json(), "output": quant.to_json()})
         return input_q, self.reference_golden(call)
 
     def generate_c_files(self, output_dir: Path) -> None:
@@ -258,17 +247,8 @@ class PoolFamilyBase(OperationBase):
         pooling_type = self.POOL_KIND
         kind = self._int_kind()
 
-        if kind is None:
-            tflite_path = output_dir / f"{name}.tflite"
-            if not tflite_path.exists():
-                raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
-            op_tensors = self.load_primary_operator_tensors(str(tflite_path))
-            input_shape = tuple(op_tensors['inputs'][0]['shape'])
-            output_shape = tuple(op_tensors['outputs'][0]['shape'])
-            output_quant = op_tensors['outputs'][0]['quantization']
-        else:
-            input_shape, output_shape = self._int_shapes()
-            output_quant = None
+        input_shape, output_shape = self._shapes()
+        output_quant = None
 
         builder = TemplateContextBuilder()
         
@@ -303,18 +283,8 @@ class PoolFamilyBase(OperationBase):
         float_kernel = kind is None
         if float_kernel:
             float_dtype = np.float16 if kernel_info["input_c_type"] == "float16_t" else np.float32
-            # The sweep lands after the narrowing so the tokens are written in the
-            # kernel's own width; generate_input_data() draws integers, which have no
-            # non-finite image to narrow.
-            input_q = self._maybe_apply_input_mode(self.generate_input_data().astype(float_dtype))
-            interpreter_input_dtype = self.load_litert_interpreter(str(tflite_path)).get_input_details()[0]['dtype']
-
-            def float_reference(operands, _dtype=float_dtype, _in_dtype=interpreter_input_dtype):
-                return self.run_inference(
-                    str(tflite_path), operands[0].astype(_in_dtype)
-                ).astype(_dtype)
-
-            output_data = float_reference([input_q])
+            input_q, output_data, float_reference = self._float_golden(
+                float_dtype, input_shape, output_shape, (pool_h, pool_w))
         else:
             input_q, output_data = self._int_golden(kind, input_shape, output_shape, (pool_h, pool_w), pool_params)
 

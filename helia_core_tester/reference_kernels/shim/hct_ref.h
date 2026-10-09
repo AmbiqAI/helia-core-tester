@@ -27,7 +27,7 @@
 extern "C" {
 #endif
 
-#define HCT_REF_ABI_VERSION 4
+#define HCT_REF_ABI_VERSION 5
 #define HCT_REF_MAX_RANK 6
 
 #define HCT_REF_OK 0
@@ -614,6 +614,14 @@ int32_t hct_ref_bmm_s16(const HctBmmParams *params,
                         const int16_t *rhs,
                         const HctShape *output_shape,
                         int16_t *output);
+/* Offsets and the output multiplier/shift must be zero; act.fmin/fmax clamp. */
+int32_t hct_ref_bmm_f32(const HctBmmParams *params,
+                        const HctShape *lhs_shape,
+                        const float *lhs,
+                        const HctShape *rhs_shape,
+                        const float *rhs,
+                        const HctShape *output_shape,
+                        float *output);
 
 /* ---- integer UNIDIRECTIONAL_SEQUENCE_LSTM (TFLM EvalLstm; tanh cell gate, no
  * peephole/projection/layer norm). Input [B, T, I] ([T, B, I] when time_major),

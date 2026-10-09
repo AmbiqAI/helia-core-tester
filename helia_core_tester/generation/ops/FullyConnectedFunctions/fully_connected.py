@@ -5,13 +5,11 @@ FullyConnected operation implementation with dtype-aware quantization.
 from typing import Dict, Any, Optional
 import numpy as np
 from helia_core_tester.generation.ops._shared.base import OperationBase
-from helia_core_tester.generation.ops._shared.fixed_batch import converter_for_batched_model
 from helia_core_tester.generation.entry import check_entry_fault, resolve_entry
 from helia_core_tester.generation.harness import ArgumentPool, ArrayLiteral, Declaration, Define, GuardedBuffer, Provider, SizeQuery
 from helia_core_tester.generation.harness.faults import common_fault, struct_copy, with_fault
 from helia_core_tester.generation.kernel_dispatch import autovectorize_declines_if, resolve_fully_connected_kernel
 from helia_core_tester.core.cpu_targets import get_cpu_profile
-import keras
 from pathlib import Path
 
 
@@ -303,9 +301,7 @@ class OpFullyConnected(OperationBase):
                                   validation_key=FC_VALIDATION_KEY, label="Fully connected", sizer_fn=fc_sizer(context))
 
     def uses_reference(self) -> bool:
-        # Integer cases take their golden from the TFLM reference kernels; float
-        # cases stay on the converter path until the float suites move.
-        return str(self.desc.get("activation_dtype", "S8")).upper() in {"S8", "S16"}
+        return True
 
     def _generate_int_reference(self, output_dir: Path, kernel_info: Dict[str, Any]) -> None:
         """Render an s8/s16 (s8 or s4 weights) case whose golden comes from the
@@ -422,134 +418,6 @@ class OpFullyConnected(OperationBase):
         )
         (output_dir / "CMakeLists.txt").write_text(cmake_content)
 
-    def needs_keras_model(self) -> bool:
-        return True
-    
-    def build_keras_model(self):
-        """Build Keras model for FullyConnected operation."""
-        input_shape = self.desc['input_shape']
-        filter_shape = self.desc['filter_shape']
-        
-        # Handle both 2D [batch, features] and 4D [batch, h, w, c] input shapes
-        if len(input_shape) == 2:
-            # 2D input: [batch, features]
-            input_features = input_shape[1]
-            batch_size = input_shape[0]
-            needs_flatten = False
-        else:
-            # 4D input: [batch, h, w, c]
-            # Calculate total features: h * w * c
-            input_features = input_shape[1] * input_shape[2] * input_shape[3]
-            batch_size = input_shape[0]
-            needs_flatten = True
-        
-        # Extract output units from filter_shape
-        if len(filter_shape) == 2:
-            output_units = filter_shape[0]
-        else:
-            output_units = filter_shape[0]
-        
-        # Get activation and use_bias from descriptor
-        activation_str = self.desc.get('activation', 'NONE')
-        use_bias = self.desc.get('use_bias', True)
-        
-        # Build model with input layer matching descriptor shape
-        if needs_flatten:
-            # 4D input: [batch, h, w, c]
-            inputs = keras.layers.Input(shape=input_shape[1:], batch_size=batch_size, name='input')
-            # Flatten to [batch, h*w*c]
-            x = keras.layers.Flatten()(inputs)
-        else:
-            # 2D input: [batch, features]
-            inputs = keras.layers.Input(shape=(input_features,), batch_size=batch_size, name='input')
-            x = inputs
-        
-        # A zero bias_initializer (Dense's default) produces an all-zero bias
-        # tensor, which the TFLite converter's constant-folding optimizer
-        # strips from the graph entirely -- the generated CMSIS-NN test then
-        # calls the kernel with a NULL bias pointer, leaving the bias-add
-        # path completely untested. Float cases only: integer cases use the
-        # reference kernels.
-        if not use_bias:
-            bias_initializer = 'zeros'
-        else:
-            bias_initializer = keras.initializers.RandomUniform(minval=-0.25, maxval=0.25, seed=self.seed)
-
-        # Dense layer without activation (we'll apply activation separately if needed)
-        x = keras.layers.Dense(
-            output_units,
-            activation=None,
-            use_bias=use_bias,
-            kernel_initializer=keras.initializers.GlorotUniform(seed=1234),
-            bias_initializer=bias_initializer,
-            name='dense'
-        )(x)
-        
-        # Apply activation if specified
-        if activation_str == 'RELU':
-            x = keras.layers.ReLU()(x)
-        elif activation_str == 'RELU6':
-            x = keras.layers.ReLU(max_value=6)(x)
-        elif activation_str == 'TANH':
-            x = keras.layers.Activation('tanh')(x)
-        elif activation_str == 'SIGMOID':
-            x = keras.layers.Activation('sigmoid')(x)
-        elif activation_str != 'NONE':
-            raise ValueError(f"Unsupported activation: {activation_str}")
-        
-        model = keras.models.Model(inputs=inputs, outputs=x)
-        return model
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        """Convert Keras model to TFLite with quantization."""
-        self.round_float16_weights(model)
-        import tensorflow as tf
-        
-        # Create converter
-        converter = converter_for_batched_model(model, [self.desc['input_shape']])
-        
-        # Apply quantization based on activation_dtype
-        activation_dtype = str(self.desc.get('activation_dtype', 'S8')).upper()
-        
-        if activation_dtype == 'S8':
-            converter.optimizations = [tf.lite.Optimize.DEFAULT]
-            converter.target_spec.supported_types = [tf.int8]
-            converter.inference_input_type = tf.int8
-            converter.inference_output_type = tf.int8
-        elif activation_dtype == 'S16':
-            converter.optimizations = [tf.lite.Optimize.DEFAULT]
-            converter.target_spec.supported_ops = [tf.lite.OpsSet.EXPERIMENTAL_TFLITE_BUILTINS_ACTIVATIONS_INT16_WEIGHTS_INT8]
-            converter.inference_input_type = tf.int16
-            converter.inference_output_type = tf.int16
-        elif activation_dtype == 'FP16':
-            converter.optimizations = []
-            converter.target_spec.supported_types = [tf.float16]
-        elif activation_dtype == 'FP32':
-            converter.optimizations = []
-        
-        # Force per-tensor quantization when requested
-        force_per_tensor = bool(self.desc.get("hint", {}).get("force_per_tensor", False))
-        if force_per_tensor and hasattr(converter, "_experimental_disable_per_channel"):
-            converter._experimental_disable_per_channel = True
-
-        # Generate representative dataset
-        def representative_data_gen():
-            for _ in range(100):
-                if 'input_shape' in self.desc:
-                    inputs = self.rng.uniform(-1.0, 1.0, size=self.desc['input_shape']).astype(np.float32)
-                    yield [inputs]
-                elif 'input_1_shape' in self.desc and 'input_2_shape' in self.desc:
-                    inputs1 = self.rng.uniform(-1.0, 1.0, size=self.desc['input_1_shape']).astype(np.float32)
-                    inputs2 = self.rng.uniform(-1.0, 1.0, size=self.desc['input_2_shape']).astype(np.float32)
-                    yield [inputs1, inputs2]
-        
-        converter.representative_dataset = representative_data_gen
-        
-        # Convert and save
-        tflite_model = converter.convert()
-        with open(out_path, 'wb') as f:
-            f.write(tflite_model)
-    
     def _select_cmsis_fc_kernel(self) -> Dict[str, str]:
         info = resolve_fully_connected_kernel(
             activation_dtype=self.desc.get('activation_dtype', 'S8'),
@@ -571,23 +439,6 @@ class OpFullyConnected(OperationBase):
             check_entry_fault(self.desc, info)
         return info
 
-    def _find_fully_connected_op_index(self, model: Any, subgraph: Any) -> int:
-        """Find the FULLY_CONNECTED operator index in the subgraph (fallback to 0)."""
-        if len(subgraph.operators) == 0:
-            raise ValueError("No operators found in model")
-
-        try:
-            from ai_edge_litert import schema_py_generated as litert
-
-            for op_idx, op in enumerate(subgraph.operators):
-                opcode = model.operatorCodes[op.opcodeIndex]
-                if opcode.builtinCode == litert.BuiltinOperator.FULLY_CONNECTED:
-                    return op_idx
-        except Exception:
-            pass
-
-        return 0
-    
     def _supports_weight_sum(self) -> bool:
         """Check if platform supports weight sum optimization.
 
@@ -621,289 +472,90 @@ class OpFullyConnected(OperationBase):
             self._generate_int_reference(output_dir, kernel_info)
             return
 
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
-        
-        # Load LiteRT model for shape and quantization extraction
-        from helia_core_tester.generation.utils.litert_utils import get_operator_tensors_from_litert
-        model, subgraph = self.load_litert_model(str(tflite_path))
-        fc_op_index = self._find_fully_connected_op_index(model, subgraph)
-        op_tensors = get_operator_tensors_from_litert(model, subgraph, fc_op_index)
-        
-        # Extract shapes from LiteRT
-        input_shape = op_tensors['inputs'][0]['shape']
-        output_shape = op_tensors['outputs'][0]['shape']
-        
-        # Ensure shapes are tuples
-        if input_shape is not None:
-            input_shape = tuple(input_shape)
-        if output_shape is not None:
-            output_shape = tuple(output_shape)
-        
-        # Extract quantization parameters from LiteRT
-        input_quant_litert = op_tensors['inputs'][0]['quantization']
-        output_quant_litert = op_tensors['outputs'][0]['quantization']
-        
-        input_quant = {
-            'scale': input_quant_litert.get('scale', 1.0),
-            'zero_point': input_quant_litert.get('zero_point', 0),
-            'per_channel': input_quant_litert.get('per_channel', False)
-        }
-        output_quant = {
-            'scale': output_quant_litert.get('scale', 1.0),
-            'zero_point': output_quant_litert.get('zero_point', 0),
-            'per_channel': output_quant_litert.get('per_channel', False)
-        }
-        
-        # Extract weights and biases for the actual FULLY_CONNECTED op.
-        # For 4D inputs, op[0] may be RESHAPE, so using operator index 0 can be wrong.
-        weights = op_tensors.get('weights')
-        biases = op_tensors.get('biases')
-        
-        # Get weight quantization from LiteRT
-        from helia_core_tester.generation.utils.litert_utils import (
-            get_tensor_data_from_litert, get_tensor_quantization_from_litert,
-            get_tensor_shape_from_litert
-        )
-        
-        weight_quant = None
-        if weights is not None:
-            # Search all tensors to find the one matching our weights
-            input_indices = set(subgraph.inputs)
-            output_indices = set(subgraph.outputs)
-            
-            for tensor_idx, tensor in enumerate(subgraph.tensors):
-                if tensor_idx in input_indices or tensor_idx in output_indices:
-                    continue
-                
-                tensor_data = get_tensor_data_from_litert(tensor, model)
-                tensor_shape = get_tensor_shape_from_litert(tensor)
-                
-                if (tensor_data is not None and tensor_shape is not None and 
-                    len(tensor_shape) > 1 and tensor_data.shape == weights.shape and
-                    np.array_equal(tensor_data, weights)):
-                    weight_quant = get_tensor_quantization_from_litert(tensor)
-                    break
-            
-            # Fallback: check operator inputs for weight tensor
-            if weight_quant is None:
-                for input_tensor_info in op_tensors['inputs']:
-                    if input_tensor_info['data'] is not None and len(input_tensor_info['shape']) > 1:
-                        weight_quant = input_tensor_info.get('quantization')
-                        break
-        
-        # Prepare weight quantization dict
-        if weight_quant is None:
-            # No weight-tensor quantization could be recovered from the
-            # converted model. Silently substituting the output tensor's
-            # quantization would produce incorrect per-channel/per-tensor
-            # weight scales and a wrong multiplier, potentially masking a real
-            # kernel/golden mismatch. Fail loudly instead.
-            raise RuntimeError(
-                f"FullyConnected descriptor '{name}' weight quantization could "
-                "not be recovered from the converted TFLite model; refusing to "
-                "substitute unrelated output quantization"
-            )
-        
-        weight_quant_dict = {
-            'scale': weight_quant.get('scale', 1.0),
-            'zero_point': weight_quant.get('zero_point', 0),
-            'per_channel': weight_quant.get('per_channel', False)
-        }
-        
-        # Validate weights shape
-        if weights is not None:
-            filter_shape = tuple(weights.shape)
-            if len(filter_shape) == 1:
-                # Try to infer 2D shape
-                if len(output_shape) == 2:
-                    output_units = output_shape[1]
-                    input_features = filter_shape[0] // output_units if filter_shape[0] % output_units == 0 else filter_shape[0]
-                    if filter_shape[0] == output_units * input_features:
-                        weights = weights.reshape(output_units, input_features)
-                        filter_shape = tuple(weights.shape)
-                    else:
-                        raise ValueError(f"Cannot infer 2D shape from 1D weights shape {filter_shape}")
-                else:
-                    raise ValueError(f"Unsupported filter shape: {filter_shape} (1D)")
-            
-            if len(filter_shape) != 2:
-                raise ValueError(f"Unsupported filter shape: {filter_shape}")
-            
-            if not float_kernel and weights.dtype != np.int8:
-                weights = weights.astype(np.int8)
-            
-            # TFLite format: [output_units, input_features]
-            filter_dims = {
-                'n': int(filter_shape[1]),  # input_features (col_dim)
-                'h': 1,
-                'w': 1,
-                'c': int(filter_shape[0])   # output_units (row_dim)
-            }
-        else:
-            # Fallback: descriptor format
-            fs = tuple(self.desc['filter_shape'])
-            if len(fs) != 2:
-                raise ValueError(f"Unsupported filter_shape in descriptor: {fs}")
-            filter_dims = {
-                'n': int(fs[1]),  # input_features
-                'h': 1,
-                'w': 1,
-                'c': int(fs[0])   # output_units
-            }
-        
+        from helia_core_tester.generation.reference import weighted
+
         builder = TemplateContextBuilder()
+        float_dtype = np.float16 if kernel_info["input_c_type"] == "float16_t" else np.float32
+        spec = weighted.fc_spec(self.desc)
+        input_shape = spec.input_shape
+        case = weighted.build_float_case(
+            self.desc, spec, self.reference_rng("weights"),
+            lambda: self._sample_uniform(input_shape), float_dtype,
+        )
+        self._reference_call = case.call
+        out_units, features = spec.weight_shape
+        filter_dims = {'n': features, 'h': 1, 'w': 1, 'c': out_units}
+        input_dims = {'n': int(input_shape[0]), 'h': 1, 'w': 1, 'c': features}
+        output_dims = {'n': int(input_shape[0]), 'h': 1, 'w': 1, 'c': out_units}
+        unquantized = {'scale': 1.0, 'zero_point': 0, 'per_channel': False}
+        fc_params = builder.build_fc_params(self.desc, unquantized, unquantized, unquantized)
+        weights, biases, input_data = case.weights, case.bias, case.input
+        has_biases = biases is not None
+        output_data, nonfinite_context = self.apply_nonfinite_policy(
+            case.output, reference=case.reference, inputs=[input_data]
+        )
+        weights_array_str = builder.format_array_as_c_literal(weights) if weights is not None else ""
+        biases_array_str = builder.format_array_as_c_literal(biases) if has_biases else ""
+        input_data_array_str = builder.format_array_as_c_literal(np.asarray(input_data, dtype=float_dtype).flatten())
+        expected_output_array_str = builder.format_array_as_c_literal(np.asarray(output_data, dtype=float_dtype).flatten())
+        element_size = np.dtype(float_dtype).itemsize
+        buffer_size_max = max(
+            1024,
+            int(
+                (
+                    input_dims['n'] * input_dims['c']
+                    + filter_dims['n'] * filter_dims['c']
+                    + output_dims['n'] * output_dims['c']
+                ) * element_size
+            ),
+        )
+
+        entry_scratch_bytes = kernel_info.get("entry_scratch_bytes")
+        if entry_scratch_bytes is not None:
+            buffer_size_max = max(buffer_size_max, int(entry_scratch_bytes))
+        self.reject_autovectorize_declines()
+        context = {
+            'name': name,
+            'input_dims': input_dims,
+            'filter_dims': filter_dims,
+            'output_dims': output_dims,
+            'fc_params': fc_params,
+            'weights_array': weights_array_str,
+            'biases_array': biases_array_str,
+            'has_biases': has_biases,
+            'has_bias_array': has_biases,
+            'input_data_array': input_data_array_str,
+            'expected_output_array': expected_output_array_str,
+            'input_dtype': kernel_info["input_c_type"],
+            'output_dtype': kernel_info["output_c_type"],
+            'weight_dtype': kernel_info.get("weight_c_type", kernel_info["input_c_type"]),
+            'bias_dtype': kernel_info["bias_c_type"],
+            'kernel_fn': kernel_info["kernel_fn"],
+            'kernel_get_buffer_size_fn': kernel_info["kernel_get_buffer_size_fn"],
+            'call_style': kernel_info.get("call_style", "baseline"),
+            'buffer_size_max': buffer_size_max,
+            'weight_sum_array': "",
+            'has_weight_sum': False,
+            'float_kernel': True,
+            'fc_params_type': kernel_info.get("fc_params_type", 'cmsis_nn_fc_params_f32'),
+            'kernel_layout': kernel_info.get("layout", "ARM_NN_LAYOUT_NHWC"),
+            'entry_family': kernel_info.get("entry_family"),
+            'entry_scratch_bytes': entry_scratch_bytes,
+            'entry_extra_sizers': kernel_info.get("entry_extra_sizers"),
+            'fc_activation_min_literal': builder.format_float_literal(fc_params['activation_min']),
+            'fc_activation_max_literal': builder.format_float_literal(fc_params['activation_max']),
+            'validation_mode': 'float',
+        }
+        context.update(nonfinite_context)
+        self._render_fully_connected(output_dir, context)
         
-        # Compute input dimensions
-        if len(input_shape) == 2:
-            input_dims = {
-                'n': int(input_shape[0]),
-                'h': 1,
-                'w': 1,
-                'c': int(input_shape[1])
-            }
-        elif len(input_shape) == 4:
-            # Flatten: [batch, h, w, c] -> features = h * w * c
-            input_dims = {
-                'n': int(input_shape[0]),
-                'h': 1,
-                'w': 1,
-                'c': int(input_shape[1] * input_shape[2] * input_shape[3])
-            }
-        else:
-            input_dims = builder.nhwc_to_cmsis_dims(input_shape)
-        
-        # Compute output dimensions - use weights shape to get correct output_units
-        if weights is not None and len(weights.shape) == 2:
-            correct_output_units = int(weights.shape[0])
-            batch_size = int(output_shape[0]) if len(output_shape) >= 1 else int(input_shape[0])
-
-            if len(output_shape) == 2 and output_shape[1] != correct_output_units:
-                # The converter/LiteRT-reported output shape disagrees with the
-                # weight tensor's output-unit dimension. Silently rewriting
-                # output_dims from the weight shape would hide a real
-                # converter/kernel contract error behind an auto-corrected
-                # harness. Fail loudly instead.
-                raise RuntimeError(
-                    f"FullyConnected descriptor '{name}' has LiteRT "
-                    f"output_shape[1] ({output_shape[1]}) that disagrees with "
-                    f"weights.shape[0] ({correct_output_units}); refusing to "
-                    "silently override output dims"
-                )
-
-            output_dims = {
-                'n': batch_size,
-                'h': 1,
-                'w': 1,
-                'c': correct_output_units
-            }
-        elif len(output_shape) == 2:
-            output_dims = {
-                'n': int(output_shape[0]),
-                'h': 1,
-                'w': 1,
-                'c': int(output_shape[1])
-            }
-        else:
-            output_dims = builder.nhwc_to_cmsis_dims(output_shape)
-        
-        float_kernel = kernel_info["input_c_type"] in {"float", "float16_t"}
-        if float_kernel:
-            float_dtype = np.float16 if kernel_info["input_c_type"] == "float16_t" else np.float32
-            if weights is not None and weights.dtype != float_dtype:
-                weights = weights.astype(float_dtype)
-            has_biases = biases is not None and biases.size > 0
-            if has_biases and biases.dtype != float_dtype:
-                biases = biases.astype(float_dtype)
-
-            fc_params = builder.build_fc_params(
-                self.desc,
-                input_quant,
-                weight_quant_dict,
-                output_quant,
-            )
-
-            input_data = np.asarray(self._sample_uniform(input_shape), dtype=float_dtype)
-            from helia_core_tester.generation.utils.litert_utils import run_inference_litert
-            interpreter_input_dtype = self.load_litert_interpreter(str(tflite_path)).get_input_details()[0]['dtype']
-            def float_reference(operands, _dtype=float_dtype, _in_dtype=interpreter_input_dtype):
-                return np.asarray(
-                    run_inference_litert(
-                        str(tflite_path),
-                        operands[0].astype(_in_dtype),
-                        subgraph_index=0,
-                    ),
-                    dtype=_dtype,
-                )
-
-            output_data = float_reference([input_data])
-            output_data, nonfinite_context = self.apply_nonfinite_policy(
-                output_data, reference=float_reference, inputs=[input_data]
-            )
-
-            weights_array_str = builder.format_array_as_c_literal(weights) if weights is not None else ""
-            biases_array_str = builder.format_array_as_c_literal(biases) if has_biases else ""
-            input_data_array_str = builder.format_array_as_c_literal(np.asarray(input_data, dtype=float_dtype).flatten())
-            expected_output_array_str = builder.format_array_as_c_literal(np.asarray(output_data, dtype=float_dtype).flatten())
-            element_size = np.dtype(float_dtype).itemsize
-            buffer_size_max = max(
-                1024,
-                int(
-                    (
-                        input_dims['n'] * input_dims['c']
-                        + filter_dims['n'] * filter_dims['c']
-                        + output_dims['n'] * output_dims['c']
-                    ) * element_size
-                ),
-            )
-
-            entry_scratch_bytes = kernel_info.get("entry_scratch_bytes")
-            if entry_scratch_bytes is not None:
-                buffer_size_max = max(buffer_size_max, int(entry_scratch_bytes))
-            self.reject_autovectorize_declines()
-            context = {
-                'name': name,
-                'input_dims': input_dims,
-                'filter_dims': filter_dims,
-                'output_dims': output_dims,
-                'fc_params': fc_params,
-                'weights_array': weights_array_str,
-                'biases_array': biases_array_str,
-                'has_biases': has_biases,
-                'has_bias_array': has_biases,
-                'input_data_array': input_data_array_str,
-                'expected_output_array': expected_output_array_str,
-                'input_dtype': kernel_info["input_c_type"],
-                'output_dtype': kernel_info["output_c_type"],
-                'weight_dtype': kernel_info.get("weight_c_type", kernel_info["input_c_type"]),
-                'bias_dtype': kernel_info["bias_c_type"],
-                'kernel_fn': kernel_info["kernel_fn"],
-                'kernel_get_buffer_size_fn': kernel_info["kernel_get_buffer_size_fn"],
-                'call_style': kernel_info.get("call_style", "baseline"),
-                'buffer_size_max': buffer_size_max,
-                'weight_sum_array': "",
-                'has_weight_sum': False,
-                'float_kernel': True,
-                'fc_params_type': kernel_info.get("fc_params_type", 'cmsis_nn_fc_params_f32'),
-                'kernel_layout': kernel_info.get("layout", "ARM_NN_LAYOUT_NHWC"),
-                'entry_family': kernel_info.get("entry_family"),
-                'entry_scratch_bytes': entry_scratch_bytes,
-                'entry_extra_sizers': kernel_info.get("entry_extra_sizers"),
-                'fc_activation_min_literal': builder.format_float_literal(fc_params['activation_min']),
-                'fc_activation_max_literal': builder.format_float_literal(fc_params['activation_max']),
-                'validation_mode': 'float',
-            }
-            context.update(nonfinite_context)
-            self._render_fully_connected(output_dir, context)
-            
-            cmake_context = {
-                'name': name,
-                'operator': self.desc.get('operator', 'FullyConnected'),
-                'operator_name': 'fully_connected'
-            }
-            cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
-            cmake_path = output_dir / "CMakeLists.txt"
-            with open(cmake_path, 'w') as f:
-                f.write(cmake_content)
-            return
+        cmake_context = {
+            'name': name,
+            'operator': self.desc.get('operator', 'FullyConnected'),
+            'operator_name': 'fully_connected'
+        }
+        cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
+        cmake_path = output_dir / "CMakeLists.txt"
+        with open(cmake_path, 'w') as f:
+            f.write(cmake_content)
+        return

@@ -290,3 +290,44 @@ def test_flat_struct_rejects_missing_and_unknown_fields() -> None:
     full = {name: 0 for name, _ in b.HctReluParams._fields_}
     with pytest.raises(KeyError, match="unknown"):
         flat_struct(b.HctReluParams, {**full, "extra": 1})
+
+
+def test_bmm_f32_matches_matmul_with_broadcast_and_clamp(lib) -> None:
+    rng = np.random.default_rng(9)
+    for ls, rs in (((2, 3, 5), (1, 4, 5)), ((1, 2, 3, 5), (2, 1, 4, 5))):
+        lhs = rng.standard_normal(ls).astype(np.float32)
+        rhs = rng.standard_normal(rs).astype(np.float32)
+        out_shape = np.broadcast_shapes(ls[:-2], rs[:-2]) + (ls[-2], rs[-2])
+        expected = np.matmul(lhs.astype(np.float64), np.swapaxes(rhs, -1, -2).astype(np.float64))
+        free = b.HctBmmParams(0, 0, 0, 0, 0, b.make_activation(0, 0, -math.inf, math.inf))
+        np.testing.assert_allclose(lib.bmm("f32", free, lhs, rhs, out_shape), expected, rtol=1e-5, atol=1e-5)
+        clamped = b.HctBmmParams(0, 0, 0, 0, 0, b.make_activation(0, 0, -0.5, 0.25))
+        np.testing.assert_allclose(lib.bmm("f32", clamped, lhs, rhs, out_shape), np.clip(expected, -0.5, 0.25),
+                                   rtol=1e-5, atol=1e-5)
+
+
+def test_bmm_f32_propagates_nonfinite_when_unbounded(lib) -> None:
+    lhs = np.ones((1, 2, 3), np.float32)
+    lhs[0, 1, 0] = np.inf
+    rhs = np.ones((1, 2, 3), np.float32)
+    free = b.HctBmmParams(0, 0, 0, 0, 0, b.make_activation(0, 0, -math.inf, math.inf))
+    out = lib.bmm("f32", free, lhs, rhs, (1, 2, 2))
+    np.testing.assert_array_equal(out[0, 0], [3.0, 3.0])
+    assert np.isposinf(out[0, 1]).all()
+
+
+def test_bmm_f32_rejections(lib) -> None:
+    lhs, rhs = np.zeros((1, 3, 5), np.float32), np.zeros((1, 4, 5), np.float32)
+    act = b.make_activation(0, 0, -1.0, 1.0)
+    for offsets in ((1, 0, 0, 0, 0), (0, 1, 0, 0, 0), (0, 0, 1, 0, 0), (0, 0, 0, 1 << 30, 0), (0, 0, 0, 0, 1)):
+        assert _code(lambda: lib.bmm("f32", b.HctBmmParams(*offsets, act), lhs, rhs, (1, 3, 4))) == b.E_PARAM
+    ok = b.HctBmmParams(0, 0, 0, 0, 0, act)
+    for fmin, fmax in ((1.0, -1.0), (math.nan, 1.0)):
+        bad = b.HctBmmParams(0, 0, 0, 0, 0, b.make_activation(0, 0, fmin, fmax))
+        assert _code(lambda: lib.bmm("f32", bad, lhs, rhs, (1, 3, 4))) == b.E_PARAM
+    assert _code(lambda: lib.bmm("f32", ok, lhs, np.zeros((1, 4, 6), np.float32), (1, 3, 4))) == b.E_DIMS
+    assert _code(lambda: lib.bmm("f32", ok, lhs, rhs, (1, 4, 3))) == b.E_DIMS
+    with pytest.raises(TypeError):
+        lib.bmm("f32", ok, lhs.astype(np.float16), rhs, (1, 3, 4))
+    with pytest.raises(ValueError, match="unknown bmm kind"):
+        lib.bmm("f16", ok, lhs, rhs, (1, 3, 4))

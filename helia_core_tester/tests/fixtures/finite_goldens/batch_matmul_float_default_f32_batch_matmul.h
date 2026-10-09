@@ -52,7 +52,7 @@ static const float batch_matmul_float_default_f32_input_rhs[] = {
 
 // Expected output (golden)
 static const float batch_matmul_float_default_f32_expected_output[] = {
-    0.037320275f, -0.320868999f, -0.155409038f, 0.46607098f, 0.635480523f, -0.152594566f, -0.477644652f, 0.384981692f
+    0.037320256f, -0.320868999f, -0.155409068f, 0.46607101f, 0.635480523f, -0.152594566f, -0.477644622f, 0.384981692f
 };
 
 #endif

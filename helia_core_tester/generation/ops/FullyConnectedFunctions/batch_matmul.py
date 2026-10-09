@@ -2,10 +2,8 @@
 
 from typing import Dict, Any
 import numpy as np
-import tensorflow as tf
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.base import OperationBase
-from helia_core_tester.generation.ops._shared.fixed_batch import converter_for_batched_model
 from helia_core_tester.generation.harness import ArgumentPool, ArrayLiteral, Declaration, HarnessInput
 from helia_core_tester.generation.harness.faults import common_fault, struct_copy, with_fault
 
@@ -127,55 +125,56 @@ class OpBatchMatMul(OperationBase):
                 kind, f"{kernel_fn} only validates arguments under ARM_MATH_MVEI; add required_capabilities: [mve]"
             )
 
-    def build_keras_model(self) -> tf.keras.Model:
-        """Build Keras model for BatchMatMul."""
-        input_1_shape = self.desc['input_1_shape']
-        input_2_shape = self.desc['input_2_shape']
-        
-        # Get transpose options (adj_x and adj_y)
-        adj_x = self.desc.get('adj_x', False)
-        adj_y = self.desc.get('adj_y', False)
-        
-        # Build inputs (exclude batch dimension in Input shape)
-        input1 = tf.keras.Input(shape=input_1_shape[1:], dtype=tf.float32, name='input1')
-        input2 = tf.keras.Input(shape=input_2_shape[1:], dtype=tf.float32, name='input2')
-        
-        # Apply transpose if needed
-        if adj_x:
-            # Transpose last two dimensions: [..., M, K] -> [..., K, M]
-            x1 = tf.keras.layers.Lambda(lambda x: tf.transpose(x, perm=[0, 2, 1]))(input1)
-        else:
-            x1 = input1
-            
-        if adj_y:
-            # Transpose last two dimensions: [..., K, N] -> [..., N, K]
-            x2 = tf.keras.layers.Lambda(lambda x: tf.transpose(x, perm=[0, 2, 1]))(input2)
-        else:
-            x2 = input2
-        
-        # Batch matrix multiplication: [batch, M, K] @ [batch, K, N] -> [batch, M, N]
-        output = tf.keras.layers.Lambda(lambda inputs: tf.matmul(inputs[0], inputs[1]))([x1, x2])
-        
-        model = tf.keras.Model(inputs=[input1, input2], outputs=output)
-        return model
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        """Convert Keras model to TFLite with quantization."""
-        converter = converter_for_batched_model(
-            model, [self.desc['input_1_shape'], self.desc['input_2_shape']]
-        )
-        self._apply_activation_quantization(converter)
-        converter.representative_dataset = self._representative_dataset_gen
-        self._write_tflite_bytes(out_path, converter.convert())
-    
     def _int_kind(self):
         return {"S8": "s8", "S16": "s16"}.get(
             str(self.tensor_dtype("input", default=self.desc.get("activation_dtype", "S8"))).upper())
 
     def uses_reference(self) -> bool:
-        # Integer cases take their golden from the TFLM reference BatchMatMul; float stays on
-        # the converter path until the float suites move.
-        return self._int_kind() is not None
+        return True
+
+    def _operand_shapes(self, max_rank: int = 5):
+        name = self.desc['name']
+        lhs_shape = tuple(int(d) for d in self.desc["input_1_shape"])
+        rhs_shape = tuple(int(d) for d in self.desc["input_2_shape"])
+        if not (3 <= len(lhs_shape) <= max_rank and 3 <= len(rhs_shape) <= max_rank):
+            raise ValueError(f"{name}: BatchMatMul cases are rank 3 to {max_rank}, got {lhs_shape} x {rhs_shape}")
+        if min(lhs_shape + rhs_shape) < 1:
+            raise ValueError(f"{name}: BatchMatMul dims must be positive, got {lhs_shape} x {rhs_shape}")
+        return lhs_shape, rhs_shape
+
+    def _canonical_operands(self, lhs_data, rhs_data, adj_x: bool, adj_y: bool):
+        """LHS [..., M, K], RHS [..., N, K] and the [..., M, N] output shape, from the descriptor's operands."""
+        name = self.desc['name']
+        lhs_c = np.swapaxes(lhs_data, -1, -2) if adj_x else lhs_data
+        rhs_c = rhs_data if adj_y else np.swapaxes(rhs_data, -1, -2)
+        if lhs_c.shape[-1] != rhs_c.shape[-1]:
+            raise ValueError(f"{name}: depth {lhs_c.shape[-1]} vs {rhs_c.shape[-1]} (adj_x={adj_x}, adj_y={adj_y})")
+        try:
+            batch = tuple(int(d) for d in np.broadcast_shapes(lhs_c.shape[:-2], rhs_c.shape[:-2]))
+        except ValueError as exc:
+            raise ValueError(f"{name}: batches {lhs_c.shape[:-2]} and {rhs_c.shape[:-2]} do not broadcast") from exc
+        return np.ascontiguousarray(lhs_c), np.ascontiguousarray(rhs_c), batch + (lhs_c.shape[-2], rhs_c.shape[-2])
+
+    def _float_golden(self, lhs_data, rhs_data, adj_x: bool, adj_y: bool, float_dtype):
+        """TFLM's f32 BatchMatMul on the canonical operands; f16 operands are rounded to half
+        first and the golden cast back once."""
+        from helia_core_tester.generation.reference import weighted
+        from helia_core_tester.generation.reference.case import ReferenceCall
+        from helia_core_tester.generation.reference.run import run_reference
+
+        fmin, fmax = weighted.float_bounds(self.desc)
+
+        def call_for(lhs, rhs):
+            lhs_c, rhs_c, output_shape = self._canonical_operands(
+                np.asarray(lhs, dtype=np.float32), np.asarray(rhs, dtype=np.float32), adj_x, adj_y)
+            return ReferenceCall("bmm_f32", {"act": {"min": 0, "max": 0, "fmin": fmin, "fmax": fmax}},
+                                 {"lhs": lhs_c, "rhs": rhs_c}, output_shape, "float32")
+
+        def reference(operands):
+            return run_reference(call_for(operands[0], operands[1])).astype(float_dtype)
+
+        call = call_for(lhs_data, rhs_data)
+        return self.reference_golden(call).astype(float_dtype), call.output_shape, reference
 
     def _generate_int_c_files(self, output_dir: Path, kind: str) -> None:
         """Integer BMM: policy quantization over the [-1, 1] draws, the output quantized over
@@ -189,10 +188,7 @@ class OpBatchMatMul(OperationBase):
         name = self.desc['name']
         np_dtype = np.int8 if kind == "s8" else np.int16
         kernel_info = self._select_cmsis_matmul_kernel(np_dtype, np_dtype, np_dtype)
-        lhs_shape = tuple(int(d) for d in self.desc["input_1_shape"])
-        rhs_shape = tuple(int(d) for d in self.desc["input_2_shape"])
-        if len(lhs_shape) != 3 or len(rhs_shape) != 3:
-            raise ValueError(f"{name}: BatchMatMul cases are rank 3, got {lhs_shape} x {rhs_shape}")
+        lhs_shape, rhs_shape = self._operand_shapes(max_rank=3)
         adj_x = bool(self.desc.get('adj_x', False))
         adj_y = bool(self.desc.get('adj_y', False))
 
@@ -202,16 +198,7 @@ class OpBatchMatMul(OperationBase):
         rhs_data = self.rng.uniform(-1.0, 1.0, size=rhs_shape).astype(np.float32)
         self.rng.__setstate__(rng_state)
 
-        # Canonical operands: LHS [B, M, K], RHS [B, N, K].
-        lhs_c = np.transpose(lhs_data, (0, 2, 1)) if adj_x else lhs_data
-        rhs_c = rhs_data if adj_y else np.transpose(rhs_data, (0, 2, 1))
-        if lhs_c.shape[2] != rhs_c.shape[2]:
-            raise ValueError(f"{name}: depth {lhs_c.shape[2]} vs {rhs_c.shape[2]} (adj_x={adj_x}, adj_y={adj_y})")
-        try:
-            batch = int(np.broadcast_shapes((lhs_c.shape[0],), (rhs_c.shape[0],))[0])
-        except ValueError as exc:
-            raise ValueError(f"{name}: batches {lhs_c.shape[0]} and {rhs_c.shape[0]} do not broadcast") from exc
-        output_shape = (batch, lhs_c.shape[1], rhs_c.shape[1])
+        lhs_c, rhs_c, output_shape = self._canonical_operands(lhs_data, rhs_data, adj_x, adj_y)
 
         draw_range = np.array([-1.0, 1.0], dtype=np.float32)
         lhs_quant = self.activation_quant("input_1", draw_range, kind)
@@ -340,208 +327,98 @@ class OpBatchMatMul(OperationBase):
         if self._int_kind() is not None:
             self._generate_int_c_files(Path(output_dir), self._int_kind())
             return
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
-        
-        # Load LiteRT interpreter
-        interpreter = self.load_litert_interpreter(str(tflite_path))
-        
-        # Get input and output details
-        input_details = interpreter.get_input_details()
-        output_details = interpreter.get_output_details()
-        
-        # BatchMatMul has two inputs (LHS and RHS)
-        if len(input_details) != 2:
-            raise ValueError(f"BatchMatMul expects 2 inputs, got {len(input_details)}")
-        
-        # Extract dtypes from TFLite tensors
-        input_lhs_dtype = input_details[0]['dtype']
-        input_rhs_dtype = input_details[1]['dtype']
-        output_dtype = output_details[0]['dtype']
         execution_dtype = self.tensor_dtype("input", default=self.desc.get("activation_dtype", "S8"))
-        if execution_dtype == "FP16":
-            input_lhs_dtype = input_rhs_dtype = output_dtype = np.float16
-        elif execution_dtype == "FP32":
-            input_lhs_dtype = input_rhs_dtype = output_dtype = np.float32
-        
-        input_lhs_shape = tuple(input_details[0]['shape'])
-        input_rhs_shape = tuple(input_details[1]['shape'])
-        output_shape = tuple(output_details[0]['shape'])
-        
-        # Select CMSIS kernel + types based on actual dtypes from TFLite
+        input_lhs_dtype = input_rhs_dtype = output_dtype = np.float16 if execution_dtype == "FP16" else np.float32
+        input_lhs_shape, input_rhs_shape = self._operand_shapes()
+
         kernel_info = self._select_cmsis_matmul_kernel(input_lhs_dtype, input_rhs_dtype, output_dtype)
-        float_kernel = kernel_info["input_lhs_c_type"] in {"float", "float16_t"}
         float_dtype = np.float16 if kernel_info["input_lhs_c_type"] == "float16_t" else np.float32
-        
-        # Extract quantization parameters from interpreter (more reliable than LiteRT)
-        # LiteRT sometimes returns incorrect scales (e.g., 1.0 instead of actual scale)
-        input_lhs_qp = input_details[0].get('quantization_parameters', {})
-        input_rhs_qp = input_details[1].get('quantization_parameters', {})
-        output_qp = output_details[0].get('quantization_parameters', {})
-        
-        # LHS quantization parameters
-        input_lhs_quant = {
-            'scale': input_lhs_qp.get('scales', [1.0]),
-            'zero_point': input_lhs_qp.get('zero_points', [0]),
-            'per_channel': len(input_lhs_qp.get('scales', [])) > 1
-        }
-        
-        # RHS quantization parameters (always S8)
-        input_rhs_quant = {
-            'scale': input_rhs_qp.get('scales', [1.0]),
-            'zero_point': input_rhs_qp.get('zero_points', [0]),
-            'per_channel': len(input_rhs_qp.get('scales', [])) > 1
-        }
-        
-        # Output quantization parameters
-        output_quant = {
-            'scale': output_qp.get('scales', [1.0]),
-            'zero_point': output_qp.get('zero_points', [0]),
-            'per_channel': len(output_qp.get('scales', [])) > 1
-        }
-        
         builder = TemplateContextBuilder()
-        
-        # Get transpose flags from descriptor
-        adj_x = self.desc.get('adj_x', False)
-        adj_y = self.desc.get('adj_y', False)
-        
-        # Convert shapes to CMSIS dims.
-        # For float BMM, CMSIS dims use .c as matrix rows and .w as the inner dimension.
-        # The CMSIS adj_y flag is inverted relative to the LiteRT descriptor flag:
+        adj_x = bool(self.desc.get('adj_x', False))
+        adj_y = bool(self.desc.get('adj_y', False))
+
+        # CMSIS float BMM dims use .c as matrix rows and .w as the inner dimension.
+        # The CMSIS adj_y flag is inverted relative to the descriptor flag:
         # adj_y=false consumes RHS as [K, N] with strided column access, while
         # adj_y=true consumes RHS already stored as [N, K].
-        if float_kernel:
-            if len(input_lhs_shape) == 3 and not adj_x:
-                input_lhs_dims = builder.nhwc_to_cmsis_dims(
-                    (input_lhs_shape[0], input_lhs_shape[2], input_lhs_shape[1])
-                )
-            else:
-                input_lhs_dims = builder.nhwc_to_cmsis_dims(input_lhs_shape)
+        if len(input_lhs_shape) == 3 and not adj_x:
+            input_lhs_dims = builder.nhwc_to_cmsis_dims((input_lhs_shape[0], input_lhs_shape[2], input_lhs_shape[1]))
+        else:
+            input_lhs_dims = builder.nhwc_to_cmsis_dims(input_lhs_shape)
+        if len(input_rhs_shape) == 3 and adj_y:
+            input_rhs_dims = builder.nhwc_to_cmsis_dims((input_rhs_shape[0], input_rhs_shape[2], input_rhs_shape[1]))
+        else:
+            input_rhs_dims = builder.nhwc_to_cmsis_dims(input_rhs_shape)
+        bmm_params = {
+            'adj_x': adj_x,
+            'adj_y': not adj_y,
+            'activation_min': float(self.desc.get("activation_min", -1.0e30)),
+            'activation_max': float(self.desc.get("activation_max", 1.0e30)),
+        }
 
-            if len(input_rhs_shape) == 3 and adj_y:
-                input_rhs_dims = builder.nhwc_to_cmsis_dims(
-                    (input_rhs_shape[0], input_rhs_shape[2], input_rhs_shape[1])
-                )
-            else:
-                input_rhs_dims = builder.nhwc_to_cmsis_dims(input_rhs_shape)
-        else:
-            if len(input_lhs_shape) == 3 and adj_x:
-                transposed_lhs_shape = (input_lhs_shape[0], input_lhs_shape[2], input_lhs_shape[1])
-                input_lhs_dims = builder.nhwc_to_cmsis_dims(transposed_lhs_shape)
-            else:
-                input_lhs_dims = builder.nhwc_to_cmsis_dims(input_lhs_shape)
-            
-            if len(input_rhs_shape) == 3:
-                if not adj_y:
-                    transposed_rhs_shape = (input_rhs_shape[0], input_rhs_shape[2], input_rhs_shape[1])
-                    input_rhs_dims = builder.nhwc_to_cmsis_dims(transposed_rhs_shape)
-                else:
-                    input_rhs_dims = builder.nhwc_to_cmsis_dims(input_rhs_shape)
-            else:
-                input_rhs_dims = builder.nhwc_to_cmsis_dims(input_rhs_shape)
-        
-        output_dims = builder.nhwc_to_cmsis_dims(output_shape)
-        
-        if float_kernel:
-            bmm_params = {
-                'adj_x': bool(adj_x),
-                'adj_y': bool(not adj_y),
-                'activation_min': float(self.desc.get("activation_min", -1.0e30)),
-                'activation_max': float(self.desc.get("activation_max", 1.0e30)),
-            }
-        else:
-            # Build FC parameters for BMM
-            # LHS is treated as "input", RHS is treated as "weights"
-            fc_params = builder.build_fc_params(
-                self.desc,
-                input_lhs_quant,  # LHS quantization
-                input_rhs_quant,  # RHS quantization (always S8)
-                output_quant     # Output quantization
-            )
-            
-            # Build BMM params
-            # Note: CMSIS-NN's adj_y is inverted compared to TFLite's adj_y
-            # This is because CMSIS-NN expects RHS to be transposed when adj_y is True
-            bmm_params = {
-                'adj_x': bool(adj_x),
-                'adj_y': bool(not adj_y),  # Invert adj_y to match CMSIS-NN convention
-                'fc_params': fc_params
-            }
-        
-        # Generate input data and quantize
         rng_state = self.rng.__getstate__()
         self.rng = np.random.default_rng(self.seed)
-        
         # Only the LHS is swept: the sweep is defined on the input tensor, and taking it
         # through _maybe_apply_input_mode rather than _sample_uniform keeps the draw on
         # self.rng so the RHS that follows it in the stream is unmoved.
         input_lhs_data = self._maybe_apply_input_mode(
-            self.rng.uniform(-1.0, 1.0, size=input_lhs_shape).astype(float_dtype if float_kernel else np.float32)
-        )
-        input_rhs_data = self.rng.uniform(-1.0, 1.0, size=input_rhs_shape).astype(float_dtype if float_kernel else np.float32)
-        
+            self.rng.uniform(-1.0, 1.0, size=input_lhs_shape).astype(float_dtype))
+        input_rhs_data = self.rng.uniform(-1.0, 1.0, size=input_rhs_shape).astype(float_dtype)
         self.rng.__setstate__(rng_state)
+
+        output_data, output_shape, float_reference = self._float_golden(
+            input_lhs_data, input_rhs_data, adj_x, adj_y, float_dtype)
+        output_dims = builder.nhwc_to_cmsis_dims(output_shape)
+        output_data, nonfinite_context = self.apply_nonfinite_policy(
+            output_data, reference=float_reference, inputs=[input_lhs_data, input_rhs_data]
+        )
+
+        input_lhs_array_str = builder.format_array_as_c_literal(input_lhs_data)
+        input_rhs_array_str = builder.format_array_as_c_literal(input_rhs_data)
+        expected_output_array_str = builder.format_array_as_c_literal(output_data)
+        element_size = np.dtype(float_dtype).itemsize
+        buffer_size_max = max(
+            1024,
+            int(
+                (np.prod(input_lhs_shape) + np.prod(input_rhs_shape) + np.prod(output_shape)) * element_size
+            ),
+        )
+
+        context = {
+            'name': name,
+            'input_lhs_dims': input_lhs_dims,
+            'input_rhs_dims': input_rhs_dims,
+            'output_dims': output_dims,
+            'bmm_params': bmm_params,
+            'input_lhs_array': input_lhs_array_str,
+            'input_rhs_array': input_rhs_array_str,
+            'expected_output_array': expected_output_array_str,
+            'input_dtype': kernel_info["input_lhs_c_type"],
+            'input_rhs_dtype': kernel_info["input_rhs_c_type"],
+            'output_dtype': kernel_info["output_c_type"],
+            'kernel_fn': kernel_info["kernel_fn"],
+            'kernel_get_buffer_size_fn': kernel_info["kernel_get_buffer_size_fn"],
+            'buffer_size_max': buffer_size_max,
+            'float_kernel': True,
+            'bmm_params_type': (
+                'cmsis_nn_bmm_params_f16'
+                if kernel_info["input_lhs_c_type"] == "float16_t"
+                else 'cmsis_nn_bmm_params_f32'
+            ),
+            'bmm_activation_min_literal': builder.format_float_literal(bmm_params['activation_min']),
+            'bmm_activation_max_literal': builder.format_float_literal(bmm_params['activation_max']),
+            'validation_mode': 'float',
+        }
+        context.update(nonfinite_context)
+        self._render_batch_matmul(output_dir, context)
         
-        if float_kernel:
-            def float_reference(operands, _dtype=float_dtype):
-                interpreter.set_tensor(input_details[0]['index'], operands[0].astype(input_details[0]['dtype']))
-                interpreter.set_tensor(input_details[1]['index'], operands[1].astype(input_details[1]['dtype']))
-                interpreter.invoke()
-                return np.array(interpreter.get_tensor(output_details[0]['index']), dtype=_dtype)
-
-            output_data = float_reference([input_lhs_data, input_rhs_data])
-            output_data, nonfinite_context = self.apply_nonfinite_policy(
-                output_data, reference=float_reference, inputs=[input_lhs_data, input_rhs_data]
-            )
-
-            input_lhs_array_str = builder.format_array_as_c_literal(input_lhs_data)
-            input_rhs_array_str = builder.format_array_as_c_literal(input_rhs_data)
-            expected_output_array_str = builder.format_array_as_c_literal(output_data)
-            element_size = np.dtype(float_dtype).itemsize
-            buffer_size_max = max(
-                1024,
-                int(
-                    (np.prod(input_lhs_shape) + np.prod(input_rhs_shape) + np.prod(output_shape)) * element_size
-                ),
-            )
-
-            context = {
-                'name': name,
-                'input_lhs_dims': input_lhs_dims,
-                'input_rhs_dims': input_rhs_dims,
-                'output_dims': output_dims,
-                'bmm_params': bmm_params,
-                'input_lhs_array': input_lhs_array_str,
-                'input_rhs_array': input_rhs_array_str,
-                'expected_output_array': expected_output_array_str,
-                'input_dtype': kernel_info["input_lhs_c_type"],
-                'input_rhs_dtype': kernel_info["input_rhs_c_type"],
-                'output_dtype': kernel_info["output_c_type"],
-                'kernel_fn': kernel_info["kernel_fn"],
-                'kernel_get_buffer_size_fn': kernel_info["kernel_get_buffer_size_fn"],
-                'buffer_size_max': buffer_size_max,
-                'float_kernel': True,
-                'bmm_params_type': (
-                    'cmsis_nn_bmm_params_f16'
-                    if kernel_info["input_lhs_c_type"] == "float16_t"
-                    else 'cmsis_nn_bmm_params_f32'
-                ),
-                'bmm_activation_min_literal': builder.format_float_literal(bmm_params['activation_min']),
-                'bmm_activation_max_literal': builder.format_float_literal(bmm_params['activation_max']),
-                'validation_mode': 'float',
-            }
-            context.update(nonfinite_context)
-            self._render_batch_matmul(output_dir, context)
-            
-            cmake_context = {
-                'name': name,
-                'operator': self.desc.get('operator', 'BatchMatMul'),
-                'operator_name': 'batch_matmul'
-            }
-            cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
-            cmake_path = output_dir / "CMakeLists.txt"
-            with open(cmake_path, 'w') as f:
-                f.write(cmake_content)
-            return
+        cmake_context = {
+            'name': name,
+            'operator': self.desc.get('operator', 'BatchMatMul'),
+            'operator_name': 'batch_matmul'
+        }
+        cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
+        cmake_path = output_dir / "CMakeLists.txt"
+        with open(cmake_path, 'w') as f:
+            f.write(cmake_content)
+        return
