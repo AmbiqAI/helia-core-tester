@@ -244,6 +244,18 @@ static void test_float16(void)
     CHECK(hct_f32_to_f16(ldexpf(1.5f, -25)) == 0x0001u, "above half min subnormal");
     CHECK(hct_f32_to_f16(-0.0f) == 0x8000u, "negative zero");
     CHECK(hct_f32_to_f16(1e-45f) == 0x0000u, "binary32 subnormal");
+    /* binary64 -> binary16 rounds once: just above a binary16 tie rounds up even where
+     * binary32 cannot hold the excess, which a binary32 intermediate would round onto the tie. */
+    CHECK(hct_f64_to_f16(ldexp(1.0, -25) * (1.0 + ldexp(1.0, -40))) == 0x0001u, "above subnormal tie");
+    CHECK(hct_f64_to_f16(ldexp(1.0, -25) * (1.0 - ldexp(1.0, -40))) == 0x0000u, "below subnormal tie");
+    CHECK(hct_f64_to_f16(1.0 + ldexp(1.0, -11) + ldexp(1.0, -40)) == 0x3C01u, "above normal tie");
+    CHECK(hct_f64_to_f16(-(1.0 + ldexp(1.0, -11) + ldexp(1.0, -40))) == 0xBC01u, "above normal tie, negative");
+    CHECK(hct_f64_to_f16(1.0 + ldexp(1.0, -11)) == 0x3C00u, "exact normal tie to even");
+    CHECK(hct_f64_to_f16(1e300) == 0x7C00u && hct_f64_to_f16(-1e300) == 0xFC00u, "binary64 overflow");
+    CHECK(hct_f64_to_f16(65519.999999) == 0x7BFFu && hct_f64_to_f16(65520.0) == 0x7C00u, "overflow edge");
+    CHECK(hct_f64_to_f16(1e-300) == 0x0000u && hct_f64_to_f16(-1e-300) == 0x8000u, "binary64 tiny");
+    CHECK((hct_f64_to_f16(NAN) & 0x7E00u) == 0x7E00u, "nan");
+    CHECK(hct_f64_to_f16(INFINITY) == 0x7C00u, "inf");
     CHECK(bits(hct_f16_to_f32(0x8000u)) == 0x80000000u, "widen -0");
     CHECK(hct_f16_to_f32(0x0001u) == ldexpf(1.0f, -24), "widen min subnormal");
 }

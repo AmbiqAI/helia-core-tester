@@ -397,6 +397,8 @@ def generate_test(
     try:
         if uses_reference:
             print(f"Reference golden: {name}")
+        elif op.status_only():
+            print(f"Status-only case: {name}")
         else:
             op.convert_to_tflite(model, str(tflite_path), seed)
             print(f"Generated TFLite model: {name}")

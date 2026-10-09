@@ -14,30 +14,12 @@ import pytest
 
 from helia_core_tester.generation.reference.abi import activation_code, dtype_code
 from helia_core_tester.generation.reference.bindings import ReferenceKernelError, get_bindings, output_shape_for
+from helia_core_tester.tests.reference_models import mbqm as _mbqm
 
 
 @pytest.fixture(scope="module")
 def lib():
     return get_bindings()
-
-
-def _srdhm(a: int, b: int) -> int:
-    if a == b == -(2**31):
-        return 2**31 - 1
-    return (a * b + 2**30) >> 31  # floor(ab / 2^31 + 1/2): gemmlowp's rounding
-
-
-def _rdbpot(x: int, e: int) -> int:
-    if e == 0:
-        return x
-    q, r = divmod(x, 1 << e)  # floor division
-    half = 1 << (e - 1)
-    return q + (1 if (r > half or (r == half and x >= 0)) else 0)
-
-
-def _mbqm(x: int, m: int, shift: int) -> int:
-    left, right = max(shift, 0), max(-shift, 0)
-    return _rdbpot(_srdhm(x << left, m), right)
 
 
 def _model_add(a: np.ndarray, b: np.ndarray, p: dict, dtype) -> np.ndarray:

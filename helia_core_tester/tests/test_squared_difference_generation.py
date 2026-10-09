@@ -1,22 +1,22 @@
 from pathlib import Path
 
-import numpy as np
 import pytest
 
 from helia_core_tester.generation.io.descriptors import load_descriptor
 from helia_core_tester.generation.ops.BasicMathFunctions.squared_difference import (
     OpSquaredDifference,
-    build_squared_difference_op,
     squared_difference_quant_preset,
 )
-from helia_core_tester.generation.utils.litert_builder import LITERT_AVAILABLE
-from helia_core_tester.generation.utils.litert_utils import (
-    get_operator_tensors_from_litert,
-    load_litert_model,
-)
-from helia_core_tester.generation.utils.tflite_utils import (
-    elementwise_squared_difference_quant_params,
-)
+from helia_core_tester.generation.reference import quant as ref_quant
+from helia_core_tester.generation.reference.bindings import get_bindings
+
+
+def _prepare(dtype: str, s1: float, s2: float, so: float, z1: int = 0, z2: int = 0, zo: int = 0) -> dict:
+    return get_bindings().prepare("squared_difference_prepare", {
+        "dtype": ref_quant.hct_dtype(dtype), "activation": 0,
+        "input1_scale": s1, "input1_zero_point": z1, "input2_scale": s2, "input2_zero_point": z2,
+        "output_scale": so, "output_zero_point": zo,
+    })
 
 TESTER_ROOT = Path(__file__).resolve().parents[2]
 SQDIFF_DESCRIPTOR_PATH = (
@@ -96,82 +96,42 @@ def test_squared_difference_descriptors_match_unit_test_parity() -> None:
         assert desc["weight_dtype"] == "S8"
         assert tuple(desc["input_1_shape"]) == input_1_shape
         assert tuple(desc["input_2_shape"]) == input_2_shape
-        # squared_difference_ident_s16 opts into the Keras fake-quant S16
-        # builder; every other case has no descriptor-level hint.
-        if name == "squared_difference_ident_s16":
-            assert desc.get("hint", {}) == {"s16_builder": "keras_fake_quant"}
-        else:
-            assert desc.get("hint", {}) == {}
+        assert desc.get("hint", {}) == {}
 
 
 def test_squared_difference_quant_params_s8_match_expected_shape() -> None:
-    params = elementwise_squared_difference_quant_params(
-        input1_scale=1.0 / 128.0,
-        input2_scale=1.0 / 256.0,
-        output_scale=1.0 / 64.0,
-        activation_dtype="S8",
-    )
+    params = _prepare("S8", 1.0 / 128.0, 1.0 / 256.0, 1.0 / 64.0)
 
     assert params["left_shift"] == 7
     assert params["input1_shift"] == 0
     assert params["input2_shift"] == -1
-    assert params["out_shift"] == -19
+    assert params["output_shift"] == -19
 
 
 def test_squared_difference_quant_params_s16_match_expected_shape() -> None:
-    params = elementwise_squared_difference_quant_params(
-        input1_scale=1.0 / 32768.0,
-        input2_scale=1.0 / 65536.0,
-        output_scale=1.0 / 32768.0,
-        activation_dtype="S16",
-    )
+    params = _prepare("S16", 1.0 / 32768.0, 1.0 / 65536.0, 1.0 / 32768.0)
 
     assert params["left_shift"] == 0
     assert params["input1_shift"] == 0
     assert params["input2_shift"] == -1
-    assert params["out_shift"] == -12
+    assert params["output_shift"] == -12
 
 
-def test_squared_difference_builder_uses_explicit_quantization(tmp_path: Path) -> None:
-    if not LITERT_AVAILABLE:
-        pytest.skip("ai_edge_litert is required for squared difference LiteRT generation")
-
-    model_bytes = build_squared_difference_op(
-        input_1_shape=(1, 2, 2, 3),
-        input_2_shape=(1, 2, 2, 3),
-        dtype="int8",
-    )
-    tflite_path = tmp_path / "sqdiff_s8.tflite"
-    tflite_path.write_bytes(model_bytes)
-
-    model, subgraph = load_litert_model(str(tflite_path))
-    op_tensors = get_operator_tensors_from_litert(model, subgraph, 0)
-
-    input1_quant = op_tensors["inputs"][0]["quantization"]
-    input2_quant = op_tensors["inputs"][1]["quantization"]
-    output_quant = op_tensors["outputs"][0]["quantization"]
-
+def test_squared_difference_presets_carry_the_explicit_quantization() -> None:
     # A moderate asymmetric input zero point: -128 would pin every lane to a
     # non-negative post-offset value and hide the sign-dependent kernel paths,
     # 0 would leave the input offset term dead in every s8 case. Only the
     # output, non-negative by definition, keeps -128 (hct#81).
-    assert input1_quant["scale"] == pytest.approx(1.0 / 128.0)
-    assert input1_quant["zero_point"] == -40
-    assert input2_quant["scale"] == pytest.approx(1.0 / 256.0)
-    assert input2_quant["zero_point"] == -40
-    assert output_quant["scale"] == pytest.approx(1.0 / 64.0)
-    assert output_quant["zero_point"] == -128
+    preset = squared_difference_quant_preset("int8")
+    assert preset["input_1_quant"] == ([1.0 / 128.0], [-40])
+    assert preset["input_2_quant"] == ([1.0 / 256.0], [-40])
+    assert preset["output_quant"] == ([1.0 / 64.0], [-128])
 
 
 def test_squared_difference_s8_generates_expected_c_params(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    if not LITERT_AVAILABLE:
-        pytest.skip("ai_edge_litert is required for squared difference LiteRT generation")
-
     monkeypatch.setenv("CMSIS_NN_REPO_ROOT", str(TESTER_ROOT))
     desc = _sqdiff_desc("sqdiff_s8", "S8")
     op = OpSquaredDifference(desc, seed=1, target_cpu="cortex-m55")
-    tflite_path = tmp_path / "sqdiff_s8.tflite"
-    op.convert_to_tflite(None, str(tflite_path), 1)
     op.generate_c_files(tmp_path)
 
     c_path = tmp_path / "sqdiff_s8_squared_difference.c"
@@ -202,9 +162,6 @@ def test_squared_difference_parity_descriptors_generate_wrapper_c(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    if not LITERT_AVAILABLE:
-        pytest.skip("ai_edge_litert is required for squared difference LiteRT generation")
-
     monkeypatch.setenv("CMSIS_NN_REPO_ROOT", str(TESTER_ROOT))
     desc = _sqdiff_descriptor_map()[name]
     assert desc["activation_dtype"] == dtype
@@ -212,33 +169,8 @@ def test_squared_difference_parity_descriptors_generate_wrapper_c(
     assert tuple(desc["input_2_shape"]) == input_2_shape
 
     op = OpSquaredDifference(desc, seed=1, target_cpu="cortex-m55")
-    tflite_path = tmp_path / f"{name}.tflite"
-    keras_model = op.build_keras_model() if op.needs_keras_model() else None
-    op.convert_to_tflite(keras_model, str(tflite_path), 1)
-
-    if dtype == "S16" and input_1_shape == input_2_shape:
-        fake_output = np.zeros(input_1_shape, dtype=np.int16)
-
-        class _FakeInterpreter:
-            def get_input_details(self):
-                return [{"index": 0}, {"index": 1}]
-
-            def get_output_details(self):
-                return [{"index": 0}]
-
-            def set_tensor(self, index, value):
-                del index, value
-
-            def invoke(self):
-                return None
-
-            def get_tensor(self, index):
-                del index
-                return fake_output
-
-        monkeypatch.setattr(op, "load_litert_interpreter", lambda _: _FakeInterpreter())
-
     op.generate_c_files(tmp_path)
+    assert op.reference.entry == f"squared_difference_{dtype.lower()}"
 
     c_path = tmp_path / f"{name}_squared_difference.c"
     h_path = tmp_path / "includes" / f"{name}_squared_difference.h"
@@ -254,35 +186,9 @@ def test_squared_difference_s16_elementwise_generates_expected_c_params(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    if not LITERT_AVAILABLE:
-        pytest.skip("ai_edge_litert is required for squared difference LiteRT generation")
-
     monkeypatch.setenv("CMSIS_NN_REPO_ROOT", str(TESTER_ROOT))
     desc = _sqdiff_desc("sqdiff_s16", "S16", call_style="elementwise")
     op = OpSquaredDifference(desc, seed=1, target_cpu="cortex-m55")
-    tflite_path = tmp_path / "sqdiff_s16.tflite"
-    op.convert_to_tflite(None, str(tflite_path), 1)
-
-    fake_output = np.zeros((1, 2, 2, 3), dtype=np.int16)
-
-    class _FakeInterpreter:
-        def get_input_details(self):
-            return [{"index": 0}, {"index": 1}]
-
-        def get_output_details(self):
-            return [{"index": 0}]
-
-        def set_tensor(self, index, value):
-            del index, value
-
-        def invoke(self):
-            return None
-
-        def get_tensor(self, index):
-            del index
-            return fake_output
-
-    monkeypatch.setattr(op, "load_litert_interpreter", lambda _: _FakeInterpreter())
     op.generate_c_files(tmp_path)
 
     c_path = tmp_path / "sqdiff_s16_squared_difference.c"

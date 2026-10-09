@@ -103,6 +103,22 @@ uint16_t hct_f32_to_f16(float f)
     return (uint16_t)(sign | shift_rne(full, s));
 }
 
+uint16_t hct_f64_to_f16(double d)
+{
+    /* Round to binary32 by round-to-odd, then to binary16: with 24 >= 11 + 2 bits the
+     * second rounding is the correctly rounded binary16 of d, subnormals included. */
+    float f = (float)d;
+    if (isfinite(d) && isfinite(f) && (double)f != d)
+    {
+        if (fabs((double)f) > fabs(d))
+        {
+            f = nextafterf(f, 0.0f);
+        }
+        f = bits_f32(f32_bits(f) | 1u);
+    }
+    return hct_f32_to_f16(f);
+}
+
 int32_t hct_check_float_activation(float lo, float hi)
 {
     if (isnan(lo) || isnan(hi) || lo > hi)

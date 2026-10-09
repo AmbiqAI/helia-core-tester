@@ -118,3 +118,37 @@ void hct_broadcast2_offsets(const HctBroadcast2 *bc, int64_t index, int64_t *a_o
     *a_offset = ao;
     *b_offset = bo;
 }
+
+int32_t hct_binary_setup(const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs,
+                         int32_t in_dtype, int32_t out_dtype, HctBroadcast2 *bc)
+{
+    HCT_TRY(hct_check_io(inputs, num_inputs, 2, outputs, num_outputs, 1));
+    int64_t n = 0;
+    HCT_TRY(hct_check_tensor(&inputs[0], in_dtype, &n));
+    HCT_TRY(hct_check_tensor(&inputs[1], in_dtype, &n));
+    HCT_TRY(hct_check_tensor(&outputs[0], out_dtype, &n));
+    return hct_broadcast2_init(bc, &inputs[0], &inputs[1], &outputs[0]);
+}
+
+int32_t hct_unary_setup(const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs,
+                        int32_t in_dtype, int32_t out_dtype, int64_t *count)
+{
+    HCT_TRY(hct_check_io(inputs, num_inputs, 1, outputs, num_outputs, 1));
+    int64_t n_in = 0;
+    int64_t n_out = 0;
+    HCT_TRY(hct_check_tensor(&inputs[0], in_dtype, &n_in));
+    HCT_TRY(hct_check_tensor(&outputs[0], out_dtype, &n_out));
+    if (inputs[0].rank != outputs[0].rank)
+    {
+        return HCT_E_SHAPE;
+    }
+    for (int32_t i = 0; i < inputs[0].rank; ++i)
+    {
+        if (inputs[0].dims[i] != outputs[0].dims[i])
+        {
+            return HCT_E_SHAPE;
+        }
+    }
+    *count = n_in;
+    return HCT_OK;
+}
