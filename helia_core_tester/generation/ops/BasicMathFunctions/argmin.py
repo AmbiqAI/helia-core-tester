@@ -6,24 +6,9 @@ from typing import Dict, Any
 import numpy as np
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.base import OperationBase
-from helia_core_tester.generation.utils.litert_builder import build_arg_reduction_op
 from helia_core_tester.generation.ops._shared.arg_extrema_float import (
     float_arg_kernel, generate_arg_extrema_float,
 )
-
-
-def build_argmin_op(
-    *,
-    input_shape,
-    axis: int = -1,
-    dtype: str = "int8",
-) -> bytes:
-    return build_arg_reduction_op(
-        op_name="ARG_MIN",
-        input_shape=input_shape,
-        axis=axis,
-        dtype=dtype,
-    )
 
 
 class OpArgMin(OperationBase):
@@ -31,32 +16,9 @@ class OpArgMin(OperationBase):
     ArgMin operation.
     """
 
-    def needs_keras_model(self) -> bool:
-        return False
-    
-    def build_keras_model(self):
-        raise NotImplementedError("ArgMin uses LiteRT-only model generation.")
+    def uses_reference(self) -> bool:
+        return True
 
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        """Convert Keras model to TFLite with quantization."""
-        activation_dtype = self.tensor_dtype("input")
-        if activation_dtype == "S8":
-            dtype = "int8"
-        elif activation_dtype == "S16":
-            dtype = "int16"
-        elif activation_dtype in ("FP16", "FP32"):
-            float_arg_kernel(self, "min")
-            dtype = "float16" if activation_dtype == "FP16" else "float32"
-        else:
-            raise NotImplementedError(f"Unsupported ArgMin dtype: {activation_dtype}")
-        model_bytes = build_argmin_op(
-            input_shape=self.desc["input_shape"],
-            axis=self.desc.get("axis", -1),
-            dtype=dtype,
-        )
-        with open(out_path, "wb") as f:
-            f.write(model_bytes)
-    
     def _select_cmsis_argmin_kernel(self) -> Dict[str, str]:
         """
         Select appropriate CMSIS-NN kernel function for ArgMin operation.
@@ -93,10 +55,9 @@ class OpArgMin(OperationBase):
 
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
         
+        from helia_core_tester.generation.reference.call import ReferenceCall
+
         name = self.desc['name']
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
         
         # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_argmin_kernel()
@@ -131,8 +92,10 @@ class OpArgMin(OperationBase):
         input_q = self.rng.integers(qmin, qmax + 1, size=input_shape, dtype=np_in_dtype)
         self.rng.__setstate__(rng_state)
 
-        # Compute expected output directly
-        output_data = np.argmin(input_q, axis=axis).astype(np.int32)
+        output_data = self.reference_golden(ReferenceCall(
+            f"arg_min_{'s16' if np_in_dtype == np.int16 else 's8'}", {"axis": int(axis)},
+            {"input": np.ascontiguousarray(input_q)},
+            {"output": tuple(n for i, n in enumerate(input_shape) if i != axis)}))
         output_shape = tuple(output_data.shape)
         
         # Format arrays

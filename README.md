@@ -926,7 +926,9 @@ Keras model, converts nothing, and fails the case unless `generate_c_files()` re
 through `OperationBase.reference_golden()`. On it so far: the elementwise and activation families
 (Add, Sub, Mul, Minimum/Maximum, SquaredDifference, comparisons, Abs, Clamp, Relu/Relu6, LeakyRelu,
 PReLU/PReLUScalar, HardSwish, Tanh, Logistic, NNActivationS16, NNActivationFloat), Softmax, Sqrt,
-Rsqrt, Quantize, Dequantize and Requantize; the rest follow per family. A case that asserts only a
+Rsqrt, Quantize, Dequantize and Requantize; the weighted operators (Conv, DepthwiseConv,
+TransposeConv, FullyConnected, BatchMatMul), pooling, Mean, ReduceSum/Max/Min, ArgMax/ArgMin and
+BatchNorm; the rest follow per family. A case that asserts only a
 returned status (an `ARG_ERROR` case) answers `status_only()` and has no golden at all.
 
 - `helia_core_tester/reference/` holds the library: plain scalar C11 written from each operator's
@@ -962,10 +964,23 @@ returned status (an `ARG_ERROR` case) answers `status_only()` and has no golden 
     output: {range: [-0.375, 8.0]}
   ```
 
+- Weighted operators draw their own weights (Glorot-uniform, `weight_gain` scaling it, from a
+  stream separate from the input draw) in `generation/reference/weighted.py`. Filters are
+  quantized symmetric per output channel (qmax 127 for int8, 7 for int4, as the converter did),
+  biases at `input_scale * filter_scale[c]`, rounded half away from zero, int32 for s8 and int64
+  for s16; integer biases are drawn with a magnitude that moves every channel's output by at least
+  one step, so a dropped bias-add cannot pass. The output quantization is the policy over the
+  float reference (`*_f32` entry) applied to the dequantized operands, and the multipliers come
+  from the `per_channel_quant` entry (TFLite's `PopulateConvolutionQuantizationParams`).
+  FullyConnected follows TFLM's double rounding (TFLite core since 2.20 rounds once; ns-cmsis-nn
+  rounds twice), s16 FullyConnected TFLite's reduced-multiplier int64 path, and Mean TFLM's folding
+  of 1/count into the multiplier.
 - float goldens are the exact result rounded once to the output type. float16 computes in binary32
   on the half operands (or binary64 where a step is not exact in binary32) and rounds once; an
   operator made of several binary16 steps (SquaredDifference) rounds each step, as IEEE binary16
-  arithmetic does. Minimum/Maximum follow IEEE 754-2019 (NaN propagates, -0 < +0). Tolerances for
+  arithmetic does. Minimum/Maximum follow IEEE 754-2019 (NaN propagates, -0 < +0). Sums (convolutions,
+  matrix products, pooling, reductions) are exact in binary64 and rounded once, so summation order
+  is not part of the reference; BatchNorm is a fused multiply-add. Tolerances for
   kernels that accumulate in fp16 are derived per operator.
 - Tests: `reference/tests/test_common.c` (run by `tests/test_reference_c.py` under UBSan, and
   ASan where the host supports it) checks the fixed point against wide-integer models and binary16

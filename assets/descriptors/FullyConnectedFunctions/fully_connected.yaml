@@ -174,8 +174,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
 input_shape:
 - 1
 - 1
@@ -197,8 +195,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
 input_shape:
 - 1
 - 1
@@ -312,8 +308,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
 input_shape:
 - 1
 - 1
@@ -335,8 +329,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
 input_shape:
 - 1
 - 1

@@ -2,9 +2,6 @@
 
 import numpy as np
 
-from helia_core_tester.generation.ops._shared.arg_extrema_reference import (
-    arg_extrema_reference,
-)
 from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
 
@@ -54,7 +51,12 @@ def generate_arg_extrema_float(op, output_dir, kind):
                 "input_bits must be unsigned integers of the element width"
             )
         bits = np.asarray(raw, dtype=word).reshape(shape)
-    expected = arg_extrema_reference(bits, axis, kind)
+    from helia_core_tester.generation.reference.call import ReferenceCall
+
+    expected = op.reference_golden(ReferenceCall(
+        f"arg_{kind}_{'f16' if half else 'f32'}", {"axis": int(axis)},
+        {"input": np.ascontiguousarray(bits.view(dtype))},
+        {"output": tuple(n for i, n in enumerate(shape) if i != axis)}))
     builder = TemplateContextBuilder()
     suffix = f"arg{kind}"
     op._write_op_outputs(

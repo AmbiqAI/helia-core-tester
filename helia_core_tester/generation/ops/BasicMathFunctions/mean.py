@@ -3,7 +3,6 @@ Mean operation implementation for Helia-Core Tester.
 """
 
 import numpy as np
-import tensorflow as tf
 from pathlib import Path
 from typing import Dict
 from helia_core_tester.generation.ops._shared.base import OperationBase  
@@ -14,37 +13,20 @@ class OpMean(OperationBase):
     Mean operation.
     """
     
-    def build_keras_model(self) -> tf.keras.Model:
-        """Build Keras model for Mean operation."""
-        input_shape = self.desc['input_shape']
-        
-        inputs = tf.keras.Input(shape=input_shape[1:], dtype=tf.float32, name='input')
-        
-        # Get axes and keepdims from descriptor
-        axes = self.desc.get('axes', [1, 2])  # Default to spatial dimensions
-        keepdims = self.desc.get('keepdims', True)
-        
-        # Mean operation
-        output = tf.keras.layers.Lambda(
-            lambda x: tf.reduce_mean(x, axis=axes, keepdims=keepdims),
-            name='reduce_mean'
-        )(inputs)
-        
-        model = tf.keras.Model(inputs=inputs, outputs=output)
-        return model
+    def uses_reference(self) -> bool:
+        return True
 
     def _is_float_kernel(self) -> bool:
         return self.tensor_dtype("input", default="S8") in ("FP32", "FP16")
 
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        """Convert Keras model to TFLite (plain float model for FP32/FP16)."""
-        if self._is_float_kernel():
-            converter = tf.lite.TFLiteConverter.from_keras_model(model)
-            tflite_model = converter.convert()
-            self._write_tflite_bytes(out_path, tflite_model)
-            return
-        super().convert_to_tflite(model, out_path, rep_seed)
-    
+    def _axes(self, rank: int):
+        from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
+
+        axes = self.desc.get('axes', [1, 2])
+        if not isinstance(axes, list):
+            axes = [axes]
+        return TemplateContextBuilder.normalize_reduction_axes(rank, axes)
+
     def _select_cmsis_mean_kernel(self) -> Dict[str, str]:
         """
         Select appropriate CMSIS-NN kernel function for Mean operation.
@@ -88,166 +70,57 @@ class OpMean(OperationBase):
         Generate C and H files from templates for Mean operation.
         """
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
-        from helia_core_tester.generation.utils.tflite_utils import calculate_multiplier_shift
         
+        from helia_core_tester.generation.reference import policy
+        from helia_core_tester.generation.reference.bindings import get_bindings
+        from helia_core_tester.generation.reference.call import ReferenceCall
+
         name = self.desc['name']
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
-        
-        # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_mean_kernel()
-        
         if kernel_info.get('float_kernel'):
             self._generate_float_c_files(output_dir, kernel_info)
             return
-        
-        # Load LiteRT model for shape and quantization extraction
-        from helia_core_tester.generation.utils.litert_utils import get_operator_tensors_from_litert
-        model, subgraph = self.load_litert_model(str(tflite_path))
-        op_tensors = get_operator_tensors_from_litert(model, subgraph, 0)
-        
-        # Extract shapes from LiteRT
-        input_shape = op_tensors['inputs'][0]['shape']
-        
-        # Ensure shapes are tuples
-        if input_shape is not None:
-            input_shape = tuple(input_shape)
-        
+
+        input_shape = tuple(int(d) for d in self.desc['input_shape'])
         builder = TemplateContextBuilder()
-        
-        # Convert input shape to CMSIS dims
         input_dims = builder.nhwc_to_cmsis_dims(input_shape)
-        
-        # Extract axes from descriptor (default to [1, 2] for spatial dimensions)
-        axes = self.desc.get('axes', [1, 2])
-        if not isinstance(axes, list):
-            axes = [axes]
-        
-        # Build CMSIS reduction dims from input + axis semantics.
-        # Keep CMSIS output dims 4D even when TFLite output rank is reduced (keepdims=false).
-        normalized_axes = builder.normalize_reduction_axes(len(input_shape), axes)
+        normalized_axes = self._axes(len(input_shape))
         axis_dims_cmsis = builder.build_reduce_axis_dims(len(input_shape), normalized_axes)
-        output_dims = builder.build_reduce_output_dims(
-            input_shape=input_shape,
-            axes=normalized_axes,
-            keepdims=bool(self.desc.get('keepdims', True))
-        )
-        
-        # Extract quantization from LiteRT
-        input_quant = op_tensors['inputs'][0]['quantization']
-        output_quant = op_tensors['outputs'][0]['quantization']
-        
-        input_scale = input_quant.get('scale', 1.0)
-        input_zp = input_quant.get('zero_point', 0)
-        output_scale = output_quant.get('scale', 1.0)
-        output_zp = output_quant.get('zero_point', 0)
-        
-        # Handle per-channel quantization (convert to scalar)
-        if isinstance(input_scale, (list, np.ndarray)):
-            input_scale = float(input_scale[0])
-        if isinstance(input_zp, (list, np.ndarray)):
-            input_zp = int(input_zp[0])
-        if isinstance(output_scale, (list, np.ndarray)):
-            output_scale = float(output_scale[0])
-        if isinstance(output_zp, (list, np.ndarray)):
-            output_zp = int(output_zp[0])
-        
-        input_scale = float(input_scale)
-        input_zp = int(input_zp)
-        output_scale = float(output_scale)
-        output_zp = int(output_zp)
-        
-        # Calculate reduction size (number of elements being averaged)
-        # IMPORTANT: Use the actual TFLite model's input_shape, not the descriptor's shape,
-        # because TFLite may have removed or modified the batch dimension during conversion
-        reduction_size = 1
-        for axis in normalized_axes:
-            if 0 <= axis < len(input_shape):
-                # Use the actual dimension size from the TFLite model
-                reduction_size *= input_shape[axis]
-        
-        # Convert to Python int for bit_length() method
-        reduction_size = int(reduction_size)
-        
-        # For Mean: base_scale = input_scale / output_scale
-        # Then we need to fold 1 / reduction_size into the multiplier/shift
-        base_scale = input_scale / output_scale
-        
-        # Calculate base multiplier and shift
-        base_mult, base_shift = calculate_multiplier_shift(base_scale)
-        
-        # Fold 1 / reduction_size into multiplier/shift
-        Q31_MAX = (1 << 31) - 1
-        
-        # Calculate initial shift: 63 - (count.bit_length() - 1)
-        shift = 63 - (reduction_size.bit_length() - 1)
-        shift = min(shift, 32)
-        shift = min(shift, 31 + base_shift)  # ensure we don't overflow Q31
-        
-        folded_mult = None
-        folded_shift = None
-        while shift >= 0:
-            folded_mult = ((base_mult << shift) + (reduction_size // 2)) // reduction_size
-            if folded_mult <= Q31_MAX:
-                folded_shift = base_shift - shift
-                break
-            shift -= 1  # try smaller shift to prevent overflow
-        
-        # Use folded values if found, otherwise fall back to base
-        if folded_mult is not None and folded_mult > 0:
-            out_mult = int(folded_mult)
-            out_shift = int(folded_shift)
-        else:
-            out_mult = base_mult
-            out_shift = base_shift
-        
-        if out_mult == 0 or out_shift < -31:
-            effective_scale = base_scale / float(reduction_size)
-            out_mult, out_shift = calculate_multiplier_shift(effective_scale)
-        
-        # Generate input data and quantize
+        keepdims = bool(self.desc.get('keepdims', True))
+        output_dims = builder.build_reduce_output_dims(input_shape=input_shape, axes=normalized_axes, keepdims=keepdims)
+        out_shape = tuple(1 if i in normalized_axes else d for i, d in enumerate(input_shape))
+        count = int(np.prod([input_shape[a] for a in normalized_axes]))
+
+        kind = "s16" if kernel_info["input_c_type"] == "int16_t" else "s8"
         rng_state = self.rng.__getstate__()
         self.rng = np.random.default_rng(self.seed)
-        
         input_data = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(np.float32)
-        
         self.rng.__setstate__(rng_state)
-        
-        # Quantize inputs
-        if kernel_info["input_c_type"] == "int8_t":
-            np_in_dtype = np.int8
-            qmin, qmax = -128, 127
-        elif kernel_info["input_c_type"] == "int16_t":
-            np_in_dtype = np.int16
-            qmin, qmax = -32768, 32767
-        else:
-            raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
-        
-        input_q = np.round(input_data / float(input_scale) + float(input_zp)).astype(np.int32)
-        input_q = np.clip(input_q, qmin, qmax).astype(np_in_dtype)
-        
-        # Run inference using LiteRT interpreter
-        interpreter = self.load_litert_interpreter(str(tflite_path))
-        input_details = interpreter.get_input_details()
-        output_details = interpreter.get_output_details()
-        
-        interpreter.set_tensor(input_details[0]['index'], input_q)
-        interpreter.invoke()
-        output_data = interpreter.get_tensor(output_details[0]['index'])
-        output_data = np.array(output_data)
-        
-        # Format arrays
+        # The [-1, 1] the converter calibrated on; a mean stays inside its input's range.
+        in_quant = self.activation_quant("input", (-1.0, 1.0), kind)
+        input_q = policy.quantize(input_data, in_quant)
+        real = policy.dequantize(input_q, in_quant).mean(axis=tuple(normalized_axes), keepdims=True)
+        out_quant = self.activation_quant("output", policy.data_range(real), kind)
+        folded = get_bindings().prepare("mean_prepare", {
+            "input_scale": in_quant.scale, "output_scale": out_quant.scale, "count": count})
+        output_data = self.reference_golden(ReferenceCall(
+            f"mean_{kind}",
+            {"axis_mask": sum(1 << a for a in normalized_axes), "input_zero_point": in_quant.zero_point,
+             "output_zero_point": out_quant.zero_point, **folded},
+            {"input": np.ascontiguousarray(input_q)}, {"output": out_shape},
+            quant={"input": in_quant.to_json(), "output": out_quant.to_json()}))
+        input_zp, output_zp = in_quant.zero_point, out_quant.zero_point
+        out_mult, out_shift = folded["multiplier"], folded["shift"]
         input_array_str = builder.format_array_as_c_literal(input_q)
         expected_output_array_str = builder.format_array_as_c_literal(output_data)
-        
-        # Build template context
+
         context = {
             'name': name,
             'input_dims': input_dims,
             'output_dims': output_dims,
             'axis_dims': axis_dims_cmsis,
-            'input_offset': int(input_zp),
+            # arm_mean_* add input_offset * count to the raw sum: the negated zero point.
+            'input_offset': int(-input_zp),
             'out_offset': int(output_zp),
             'out_mult': int(out_mult),
             'out_shift': int(out_shift),
@@ -279,10 +152,8 @@ class OpMean(OperationBase):
 
         Mirrors OpReduceSum's float path: same call shape (4D NHWC input
         dims + 4D binary axis mask + 4D output dims), with the kernel
-        dividing by the reduction count before the single store. Goldens
-        accumulate in float32 for both dtypes and divide in float32,
-        matching the kernels' documented semantics (the f16 kernel widens
-        to float32 and rounds once after the divide).
+        dividing by the reduction count before the single store. The golden
+        is the exact mean rounded once (the C reference).
         """
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
@@ -309,25 +180,15 @@ class OpMean(OperationBase):
 
         input_q = self._sample_uniform(input_shape, dtype=float_dtype)
 
-        reduction_count = 1
-        for axis in normalized_axes:
-            reduction_count *= int(input_shape[axis])
+        from helia_core_tester.generation.reference.call import ReferenceCall
 
-        # Golden with float32 accumulation and a float32 divide for both
-        # dtypes (single final rounding for f16).
-        def reference(operands):
-            return (
-                np.sum(
-                    operands[0].astype(np.float32),
-                    axis=tuple(normalized_axes),
-                    keepdims=True,
-                )
-                / np.float32(reduction_count)
-            ).astype(float_dtype)
-
-        output_data = reference([input_q])
+        output_data = self.reference_golden(ReferenceCall(
+            "mean_f16" if float_dtype == np.float16 else "mean_f32",
+            {"axis_mask": sum(1 << a for a in normalized_axes)},
+            {"input": np.ascontiguousarray(input_q)},
+            {"output": tuple(1 if i in normalized_axes else d for i, d in enumerate(input_shape))}))
         output_data, nonfinite_context = self.apply_nonfinite_policy(
-            output_data, reference=reference, inputs=[input_q]
+            output_data, reference=self.reference_probe, inputs=[input_q]
         )
 
         context = {

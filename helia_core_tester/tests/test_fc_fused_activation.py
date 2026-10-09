@@ -1,8 +1,8 @@
 """FC fused RELU clamps at the output zero point."""
 
-import numpy as np
 import pytest
 
+from helia_core_tester.generation.ops._shared.conv_reference import quantized_bounds
 from helia_core_tester.generation.ops.FullyConnectedFunctions.fully_connected import OpFullyConnected
 
 
@@ -17,5 +17,14 @@ from helia_core_tester.generation.ops.FullyConnectedFunctions.fully_connected im
 )
 def test_relu_clamp_uses_zero_point(activation, zero_point, expected):
     op = OpFullyConnected({"name": "fc_relu_s8", "operator": "FullyConnected", "activation": activation})
-    quant = {"scale": 6.0 / 47, "zero_point": zero_point}
-    assert op._compute_activation_range(quant, np.dtype(np.int8)) == expected
+    assert quantized_bounds(op, "s8", 6.0 / 47, zero_point) == expected
+
+
+def test_descriptor_bounds_narrow_the_fused_range_and_an_empty_one_fails():
+    op = OpFullyConnected({"name": "fc_relu_s8", "operator": "FullyConnected", "activation": "RELU",
+                           "activation_min": -3, "activation_max": 100})
+    assert quantized_bounds(op, "s8", 0.1, -5) == (-3, 100)
+    op = OpFullyConnected({"name": "fc_empty_s8", "operator": "FullyConnected", "activation": "RELU",
+                           "activation_max": -10})
+    with pytest.raises(ValueError, match="empty"):
+        quantized_bounds(op, "s8", 0.1, -5)

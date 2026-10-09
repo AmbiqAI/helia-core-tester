@@ -1305,8 +1305,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1335,8 +1333,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1365,8 +1361,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1395,8 +1389,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1425,8 +1417,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1455,8 +1445,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1485,8 +1473,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1515,8 +1501,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1545,8 +1529,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1575,8 +1557,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1605,8 +1585,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1635,8 +1613,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1665,8 +1641,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1695,8 +1669,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1725,8 +1697,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1755,8 +1725,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1785,8 +1753,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1815,8 +1781,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1845,8 +1809,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1875,8 +1837,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1905,8 +1865,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1935,8 +1893,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1965,8 +1921,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1995,8 +1949,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -2025,8 +1977,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -2103,8 +2053,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape: [1, 4, 4, 1]
 filter_shape: [3, 3, 1, 2]
@@ -3345,6 +3293,9 @@ activation: RELU6
 entry: arm_convolve_1x1_s8_short_k
 entry_sizer: arm_convolve_1x1_s8_fast_get_buffer_size
 hint: {call_style: per_tensor}
+# Inputs in [-2, 2] keep most pre-activations inside (0, 6), so the clamp is exercised on both
+# sides without pinning the output at the top code.
+input_range: [-2, 2]
 input_shape: [1, 1, 11, 8]
 filter_shape: [1, 1, 8, 8]
 strides: [1, 1]
