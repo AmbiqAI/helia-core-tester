@@ -24,6 +24,8 @@ CASE_COLUMNS = ["case_id", "baseline_cycles", "candidate_cycles", "speedup", "ba
 TOP_HINTS = 10
 # A leg the judge did not run.
 SKIPPED = "skipped"
+# Verdicts later legs can still worsen.
+OPEN_VERDICTS = ORDER[ORDER.index("no_gain"):]
 
 
 class LockBusy(Exception):
@@ -104,6 +106,19 @@ def is_infra(verdict: Optional[dict]) -> bool:
 
 def skipped(verdict: Optional[dict]) -> bool:
     return isinstance(verdict, dict) and verdict.get("verdict") == SKIPPED
+
+
+def skip_reason(leg: Leg, legs: dict[str, dict], runs: tuple[Leg, ...]) -> Optional[str]:
+    """Why this leg need not run."""
+    for name, verdict in legs.items():
+        # Fail or worse settles the eval.
+        if not skipped(verdict) and (not scored(verdict) or verdict.get("verdict") not in OPEN_VERDICTS):
+            return f"{name} was {verdict.get('verdict')}"
+    if leg.placement == "mram":
+        tcm = next((r.name for r in runs if r.placement == "tcm" and r.toolchain == leg.toolchain), None)
+        if tcm in legs and legs[tcm].get("verdict") != "pass":
+            return f"{tcm} did not pass"
+    return None
 
 
 def merge_legs(legs: dict[str, Optional[dict]], wanted: tuple[str, ...]) -> str:

@@ -872,6 +872,14 @@ def test_submit_gates_mram_per_toolchain(ws: Workspace, atfe_root: Path, capsys)
     assert list(row["legs"]) == list(LEGS4) and row["legs"]["mram"]["verdict"] == "skipped"
 
 
+def test_submit_runs_tcm_before_mram(ws: Workspace, capsys) -> None:
+    _replace(ws, legs=("mram", "tcm"))
+    board = FakeBoard([_leg("no_gain")])
+    rc, view = _submit(ws, board, capsys)
+    assert [Path(c[c.index("--baseline") + 1]).name for c in board.calls] == ["tcm"]
+    assert rc == 4 and view["legs"]["mram"]["verdict"] == "skipped"
+
+
 def test_submit_infra_after_skip_is_free(ws: Workspace, atfe_root: Path, capsys, monkeypatch) -> None:
     monkeypatch.setattr(judge, "RETRY_PAUSE_S", 0)
     _two_toolchains(ws)

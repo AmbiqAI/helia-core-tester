@@ -18,9 +18,9 @@ from helia_core_tester.hardware.candidate_scan import run_binutil
 
 from helia_core_tester.hardware.toolchain import toolchain_spec
 
-from .config import Campaign, Leg
+from .config import Campaign
 from .ledger import (EXIT_BUDGET, SKIPPED, Ledger, LockBusy, agent_view, file_lock, is_infra, ledger_row,
-                     merge_legs, next_note, passing_evals, scored, skipped)
+                     merge_legs, next_note, passing_evals, skip_reason)
 from .workspace import Workspace, kernel_lib
 
 EDIT_TREES = ("Source", "Include")
@@ -33,8 +33,6 @@ TIMED_OUT = 124
 # Least lock wait and eval time.
 MIN_LOCK_S = 10
 MIN_EVAL_S = 60
-# Verdicts later legs can still worsen.
-OPEN_VERDICTS = ("pass", "no_gain")
 
 
 def object_sizes(lib: Path) -> dict[str, int]:
@@ -283,19 +281,6 @@ def run_leg(ws: Workspace, campaign: Campaign, eid: str, leg: str, deadline: flo
     return {k: verdict.get(k) for k in ("verdict", "stage", "reason") if verdict.get(k)}, attempt
 
 
-def skip_reason(leg: Leg, legs: dict[str, dict], runs: tuple[Leg, ...]) -> Optional[str]:
-    """Why this leg need not run."""
-    for name, verdict in legs.items():
-        # Fail or worse settles the eval.
-        if not skipped(verdict) and (not scored(verdict) or verdict.get("verdict") not in OPEN_VERDICTS):
-            return f"{name} was {verdict.get('verdict')}"
-    if leg.placement == "mram":
-        tcm = next((r.name for r in runs if r.placement == "tcm" and r.toolchain == leg.toolchain), None)
-        if tcm in legs and legs[tcm].get("verdict") != "pass":
-            return f"{tcm} did not pass"
-    return None
-
-
 def _emit(ws: Workspace, eid: str, view: dict) -> int:
     text = json.dumps(view, indent=1)
     ws.results.mkdir(parents=True, exist_ok=True)
@@ -353,7 +338,9 @@ def _submit_locked(ws: Workspace, campaign: Campaign, facts: dict, ledger: Ledge
         legs: dict[str, Optional[dict]] = {}
         attempts: dict[str, int] = {}
         infra = False
-        for run in campaign.runs:
+        # tcm first, so it gates mram.
+        order = sorted(campaign.runs, key=lambda r: (campaign.toolchains.index(r.toolchain), r.placement != "tcm"))
+        for run in order:
             reason = skip_reason(run, legs, campaign.runs)
             if reason:
                 legs[run.name] = {"verdict": SKIPPED, "reason": reason}
