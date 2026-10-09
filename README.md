@@ -18,6 +18,7 @@ uv run helia_core_tester --help
 - `uv run helia_core_tester clean`
 - `uv run helia_core_tester clean-all`
 - `uv run helia_core_tester doctor`
+- `uv run helia_core_tester host-check` (see [Host check](#host-check))
 - `uv run helia_core_tester coverage-merge`
 - `uv run helia_core_tester contract inventory` (see [Kernel contracts](#kernel-contracts-iteration-1))
 - `uv run helia_core_tester boards` / `probes list` / `probes match`
@@ -916,6 +917,67 @@ anything else fails generation instead of silently waiving nothing. `operand_sig
 is also declared in `helia_core_tester/generation/descriptors/schema.json`, but that schema is
 not enforced at load time (#100), so the rule lives in code.
 
+## Reference goldens (C reference library)
+
+Every golden is being moved onto one flow: descriptor -> seeded draw -> quantization ->
+`ReferenceCall` -> a C reference kernel maintained in this repo -> golden plus
+`<case>.reference.json`. Operators on it say so with `uses_reference()`; the driver then builds no
+Keras model, converts nothing, and fails the case unless `generate_c_files()` recorded its call
+through `OperationBase.reference_golden()`. Add is the first operator on it; the rest follow per
+family.
+
+- `helia_core_tester/reference/` holds the library: plain scalar C11 written from each operator's
+  definition (TFLite reference semantics for integer rounding), never from ns-cmsis-nn sources.
+  `src/common/` has the shared fixed point (gemmlowp SRDHM, rounding divide, double-rounding
+  `MultiplyByQuantizedMultiplier`, `QuantizeMultiplier`, activation range), binary16 conversion
+  on bit patterns, tensor checks and numpy-style broadcasting; `src/<family>/` the operators.
+- `reference/spec/entries.yaml` is the single source of truth for the ABI. Every kernel entry is
+  `hct_ref_<entry>(params, inputs, n, outputs, n)`, every prepare entry (parameters computed the
+  way TFLite's prepare computes them) `hct_ref_<entry>(in, out)`. `include/hct_ref_abi.h` is
+  generated from it (`python -m helia_core_tester.generation.reference.abi --write`; a stale
+  header fails the build and a test), and the ctypes structs are built from it at import.
+- The library is built once per environment with the host C compiler (`HCT_HOST_CC`, else
+  `cc`/`gcc`/`clang`) into `artifacts/host_ref/<key>/`, keyed by the spec, header, sources, flags
+  and compiler identity. Flags are strict: `-O1 -fno-fast-math -ffp-contract=off -Werror`, and
+  binary16 is converted on bit patterns, so a golden does not depend on the host FPU or optimizer.
+  Only the `hct_ref_*` symbols are exported.
+- float16 goldens compute in binary32 on the half operands and round once (the mathematical
+  result); tolerances for kernels that accumulate in fp16 are derived per operator.
+- Tests: `reference/tests/test_common.c` (run by `tests/test_reference_c.py` under UBSan, and
+  ASan where the host supports it) checks the fixed point against wide-integer models and binary16
+  exhaustively; `tests/test_reference_*.py` cover the ABI, the build cache, the bindings' argument
+  checks and every status code, and each operator against independent models.
+
+## Host check
+
+`full` and `hardware run` compile and run every generated int case on the host, against the
+ns-cmsis-nn kernels, after generation and before any FVP or board build; a failure blocks the
+build (`--no-fail-fast` does not override that). ns-cmsis-nn's cortex-m0 configuration (no
+`ARM_MATH_*` define) is pure C, so the generated harness runs natively and validates its golden
+exactly as it does on the FVP.
+
+```bash
+uv run helia_core_tester host-check --cpu cortex-m55                    # m0 kernels (default)
+uv run helia_core_tester host-check --cpu cortex-m55 --host-kernels m0,dsp
+uv run helia_core_tester full --cpu cortex-m55 --skip-host-check         # bypass
+```
+
+- `--host-kernels`: `m0` (pure C) and/or `dsp` (the Armv7E-M routes, through the mutation
+  harness's `dsp_shim.h`). Also `host_kernels` in `helia_core_tester.toml` /
+  `HELIA_CORE_TESTER_HOST_KERNELS`, and `skip_host_check` / `HELIA_CORE_TESTER_SKIP_HOST_CHECK`.
+- The cases checked are the ones `manifest.json` lists (what the FVP build compiles), and the run
+  seed comes from it: every failure prints `--seed <run_seed> --name <case>`. Every non-pass is a
+  failure, including a case that does not compile or link on the host.
+- A tree generated for a CPU with capabilities the host build lacks (cortex-m55's MVE) is judged
+  per case: a case whose `required_capabilities` the host build lacks is *not applicable* and
+  not run; a case the generator specialised for the target CPU (an `entry:` or `fault:` case, or
+  FullyConnected s8 folding its bias into the MVE-only kernel sums) still runs, but its failure is
+  *advisory* (reported, not blocking); everything else blocks. The report lists all three.
+- The kernel library (every int and f32 source of the checkout; f16 stays FVP-only) and the test
+  runtime are cached in `artifacts/host_kernels/<key>/`, keyed by the checkout's `Include/` and
+  `Source/` (commit when clean, content when dirty), the mode, flags and compiler identity.
+- The report is `artifacts/reports/generation/int/<cpu>/host_check.json`.
+
 ## Mutation scoring
 
 `python -m helia_core_tester.mutation run --cmsis-nn-root <checkout>` generates cases, applies
@@ -960,7 +1022,7 @@ Seeds:
   and `score` refuses to compare bundles drawn from different seeds.
 
 Generation reuse:
-- each generated case carries a `.stamp` over its descriptor document, the case name, target CPU, suite, seed, the identity of the ns-cmsis-nn checkout (commit when the checkout is a clean git tree, a content digest of its `Include/`, UnitTest TestData and `Tests/KernelContracts` export otherwise), and a generator-version hash (the generation sources, `core/cpu_targets.py`, `core/path_layout.py`, the templates under `assets/templates`, a SHA-256 of `uv.lock` for the resolved dependency set, and the Python version and machine architecture). Float precision is not a stamp input: it selects which descriptors a run generates, not what any one of them emits.
+- each generated case carries a `.stamp` over its descriptor document, the case name, target CPU, suite, seed, the identity of the ns-cmsis-nn checkout (commit when the checkout is a clean git tree, a content digest of its `Include/`, UnitTest TestData and `Tests/KernelContracts` export otherwise), and a generator-version hash (the generation sources, `core/cpu_targets.py`, `core/path_layout.py`, the templates under `assets/templates`, the C reference library under `helia_core_tester/reference`, a SHA-256 of `uv.lock` for the resolved dependency set, the Python version and machine architecture, and the host C compiler identity). Float precision is not a stamp input: it selects which descriptors a run generates, not what any one of them emits.
 - a case whose stamp still matches is reused: no TFLite conversion, no inference, no file emission. Its manifest entry is rebuilt from the on-disk sidecar, so build and run see the same tree either way.
 - a case whose stamp does not match has its directory removed before regeneration, so output a previous descriptor emitted under a different file name cannot survive into the new build.
 - capability and kernel-symbol skips are re-evaluated every run, because a different ns-cmsis-nn checkout can add or remove a symbol.

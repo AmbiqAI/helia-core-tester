@@ -32,7 +32,7 @@ STAMP_FILENAME = ".stamp"
 
 # Version prefix of the stamp payload itself. Bump when the payload layout
 # changes so old stamps cannot accidentally validate against new semantics.
-_STAMP_SCHEMA = "helia-core-tester/generation-stamp/5"
+_STAMP_SCHEMA = "helia-core-tester/generation-stamp/6"
 
 # The lock file is the whole resolved dependency set, so it covers every package
 # that can move emitted bytes -- the converter and runtime, but equally numpy's
@@ -68,6 +68,9 @@ _version_hash_cache: Optional[str] = None
 _checkout_identity_cache: Optional[Dict[str, str]] = None
 
 
+_REFERENCE_ROOT = Path(__file__).resolve().parents[1] / "reference"
+
+
 def _iter_generator_sources() -> Iterator[Path]:
     """Files whose content defines what the generator emits for any case.
 
@@ -88,6 +91,11 @@ def _iter_generator_sources() -> Iterator[Path]:
     repo_root = find_repo_root()
     for relative in _EXTERNAL_GENERATOR_SOURCES:
         yield repo_root / relative
+
+    # The C reference library computes goldens and is not Python.
+    for path in sorted(_REFERENCE_ROOT.rglob("*")):
+        if path.is_file() and path.suffix in {".c", ".h", ".yaml"}:
+            yield path
 
     templates_root = find_tester_templates_dir(repo_root)
     if not templates_root.is_dir():
@@ -128,7 +136,18 @@ def _environment_identity() -> Dict[str, str]:
         "lock_sha256": hashlib.sha256(lock_bytes).hexdigest(),
         "python": ".".join(str(part) for part in sys.version_info[:3]),
         "machine": platform.machine(),
+        # The host C compiler builds the reference library that computes the goldens.
+        "host_cc": _host_cc_identity(),
     }
+
+
+def _host_cc_identity() -> str:
+    from helia_core_tester.utils.host_compiler import HostCompilerMissing, compiler_identity, find_host_cc
+
+    try:
+        return compiler_identity(find_host_cc())
+    except HostCompilerMissing:
+        return "missing"
 
 
 def generator_version_hash() -> str:

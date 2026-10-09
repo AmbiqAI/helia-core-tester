@@ -6,7 +6,7 @@ All operations inherit from this and implement build_keras_model().
 import json
 import numpy as np
 from typing import Callable, Dict, Any, List, Optional, Sequence, Tuple, Iterator
-from abc import ABC, abstractmethod
+from abc import ABC
 from pathlib import Path
 import jinja2
 
@@ -120,6 +120,8 @@ class OperationBase(ABC):
         self._tflite_path = None
         self._input_mode_consumed = False
         self._nonfinite_policy_applied = False
+        self._reference_call = None
+        self._golden = None
         declared = {**(desc.get("tensor_dtypes") or {})}
         declared.update({key: desc[key] for key in ("activation_dtype", "weight_dtype") if key in desc})
         storage_only = [role for role, dtype in declared.items() if str(dtype).upper() == "U16"]
@@ -129,15 +131,15 @@ class OperationBase(ABC):
                 "Dequantize bit-pattern entry only"
             )
 
-    @abstractmethod
     def build_keras_model(self):
         """
-        Build the Keras model for this operation.
-        
+        Build the Keras model for this operation (converter-path operators only;
+        a reference-backed operator never builds one).
+
         Returns:
             Keras model ready for TFLite conversion
         """
-        pass
+        raise NotImplementedError(f"{type(self).__name__} builds no Keras model")
 
     def round_float16_weights(self, model) -> None:
         """Round an FP16 case's Keras weights and biases to float16 before conversion.
@@ -150,13 +152,53 @@ class OperationBase(ABC):
         for layer in model.layers:
             layer.set_weights([w.astype(np.float16).astype(np.float32) for w in layer.get_weights()])
 
+    def uses_reference(self) -> bool:
+        """True when this case's golden comes from the C reference library.
+
+        The driver then builds no model and converts nothing, and refuses the
+        case unless generate_c_files() recorded its ReferenceCall."""
+        return False
+
+    @property
+    def reference(self):
+        """The ReferenceCall recorded by reference_golden(), or None."""
+        return self._reference_call
+
+    def reference_golden(self, call) -> np.ndarray:
+        """Run `call` on the C reference, record it as this case's golden, and return its output.
+
+        Every golden of a reference-backed operator goes through here, so the
+        record (reference.json, sidecar, manifest) always matches what was emitted."""
+        from helia_core_tester.generation.reference.call import ReferenceCall
+
+        if not isinstance(call, ReferenceCall):
+            raise TypeError(f"reference_golden takes a ReferenceCall, got {type(call).__name__}")
+        if self._reference_call is not None:
+            raise RuntimeError(f"{self.desc.get('name')}: a reference golden was already recorded for this case")
+        golden = call.output()
+        self._reference_call = call
+        self._golden = golden
+        return golden
+
+    def reference_probe(self, operands: Sequence[np.ndarray]) -> np.ndarray:
+        """The recorded call re-run on replaced inputs (in the call's input order), for nonfinite masking."""
+        call = self._reference_call
+        if call is None:
+            raise RuntimeError("reference_probe needs a recorded reference call")
+        names = list(call.inputs)
+        if len(operands) != len(names):
+            raise ValueError(f"{call.entry}: {len(operands)} operands for inputs {names}")
+        replaced = {n: np.ascontiguousarray(np.asarray(o).reshape(call.inputs[n].shape), dtype=call.inputs[n].dtype)
+                    for n, o in zip(names, operands)}
+        return call.with_inputs(**replaced).output()
+
     def needs_keras_model(self) -> bool:
         """Return True if build_keras_model should be called for conversion."""
-        return True
+        return not self.uses_reference()
 
     def allow_no_tflite(self) -> bool:
         """Return True if this op can generate C/H without a .tflite."""
-        return False
+        return self.uses_reference()
 
     def activation_name(self) -> str:
         """Return the normalized descriptor activation name."""
@@ -1121,7 +1163,15 @@ class OperationBase(ABC):
             "case_seed": self.seed,
             "resolved_tensor_dtypes": self.resolved_tensor_dtypes(),
             "scalars": scalars,
+            **({"reference": self._reference_record()} if self._reference_call is not None else {}),
         }
+
+    def _reference_record(self) -> Dict[str, Any]:
+        """Entry, parameters, ABI and library of the reference call behind the golden."""
+        from helia_core_tester.generation.reference.bindings import loaded_library_key
+
+        record = self._reference_call.provenance(library_key=loaded_library_key())
+        return {k: record[k] for k in ("entry", "abi_version", "params", "library_key")}
 
     def generate_input_data(self) -> np.ndarray:
         """

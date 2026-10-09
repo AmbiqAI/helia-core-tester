@@ -9,6 +9,8 @@ include = ["helia_core_tester*"]
 [tool.setuptools.package-data]
 "helia_core_tester.mutation" = ["host/*.h", "host/*.c"]
 "helia_core_tester.agent_loop" = ["prompt.md.j2"]
+# The C reference library is built from source on first use.
+"helia_core_tester" = ["reference/spec/*.yaml", "reference/include/*.h", "reference/src/*/*.c", "reference/src/*/*.h", "reference/tests/*.c"]
 
 [project]
 name = "helia_core_tester"

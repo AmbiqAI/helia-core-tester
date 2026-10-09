@@ -275,6 +275,12 @@ def _manifest_entry(
         "relative_test_dir": str(test_dir.relative_to(generated_tests_dir)),
         "tflite": str(test_dir / f"{desc['name']}.tflite"),
         "c_sources": sorted(p.name for p in test_dir.glob("*.c")),
+        # Provenance of a reference golden; None for operators not yet on the C reference.
+        "reference": (
+            str(test_dir / f"{desc['name']}.reference.json")
+            if (test_dir / f"{desc['name']}.reference.json").is_file()
+            else None
+        ),
         "cpu": cpu,
         "reused": reused,
         "run_seed": desc.get("run_seed"),
@@ -307,6 +313,17 @@ def _reused_manifest_entry(
         cpu=cpu,
         reused=True,
     )
+
+
+def _write_reference_record(op, test_dir: Path, name: str, *, run_seed: int, case_seed: int) -> None:
+    """Write `<name>.reference.json`; a reference-backed case without a recorded call is an error."""
+    if op.reference is None:
+        raise RuntimeError(f"{name}: {type(op).__name__}.uses_reference() but no ReferenceCall was recorded")
+    from helia_core_tester.generation.reference.bindings import loaded_library_key
+
+    op.reference.to_json(test_dir / f"{name}.reference.json",
+                         seeds={"run_seed": int(run_seed), "case_seed": int(case_seed)},
+                         library_key=loaded_library_key())
 
 
 def generate_test(
@@ -353,8 +370,9 @@ def generate_test(
     op = op_class(desc, seed, target_cpu=cpu)
     op.run_seed = int(run_seed)
     
-    # Build Keras model (skip for ops that generate LiteRT models directly)
-    if op.needs_keras_model():
+    uses_reference = op.uses_reference()
+    # A reference-backed case needs no model: its golden is a ReferenceCall on the C library.
+    if not uses_reference and op.needs_keras_model():
         try:
             model = op.build_keras_model()
         except Exception as e:
@@ -377,8 +395,11 @@ def generate_test(
     # Convert to TFLite (some ops allow no-tflite fallback)
     tflite_path = test_dir / f"{name}.tflite"
     try:
-        op.convert_to_tflite(model, str(tflite_path), seed)
-        print(f"Generated TFLite model: {name}")
+        if uses_reference:
+            print(f"Reference golden: {name}")
+        else:
+            op.convert_to_tflite(model, str(tflite_path), seed)
+            print(f"Generated TFLite model: {name}")
     except Exception as e:
         if op.allow_no_tflite():
             print(f"INFO: Skipping TFLite generation for {name}: {e}")
@@ -409,9 +430,17 @@ def generate_test(
     
     # Generate C/H files from templates
     try:
-        op.generate_c_files(test_dir)
+        try:
+            op.generate_c_files(test_dir)
+        except NotImplementedError as exc:
+            # A reference-backed operator has no "not yet": it must produce a golden.
+            if uses_reference:
+                raise RuntimeError(f"{name}: reference operator {operator} is not implemented: {exc}") from exc
+            raise
         op.assert_input_mode_consumed()
         check_case_golden(test_dir, desc)
+        if uses_reference:
+            _write_reference_record(op, test_dir, name, run_seed=run_seed, case_seed=seed)
     except NotImplementedError:
         # Operator doesn't support C file generation yet
         print(f"INFO: {name} - C file generation not implemented")

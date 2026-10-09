@@ -186,7 +186,7 @@ def run_mutation_scoring(
     mutants: Sequence[Mutant],
     tester_root: Path,
     workdir: Path,
-    cc: str = "gcc",
+    cc: Optional[str] = None,
     jobs: int = 8,
     capabilities: Optional[frozenset] = None,
     log=print,

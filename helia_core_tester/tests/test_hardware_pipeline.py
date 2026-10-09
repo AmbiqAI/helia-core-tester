@@ -47,6 +47,16 @@ from helia_core_tester.hardware.result_bundle import write_result_bundle
 from helia_core_tester.hardware.run_summary import build_json_summary, print_run_report
 from helia_core_tester.hardware.session import BootFailure, HostSession, read_target_info
 
+
+@pytest.fixture(autouse=True)
+def _stub_host_check(monkeypatch):
+    """These tests stub generation, so there are no real cases to host-check;
+    the host-check stage itself is covered in test_hardware_host_check.py."""
+    from helia_core_tester.hardware import hardware_pipeline
+
+    monkeypatch.setattr(hardware_pipeline, "host_check_tests_for_board", lambda *a, **k: "host check stubbed")
+
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 BOARD = resolve_board("apollo510_evb")
 SERIAL = 1160002276
