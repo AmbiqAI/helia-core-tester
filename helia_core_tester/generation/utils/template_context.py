@@ -1055,11 +1055,10 @@ class TemplateContextBuilder:
         rolling_ctx_size = max(buf_x, buf_x_mve) * buf_y * 4  # int32 scratch
 
         if output_dtype == 'S16':
-            # S16 buffer size (conservative estimate)
-            buffer_size_mve = 4 * 8 * filter_w * filter_h * 2  # sizeof(int16_t) = 2
-            buffer_size_dsp = 2 * input_c * filter_w * filter_h * 2
-            ctx_size = max(buffer_size_mve, buffer_size_dsp)
-            output_ctx_size = output_dims['w'] * output_dims['h'] * output_c * 4
+            # Int64 accumulators: whole output or rolling rows.
+            whole_output = output_dims['h'] * output_dims['w'] * output_c * 8
+            ctx_size = max(whole_output, rolling_ctx_size * 2)
+            output_ctx_size = 0
         else:
             if reverse_conv_possible and reverse_conv_efficient:
                 reverse_conv_input_dims = {

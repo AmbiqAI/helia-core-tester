@@ -2218,5 +2218,17 @@
     "scratch_bytes": 0,
     "stateless": true,
     "supported_dtype": "S8"
+  },
+  {
+    "adapter_schema_version": 1,
+    "api_version": 1,
+    "canonical_name": "arm_transpose_conv_s16",
+    "kernel_id": 186,
+    "mutates_input": false,
+    "operator_family": "ConvolutionFunctions",
+    "repeated_invocation_safe": true,
+    "scratch_bytes": 0,
+    "stateless": true,
+    "supported_dtype": "S16"
   }
 ]

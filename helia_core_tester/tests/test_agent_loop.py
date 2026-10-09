@@ -97,6 +97,13 @@ def test_config_dw_s16_hidden() -> None:
     assert (c.op, c.dtype, c.hidden_shapes) == ("DepthwiseConv", "S16", 6)
 
 
+def test_config_tc16_hidden() -> None:
+    c = _campaign(op="TransposeConv", dtype="S16", hidden_shapes=6, legs=["tcm"])
+    assert (c.op, c.dtype, c.hidden_shapes, c.legs) == ("TransposeConv", "S16", 6, ("tcm",))
+    with pytest.raises(ConfigError, match="hidden_shapes: No random shapes"):
+        _campaign(op="TransposeConv", dtype="S8", hidden_shapes=6)
+
+
 def test_config_fc_without_hidden() -> None:
     c = _campaign(op="FullyConnected", hidden_shapes=0, legs=["tcm"])
     assert c.op == "FullyConnected" and c.legs == ("tcm",)
@@ -497,6 +504,13 @@ def test_prompt_convolve_has_no_depthwise() -> None:
     assert "previous attempt is already applied" in text
 
 
+def test_prompt_transpose_conv() -> None:
+    rows = [{"case_id": "a", "timed_symbol": "arm_transpose_conv_s16", "inner_symbol": "", "cycles_per_mac": "9.0"}]
+    text = render_prompt(_campaign(op="TransposeConv", dtype="S16", legs=["tcm"]), rows, PATHS)
+    assert "s16 transpose convolution faster" in text and "`arm_transpose_conv_s16`: 1 case" in text
+    assert "depthwise" not in text.lower()
+
+
 # --- selftest and status ----------------------------------------------------------------
 
 
@@ -637,14 +651,16 @@ def test_hidden_set_targets_campaign_op(tmp_path: Path, monkeypatch) -> None:
     calls = []
     monkeypatch.setattr(setup, "resolve_board", lambda _: type("B", (), {"cpu": "cortex-m55"}))
 
-    def fake_run(cmd, log, **_):
-        calls.append(cmd)
+    def fake_run(cmd, log, env=None, **_):
+        calls.append((cmd, env))
         ws.hidden_dir(camp).mkdir(parents=True)
 
     monkeypatch.setattr(setup, "_run", fake_run)
     setup.make_hidden(ws, camp, {})
-    cmd = calls[0]
+    cmd, env = calls[0]
     assert cmd[cmd.index("--op") + 1] == "DepthwiseConv" and cmd[cmd.index("--dtype") + 1] == "S8"
+    # The symbol probe reads the base tree.
+    assert env == {"CMSIS_NN_ROOT": str(ws.base)}
 
 
 def test_secrets_dir_needs_ownership(tmp_path: Path) -> None:

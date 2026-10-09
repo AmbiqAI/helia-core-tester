@@ -263,6 +263,7 @@ extern "C" {
 #define HCT_KERNEL_ID_SVDF_S8 183u
 #define HCT_KERNEL_ID_SVDF_STATE_S16_S8 184u
 #define HCT_KERNEL_ID_LSTM_UNIDIRECTIONAL_S8 185u
+#define HCT_KERNEL_ID_TRANSPOSE_CONV_S16 186u
 
 static inline hct_server_blob_t *find_blob_by_role(hct_server_session_t *session, uint8_t role)
 {

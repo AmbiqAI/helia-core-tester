@@ -1677,12 +1677,14 @@ def _build_transpose_conv_case(
     operator = str(descriptor.get("operator", ""))
     activation_dtype = str(descriptor.get("activation_dtype", ""))
     weight_dtype = str(descriptor.get("weight_dtype", descriptor.get("resolved_tensor_dtypes", {}).get("weights", "")))
-    if operator != "TransposeConv" or (activation_dtype, weight_dtype) not in {("S8", "S8"), ("FP32", "FP32"), ("FP16", "FP16")}:
+    combos = {("S8", "S8"), ("S16", "S8"), ("FP32", "FP32"), ("FP16", "FP16")}
+    if operator != "TransposeConv" or (activation_dtype, weight_dtype) not in combos:
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: weight_dtype={weight_dtype!r} activation_dtype={activation_dtype!r} is not "
             "bridgeable -- hardware benchmark firmware only dispatches arm_transpose_conv_wrapper_s8, "
-            "arm_transpose_conv_f32, and arm_transpose_conv_f16."
+            "arm_transpose_conv_s16, arm_transpose_conv_f32, and arm_transpose_conv_f16."
         )
+    quantized = activation_dtype in ("S8", "S16")
 
     header_path = _find_header_file(generated_test.directory)
     header_text = header_path.read_text(encoding="utf-8")
@@ -1694,7 +1696,9 @@ def _build_transpose_conv_case(
     input_dims = _extract_dims(header_text, f"{prefix}_input_dims")
     filter_dims = _extract_dims(header_text, f"{prefix}_filter_dims")
     output_dims = _extract_dims(header_text, f"{prefix}_output_dims")
-    if input_dims["n"] != 1 or output_dims["n"] != 1:
+    # Only the s16 adapter loops batches.
+    batched = activation_dtype == "S16" and input_dims["n"] == output_dims["n"]
+    if not batched and (input_dims["n"] != 1 or output_dims["n"] != 1):
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: batch size > 1 is not yet supported by the hardware bridge."
         )
@@ -1703,10 +1707,10 @@ def _build_transpose_conv_case(
     output_shape = (output_dims["n"], output_dims["h"], output_dims["w"], output_dims["c"])
     output_channels = output_dims["c"]
 
-    if activation_dtype == "S8":
-        numpy_dtype = np.int8
+    if quantized:
+        numpy_dtype = np.int16 if activation_dtype == "S16" else np.int8
         input_flat = np.array(_extract_array(header_text, f"{prefix}_input"), dtype=numpy_dtype)
-        weights_flat = np.array(_extract_array(header_text, f"{prefix}_weights"), dtype=numpy_dtype)
+        weights_flat = np.array(_extract_array(header_text, f"{prefix}_weights"), dtype=np.int8)
         expected_flat = np.array(_extract_array(header_text, f"{prefix}_expected_output"), dtype=numpy_dtype)
         multiplier = np.array(_extract_array(header_text, f"{prefix}_multiplier"), dtype=np.int32)
         shift = np.array(_extract_array(header_text, f"{prefix}_shift"), dtype=np.int32)
@@ -1735,7 +1739,7 @@ def _build_transpose_conv_case(
     input_flat = input_flat[:expected_input_size]
     weights_flat = weights_flat[:expected_filter_size]
     expected_flat = expected_flat[:expected_output_size]
-    if activation_dtype == "S8" and (multiplier.size != output_channels or shift.size != output_channels):
+    if quantized and (multiplier.size != output_channels or shift.size != output_channels):
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: quant array sizes (multiplier={multiplier.size}, shift={shift.size}) do not "
             f"match output channels ({output_channels})."
@@ -1750,7 +1754,7 @@ def _build_transpose_conv_case(
     pad_w = _extract_nested_scalar(header_text, params_struct, "padding", "w")
     pad_offset_h = _extract_nested_scalar(header_text, params_struct, "padding_offsets", "h")
     pad_offset_w = _extract_nested_scalar(header_text, params_struct, "padding_offsets", "w")
-    if activation_dtype == "S8":
+    if quantized:
         input_offset = _extract_scalar(header_text, params_struct, "input_offset")
         output_offset = _extract_scalar(header_text, params_struct, "output_offset")
         activation_min = _extract_nested_scalar(header_text, params_struct, "activation", "min")
@@ -1762,21 +1766,22 @@ def _build_transpose_conv_case(
         activation_max = float(_extract_nested_float_scalar(header_text, params_struct, "activation", "max"))
 
     has_bias = not _extract_null_pointer_decl(header_text, f"{prefix}_biases")
-    if has_bias:
-        bias_dtype = np.int32 if activation_dtype == "S8" else numpy_dtype
-        bias_values = _extract_array(header_text, f"{prefix}_biases") if activation_dtype == "S8" else _extract_float_array(header_text, f"{prefix}_biases")
-        biases = np.array(bias_values, dtype=bias_dtype)
-    else:
-        biases = None
+    # S16 takes int64 bias.
+    bias_wire_dtype = {"S8": "S32", "S16": "S64"}.get(activation_dtype, activation_dtype)
+    biases = _extract_typed_array(header_text, f"{prefix}_biases", bias_wire_dtype) if has_bias else None
     if has_bias and biases.size != output_channels:
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: bias array size ({biases.size}) does not match output channels ({output_channels})."
         )
 
     ctx_upper = _extract_define_int(source_text, f"{upper_prefix}_BUFFER_SIZE_MAX")
-    reverse_upper = _extract_define_int(source_text, f"{upper_prefix}_REVERSE_CONV_CTX_SIZE")
-    weight_sum_bytes = output_channels * 4 if activation_dtype == "S8" else 0
-    scratch_bytes = int(_align_up(_align_up(ctx_upper, 16) + reverse_upper, 16) + weight_sum_bytes)
+    if activation_dtype == "S16":
+        # One ctx; the kernel sizes it.
+        scratch_bytes = int(_align_up(ctx_upper, 16))
+    else:
+        reverse_upper = _extract_define_int(source_text, f"{upper_prefix}_REVERSE_CONV_CTX_SIZE")
+        weight_sum_bytes = output_channels * 4 if activation_dtype == "S8" else 0
+        scratch_bytes = int(_align_up(_align_up(ctx_upper, 16) + reverse_upper, 16) + weight_sum_bytes)
 
     input_data = _reshape_generated_prefix(input_flat, input_shape, generated_test=generated_test, tensor_name="input", context=f"input_shape={input_shape}")
     weights = _reshape_generated_prefix(weights_flat, filter_shape, generated_test=generated_test, tensor_name="weights", context=f"filter_shape={filter_shape}")
@@ -1793,14 +1798,14 @@ def _build_transpose_conv_case(
         (2, "weights", weight_dtype, filter_shape, weights, False, False),
     ]
     next_blob_id = 3
-    if activation_dtype == "S8":
+    if quantized:
         arrays.extend([
             (3, "multiplier", "S32", (output_channels,), multiplier, False, False),
             (4, "shift", "S32", (output_channels,), shift, False, False),
         ])
         next_blob_id = 5
     if has_bias and biases is not None:
-        arrays.append((next_blob_id, "bias", "S32" if activation_dtype == "S8" else activation_dtype, (output_channels,), biases, False, False))
+        arrays.append((next_blob_id, "bias", bias_wire_dtype, (output_channels,), biases, False, False))
         expected_blob_id = next_blob_id + 1
     else:
         expected_blob_id = next_blob_id
@@ -1839,21 +1844,21 @@ def _build_transpose_conv_case(
                     "activation_min": activation_min,
                     "activation_max": activation_max,
                 }
-                if activation_dtype == "S8"
+                if quantized
                 else {
                     "float_activation_min_bits": _quant_scale_to_bits(activation_min),
                     "float_activation_max_bits": _quant_scale_to_bits(activation_max),
                 }
             ),
         },
-        tensor_dtypes={"input": activation_dtype, "weights": weight_dtype, **({"bias": ("S32" if activation_dtype == "S8" else activation_dtype)} if has_bias else {}), "output": activation_dtype},
+        tensor_dtypes={"input": activation_dtype, "weights": weight_dtype, **({"bias": bias_wire_dtype} if has_bias else {}), "output": activation_dtype},
         blob_roles=[_manifest_blob_entry(blob) for blob in blobs],
         expected_output={"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
         comparison=dict(descriptor["resolved_comparison"]),
         scratch_bytes=scratch_bytes,
-        capabilities=[
-            "arm_transpose_conv_wrapper_s8" if activation_dtype == "S8" else ("arm_transpose_conv_f32" if activation_dtype == "FP32" else "arm_transpose_conv_f16")
-        ],
+        capabilities=[{
+            "S8": "arm_transpose_conv_wrapper_s8", "S16": "arm_transpose_conv_s16", "FP32": "arm_transpose_conv_f32",
+        }.get(activation_dtype, "arm_transpose_conv_f16")],
     )
 
 

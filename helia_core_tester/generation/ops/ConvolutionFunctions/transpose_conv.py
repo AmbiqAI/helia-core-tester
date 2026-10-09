@@ -6,6 +6,7 @@ from typing import Dict, Any
 import numpy as np
 import tensorflow as tf
 from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.ops._shared.quant_knobs import clamp_golden, kernel_init, value_range
 from pathlib import Path
 
 class OpTransposeConv(OperationBase):
@@ -71,15 +72,28 @@ class OpTransposeConv(OperationBase):
             'name': 'transpose_conv'
         }
     
-        transpose_conv_kwargs['kernel_initializer'] = tf.keras.initializers.GlorotUniform(seed=123)
+        weights_init = kernel_init(self.desc, 123)
+        if self.desc.get('positive_weights'):
+            # Same bound, one sign.
+            weights_init = lambda shape, dtype=None, _init=weights_init: tf.abs(_init(shape, dtype))
+        transpose_conv_kwargs['kernel_initializer'] = weights_init
         
         if transpose_conv_kwargs['use_bias']:
+            bias_lo, bias_hi = value_range(self.desc, 'bias_range', (-0.5, 0.5))
             transpose_conv_kwargs['bias_initializer'] = tf.keras.initializers.RandomUniform(
-                minval=-0.5, maxval=0.5, seed=321
+                minval=bias_lo, maxval=bias_hi, seed=321
             )
         
         layer = tf.keras.layers.Conv2DTranspose(**transpose_conv_kwargs)
         outputs = layer(inputs)
+        # The converter fuses these into the op.
+        activation = self.activation_name()
+        if activation == 'RELU':
+            outputs = tf.keras.layers.ReLU()(outputs)
+        elif activation == 'RELU6':
+            outputs = tf.keras.layers.ReLU(max_value=6)(outputs)
+        elif activation != 'NONE':
+            raise ValueError(f"Unsupported activation: {activation}")
         
         model = tf.keras.Model(inputs=[inputs], outputs=[outputs], name='transpose_conv_model')
         return model
@@ -112,11 +126,13 @@ class OpTransposeConv(OperationBase):
             converter.optimizations = []
         
         # Generate representative dataset
+        calibration = value_range(self.desc, 'calibration_range', (-8.0, 8.0))
+
         def representative_data_gen():
             rep_rng = np.random.default_rng(42)
             for _ in range(128): 
                 if 'input_shape' in self.desc:
-                    inputs = rep_rng.uniform(-8.0, 8.0, size=self.desc['input_shape']).astype(np.float32)
+                    inputs = rep_rng.uniform(*calibration, size=self.desc['input_shape']).astype(np.float32)
                     yield [inputs]
                 elif 'input_1_shape' in self.desc and 'input_2_shape' in self.desc:
                     inputs1 = rep_rng.uniform(-8.0, 8.0, size=self.desc['input_1_shape']).astype(np.float32)
@@ -129,6 +145,10 @@ class OpTransposeConv(OperationBase):
         tflite_model = converter.convert()
         with open(out_path, 'wb') as f:
             f.write(tflite_model)
+        if self.desc.get('wide_bias') or self.desc.get('min_effective_scale'):
+            from helia_core_tester.generation.ops._shared.bias_init import patch_requant
+
+            patch_requant(out_path, self.desc, self.seed)
     
     def _select_cmsis_transpose_conv_kernel(self) -> Dict[str, str]:
         """
@@ -176,6 +196,17 @@ class OpTransposeConv(OperationBase):
                 'output_c_type': 'int8_t',
                 'weight_c_type': 'int8_t',
                 'bias_c_type': 'int32_t'
+            }
+        if activation_dtype == 'S16' and weight_dtype == 'S8':
+            # Direct kernel: no wrapper, no reverse route.
+            return {
+                'kernel_fn': 'arm_transpose_conv_s16',
+                'kernel_get_buffer_size_fn': 'arm_transpose_conv_s16_get_buffer_size',
+                'kernel_get_reverse_buffer_size_fn': None,
+                'input_c_type': 'int16_t',
+                'output_c_type': 'int16_t',
+                'weight_c_type': 'int8_t',
+                'bias_c_type': 'int64_t',
             }
         else:
             raise NotImplementedError(f"Unsupported TransposeConv dtype combo: {activation_dtype} x {weight_dtype}")
@@ -292,6 +323,10 @@ class OpTransposeConv(OperationBase):
         # Ensure output_shape is 4D (NHWC)
         if len(output_shape) < 4:
             output_shape = (1,) + output_shape if len(output_shape) == 3 else output_shape
+        if kernel_info["input_c_type"] == "int16_t":
+            # The model is batch 1; inference loops batches.
+            batch = int(self.desc['input_shape'][0])
+            input_shape, output_shape = (batch, *input_shape[1:]), (batch, *output_shape[1:])
         
         # Extract quantization parameters from LiteRT
         # For TransposeConv, find the actual input data tensor (4D, in subgraph inputs)
@@ -564,10 +599,12 @@ class OpTransposeConv(OperationBase):
         # Format weights and biases as C arrays
         weights_array_str = builder.format_array_as_c_literal(weights)
         has_biases = biases is not None and biases.size > 0
+        is_s16 = kernel_info["input_c_type"] == "int16_t"
         if has_biases:
-            # Convert biases to int32_t for CMSIS-NN
-            if biases.dtype != np.int32:
-                biases = biases.astype(np.int32)
+            # int64 bias for s16, int32 for s8.
+            bias_np_dtype = np.int64 if is_s16 else np.int32
+            if biases.dtype != bias_np_dtype:
+                biases = biases.astype(bias_np_dtype)
             biases_array_str = builder.format_array_as_c_literal(biases)
         else:
             biases_array_str = ""
@@ -600,11 +637,22 @@ class OpTransposeConv(OperationBase):
         input_q = np.clip(input_q, qmin, qmax).astype(np_in_dtype)
         
         # Run inference (dtype must match interpreter input)
-        output_data = self.run_inference(str(tflite_path), input_q)
+        if is_s16:
+            # Reference kernels: TFLM's int16x8 TransposeConv.
+            from ai_edge_litert.interpreter import OpResolverType
+            from helia_core_tester.generation.utils.litert_utils import run_inference_litert_tensor
+
+            out_index = int(subgraph.operators[transpose_op_index].outputs[0])
+            output_data = run_inference_litert_tensor(
+                str(tflite_path), input_q, out_index, op_resolver_type=OpResolverType.BUILTIN_REF
+            )
+        else:
+            output_data = self.run_inference(str(tflite_path), input_q)
+        output_data = clamp_golden(self.desc, output_data.astype(np_in_dtype))
         
         # Format input and output arrays
         input_data_array_str = builder.format_array_as_c_literal(input_q)
-        expected_output_array_str = builder.format_array_as_c_literal(output_data.astype(np.int8))
+        expected_output_array_str = builder.format_array_as_c_literal(output_data)
 
         strides = self.desc.get('strides', [1, 1])
         stride_w = strides[1] if len(strides) > 1 else strides[0]
@@ -664,6 +712,7 @@ class OpTransposeConv(OperationBase):
             'kernel_get_reverse_buffer_size_fn': kernel_info["kernel_get_reverse_buffer_size_fn"],
             'buffer_size_max': buffer_size_max,
             'reverse_conv_ctx_size': reverse_conv_ctx_size,
+            'direct_s16': is_s16,
         }
         fault = self.fault_kind()
         c_template = "ConvolutionFunctions/transpose_conv/transpose_conv.c.j2"

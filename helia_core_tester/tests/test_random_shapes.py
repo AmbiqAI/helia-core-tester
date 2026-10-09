@@ -20,12 +20,17 @@ from helia_core_tester.generation.ops._shared.quant_knobs import clamp_golden, v
 from helia_core_tester.hardware.generated_test_bridge import HW_CASE_SUFFIX
 
 SEEDS = (0, 1, 7, 12345)
-CONV, DW, DW16 = ("Convolve", "S8"), ("DepthwiseConv", "S8"), ("DepthwiseConv", "S16")
+CONV, DW, DW16, TC16 = ("Convolve", "S8"), ("DepthwiseConv", "S8"), ("DepthwiseConv", "S16"), ("TransposeConv", "S16")
 
 
 def _layer(case: dict) -> rs.Layer:
     kh, kw, cin, last = case["filter_shape"]
     dw = case["operator"] == "DepthwiseConv"
+    if case["operator"] == "TransposeConv":
+        # Filter is [kh, kw, cout, cin].
+        cout = cin
+        n, h, w, c = case["input_shape"]
+        return rs.Layer(h, w, c, cout, kh, kw, *case["strides"], padding=case["padding"], transpose=True, n=n)
     return rs.Layer(
         case["input_shape"][1], case["input_shape"][2], cin, cin * last if dw else last, kh, kw,
         *case["strides"], *case["dilation"], padding=case["padding"], mult=last if dw else 1,
@@ -40,17 +45,20 @@ def test_same_seed_same_cases() -> None:
 def test_ops_draw_independently() -> None:
     both = rs.sample_cases(10, 3)
     assert [c for c in both if c["operator"] == "Convolve"] == rs.sample_cases(10, 3, ops=(CONV,))
-    assert [c for c in both if c["activation_dtype"] == "S16"] == rs.sample_cases(10, 3, ops=(DW16,))
+    for key in (DW16, TC16):
+        assert [c for c in both if (c["operator"], c["activation_dtype"]) == key] == rs.sample_cases(10, 3, ops=(key,))
 
 
 @pytest.mark.parametrize(("op", "dtype", "picked"), [
-    (None, None, (CONV, DW, DW16)),
+    (None, None, (CONV, DW, DW16, TC16)),
+    ("TransposeConv", "S16", (TC16,)),
+    ("transpose_conv", None, (TC16,)),
     ("Convolve", None, (CONV,)),
     ("DepthwiseConv", "s8", (DW,)),
     ("DepthwiseConv", "S16", (DW16,)),
     ("depthwise_conv", None, (DW, DW16)),
     (None, "S8", (CONV, DW)),
-    (None, "s16", (DW16,)),
+    (None, "s16", (DW16, TC16)),
 ])
 def test_select_ops_matches_filters(op, dtype, picked) -> None:
     assert rs.select_ops(op, dtype) == picked
@@ -58,13 +66,14 @@ def test_select_ops_matches_filters(op, dtype, picked) -> None:
 
 @pytest.mark.parametrize(("op", "dtype"), [
     ("FullyConnected", None), ("Convolve", "S16"), (None, "S4"), ("rs", None), ("DepthwiseConv", "S4"),
+    ("TransposeConv", "S8"),
     # A typo fails even beside a match.
     ("Convolve,Softmax", "S8"),
     # Drawn names cannot be filtered.
     ("rs7_conv", None),
 ])
 def test_select_ops_refuses_unknown(op, dtype) -> None:
-    with pytest.raises(ValueError, match="have Convolve S8, DepthwiseConv S8, DepthwiseConv S16$"):
+    with pytest.raises(ValueError, match="have Convolve S8, DepthwiseConv S8, DepthwiseConv S16, TransposeConv S16$"):
         rs.select_ops(op, dtype)
 
 
@@ -190,6 +199,18 @@ def test_s8_hidden_sets_unchanged(cpu: str, digest: str) -> None:
     assert hashlib.sha256(yaml.safe_dump_all(cases, sort_keys=False).encode()).hexdigest() == digest
 
 
+@pytest.mark.parametrize("cpu", ["cortex-m55", "cortex-m4"])
+def test_dw16_hidden_sets_unchanged(cpu: str) -> None:
+    import hashlib
+
+    import yaml
+
+    # Pinned before tc16 joined.
+    cases = rs.hidden_cases(8, SECRET.encode(), cpu, (DW16,))
+    digest = hashlib.sha256(yaml.safe_dump_all(cases, sort_keys=False).encode()).hexdigest()
+    assert digest == "fa1b40c9ebf40084e996770e6e90ec211a0b8a9274dfbda423c2b2031a26516c"
+
+
 def test_plain_cpu_hits_3x3_route() -> None:
     routes = rs.route_counts(rs.sample_cases(20, 2, "cortex-m4", (CONV, DW)))
     assert "arm_depthwise_conv_3x3_s8" in routes["DepthwiseConv"]
@@ -201,7 +222,7 @@ def test_written_descriptors_load(tmp_path: Path) -> None:
     loaded = load_all_descriptors(str(descriptors))
     assert sorted(d["name"] for d in loaded) == sorted(c["name"] for c in rs.sample_cases(6, 9))
     summary = json.loads((descriptors.parent / "summary.json").read_text())
-    assert summary["shape_seed"] == 9 and summary["cases"] == 18
+    assert summary["shape_seed"] == 9 and summary["cases"] == 6 * len(rs.GENERATORS)
 
 
 def test_quant_knobs() -> None:

@@ -206,6 +206,8 @@ _OPERATOR_INT16_TOLERANCE_OVERRIDES: Dict[str, int] = {
     # Kernel rounds 1 LSB off TFLite.
     "FullyConnected": 1,
     "Convolve": 0,
+    # Direct kernel; bit-exact with TFLite.
+    "TransposeConv": 0,
     "Abs": 0,
     "Add": 0,
     "SquaredDifference": 0,
