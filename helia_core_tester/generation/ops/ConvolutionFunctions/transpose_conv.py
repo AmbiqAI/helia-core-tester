@@ -102,7 +102,13 @@ class OpTransposeConv(OperationBase):
         """Convert Keras model to TFLite with quantization."""
         self.round_float16_weights(model)
         # Create converter
-        converter = tf.lite.TFLiteConverter.from_keras_model(model)
+        if str(self.desc.get('activation_dtype', 'S8')).upper() == 'S16':
+            from helia_core_tester.generation.ops._shared.fixed_batch import converter_for_batched_model
+
+            # Keep the descriptor's batch in the model.
+            converter = converter_for_batched_model(model, [self.desc['input_shape']])
+        else:
+            converter = tf.lite.TFLiteConverter.from_keras_model(model)
         
         # Apply quantization based on activation_dtype
         activation_dtype = str(self.desc.get('activation_dtype', 'S8')).upper()
@@ -323,10 +329,6 @@ class OpTransposeConv(OperationBase):
         # Ensure output_shape is 4D (NHWC)
         if len(output_shape) < 4:
             output_shape = (1,) + output_shape if len(output_shape) == 3 else output_shape
-        if kernel_info["input_c_type"] == "int16_t":
-            # The model is batch 1; inference loops batches.
-            batch = int(self.desc['input_shape'][0])
-            input_shape, output_shape = (batch, *input_shape[1:]), (batch, *output_shape[1:])
         
         # Extract quantization parameters from LiteRT
         # For TransposeConv, find the actual input data tensor (4D, in subgraph inputs)

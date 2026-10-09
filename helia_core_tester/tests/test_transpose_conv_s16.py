@@ -228,3 +228,18 @@ def test_edge_categories_hold(seed: int) -> None:
             assert cin % 2 and cout % 2
         elif edge == "unit_tail":
             assert cin == cout == 1
+
+
+def test_batch2_model_keeps_its_batch(tmp_path: Path) -> None:
+    from ai_edge_litert.interpreter import Interpreter
+
+    from helia_core_tester.core.config import Config
+    from helia_core_tester.generation.test_ops import generate_test
+
+    name = "transpose_conv_batch2_s16"
+    desc = next(d for d in _s16_descriptors() if d["name"] == name)
+    generate_test(desc, str(tmp_path), seed=Config.seed, cpu="cortex-m55")
+    model = Interpreter(model_path=str(next(tmp_path.rglob(f"{name}.tflite"))))
+    # The signature, not a looped batch-1 model.
+    assert list(model.get_input_details()[0]["shape"]) == desc["input_shape"] == [2, 3, 5, 7]
+    assert model.get_output_details()[0]["shape"][0] == 2
