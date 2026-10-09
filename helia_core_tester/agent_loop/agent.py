@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Iterable, Optional
 
 from .config import Campaign
-from .ledger import Ledger, passing_evals, phase_text
+from .ledger import Ledger, passing_evals, phase_text, skipped
 from .workspace import Workspace
 
 TOOLS = "Read,Edit,Write,Glob,Grep,Bash"
@@ -196,7 +196,8 @@ def status(ws: Workspace, tail: int = 10) -> dict[str, Any]:
     events = stream_events(Path(meta["log"])) if meta.get("log") else []
     saved = ledger.rows()
     rows = [{"eval": r["eval"], "verdict": r["verdict"], "charged": r.get("charged"),
-             "geomean": {leg: v.get("geomean") for leg, v in (r.get("legs") or {}).items()},
+             "geomean": {leg: v.get("geomean") or {} for leg, v in (r.get("legs") or {}).items()},
+             "skipped": [leg for leg, v in (r.get("legs") or {}).items() if skipped(v)],
              "size_delta": r.get("size_delta"), "toolchains": r.get("toolchains")} for r in saved]
     passes = passing_evals(saved, campaign.runs)
     for pick in passes:

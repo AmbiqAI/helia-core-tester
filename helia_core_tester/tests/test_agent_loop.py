@@ -872,6 +872,26 @@ def test_submit_gates_mram_per_toolchain(ws: Workspace, atfe_root: Path, capsys)
     assert list(row["legs"]) == list(LEGS4) and row["legs"]["mram"]["verdict"] == "skipped"
 
 
+def test_status_shows_skipped_legs(ws: Workspace, capsys) -> None:
+    from typer.testing import CliRunner
+
+    from helia_core_tester.cli import app
+
+    _submit(ws, FakeBoard([_leg("fail")]), capsys)
+    campaign, facts = ws.load()
+    ws.save(campaign, {**facts, "ready": True})
+    # Old rows lack geomean on skips.
+    led = ledger.Ledger(ws.ledger)
+    led.append({"eval": "002", "verdict": "no_gain", "charged": True, "infra": False,
+                "legs": {"tcm": {"verdict": "no_gain", "geomean": {"conv": 1.0}}, "mram": {"verdict": "skipped"}}})
+    info = agent.status(ws, tail=0)
+    assert [r["skipped"] for r in info["rows"]] == [["mram"], ["mram"]]
+    assert info["rows"][1]["geomean"]["mram"] == {}
+    result = CliRunner().invoke(app, ["agent-loop", "status", "-w", str(ws.root)])
+    assert result.exit_code == 0, result.output
+    assert "001 fail" in result.output and "skipped mram" in result.output
+
+
 def test_submit_runs_tcm_before_mram(ws: Workspace, capsys) -> None:
     _replace(ws, legs=("mram", "tcm"))
     board = FakeBoard([_leg("no_gain")])

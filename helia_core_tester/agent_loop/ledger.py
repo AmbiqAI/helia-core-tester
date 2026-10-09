@@ -200,7 +200,7 @@ def ledger_row(eid: str, overall: str, legs: dict, *, charged: bool, infra: bool
     row = {
         "eval": eid, "time": time.strftime("%Y-%m-%dT%H:%M:%S"), "verdict": overall, "charged": charged,
         "infra": infra, "attempts": attempts,
-        "legs": {k: dict(v) if skipped(v) else
+        "legs": {k: {**v, "geomean": {}} if skipped(v) else
                  {"verdict": v.get("verdict"), "stage": v.get("stage"), "score": v.get("score"),
                   "geomean": family_geomeans(v), "hidden": v.get("hidden")} for k, v in legs.items() if v},
         "size_delta": size_deltas(size, runs), **diff_digest(diff),

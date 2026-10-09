@@ -132,7 +132,8 @@ def status_command(
                           for fam, g in fams.items() if g is not None)
         gains = row.get("toolchains") or {}
         size = "" if gains else f" size {row['size_delta']}"
-        typer.echo(f"  {row['eval']} {row['verdict']:<14}{charged}{size} {means}")
+        skips = f" skipped {', '.join(row['skipped'])}" if row.get("skipped") else ""
+        typer.echo(f"  {row['eval']} {row['verdict']:<14}{charged}{size} {means}{skips}")
         for name, gain in gains.items():
             typer.echo(f"      {name}: geomean {gain['geomean']}, size {gain['size_delta']}")
     _print_passes(info["passes"])
