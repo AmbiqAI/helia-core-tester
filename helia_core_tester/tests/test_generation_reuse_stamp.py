@@ -45,12 +45,6 @@ def _fake_checkout(root: Path) -> Path:
     data_dir = root / "Tests" / "UnitTest" / "TestCases" / "TestData" / "lstm_1"
     data_dir.mkdir(parents=True, exist_ok=True)
     (data_dir / "output.h").write_text("const int8_t lstm_1_output[] = {1, 2, 3};\n")
-    tables = root / "Source" / "NNSupportFunctions"
-    tables.mkdir(parents=True, exist_ok=True)
-    (tables / "arm_nntables.c").write_text("const uint16_t sigmoid_table_uint16[256] = {0, 1};\n")
-    schema_dir = root / "Tests" / "UnitTest" / "RefactoredTestGen"
-    schema_dir.mkdir(parents=True, exist_ok=True)
-    (schema_dir / "schema.fbs").write_text("table Model {}\n")
     contracts = root / "Tests" / "KernelContracts"
     contracts.mkdir(parents=True, exist_ok=True)
     (contracts / "kernel_contracts.json").write_text('{"schema": "ns-cmsis-nn/kernel-contracts/1", "functions": []}\n')
@@ -171,49 +165,34 @@ def test_checkout_content_is_the_identity_when_the_root_is_not_a_git_tree(
     baseline = reuse.cmsis_nn_checkout_identity()
     assert baseline["state"] == "content"
 
+    # Unit-test data is not a generation input any more: no golden is read from the checkout.
     golden = root / "Tests" / "UnitTest" / "TestCases" / "TestData" / "lstm_1" / "output.h"
     golden.write_text(golden.read_text().replace("{1, 2, 3}", "{1, 2, 4}"))
     monkeypatch.setattr(reuse, "_checkout_identity_cache", None)
-    perturbed = reuse.cmsis_nn_checkout_identity()
-    assert perturbed != baseline
+    assert reuse.cmsis_nn_checkout_identity() == baseline
 
     header = root / "Include" / "arm_nnfunctions.h"
     header.write_text("/* sizers hidden */\n")
     monkeypatch.setattr(reuse, "_checkout_identity_cache", None)
-    perturbed = reuse.cmsis_nn_checkout_identity()
-    assert perturbed != baseline
-
-    # The two files generation reads outside Include/ and TestData/: the s16
-    # activation table and the LSTM reference schema. An uncommitted edit to
-    # either must not let a stale golden be reused.
-    tables = root / "Source" / "NNSupportFunctions" / "arm_nntables.c"
-    tables.write_text(tables.read_text().replace("{0, 1}", "{0, 2}"))
-    monkeypatch.setattr(reuse, "_checkout_identity_cache", None)
-    after_table_edit = reuse.cmsis_nn_checkout_identity()
-    assert after_table_edit != perturbed
-
-    schema = root / "Tests" / "UnitTest" / "RefactoredTestGen" / "schema.fbs"
-    schema.write_text("table Model { version:int; }\n")
-    monkeypatch.setattr(reuse, "_checkout_identity_cache", None)
-    after_schema_edit = reuse.cmsis_nn_checkout_identity()
-    assert after_schema_edit != after_table_edit
+    after_header_edit = reuse.cmsis_nn_checkout_identity()
+    assert after_header_edit != baseline
 
     # The exported kernel contract: a re-export after a prototype change must
     # regenerate the cases whose call sites are rendered from it.
     contract = root / "Tests" / "KernelContracts" / "kernel_contracts.json"
     contract.write_text(contract.read_text().replace('"functions": []', '"functions": [{}]'))
     monkeypatch.setattr(reuse, "_checkout_identity_cache", None)
-    assert reuse.cmsis_nn_checkout_identity() != after_schema_edit
+    assert reuse.cmsis_nn_checkout_identity() != after_header_edit
 
 
 def test_stamp_schema_bump_invalidates_every_older_stamp(monkeypatch) -> None:
     # Folding the C reference tree into the generator sources changed what a stamp
     # means; a stamp minted under the previous schema must never validate a case now.
-    assert reuse._STAMP_SCHEMA == "helia-core-tester/generation-stamp/6"
-    assert "Tests/KernelContracts" in reuse._CMSIS_NN_INPUT_SUBTREES
+    assert reuse._STAMP_SCHEMA == "helia-core-tester/generation-stamp/7"
+    assert reuse._CMSIS_NN_INPUT_SUBTREES == ("Include", "Tests/KernelContracts")
     descriptor = {"name": "Add_s8_basic", "operator": "Add", "shape": [1, 4]}
     current = _stamp(descriptor)
-    monkeypatch.setattr(reuse, "_STAMP_SCHEMA", "helia-core-tester/generation-stamp/5")
+    monkeypatch.setattr(reuse, "_STAMP_SCHEMA", "helia-core-tester/generation-stamp/6")
     assert _stamp(descriptor) != current
 
 
@@ -252,8 +231,8 @@ def test_a_dirty_git_checkout_falls_back_to_content(monkeypatch, tmp_path: Path)
     assert baseline["state"] == "git-dirty"
     assert baseline["commit"] == "18a89ff"
 
-    golden = root / "Tests" / "UnitTest" / "TestCases" / "TestData" / "lstm_1" / "output.h"
-    golden.write_text(golden.read_text().replace("{1, 2, 3}", "{1, 2, 4}"))
+    header = root / "Include" / "arm_nnfunctions.h"
+    header.write_text("/* edited */\n")
     monkeypatch.setattr(reuse, "_checkout_identity_cache", None)
     assert reuse.cmsis_nn_checkout_identity() != baseline
 

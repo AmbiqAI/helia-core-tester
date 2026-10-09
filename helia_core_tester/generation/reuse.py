@@ -32,7 +32,7 @@ STAMP_FILENAME = ".stamp"
 
 # Version prefix of the stamp payload itself. Bump when the payload layout
 # changes so old stamps cannot accidentally validate against new semantics.
-_STAMP_SCHEMA = "helia-core-tester/generation-stamp/6"
+_STAMP_SCHEMA = "helia-core-tester/generation-stamp/7"
 
 # The lock file is the whole resolved dependency set, so it covers every package
 # that can move emitted bytes -- the converter and runtime, but equally numpy's
@@ -50,17 +50,13 @@ _EXTERNAL_GENERATOR_SOURCES = (
 
 # Subtrees (or single files) of the ns-cmsis-nn checkout that are generation
 # inputs: the public headers drive the temp-sizer probe's choice of template
-# variant, the UnitTest data is read directly as LSTM/GRU goldens, the s16
-# activation generator reads sigmoid_table_uint16 from arm_nntables.c, the
-# LSTM s16 reference path feeds schema.fbs to flatc, and the exported kernel
-# contract (contract/ir.py) is what call-site rendering and symbol checks read
-# instead of the headers. Adding an entry here is a stamp-schema bump: an
-# uncovered input would let a stale case be reused after that input changed.
+# variant, and the exported kernel contract (contract/ir.py) is what call-site
+# rendering and symbol checks read instead of the headers. No golden is read
+# from the checkout (they come from the tester's C reference). Changing this
+# list is a stamp-schema bump: an uncovered input would let a stale case be
+# reused after that input changed.
 _CMSIS_NN_INPUT_SUBTREES = (
     "Include",
-    "Tests/UnitTest/TestCases/TestData",
-    "Source/NNSupportFunctions/arm_nntables.c",
-    "Tests/UnitTest/RefactoredTestGen",
     "Tests/KernelContracts",
 )
 
@@ -235,9 +231,9 @@ def cmsis_nn_checkout_identity() -> Dict[str, str]:
     """Identity of the ns-cmsis-nn checkout the generator will read.
 
     The checkout is an input to the emitted bytes, not only to the build: the
-    LSTM/GRU goldens are read straight out of its UnitTest TestData, and the
     temp-sizer probe (generation/utils/temp_sizer_probe.py) reads its public
-    Include/ headers to pick which template variant a case emits. Two runs
+    Include/ headers to pick which template variant a case emits, and call sites
+    render from its exported kernel contract. Two runs
     against different checkouts must therefore never share a stamp.
 
     A clean git checkout is identified by its commit, which is cheap and exact.

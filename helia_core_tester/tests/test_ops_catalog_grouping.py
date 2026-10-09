@@ -210,6 +210,9 @@ REFERENCE_BACKED_SOURCES = (
     "SelectFunctions/where.py",
     "ReverseSequenceFunctions/reverse_sequence.py",
     "DynamicUpdateSliceFunctions/dynamic_update_slice.py",
+    "LSTMFunctions/lstm_unidirectional.py",
+    "LSTMFunctions/gru_unidirectional.py",
+    "SVDFunctions/svdf.py",
 )
 
 # Thin subclasses of a reference-backed base above.

@@ -269,6 +269,10 @@ static inline int32_t hct_store_xsum(HctTensor *t, int64_t i, const HctXsum *x, 
     return HCT_OK;
 }
 
+/* reference_integer_ops::Logistic / Tanh on one int16 value with the effective input multiplier
+ * and right shift (multiplier 3 << k, shift 0 in the power-of-two case). */
+int32_t hct_tanh_logistic_s16_value(int32_t value, int32_t multiplier, int32_t shift, int is_tanh);
+
 /* Checks a two-input, one-output broadcasting entry and sets up its iteration. */
 int32_t hct_binary_setup(const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs,
                          int32_t in_dtype, int32_t out_dtype, HctBroadcast2 *bc);
