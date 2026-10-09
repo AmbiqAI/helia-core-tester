@@ -584,9 +584,12 @@ uv run helia_core_tester agent-loop stop -w ~/campaigns/conv-s8
   deadline, is rejected and costs no eval.
   Every leg then judges that frozen copy, so edits made during a submit
   wait for the next one. Each leg runs under `bench-agent run --timeout`
-  and `timeout`, both cut to fit `submit_deadline_s`. A later leg runs
-  only when the earlier legs reached stage `score`. The overall verdict is
-  the worst leg, and `pass` needs every leg.
+  and `timeout`, both cut to fit `submit_deadline_s`. Once a leg ends
+  below stage `score` or with a verdict worse than `no_gain`, later legs
+  are skipped. An `mram` leg runs only after the `tcm` leg on the same
+  toolchain passes; other toolchains still run. Skipped legs show as
+  `{"verdict": "skipped", "reason": ...}` in the view and the ledger. The
+  overall verdict is the worst leg that ran, and `pass` needs every leg.
   - A submit that cannot take the submit lock in time (another submit is
     running) returns a free `error` and a ledger row without an id.
   - No verdict at all (board busy past the lock wait, bench-agent or

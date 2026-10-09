@@ -110,6 +110,6 @@ def render_prompt(campaign: Campaign, rows: list[dict], paths: dict[str, Path],
         is_depthwise=campaign.op == "DepthwiseConv", has_mve=board.has_mve,
         legs=[{"name": leg.name, "text": LEG_TEXT[leg.placement] + (TOOLCHAIN_TEXT[leg.toolchain] if many or has_atfe else "")}
               for leg in campaign.runs],
-        first_leg=campaign.runs[0].name, toolchains=campaign.toolchains if many else (), has_atfe=has_atfe,
+        first_leg=campaign.runs[0].name, gates_mram={"tcm", "mram"} <= set(campaign.legs), toolchains=campaign.toolchains if many else (), has_atfe=has_atfe,
         evals=campaign.evals, size_evals=campaign.size_budget, start=start, **{k: str(v) for k, v in paths.items()},
     )

@@ -130,6 +130,8 @@ def test_ledger_counter_ignores_rows(tmp_path: Path) -> None:
     ({"tcm": {"verdict": "rejected", "stage": "check"}}, ("tcm", "mram"), "rejected"),
     ({"tcm": {"verdict": "pass"}}, ("tcm", "mram"), "error"),
     ({"tcm": {"verdict": "weird"}}, ("tcm",), "error"),
+    ({"tcm": {"verdict": "no_gain"}, "mram": {"verdict": "skipped"}}, ("tcm", "mram"), "no_gain"),
+    ({"tcm": {"verdict": "pass"}, "mram": {"verdict": "skipped"}}, ("tcm", "mram"), "error"),
 ])
 def test_merge_legs(legs, wanted, overall) -> None:
     assert ledger.merge_legs(legs, wanted) == overall
@@ -222,8 +224,21 @@ def test_submit_pass_charges_and_records(ws: Workspace, capsys) -> None:
 def test_submit_skips_mram_when_unscored(ws: Workspace, capsys) -> None:
     board = FakeBoard([{"verdict": "rejected", "stage": "objects", "findings": [{"rule": "x"}]}])
     rc, view = _submit(ws, board, capsys)
-    assert rc == 3 and view["verdict"] == "rejected" and list(view["legs"]) == ["tcm"]
+    assert rc == 3 and view["verdict"] == "rejected"
+    assert view["legs"]["mram"] == {"verdict": "skipped", "reason": "tcm was rejected"}
     assert len(board.calls) == 1 and ledger.Ledger(ws.ledger).charged() == 1
+
+
+@pytest.mark.parametrize("first, rc", [("fail", 1), ("no_gain", 4), ("not_comparable", 3)])
+def test_submit_skips_mram_unless_tcm_passes(ws: Workspace, capsys, first: str, rc: int) -> None:
+    board = FakeBoard([_leg(first)])
+    code, view = _submit(ws, board, capsys)
+    assert code == rc and view["verdict"] == first and len(board.calls) == 1
+    assert view["legs"]["mram"]["verdict"] == "skipped" and view["exit_code"] == rc
+    row = ledger.Ledger(ws.ledger).rows()[0]
+    assert row["verdict"] == first and row["charged"] and row["attempts"] == {"tcm": 1}
+    assert row["legs"]["mram"]["verdict"] == "skipped" and view["evals_left"] == 1
+    assert agent.status(ws, tail=0)["rows"][0]["verdict"] == first
 
 
 def test_submit_infra_is_free_and_retried(ws: Workspace, capsys, monkeypatch) -> None:
@@ -489,6 +504,7 @@ def test_prompt_depthwise() -> None:
     assert "run exactly `/w/bin/submit`" in text and "`/w/bin/disasm <function_name>`" in text
     assert "leg `mram`" in text and "you have 12 evaluations" in text and "/w/agent-results/NNN.json" in text
     assert "Depthwise has no reduction" in text and "previous attempt" not in text
+    assert "mram leg runs only after the tcm leg" in text and "verdict `skipped`" in text
     for keep in ("comparison_failed", "prepare_regression", "Code size.", "Tiling.", "Work plan:", "short summary"):
         assert keep in text
 
@@ -500,6 +516,7 @@ def test_prompt_convolve_has_no_depthwise() -> None:
     text = render_prompt(camp, CONV_ROWS, PATHS, start_diff=diff)
     assert "s8 convolution faster" in text and "depthwise" not in text.lower()
     assert "ceiling 0.125" in text and "leg `mram`" not in text and "you have 8 evaluations" in text
+    assert "mram leg runs" not in text
     assert "`Source/ConvolutionFunctions/arm_convolve_s8.c`" in text and "- 1x1 path vectorized." in text
     assert "previous attempt is already applied" in text
 
@@ -837,9 +854,30 @@ def test_submit_runs_every_toolchain_leg(ws: Workspace, atfe_root: Path, capsys)
 
 def test_submit_atfe_failure_fails_eval(ws: Workspace, atfe_root: Path, capsys) -> None:
     _two_toolchains(ws)
-    board = FakeBoard([_leg("pass"), _leg("pass"), _leg("fail"), _leg("pass")])
+    board = FakeBoard([_leg("pass"), _leg("pass"), _leg("fail")])
     rc, view = _submit(ws, board, capsys, checker=_keyed_check)
     assert rc == 1 and view["verdict"] == "fail" and view["legs"]["tcm-atfe"]["verdict"] == "fail"
+    assert len(board.calls) == 3 and view["legs"]["mram-atfe"]["verdict"] == "skipped"
+
+
+def test_submit_gates_mram_per_toolchain(ws: Workspace, atfe_root: Path, capsys) -> None:
+    _two_toolchains(ws)
+    board = FakeBoard([_leg("no_gain"), _leg("pass"), _leg("pass")])
+    rc, view = _submit(ws, board, capsys, checker=_keyed_check)
+    # atfe still runs after gcc no_gain.
+    names = [Path(c[c.index("--baseline") + 1]).name for c in board.calls]
+    assert names == ["tcm", "tcm-atfe", "mram-atfe"] and rc == 4 and view["verdict"] == "no_gain"
+    assert view["legs"]["mram"] == {"verdict": "skipped", "reason": "tcm did not pass"}
+    row = ledger.Ledger(ws.ledger).rows()[0]
+    assert list(row["legs"]) == list(LEGS4) and row["legs"]["mram"]["verdict"] == "skipped"
+
+
+def test_submit_infra_after_skip_is_free(ws: Workspace, atfe_root: Path, capsys, monkeypatch) -> None:
+    monkeypatch.setattr(judge, "RETRY_PAUSE_S", 0)
+    _two_toolchains(ws)
+    rc, view = _submit(ws, FakeBoard([_leg("no_gain"), "", ""]), capsys, checker=_keyed_check)
+    assert rc == 5 and view["legs"] == {} and view["evals_left"] == 2
+    assert not ledger.Ledger(ws.ledger).rows()[0]["charged"]
 
 
 def test_gcc_only_row_stays_flat(ws: Workspace, capsys) -> None:
