@@ -469,17 +469,15 @@ def doctor(
             typer.echo(f"⚠ {dir_name}/ not found ({description})", err=True)
 
     # Host toolchain: the reference library (goldens) and the host check need it,
-    # so a missing C/C++ compiler fails doctor; flatc is LSTM-only and informational.
+    # so a missing C/C++ compiler fails doctor.
     from .generation.reference.host_build import describe_cache
     from .utils.host_compiler import describe_host_toolchain
 
     typer.echo("\nHost toolchain (reference goldens and host check):")
     toolchain = describe_host_toolchain()
-    for key, label in (("cc", "C compiler"), ("cxx", "C++ compiler"), ("flatc", "flatc (LSTM flatbuffers)")):
+    for key, label in (("cc", "C compiler"), ("cxx", "C++ compiler")):
         if toolchain.get(key):
             typer.echo(f"✓ {label}: {toolchain[key]}")
-        elif key == "flatc":
-            typer.echo(f"⚠ {label}: {toolchain.get(f'{key}_error')}")
         else:
             typer.echo(f"✗ {label}: {toolchain.get(f'{key}_error')}", err=True)
             all_ok = False

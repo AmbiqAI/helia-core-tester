@@ -3,28 +3,10 @@
 from pathlib import Path
 from typing import Dict, Any
 import numpy as np
-import tensorflow as tf
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.ops._shared.recurrent_pool import recurrent_argument_pool
 
 LSTM_FRAGMENTS = "LSTMFunctions/lstm_unidirectional"
-from helia_core_tester.generation.ops.catalog import get_operator_spec
-from helia_core_tester.generation.utils.temp_sizer_probe import resolve_cmsis_nn_root
-
-
-def lstm_schema_path() -> Path:
-    """The TFLite schema the LSTM reference path feeds to flatc.
-
-    The same checkout the firmware compiles (CMSIS_NN_ROOT / --cmsis-nn-root),
-    else the nested <ns-cmsis-nn>/Tests/helia-core-tester layout: from
-    .../helia-core-tester/helia_core_tester/generation/ops/LSTMFunctions/ this
-    file's parents[6] is ns-cmsis-nn (the old parents[4] guess was the tester
-    repo itself). Deliberately not require_cmsis_nn_root(): generate_lstm_data()
-    falls back to the validated unit-test data when flatc or the schema is
-    unavailable, and runs without an ns-cmsis-nn checkout rely on that.
-    """
-    cmsis_nn_root = resolve_cmsis_nn_root() or Path(__file__).resolve().parents[6]
-    return cmsis_nn_root / "Tests" / "UnitTest" / "RefactoredTestGen" / "schema.fbs"
 
 
 class OpLSTMUnidirectional(OperationBase):
@@ -32,122 +14,13 @@ class OpLSTMUnidirectional(OperationBase):
 
     FAULT_KINDS = ("null_input", "null_output", "null_params", "null_buffers")
 
-    def build_keras_model(self) -> tf.keras.Model:
-        """
-        Build Keras model for LSTMUnidirectional.
-        Mirrors the flow from ns-cmsis-nn reference implementation.
-        """
-        # Extract parameters from descriptor
-        time_steps = int(self.desc.get('time_steps', 50))
-        input_size = int(self.desc.get('feature_size', 24))  # feature_size maps to input_size
-        hidden_size = int(self.desc.get('units', 64))  # units maps to hidden_size
-        batch_size = int(self.desc.get('batch_size', 1))
-        time_major = bool(self.desc.get('time_major', False))
-        
-        # Build input layer with batch_size specified
-        input_layer = tf.keras.Input(
-            shape=(time_steps, input_size),
-            batch_size=batch_size,
-            dtype=tf.float32,
-            name='input'
-        )
-        
-        # Handle time_major: transpose if needed
-        # Note: time_major parameter is only passed when True (for older TF versions compatibility)
-        if time_major:
-            input_layer_transposed = tf.transpose(input_layer, perm=[1, 0, 2])
-            lstm_layer = tf.keras.layers.LSTM(
-                units=hidden_size,
-                time_major=True,  # Only pass when True
-                return_sequences=bool(self.desc.get('return_sequences', True)),
-                name="lstm"
-            )(input_layer_transposed)
-        else:
-            # When time_major=False, don't pass the parameter (use default)
-            lstm_layer = tf.keras.layers.LSTM(
-                units=hidden_size,
-                return_sequences=bool(self.desc.get('return_sequences', True)),
-                name="lstm"
-            )(input_layer)
-        
-        model = tf.keras.Model(input_layer, lstm_layer, name="LSTMUnidirectional")
-        return model
+    def needs_tflite(self) -> bool:
+        # Integer goldens come from TFLM's LSTM in the reference shim, float ones from numpy.
+        return False
 
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        """Convert Keras model to TFLite with quantization."""
-        if self.desc.get("hint", {}).get("force_cmsis", False):
-            raise RuntimeError("LSTM CMSIS-only test; skip TFLite generation.")
-        # Create converter
-        converter = tf.lite.TFLiteConverter.from_keras_model(model)
-        
-        # LSTM requires Select TF ops (flex ops) to handle dynamic tensor lists
-        # Disable experimental lower tensor list ops to avoid conversion errors
-        converter._experimental_lower_tensor_list_ops = False
-        
-        # Apply quantization based on activation_dtype
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
-        
-        if activation_dtype == 'S8':
-            # For LSTM: SELECT_TF_OPS is required for TensorList ops
-            # However, quantization + SELECT_TF_OPS may not work together
-            # Try without quantization first, or skip quantization for LSTM
-            # Note: LSTM in TFLite often uses unquantized float32 due to complexity
-            converter.target_spec.supported_ops = [
-                tf.lite.OpsSet.TFLITE_BUILTINS,
-                tf.lite.OpsSet.SELECT_TF_OPS
-            ]
-            # For now, skip quantization for LSTM as it conflicts with SELECT_TF_OPS
-            # The model will be float32
-            # TODO: Investigate if post-training quantization can work with SELECT_TF_OPS
-        elif activation_dtype == 'S16':
-            # Similar to S8: quantization with SELECT_TF_OPS is problematic
-            converter.target_spec.supported_ops = [
-                tf.lite.OpsSet.TFLITE_BUILTINS,
-                tf.lite.OpsSet.SELECT_TF_OPS
-            ]
-            # Skip quantization for now
-        else:
-            # For float32 or other types, still need SELECT_TF_OPS for LSTM
-            converter.target_spec.supported_ops = [
-                tf.lite.OpsSet.TFLITE_BUILTINS,
-                tf.lite.OpsSet.SELECT_TF_OPS
-            ]
-        
-        # Generate representative dataset
-        def representative_data_gen():
-            for _ in range(100):
-                if 'time_steps' in self.desc and 'feature_size' in self.desc:
-                    # LSTM uses [batch, time_steps, feature_size]
-                    batch_size = int(self.desc.get('batch_size', 1))
-                    time_steps = int(self.desc['time_steps'])
-                    feature_size = int(self.desc['feature_size'])
-                    inputs = self.rng.uniform(-1.0, 1.0, size=(batch_size, time_steps, feature_size)).astype(np.float32)
-                    yield [inputs]
-                elif 'input_shape' in self.desc:
-                    inputs = self.rng.uniform(-1.0, 1.0, size=self.desc['input_shape']).astype(np.float32)
-                    yield [inputs]
-                elif 'input_1_shape' in self.desc and 'input_2_shape' in self.desc:
-                    inputs1 = self.rng.uniform(-1.0, 1.0, size=self.desc['input_1_shape']).astype(np.float32)
-                    inputs2 = self.rng.uniform(-1.0, 1.0, size=self.desc['input_2_shape']).astype(np.float32)
-                    yield [inputs1, inputs2]
-        
-        # Only set representative dataset if quantization is enabled
-        # (Currently disabled for LSTM when using SELECT_TF_OPS)
-        if activation_dtype in ['S8', 'S16']:
-            # Quantization is currently skipped for LSTM, but keep dataset ready
-            # for future implementation
-            converter.representative_dataset = representative_data_gen
-        
-        # Convert and save
-        tflite_model = converter.convert()
-        with open(out_path, 'wb') as f:
-            f.write(tflite_model)
-
-    def needs_keras_model(self) -> bool:
-        return not self.desc.get("hint", {}).get("force_cmsis", False)
-
-    def allow_no_tflite(self) -> bool:
-        return self.desc.get("hint", {}).get("force_cmsis", False)
+    def uses_reference(self) -> bool:
+        return self.desc.get("hint", {}).get("force_cmsis", False) and str(
+            self.desc.get("activation_dtype", "S8")).upper() in {"S8", "S16"}
 
     @staticmethod
     def _dataset_prefixes(dataset: str) -> tuple[str, str]:
@@ -401,7 +274,6 @@ class OpLSTMUnidirectional(OperationBase):
 
         from helia_core_tester.generation.utils.lstm_data import generate_lstm_data, build_lstm_context
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
-        from helia_core_tester.core.discovery import find_tester_templates_dir
 
         name = self.desc['name']
         dataset = self.desc.get("dataset")
@@ -422,11 +294,6 @@ class OpLSTMUnidirectional(OperationBase):
         if output_zero_point_override is not None:
             output_zero_point_override = int(output_zero_point_override)
 
-        templates_dir = Path(find_tester_templates_dir()) / get_operator_spec("LSTMUnidirectional").template_relpath / "json"
-        schema_path = lstm_schema_path()
-        work_dir = Path(output_dir) / "_lstm_tmp"
-        work_dir.mkdir(parents=True, exist_ok=True)
-
         data = generate_lstm_data(
             rng=self.rng,
             activation_dtype=activation_dtype,
@@ -435,13 +302,10 @@ class OpLSTMUnidirectional(OperationBase):
             input_size=input_size,
             hidden_size=hidden_size,
             time_major=time_major,
-            templates_dir=templates_dir,
-            schema_path=schema_path,
-            work_dir=work_dir,
-            dataset=dataset,
             input_zero_point_override=input_zero_point_override,
             output_zero_point_override=output_zero_point_override,
         )
+        self._reference_call = data.reference_call
 
         context = build_lstm_context(
             name=name,

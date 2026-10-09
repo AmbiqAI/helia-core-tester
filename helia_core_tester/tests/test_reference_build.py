@@ -171,10 +171,9 @@ def test_toolchain_report_never_raises(monkeypatch) -> None:
     monkeypatch.setattr(host_compiler.shutil, "which", lambda name: None)
     monkeypatch.delenv(host_compiler.CC_ENV, raising=False)
     monkeypatch.delenv(host_compiler.CXX_ENV, raising=False)
-    monkeypatch.delenv(host_compiler.FLATC_ENV, raising=False)
     report = host_compiler.describe_host_toolchain()
-    assert report["cc"] is None and report["cxx"] is None and report["flatc"] is None
-    assert "cc_error" in report and "flatc_error" in report
+    assert report["cc"] is None and report["cxx"] is None
+    assert "cc_error" in report and "flatc" not in report
 
 
 def test_library_exports_only_the_c_abi(library) -> None:

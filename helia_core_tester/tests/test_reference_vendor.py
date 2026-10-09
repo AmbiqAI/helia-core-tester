@@ -41,9 +41,17 @@ def test_both_licenses_ship_with_the_code() -> None:
     assert "Apache License" in (host_build.THIRD_PARTY / "tflite_micro" / "LICENSE").read_text()
 
 
+# The only micro files vendored: TFLM's integer LSTM, driven directly by shim/hct_ref_lstm.cc.
+_MICRO_LSTM = {
+    "third_party/tflite_micro/tensorflow/lite/micro/kernels/lstm_eval.h",
+    "third_party/tflite_micro/tensorflow/lite/micro/kernels/lstm_eval.cc",
+    "third_party/tflite_micro/tensorflow/lite/micro/kernels/lstm_shared.h",
+}
+
+
 def test_nothing_from_the_micro_runtime_is_vendored() -> None:
     files = host_build.load_manifest()["files"]
-    assert not [f for f in files if "/tensorflow/lite/micro/" in f]
+    assert {f for f in files if "/tensorflow/lite/micro/" in f} == _MICRO_LSTM
     assert not [f for f in files if "/kernels/internal/optimized/" in f and not f.endswith("neon_check.h")]
     assert not [f for f in files if "flatbuffers" in f or "/schema/" in f]
 
@@ -53,7 +61,8 @@ def test_compiled_sources_are_manifested_kernel_files() -> None:
     assert manifest["sources"]
     for source in manifest["sources"]:
         assert source in manifest["files"]
-        assert "/tensorflow/lite/kernels/internal/" in source and source.endswith(".cc")
+        assert source.endswith(".cc")
+        assert "/tensorflow/lite/kernels/internal/" in source or source in _MICRO_LSTM
 
 
 def test_vendor_md_names_the_pinned_commits() -> None:
@@ -71,6 +80,8 @@ def test_allow_list_refuses_runtime_and_optimized_headers() -> None:
     assert allowed("tensorflow/lite/kernels/internal/optimized/neon_check.h")
     assert not allowed("tensorflow/lite/kernels/internal/optimized/optimized_ops.h")
     assert not allowed("tensorflow/lite/micro/micro_log.h")
+    assert not allowed("tensorflow/lite/micro/kernels/kernel_util.h")
+    assert allowed("tensorflow/lite/micro/kernels/lstm_eval.h")
     assert not allowed("tensorflow/lite/schema/schema_generated.h")
     assert not allowed("tensorflow/lite/kernels/kernel_util.h")
 

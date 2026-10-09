@@ -16,7 +16,6 @@ from typing import Dict, Optional, Sequence
 
 CC_ENV = "HCT_HOST_CC"
 CXX_ENV = "HCT_HOST_CXX"
-FLATC_ENV = "HCT_FLATC"
 
 _CC_CANDIDATES = ("cc", "gcc", "clang")
 _CXX_CANDIDATES = ("c++", "g++", "clang++")
@@ -28,7 +27,7 @@ _INSTALL_HINT = (
 
 
 class HostCompilerMissing(RuntimeError):
-    """No usable host compiler (or flatc) was found."""
+    """No usable host compiler was found."""
 
 
 def _resolve(env_var: str, candidates: Sequence[str], kind: str, hint: str) -> str:
@@ -57,16 +56,6 @@ def find_host_cxx() -> str:
     return _resolve(CXX_ENV, _CXX_CANDIDATES, "C++ compiler", _INSTALL_HINT)
 
 
-def find_flatc() -> str:
-    """Absolute path of the FlatBuffers compiler."""
-    return _resolve(
-        FLATC_ENV,
-        ("flatc",),
-        "flatc",
-        "install FlatBuffers (`brew install flatbuffers`, `apt install flatbuffers-compiler`)",
-    )
-
-
 @lru_cache(maxsize=None)
 def compiler_identity(compiler: str) -> str:
     """First line of `<compiler> --version`, which names the vendor and version.
@@ -89,7 +78,7 @@ def compiler_identity(compiler: str) -> str:
 def describe_host_toolchain() -> Dict[str, Optional[str]]:
     """Best-effort report for `doctor`: never raises."""
     report: Dict[str, Optional[str]] = {}
-    for key, finder in (("cc", find_host_cc), ("cxx", find_host_cxx), ("flatc", find_flatc)):
+    for key, finder in (("cc", find_host_cc), ("cxx", find_host_cxx)):
         try:
             path = finder()
             report[key] = f"{path} ({compiler_identity(path)})"

@@ -18,7 +18,7 @@ from typing import Callable, Dict, Optional, Sequence, Tuple
 
 import numpy as np
 
-ABI_VERSION = 3
+ABI_VERSION = 4
 MAX_RANK = 6
 
 OK = 0
@@ -173,6 +173,35 @@ class HctBmmParams(ctypes.Structure):
     ]
 
 
+class HctLstmParams(ctypes.Structure):
+    _fields_ = [
+        ("batch", c_int32),
+        ("time_steps", c_int32),
+        ("input_size", c_int32),
+        ("hidden_size", c_int32),
+        ("time_major", c_int32),
+        ("input_scale", ctypes.c_float),
+        ("input_zero_point", c_int32),
+        ("output_scale", ctypes.c_float),
+        ("output_zero_point", c_int32),
+        ("cell_scale", ctypes.c_float),
+        ("cell_clip", ctypes.c_float),
+        ("weight_scales", ctypes.c_float * 8),
+    ]
+
+
+HctSvdfParams = _int_struct(
+    "HctSvdfParams",
+    ("batch", "input_size", "num_filters", "memory_size", "rank", "input_zero_point", "output_zero_point",
+     "scale1_multiplier", "scale1_shift", "scale2_multiplier", "scale2_shift"),
+)
+
+
+# HctLstmParams.weight_scales / the weights pointer array order.
+LSTM_WEIGHT_ORDER = tuple(f"{g}_gate_{k}" for k in ("input", "hidden") for g in ("input", "forget", "cell", "output"))
+LSTM_BIAS_ORDER = tuple(f"{g}_gate_bias" for g in ("input", "forget", "cell", "output"))
+
+
 def struct_to_dict(struct: ctypes.Structure) -> Dict[str, int]:
     """The integer fields of a flat params struct, for provenance and harness contexts."""
     return {name: int(getattr(struct, name)) for name, _ in struct._fields_}
@@ -197,6 +226,8 @@ STRUCTS = {
     "HctMeanParams": HctMeanParams,
     "HctRsqrtParams": HctRsqrtParams,
     "HctBmmParams": HctBmmParams,
+    "HctLstmParams": HctLstmParams,
+    "HctSvdfParams": HctSvdfParams,
 }
 
 _P = ctypes.POINTER
@@ -260,6 +291,10 @@ _ENTRIES.update({
     "hct_ref_quantize_f32_s16": [_c_float, c_int32, _P(HctShape), c_void_p, c_void_p],
     "hct_ref_bmm_s8": [_P(HctBmmParams), _P(HctShape), c_void_p, _P(HctShape), c_void_p, _P(HctShape), c_void_p],
     "hct_ref_bmm_s16": [_P(HctBmmParams), _P(HctShape), c_void_p, _P(HctShape), c_void_p, _P(HctShape), c_void_p],
+    "hct_ref_lstm_s8": [_P(HctLstmParams), c_void_p, ctypes.POINTER(c_void_p), ctypes.POINTER(c_void_p), c_void_p],
+    "hct_ref_lstm_s16": [_P(HctLstmParams), c_void_p, ctypes.POINTER(c_void_p), ctypes.POINTER(c_void_p), c_void_p],
+    "hct_ref_svdf_s8": [_P(HctSvdfParams), c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, c_void_p],
+    "hct_ref_svdf_s8_state_s16": [_P(HctSvdfParams), c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, c_void_p],
     "hct_ref_mean_fold": [c_int32, c_int32, ctypes.c_int64, _P(HctQuant)],
     "hct_ref_mean_s8": [_P(HctMeanParams), _P(HctShape), c_void_p, c_int32_p, c_int32, _P(HctShape), c_void_p],
     "hct_ref_mean_s16": [_P(HctMeanParams), _P(HctShape), c_void_p, c_int32_p, c_int32, _P(HctShape), c_void_p],
@@ -627,6 +662,63 @@ class Bindings:
         )
         self._check(entry, code)
         return output
+
+    def lstm(self, kind: str, params: ctypes.Structure, input: np.ndarray, weights: Dict[str, np.ndarray],
+             biases: Dict[str, np.ndarray]) -> np.ndarray:
+        """TFLM integer LSTM; weights/biases keyed as LSTM_WEIGHT_ORDER / LSTM_BIAS_ORDER."""
+        types = {"s8": (np.int8, np.int32), "s16": (np.int16, np.int64)}.get(kind)
+        if types is None:
+            raise ValueError(f"unknown lstm kind {kind!r}")
+        if not isinstance(params, HctLstmParams):
+            raise TypeError(f"lstm takes HctLstmParams, got {type(params).__name__}")
+        act, bias_t = types
+        b, t, i, h = params.batch, params.time_steps, params.input_size, params.hidden_size
+        lead = (t, b) if params.time_major else (b, t)
+        _require(input, act, "input")
+        if input.shape != lead + (i,):
+            raise ValueError(f"input shape {input.shape}, params say {lead + (i,)}")
+        w_arrays = [_require(weights[k], np.int8, k) for k in LSTM_WEIGHT_ORDER]
+        for k, w in zip(LSTM_WEIGHT_ORDER, w_arrays):
+            if w.shape != ((h, i) if k.endswith("_input") else (h, h)):
+                raise ValueError(f"{k} shape {w.shape} does not match hidden {h} / input {i}")
+        b_arrays = [_require(biases[k], bias_t, k) for k in LSTM_BIAS_ORDER]
+        for k, v in zip(LSTM_BIAS_ORDER, b_arrays):
+            if v.shape != (h,):
+                raise ValueError(f"{k} shape {v.shape}, expected ({h},)")
+        output = np.zeros(lead + (h,), dtype=act)
+        w_ptrs = (c_void_p * 8)(*[w.ctypes.data for w in w_arrays])
+        b_ptrs = (c_void_p * 4)(*[v.ctypes.data for v in b_arrays])
+        entry = f"hct_ref_lstm_{kind}"
+        self._check(entry, self._fn(entry)(ctypes.byref(params), _ptr(input), w_ptrs, b_ptrs, _ptr(output)))
+        return output
+
+    def svdf(self, state_kind: str, params: ctypes.Structure, input: np.ndarray, weights_feature: np.ndarray,
+             weights_time: np.ndarray, bias: Optional[np.ndarray], state: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """One SVDF step; returns (output, the updated state). The caller's state is not modified."""
+        state_t = {"s8": np.int8, "s16": np.int16}.get(state_kind)
+        if state_t is None:
+            raise ValueError(f"unknown svdf state kind {state_kind!r}")
+        if not isinstance(params, HctSvdfParams):
+            raise TypeError(f"svdf takes HctSvdfParams, got {type(params).__name__}")
+        n, i, f, m, r = params.batch, params.input_size, params.num_filters, params.memory_size, params.rank
+        if r < 1 or f % r:
+            raise ValueError(f"rank {r} does not divide num_filters {f}")
+        for name, arr, dtype, shape in (("input", input, np.int8, (n, i)), ("weights_feature", weights_feature, np.int8, (f, i)),
+                                        ("weights_time", weights_time, state_t, (f, m)), ("state", state, state_t, (n, f, m))):
+            _require(arr, dtype, name)
+            if arr.shape != shape:
+                raise ValueError(f"{name} shape {arr.shape}, params say {shape}")
+        if bias is not None:
+            _require(bias, np.int32, "bias")
+            if bias.shape != (f // r,):
+                raise ValueError(f"bias shape {bias.shape}, expected ({f // r},)")
+        new_state = np.array(state, copy=True)
+        output = np.zeros((n, f // r), dtype=np.int8)
+        entry = "hct_ref_svdf_s8" if state_kind == "s8" else "hct_ref_svdf_s8_state_s16"
+        code = self._fn(entry)(ctypes.byref(params), _ptr(input), _ptr(weights_feature), _ptr(weights_time),
+                               _ptr(bias), _ptr(new_state), _ptr(output))
+        self._check(entry, code)
+        return output, new_state
 
     def prelu_s8(self, params: ctypes.Structure, input: np.ndarray, alpha: np.ndarray) -> np.ndarray:
         if not isinstance(params, HctPreluParams):

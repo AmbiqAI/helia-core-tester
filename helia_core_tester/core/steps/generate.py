@@ -129,9 +129,9 @@ class GenerateStep(StepBase):
                 f"Run seed: {seed} ({'chosen' if chosen else 'fresh draw'}; pass --seed {seed} to reproduce"
                 f"{'' if chosen else ' or reuse'})"
             )
-        # Propagate an overridden CMSIS-NN root (--cmsis-nn-root) so LSTM
-        # unit-test data lookups (lstm_data.py) resolve against it instead of
-        # assuming the repo is nested under ns-cmsis-nn/Tests/. Uses
+        # Propagate an overridden CMSIS-NN root (--cmsis-nn-root) so checkout
+        # probes (temp_sizer_probe.py, the s16 activation tables) resolve
+        # against it instead of assuming the repo is nested under ns-cmsis-nn/Tests/. Uses
         # CMSIS_NN_ROOT (matching the CMake cache var name), distinct from
         # CMSIS_NN_REPO_ROOT which overrides helia-core-tester's own repo
         # root discovery.

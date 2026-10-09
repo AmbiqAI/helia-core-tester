@@ -20,6 +20,11 @@ Parameter dictionaries (the JSON form recorded in <case>.reference.json):
   rsqrt_s16:     the HctRsqrtParams fields plus input_scale, output_scale (TFLite's LUT route)
   bmm_s8 / bmm_s16: lhs_offset, rhs_offset, output_offset, output_multiplier, output_shift, act
                  (tensors lhs [..., M, K], rhs [..., N, K])
+  lstm_s8 / lstm_s16: the HctLstmParams fields (weight_scales a list of 8 in
+                 bindings.LSTM_WEIGHT_ORDER); tensors input, "<gate>_gate_input",
+                 "<gate>_gate_hidden", "<gate>_gate_bias"
+  svdf_s8 / svdf_s16state: the HctSvdfParams fields; tensors input, weights_feature,
+                 weights_time, bias (optional), state (the state before the step)
   quantize_s8 / quantize_s16: scale, zero_point (float32 input -> int output)
   mean_s8 / mean_s16: input_zero_point, output_zero_point, multiplier, shift (unfolded),
                  keep_dims, axes [...]
@@ -140,6 +145,24 @@ def run_reference(call: ReferenceCall, lib: Optional[b.Bindings] = None) -> np.n
         out = _run_flat(lib, call)
         if out.dtype != np.dtype(call.output_dtype):
             raise TypeError(f"{call.kernel} produced {out.dtype}, call expects {call.output_dtype}")
+        return out
+    if call.kernel in ("svdf_s8", "svdf_s16state"):
+        t = call.tensors
+        out, _ = lib.svdf("s8" if call.kernel == "svdf_s8" else "s16", flat_struct(b.HctSvdfParams, call.params),
+                          _tensor(t, "input"), _tensor(t, "weights_feature"), _tensor(t, "weights_time"), t.get("bias"),
+                          _tensor(t, "state"))
+        if tuple(out.shape) != tuple(call.output_shape):
+            raise ValueError(f"{call.kernel}: output shape {out.shape}, call expects {call.output_shape}")
+        return out
+    if call.kernel in ("lstm_s8", "lstm_s16"):
+        from helia_core_tester.generation.reference.lstm import lstm_struct
+
+        t = call.tensors
+        weights = {k: _tensor(t, k) for k in b.LSTM_WEIGHT_ORDER}
+        biases = {k: _tensor(t, k) for k in b.LSTM_BIAS_ORDER}
+        out = lib.lstm(call.kernel[5:], lstm_struct(call.params), _tensor(t, "input"), weights, biases)
+        if out.dtype != np.dtype(call.output_dtype) or tuple(out.shape) != tuple(call.output_shape):
+            raise TypeError(f"{call.kernel} produced {out.dtype}{out.shape}, call expects {call.output_dtype}{call.output_shape}")
         return out
     if call.kernel in ("bmm_s8", "bmm_s16"):
         p = call.params

@@ -15,14 +15,16 @@ replant. The gemmlowp commit is the one tflite-micro pins in
 upstream only: never from the helia-rt tree, whose root license restricts it to
 Ambiq CPUs.
 
-55 files, each hashed in `manifest.json` (checked by
+63 files, each hashed in `manifest.json` (checked by
 `helia_core_tester/tests/test_reference_vendor.py`). Only the include closure of
 `shim/*.cc` is vendored, plus the companion `.cc` of each header that has one;
-nothing from `tensorflow/lite/micro`, ruy, flatbuffers or the schema.
+from `tensorflow/lite/micro` only TFLM's integer LSTM (`kernels/lstm_eval.{h,cc}`,
+`kernels/lstm_shared.h`), and nothing from ruy, flatbuffers or the schema.
 
-Stubs in `shim/stubs/` replace the two headers outside that closure:
-`ruy/profiler/instrumentation.h` (an empty `ScopeLabel`) and
-`tensorflow/lite/micro/micro_log.h` (the `TF_LITE_STRIP_ERROR_STRINGS` no-op forms).
+Stubs in `shim/stubs/` replace the three headers outside that closure:
+`ruy/profiler/instrumentation.h` (an empty `ScopeLabel`),
+`tensorflow/lite/micro/micro_log.h` (the `TF_LITE_STRIP_ERROR_STRINGS` no-op forms) and
+`tensorflow/lite/micro/kernels/kernel_util.h` (the tensor accessors the LSTM uses).
 
 Compiled sources (besides `shim/*.cc`):
 
@@ -30,6 +32,7 @@ Compiled sources (besides `shim/*.cc`):
 - `third_party/tflite_micro/tensorflow/lite/kernels/internal/portable_tensor_utils.cc`
 - `third_party/tflite_micro/tensorflow/lite/kernels/internal/quantization_util.cc`
 - `third_party/tflite_micro/tensorflow/lite/kernels/internal/runtime_shape.cc`
+- `third_party/tflite_micro/tensorflow/lite/micro/kernels/lstm_eval.cc`
 
 Refresh:
 

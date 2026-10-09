@@ -16,8 +16,7 @@ sizer-validating variant. Any symbol absent (or no checkout resolvable at
 all) -> the templates emit byte-identical legacy output, so a generate
 against ns-cmsis-nn main is unchanged down to the last byte.
 
-The checkout is resolved exactly the way lstm_data.py resolves its UnitTest
-data root: the ``CMSIS_NN_ROOT`` environment variable (set from
+The checkout is resolved from the ``CMSIS_NN_ROOT`` environment variable (set from
 Config.cmsis_nn_root / --cmsis-nn-root by the generation step) when present,
 else the historical nested layout (ns-cmsis-nn/Tests/helia-core-tester/...).
 """
@@ -44,8 +43,7 @@ _PUBLIC_HEADER_NAMES = (
 def resolve_cmsis_nn_root() -> Optional[Path]:
     """Return the ns-cmsis-nn checkout root used for generation, or None.
 
-    Mirrors lstm_data._unit_test_data_root(): CMSIS_NN_ROOT wins, else the
-    nested ns-cmsis-nn/Tests/helia-core-tester layout. Returns None when the
+    CMSIS_NN_ROOT wins, else the nested ns-cmsis-nn/Tests/helia-core-tester layout. Returns None when the
     resolved directory does not look like an ns-cmsis-nn checkout (no
     Include/), which callers must treat as "sizers absent".
     """

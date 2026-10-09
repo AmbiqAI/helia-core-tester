@@ -27,7 +27,7 @@
 extern "C" {
 #endif
 
-#define HCT_REF_ABI_VERSION 3
+#define HCT_REF_ABI_VERSION 4
 #define HCT_REF_MAX_RANK 6
 
 #define HCT_REF_OK 0
@@ -614,6 +614,73 @@ int32_t hct_ref_bmm_s16(const HctBmmParams *params,
                         const int16_t *rhs,
                         const HctShape *output_shape,
                         int16_t *output);
+
+/* ---- integer UNIDIRECTIONAL_SEQUENCE_LSTM (TFLM EvalLstm; tanh cell gate, no
+ * peephole/projection/layer norm). Input [B, T, I] ([T, B, I] when time_major),
+ * output [B, T, H] likewise; states start at the hidden zero point / zero.
+ * weights: input-to-{input, forget, cell, output} [H, I], then recurrent-to-the-same
+ * [H, H], all int8 per tensor; biases: {input, forget, cell, output} [H]. ---- */
+typedef struct
+{
+    int32_t batch;
+    int32_t time_steps;
+    int32_t input_size;
+    int32_t hidden_size;
+    int32_t time_major;
+    float input_scale;
+    int32_t input_zero_point;
+    float output_scale; /* hidden state and output */
+    int32_t output_zero_point;
+    float cell_scale; /* power of two */
+    float cell_clip;  /* real units; 0 disables clipping */
+    float weight_scales[8];
+} HctLstmParams;
+
+int32_t hct_ref_lstm_s8(const HctLstmParams *params,
+                        const int8_t *input,
+                        const int8_t *const *weights,
+                        const int32_t *const *biases,
+                        int8_t *output);
+int32_t hct_ref_lstm_s16(const HctLstmParams *params,
+                         const int16_t *input,
+                         const int8_t *const *weights,
+                         const int64_t *const *biases,
+                         int16_t *output);
+
+/* ---- integer SVDF (TFLM EvalIntegerSvdfReference; state zero point 0).
+ * input [batch, input_size], weights_feature [num_filters, input_size],
+ * weights_time [num_filters, memory_size], bias [num_filters / rank] (nullable),
+ * state [batch, num_filters, memory_size] is read and updated in place,
+ * output [batch, num_filters / rank]. ---- */
+typedef struct
+{
+    int32_t batch;
+    int32_t input_size;
+    int32_t num_filters;
+    int32_t memory_size;
+    int32_t rank;
+    int32_t input_zero_point;
+    int32_t output_zero_point;
+    int32_t scale1_multiplier; /* input * weights_feature -> state */
+    int32_t scale1_shift;
+    int32_t scale2_multiplier; /* state * weights_time -> output */
+    int32_t scale2_shift;
+} HctSvdfParams;
+
+int32_t hct_ref_svdf_s8(const HctSvdfParams *params,
+                        const int8_t *input,
+                        const int8_t *weights_feature,
+                        const int8_t *weights_time,
+                        const int32_t *bias,
+                        int8_t *state,
+                        int8_t *output);
+int32_t hct_ref_svdf_s8_state_s16(const HctSvdfParams *params,
+                                  const int8_t *input,
+                                  const int8_t *weights_feature,
+                                  const int16_t *weights_time,
+                                  const int32_t *bias,
+                                  int16_t *state,
+                                  int8_t *output);
 
 /* Struct sizes, asserted against the ctypes mirrors at load time. */
 int32_t hct_ref_sizeof(const char *type_name);

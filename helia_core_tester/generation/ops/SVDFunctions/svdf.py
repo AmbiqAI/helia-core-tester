@@ -5,7 +5,6 @@ SVDF operation implementation.
 from typing import Dict, Any, Optional
 from pathlib import Path
 import numpy as np
-import tensorflow as tf
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.harness import ArgumentPool, HarnessInput, fragment
 
@@ -81,59 +80,8 @@ class OpSVDF(OperationBase):
                     kind, "arm_svdf_s8 only checks ctx->buf under ARM_MATH_MVEI; add required_capabilities: [mve]"
                 )
 
-    def build_keras_model(self) -> tf.keras.Model:
-        """Build Keras model for SVDF operation."""
-        input_shape = self.desc['input_shape']
-        inputs = tf.keras.Input(shape=input_shape[1:], dtype=tf.float32, name='input')
-        x = tf.keras.layers.Dense(units=64)(inputs)
-        model = tf.keras.Model(inputs=inputs, outputs=x)
-        return model
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        """Convert Keras model to TFLite with quantization."""
-        # Create converter
-        converter = tf.lite.TFLiteConverter.from_keras_model(model)
-        
-        # Apply quantization based on activation_dtype
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
-        
-        if activation_dtype == 'S8':
-            converter.optimizations = [tf.lite.Optimize.DEFAULT]
-            converter.target_spec.supported_types = [tf.int8]
-            converter.inference_input_type = tf.int8
-            converter.inference_output_type = tf.int8
-        elif activation_dtype == 'S16':
-            converter.optimizations = [tf.lite.Optimize.DEFAULT]
-            converter.target_spec.supported_types = [tf.int16]
-            # For int16 quantization, keep input/output as float32
-            # For int16 quantization, keep input/output as float32
-        
-        # Generate representative dataset
-        def representative_data_gen():
-            for _ in range(100):
-                if 'input_shape' in self.desc:
-                    inputs = self.rng.uniform(-1.0, 1.0, size=self.desc['input_shape']).astype(np.float32)
-                    yield [inputs]
-                elif 'input_1_shape' in self.desc and 'input_2_shape' in self.desc:
-                    inputs1 = self.rng.uniform(-1.0, 1.0, size=self.desc['input_1_shape']).astype(np.float32)
-                    inputs2 = self.rng.uniform(-1.0, 1.0, size=self.desc['input_2_shape']).astype(np.float32)
-                    yield [inputs1, inputs2]
-        
-        converter.representative_dataset = representative_data_gen
-        
-        # Convert and save
-        tflite_model = converter.convert()
-        with open(out_path, 'wb') as f:
-            f.write(tflite_model)
-
-    def needs_keras_model(self) -> bool:
-        if self.desc.get("hint", {}).get("force_cmsis", False):
-            return False
-        return True
-
-    def allow_no_tflite(self) -> bool:
-        if self.desc.get("hint", {}).get("force_cmsis", False):
-            return True
+    def needs_tflite(self) -> bool:
+        # Integer goldens come from the TFLM SVDF port in the reference shim, float ones from numpy.
         return False
 
     @staticmethod
@@ -268,6 +216,68 @@ class OpSVDF(OperationBase):
             output = np.clip(reduced, output_act_min, output_act_max).astype(np.float32)
 
         return output.flatten()
+
+    # TFLM requires the state zero point to be 0 and the bias scale to be state * weights_time.
+    _STATE_SCALE = {"S8": 1.0 / 64, "S16": 2.0 ** -10}
+
+    def uses_reference(self) -> bool:
+        return self.desc.get("hint", {}).get("force_cmsis", False) and str(
+            self.desc.get("activation_dtype", "S8")).upper() == "S8"
+
+    def _int_reference_case(self, state_dtype_str: str, *, input_batches: int, input_height: int,
+                            feature_batches: int, time_batches: int, rank: int, use_bias: bool) -> Dict[str, Any]:
+        """Quantize, draw and run one integer SVDF step on the TFLM reference port.
+
+        Scales: input over [-1, 1]; feature weights keeping the state O(1); state 1/64 (s8)
+        or 2^-10 (s16); time weights keeping each filter O(1); output covering the rank sum.
+        effective_scale_1/2 are formed in float32 and widened, as TFLM's SVDF prepare does.
+        Explicit hint multipliers/offsets (legacy) are passed through untouched."""
+        from helia_core_tester.generation.reference import params as ref_params
+        from helia_core_tester.generation.reference.case import ReferenceCall
+
+        if feature_batches % rank:
+            raise ValueError(f"{self.desc.get('name')}: rank {rank} does not divide feature_batches {feature_batches}")
+        hint = self.desc.get("hint", {})
+        f32 = np.float32
+        state_t = np.int8 if state_dtype_str == "S8" else np.int16
+        state_info = np.iinfo(state_t)
+        in_s = f32(1.0 / 128)
+        wf_s = f32(1.0 / (127 * np.sqrt(input_height)))
+        st_s = f32(self._STATE_SCALE[state_dtype_str])
+        wt_s = f32(1.0 / (state_info.max * np.sqrt(time_batches)))
+        out_s = f32(np.sqrt(rank) / 64)
+        mult1, shift1 = ref_params.quantize_multiplier(float(f32(in_s * wf_s / st_s)))
+        mult2, shift2 = ref_params.quantize_multiplier(float(f32(st_s * wt_s / out_s)))
+        params = {
+            "batch": input_batches, "input_size": input_height, "num_filters": feature_batches,
+            "memory_size": time_batches, "rank": rank,
+            "input_zero_point": int(hint.get("input_offset", 0)), "output_zero_point": int(hint.get("output_offset", 0)),
+            "scale1_multiplier": int(hint.get("input_multiplier", mult1)), "scale1_shift": int(hint.get("input_shift", shift1)),
+            "scale2_multiplier": int(hint.get("output_multiplier", mult2)), "scale2_shift": int(hint.get("output_shift", shift2)),
+        }
+
+        rng_state = self.rng.__getstate__()
+        self.rng = np.random.default_rng(self.seed)
+        x = self.rng.integers(-128, 128, size=(input_batches, input_height)).astype(np.int8)
+        wf = self.rng.integers(-127, 128, size=(feature_batches, input_height)).astype(np.int8)
+        wt = self.rng.integers(-state_info.max, state_info.max + 1, size=(feature_batches, time_batches)).astype(state_t)
+        half = state_info.max // 2
+        state = self.rng.integers(-half, half + 1, size=(input_batches, feature_batches, time_batches)).astype(state_t)
+        bias = None
+        if use_bias:
+            reach = max(1, int(0.25 / float(st_s * wt_s)))
+            bias = self.rng.integers(-reach, reach + 1, size=(feature_batches // rank,)).astype(np.int32)
+        self.rng.__setstate__(rng_state)
+
+        call = ReferenceCall(
+            "svdf_s8" if state_dtype_str == "S8" else "svdf_s16state", params,
+            {"input": x, "weights_feature": wf, "weights_time": wt, "bias": bias, "state": state},
+            (input_batches, feature_batches // rank), "int8",
+            quant={"input": float(in_s), "weights_feature": float(wf_s), "state": float(st_s),
+                   "weights_time": float(wt_s), "output": float(out_s)},
+        )
+        return {"params": params, "input": x, "weights_feature": wf, "weights_time": wt, "state": state, "bias": bias,
+                "output": self.reference_golden(call).reshape(-1)}
 
     def _ctx_sizer_context(self, sizer_prefix: str) -> Dict[str, Any]:
         # Issue #71: the harness sizes input_ctx/output_ctx with the kernel's own
@@ -411,70 +421,22 @@ class OpSVDF(OperationBase):
             raise ValueError(f"Unsupported state_dtype: {state_dtype_str}")
 
         state_dtype = np.int8 if state_dtype_str == "S8" else np.int16
-        weights_time_dtype = np.int8 if state_dtype_str == "S8" else np.int16
         kernel_fn = "arm_svdf_s8" if state_dtype_str == "S8" else "arm_svdf_state_s16_s8"
         has_ctx = state_dtype_str == "S8"
 
-        input_offset = int(hint.get("input_offset", 0))
-        output_offset = int(hint.get("output_offset", 0))
-        input_multiplier = int(hint.get("input_multiplier", 2147483647))
-        input_shift = int(hint.get("input_shift", 0))
-        output_multiplier = int(hint.get("output_multiplier", 2147483647))
-        output_shift = int(hint.get("output_shift", 0))
-
-        if state_dtype_str == "S16":
-            input_activation_min = int(hint.get("input_activation_min", -32768))
-            input_activation_max = int(hint.get("input_activation_max", 32767))
-        else:
-            input_activation_min = int(hint.get("input_activation_min", -128))
-            input_activation_max = int(hint.get("input_activation_max", 127))
-
-        output_activation_min = int(hint.get("output_activation_min", -128))
-        output_activation_max = int(hint.get("output_activation_max", 127))
-
-        rng_state = self.rng.__getstate__()
-        self.rng = np.random.default_rng(self.seed)
-
-        input_data = self.rng.integers(-5, 6, size=(input_batches, input_height), dtype=np.int8)
-        weights_feature = self.rng.integers(-5, 6, size=(feature_batches, input_height), dtype=np.int8)
-        weights_time = self.rng.integers(-5, 6, size=(feature_batches, time_batches), dtype=weights_time_dtype)
-        state_init = self.rng.integers(-5, 6, size=(input_batches, feature_batches, time_batches), dtype=state_dtype)
-
-        if use_bias:
-            bias_size = feature_batches if unit_count == feature_batches else unit_count
-            bias = self.rng.integers(-25, 26, size=(bias_size,), dtype=np.int32)
-        else:
-            bias = None
-
-        self.rng.__setstate__(rng_state)
-
-        params = {
-            "input_batches": input_batches,
-            "input_height": input_height,
-            "feature_batches": feature_batches,
-            "time_batches": time_batches,
-            "rank": rank,
-            "input_multiplier": input_multiplier,
-            "input_shift": input_shift,
-            "output_multiplier": output_multiplier,
-            "output_shift": output_shift,
-            "input_activation_min": input_activation_min,
-            "input_activation_max": input_activation_max,
-            "output_activation_min": output_activation_min,
-            "output_activation_max": output_activation_max,
-            "input_offset": input_offset,
-            "output_offset": output_offset,
-        }
-
-        expected_output = self._generate_svdf_expected(
-            input_data=input_data,
-            state_init=state_init,
-            weights_feature=weights_feature,
-            weights_time=weights_time,
-            bias=bias,
-            params=params,
-            state_dtype=state_dtype,
+        case = self._int_reference_case(
+            state_dtype_str, input_batches=input_batches, input_height=input_height,
+            feature_batches=feature_batches, time_batches=time_batches, rank=rank, use_bias=use_bias,
         )
+        params = case["params"]
+        input_data, weights_feature, weights_time = case["input"], case["weights_feature"], case["weights_time"]
+        state_init, bias, expected_output = case["state"], case["bias"], case["output"]
+        input_offset, output_offset = params["input_zero_point"], params["output_zero_point"]
+        input_multiplier, input_shift = params["scale1_multiplier"], params["scale1_shift"]
+        output_multiplier, output_shift = params["scale2_multiplier"], params["scale2_shift"]
+        state_info = np.iinfo(state_dtype)
+        input_activation_min, input_activation_max = int(state_info.min), int(state_info.max)
+        output_activation_min, output_activation_max = -128, 127
 
         builder = TemplateContextBuilder()
         context = {

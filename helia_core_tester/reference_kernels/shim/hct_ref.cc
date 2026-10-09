@@ -553,6 +553,8 @@ int32_t hct_ref_sizeof(const char *type_name)
         {"HctMeanParams", sizeof(HctMeanParams)},
         {"HctRsqrtParams", sizeof(HctRsqrtParams)},
         {"HctBmmParams", sizeof(HctBmmParams)},
+        {"HctLstmParams", sizeof(HctLstmParams)},
+        {"HctSvdfParams", sizeof(HctSvdfParams)},
     };
     for (const Entry &entry : entries)
     {

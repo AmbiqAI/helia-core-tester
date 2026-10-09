@@ -962,8 +962,7 @@ Keras/TFLiteConverter path; see `third_party/VENDOR.md` for the pinned commits a
 
 ### Reference goldens, host check and quantization policy
 
-No integer case builds a Keras model or writes a `.tflite` (LSTM s8 excepted, until its
-flatbuffer route lands). A case whose golden comes from a reference kernel writes
+No integer case builds a Keras model or writes a `.tflite`. A case whose golden comes from a reference kernel writes
 `<name>.reference.json` (kernel, parameters, tensor shapes/dtypes/sha256, seeds, library key)
 next to its sources, the sidecar gains a `reference` entry, and `manifest.json` points at the
 file. Float cases stay on the converter path for now. Where each integer golden comes from:
@@ -980,6 +979,8 @@ file. Float cases stay on the converter path for now. Where each integer golden 
 | Mean | TFLM `QuantizedMeanOrSum`; the CMSIS multiplier is folded by 1/count exactly as TFLM folds it | input over the draw, output over the float mean |
 | BatchMatMul | TFLM `BatchMatMul` on the canonical `[M, K]` x `[N, K]` operands | inputs over `[-1, 1]`, output over the float product |
 | Quantize | TFLM `AffineQuantize` on the activated input | output over the activated `[-1, 1]` range |
+| LSTMUnidirectional (s8, s16) | TFLM's own integer LSTM (`micro/kernels/lstm_eval`, vendored with stubbed micro helpers); the kernel multipliers come from the same float32 scales | activations `[-1, 1]` (s8 1/128, s16 2^-15), cell 2^-11, a distinct weight scale per gate tensor; s16 zero points are refused (TFLM ignores them) |
+| SVDF (s8, int8 or int16 state) | a port of TFLM's `EvalIntegerSvdfReference`; `effective_scale_1/2` in float32 as TFLM forms them | input 1/128, state 1/64 or 2^-10, output covering the rank sum |
 | Rsqrt | TFLite: int8 multiplier route, int16 `LUTPopulate` + `LUTLookup` | fixed |
 | Sqrt | s8 the TFLite float formula as a LUT; s16 the kernel's LUT interpolation, checked within 2 LSB of float sqrt above q = 1024 | fixed |
 | Abs, SquaredDifference, Comparison, ReduceMax/Min, Dequantize, PReLU s16, HardSwishPrecise, data movement | the TFLite formula / CMSIS port in numpy | fixed or preset |

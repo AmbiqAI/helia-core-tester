@@ -40,6 +40,12 @@ THIRD_PARTY = REF_ROOT / "third_party"
 INCLUDE_RE = re.compile(r'^\s*#\s*include\s+"([^"]+)"', re.MULTILINE)
 
 # Roots an include may resolve into, per upstream.
+MICRO_LSTM = (
+    "tensorflow/lite/micro/kernels/lstm_eval.h",
+    "tensorflow/lite/micro/kernels/lstm_eval.cc",
+    "tensorflow/lite/micro/kernels/lstm_shared.h",
+)
+
 TFLM_ALLOWED = (
     "tensorflow/lite/kernels/internal/",
     "tensorflow/lite/kernels/op_macros.h",
@@ -48,6 +54,13 @@ TFLM_ALLOWED = (
     "tensorflow/lite/core/c/c_api_types.h",
     "tensorflow/lite/core/c/builtin_op_data.h",
     "tensorflow/compiler/mlir/lite/core/c/",
+    # Legacy forwarding headers the micro LSTM includes.
+    "tensorflow/lite/c/common.h",
+    "tensorflow/lite/c/builtin_op_data.h",
+    "tensorflow/lite/c/c_api_types.h",
+    # TFLM's integer LSTM, driven directly by shim/hct_ref_lstm.cc; the rest of
+    # tensorflow/lite/micro stays out (kernel_util.h and micro_log.h are stubbed).
+    *MICRO_LSTM,
 )
 TFLM_DENIED = (
     # Optimized kernels pull in ruy/eigen; the reference build never needs them.
@@ -142,7 +155,7 @@ def collect_closure(tflm: Path, gemmlowp: Path) -> tuple[dict[str, dict[str, Pat
                 # headers (core/c) are used header-only.
                 if (
                     origin == "tflite_micro"
-                    and rel.startswith("tensorflow/lite/kernels/internal/")
+                    and (rel.startswith("tensorflow/lite/kernels/internal/") or rel in MICRO_LSTM)
                     and path.suffix == ".h"
                     and companion.is_file()
                 ):
@@ -204,11 +217,13 @@ Ambiq CPUs.
 {count} files, each hashed in `manifest.json` (checked by
 `helia_core_tester/tests/test_reference_vendor.py`). Only the include closure of
 `shim/*.cc` is vendored, plus the companion `.cc` of each header that has one;
-nothing from `tensorflow/lite/micro`, ruy, flatbuffers or the schema.
+from `tensorflow/lite/micro` only TFLM's integer LSTM (`kernels/lstm_eval.{{h,cc}}`,
+`kernels/lstm_shared.h`), and nothing from ruy, flatbuffers or the schema.
 
-Stubs in `shim/stubs/` replace the two headers outside that closure:
-`ruy/profiler/instrumentation.h` (an empty `ScopeLabel`) and
-`tensorflow/lite/micro/micro_log.h` (the `TF_LITE_STRIP_ERROR_STRINGS` no-op forms).
+Stubs in `shim/stubs/` replace the three headers outside that closure:
+`ruy/profiler/instrumentation.h` (an empty `ScopeLabel`),
+`tensorflow/lite/micro/micro_log.h` (the `TF_LITE_STRIP_ERROR_STRINGS` no-op forms) and
+`tensorflow/lite/micro/kernels/kernel_util.h` (the tensor accessors the LSTM uses).
 
 Compiled sources (besides `shim/*.cc`):
 
