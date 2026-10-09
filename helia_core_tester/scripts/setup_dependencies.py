@@ -42,18 +42,43 @@ class ChecksumMismatchError(RuntimeError):
 # Pinned SHA-256 digests for all downloaded dependency archives, keyed by
 # (dependency, architecture). Values were obtained from Arm's official release
 # artifacts:
-#   - ARM GCC toolchain 14.2.rel1: published by Arm alongside the release at
-#     https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/<file>.sha256asc
+#   - ARM GCC toolchain 14.3.rel1: published by Arm alongside the release at
+#     https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/<file>.sha256asc
 #   - Corstone-300 FVP 11.24_13: Arm does not publish a SHA-256 sidecar for this
 #     archive; the digest below was computed directly from a fresh download of
 #     the official Arm URL referenced in setup_corstone300() and should be
 #     re-verified/updated whenever the pinned Corstone300 version changes.
 PINNED_SHA256 = {
-    ("arm_gcc", "x86_64"): "62a63b981fe391a9cbad7ef51b17e49aeaa3e7b0d029b36ca1e9c3b2a9b78823",
-    ("arm_gcc", "aarch64"): "87330bab085dd8749d4ed0ad633674b9dc48b237b61069e3b481abd364d0a684",
+    ("arm_gcc", "x86_64"): "8f6903f8ceb084d9227b9ef991490413014d991874a1e34074443c2a72b14dbd",
+    ("arm_gcc", "aarch64"): "2d465847eb1d05f876270494f51034de9ace9abe87a4222d079f3360240184d3",
     ("corstone300", "x86_64"): "6ea4096ecf8a8c06d6e76e21cae494f0c7139374cb33f6bc3964d189b84539a9",
     ("corstone300", "aarch64"): "9b43da6a688220c707cd1801baf9cf4f5fb37d6dc77587b9071347411a64fd56",
 }
+
+
+# The Arm GNU Toolchain release, matching heliaAOT's tests/e2e/tools/deps.py. Bumping it
+# means updating the two arm_gcc digests above.
+ARM_GCC_VERSION = "14.3.rel1"
+# Written into the install once it is complete. An install without it, or with another
+# version, is stale: a restored CI cache or a reused volume must not keep an old compiler.
+ARM_GCC_VERSION_MARKER = ".hct-arm-gcc-version"
+
+
+def arm_gcc_url(arch: str, version: str = ARM_GCC_VERSION) -> str:
+    if arch not in ("x86_64", "aarch64"):
+        raise RuntimeError(f"Unsupported architecture for ARM GCC: {arch}")
+    return (
+        f"https://developer.arm.com/-/media/Files/downloads/gnu/{version}/binrel/"
+        f"arm-gnu-toolchain-{version}-{arch}-arm-none-eabi.tar.xz"
+    )
+
+
+def installed_arm_gcc_version(gcc_dir: Path) -> Optional[str]:
+    """The version an install records, or None when it records none."""
+    try:
+        return (gcc_dir / ARM_GCC_VERSION_MARKER).read_text().strip() or None
+    except OSError:
+        return None
 
 
 def get_architecture() -> str:
@@ -274,49 +299,45 @@ def setup_corstone300(downloads_dir: Path, force: bool = False) -> None:
 
 
 def setup_arm_gcc(downloads_dir: Path, force: bool = False) -> None:
-    """Download and setup ARM GCC toolchain."""
+    """Download and set up the pinned ARM GCC toolchain, replacing a stale install."""
     gcc_dir = downloads_dir / "arm_gcc_download"
-    
-    if gcc_dir.exists() and not force:
-        print("Arm GCC already installed. If you wish to install a new version, please delete the old folder.")
-        return
-    
-    if force and gcc_dir.exists():
-        print("Removing existing ARM GCC installation...")
-        shutil.rmtree(gcc_dir)
-    
-    arch = get_architecture()
-    if arch == 'x86_64':
-        gcc_url = "https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-x86_64-arm-none-eabi.tar.xz"
-    elif arch == 'aarch64':
-        gcc_url = "https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-aarch64-arm-none-eabi.tar.xz"
-    else:
-        raise RuntimeError(f"Unsupported architecture for ARM GCC: {arch}")
 
+    if gcc_dir.exists() and not force:
+        installed = installed_arm_gcc_version(gcc_dir)
+        if installed == ARM_GCC_VERSION:
+            print(f"Arm GCC {ARM_GCC_VERSION} already installed.")
+            return
+        print(f"Arm GCC at {gcc_dir} is {installed or 'an unrecorded version'}; installing {ARM_GCC_VERSION}.")
+
+    arch = get_architecture()
+    gcc_url = arm_gcc_url(arch)
     expected_sha256 = PINNED_SHA256[("arm_gcc", arch)]
 
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_path = Path(temp_dir)
         archive_file = temp_path / "arm_gcc.tar.xz"
-        
-        download_file(gcc_url, archive_file, "ARM GCC toolchain", expected_sha256)
-        
-        # Extract to temporary directory first
+
+        download_file(gcc_url, archive_file, f"ARM GCC toolchain {ARM_GCC_VERSION}", expected_sha256)
+
         temp_extract = temp_path / "extracted"
         extract_tar_gz(archive_file, temp_extract, strip_components=0)
-        
-        # Find the toolchain directory (should be the only subdirectory)
+
         toolchain_dirs = [d for d in temp_extract.iterdir() if d.is_dir()]
-        if not toolchain_dirs:
-            raise RuntimeError("Could not find toolchain directory in archive")
-        
+        if len(toolchain_dirs) != 1:
+            raise RuntimeError(f"Expected one toolchain directory in the archive, found {len(toolchain_dirs)}")
         toolchain_dir = toolchain_dirs[0]
-        
-        # Move contents to final destination
+        if not (toolchain_dir / "bin").is_dir():
+            raise RuntimeError(f"Toolchain archive has no bin/ under {toolchain_dir.name}")
+
+        # The old install goes only once the new one is verified and extracted.
+        if gcc_dir.exists():
+            print(f"Removing existing ARM GCC installation at {gcc_dir}...")
+            shutil.rmtree(gcc_dir)
         print(f"Moving toolchain from {toolchain_dir.name} to {gcc_dir}")
         shutil.move(str(toolchain_dir), str(gcc_dir))
-    
-    print("ARM GCC setup complete")
+        (gcc_dir / ARM_GCC_VERSION_MARKER).write_text(ARM_GCC_VERSION + "\n")
+
+    print(f"ARM GCC {ARM_GCC_VERSION} setup complete")
 
 
 def setup_cmsis5(downloads_dir: Path, force: bool = False) -> None:
