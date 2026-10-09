@@ -11,6 +11,7 @@ from helia_core_tester.core.logging import get_logger
 from helia_core_tester.core.runtime_env import RuntimeEnvContext, bootstrap_runtime_env
 from helia_core_tester.core.steps import (
     GenerateStep,
+    HostCheckStep,
     BuildStep,
     RunStep,
     CleanStep,
@@ -63,8 +64,9 @@ class FullTestPipeline:
         
         The pipeline executes steps in order:
         1. Generate TFLite models (if not skipped)
-        2. Build FVP executables (if not skipped)
-        3. Run tests on FVP (if not skipped)
+        2. Host-check the generated int cases (if not skipped)
+        3. Build FVP executables (if not skipped)
+        4. Run tests on FVP (if not skipped)
         
         Returns:
             True if all steps succeeded, False otherwise
@@ -93,6 +95,20 @@ class FullTestPipeline:
                 )
                 overall_success = success
                 if stop:
+                    return False
+
+            # A failing host check blocks the FVP build regardless of
+            # --no-fail-fast: building known-wrong cases only buries the failure.
+            if self.config.skip_host_check:
+                if self.config.verbosity >= 1:
+                    self.logger.info("Skipping host check (--skip-host-check)")
+            elif overall_success:
+                success, _ = _run_step(
+                    HostCheckStep(self.config), self.logger,
+                    self.config.verbosity, self.config.fail_fast
+                )
+                overall_success = success
+                if not success:
                     return False
 
             if self.config.skip_build:
@@ -142,6 +158,11 @@ class FullTestPipeline:
             plans.append(StepPlan(name="generate", will_run=False, reason="skipped by config"))
         else:
             plans.append(GenerateStep(self.config).plan())
+
+        if self.config.skip_host_check:
+            plans.append(StepPlan(name="host-check", will_run=False, reason="skipped by config"))
+        else:
+            plans.append(HostCheckStep(self.config).plan())
 
         if self.config.skip_build:
             plans.append(StepPlan(name="build", will_run=False, reason="skipped by config"))

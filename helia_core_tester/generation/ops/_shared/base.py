@@ -120,6 +120,8 @@ class OperationBase(ABC):
         self._tflite_path = None
         self._input_mode_consumed = False
         self._nonfinite_policy_applied = False
+        self._reference_call = None
+        self._golden = None
         declared = {**(desc.get("tensor_dtypes") or {})}
         declared.update({key: desc[key] for key in ("activation_dtype", "weight_dtype") if key in desc})
         storage_only = [role for role, dtype in declared.items() if str(dtype).upper() == "U16"]
@@ -149,6 +151,37 @@ class OperationBase(ABC):
             return
         for layer in model.layers:
             layer.set_weights([w.astype(np.float16).astype(np.float32) for w in layer.get_weights()])
+
+    def build_reference(self):
+        """The reference-kernel call that produces this case's golden, or None.
+
+        None keeps the operator on its existing golden path (Keras/TFLite or a
+        numpy port); an operator migrated onto the host TFLM reference kernels
+        returns a generation.reference.case.ReferenceCall here.
+        """
+        return None
+
+    @property
+    def reference(self):
+        """build_reference(), evaluated once per case."""
+        if self._reference_call is None:
+            self._reference_call = self.build_reference()
+        return self._reference_call
+
+    def golden(self) -> np.ndarray:
+        """The reference kernel's output for this case (cached).
+
+        Raises when the operator has no reference call: a caller asking for the
+        reference golden of an op still on another path is a bug, not a fallback.
+        """
+        if self._golden is None:
+            call = self.reference
+            if call is None:
+                raise NotImplementedError(f"{type(self).__name__} has no reference-kernel golden")
+            from helia_core_tester.generation.reference.run import run_reference
+
+            self._golden = run_reference(call)
+        return self._golden
 
     def needs_keras_model(self) -> bool:
         """Return True if build_keras_model should be called for conversion."""
@@ -1110,7 +1143,7 @@ class OperationBase(ABC):
             if not _is_json_serializable(value):
                 continue
             scalars[key] = value
-        return {
+        sidecar = {
             "name": name,
             "operator": operator,
             "op_suffix": op_suffix,
@@ -1122,6 +1155,22 @@ class OperationBase(ABC):
             "resolved_tensor_dtypes": self.resolved_tensor_dtypes(),
             "scalars": scalars,
         }
+        # Only reference-golden cases carry the key, so the sidecars of
+        # operators still on another golden path are unchanged.
+        reference = self._reference_record()
+        if reference is not None:
+            sidecar["reference"] = reference
+        return sidecar
+
+    def _reference_record(self) -> Optional[Dict[str, Any]]:
+        """Kernel, parameters and library of the reference call behind the golden."""
+        call = self._reference_call
+        if call is None:
+            return None
+        from helia_core_tester.generation.reference.bindings import loaded_library_key
+
+        record = call.provenance(library_key=loaded_library_key())
+        return {"kernel": record["kernel"], "params": record["params"], "library_key": record["library_key"]}
 
     def generate_input_data(self) -> np.ndarray:
         """

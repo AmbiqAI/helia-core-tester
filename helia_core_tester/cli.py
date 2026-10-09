@@ -17,7 +17,7 @@ from helia_core_tester.core.discovery import ensure_arm_toolchain_on_path
 from helia_core_tester.core.logging import setup_logger
 from helia_core_tester.core.path_layout import artifacts_root
 from helia_core_tester.core.pipeline import FullTestPipeline
-from helia_core_tester.core.steps import BuildStep, CleanStep, GenerateStep, RunStep
+from helia_core_tester.core.steps import BuildStep, CleanStep, GenerateStep, HostCheckStep, RunStep
 from helia_core_tester.reporting.coverage_merge import run_coverage_merge
 from helia_core_tester.contract.cli import contract_app
 from helia_core_tester.hardware.cli import boards as boards_command
@@ -220,6 +220,35 @@ def build(
     )
 
 
+@app.command(name="host-check")
+def host_check(
+    cpu: str = typer.Option("cortex-m55", help="Target CPU(s) whose generated int trees to check, comma-separated"),
+    host_kernels: str = typer.Option("m0", "--host-kernels", help="Host kernel builds, comma-separated: m0 (pure C, no ARM_MATH_*) and/or dsp (Armv7E-M via dsp_shim.h)"),
+    jobs: Optional[int] = typer.Option(None, help="Parallel compile/run jobs"),
+    seed: Optional[int] = typer.Option(None, help="Run seed for the reproduce hints (default: the one manifest.json records)"),
+    verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help="Verbosity level (0-3)"),
+    plan: bool = typer.Option(False, "--plan", help="Print execution plan and exit"),
+    project_root: Optional[Path] = typer.Option(None, "--repo-root", help="Repository root directory"),
+    cmsis_nn_root: Optional[Path] = typer.Option(None, "--cmsis-nn-root", help="ns-cmsis-nn checkout whose kernels to check against (default: CMSIS_NN_ROOT, else the enclosing checkout)"),
+):
+    """Compile and run every generated int case on the host against the ns-cmsis-nn kernels."""
+    config = get_config(
+        cpu=cpu,
+        verbosity=verbosity,
+        plan=plan,
+        project_root=project_root,
+        jobs=jobs,
+        seed=seed,
+        suite="int",
+        host_kernels=[m.strip() for m in host_kernels.split(",") if m.strip()],
+        cmsis_nn_root=cmsis_nn_root,
+    )
+    if config.plan:
+        _print_plan_item(HostCheckStep(config).plan())
+        sys.exit(0)
+    run_step_exit(HostCheckStep(config), config, "", failure_prefix="Host check failed")
+
+
 @app.command()
 def run(
     cpu: str = typer.Option("cortex-m55", help="Target CPU(s), comma-separated (e.g. m0,m4,m55)"),
@@ -285,6 +314,8 @@ def full(
     coverage_mve_int: bool = typer.Option(False, "--coverage-mve-int", help="Enable Cortex-M55 integer MVE paths (no ARM_MATH_AUTOVECTORIZE) during coverage builds"),
     force_generate: bool = typer.Option(False, "--force-generate", help="Regenerate every case even when its reuse stamp still matches"),
     skip_generation: bool = typer.Option(False, "--skip-generation", help="Skip TFLite generation"),
+    skip_host_check: bool = typer.Option(False, "--skip-host-check", help="Skip the host check of the generated int cases (runs after generation, before the FVP build, and blocks it on failure)"),
+    host_kernels: str = typer.Option("m0", "--host-kernels", help="Host check kernel builds, comma-separated: m0 and/or dsp"),
     skip_build: bool = typer.Option(False, "--skip-build", help="Skip FVP build"),
     skip_run: bool = typer.Option(False, "--skip-run", help="Skip FVP test execution"),
     no_report: bool = typer.Option(False, "--no-report", help="Disable test reporting"),
@@ -319,6 +350,8 @@ def full(
         coverage_mve_int=coverage_mve_int,
         force_generate=force_generate,
         skip_generation=skip_generation,
+        skip_host_check=skip_host_check,
+        host_kernels=[m.strip() for m in host_kernels.split(",") if m.strip()],
         skip_build=skip_build,
         skip_run=skip_run,
         enable_reporting=not no_report,
@@ -434,6 +467,29 @@ def doctor(
             typer.echo(f"✓ {dir_name}/ exists or will be created ({description})")
         else:
             typer.echo(f"⚠ {dir_name}/ not found ({description})", err=True)
+
+    # Host toolchain: the reference library (goldens) and the host check need it,
+    # so a missing C/C++ compiler fails doctor; flatc is LSTM-only and informational.
+    from .generation.reference.host_build import describe_cache
+    from .utils.host_compiler import describe_host_toolchain
+
+    typer.echo("\nHost toolchain (reference goldens and host check):")
+    toolchain = describe_host_toolchain()
+    for key, label in (("cc", "C compiler"), ("cxx", "C++ compiler"), ("flatc", "flatc (LSTM flatbuffers)")):
+        if toolchain.get(key):
+            typer.echo(f"✓ {label}: {toolchain[key]}")
+        elif key == "flatc":
+            typer.echo(f"⚠ {label}: {toolchain.get(f'{key}_error')}")
+        else:
+            typer.echo(f"✗ {label}: {toolchain.get(f'{key}_error')}", err=True)
+            all_ok = False
+    cache = describe_cache()
+    if "error" in cache:
+        typer.echo(f"✗ reference library: {cache['error']}", err=True)
+        all_ok = False
+    else:
+        state = "built" if cache["built"] else "not built yet (builds on first use)"
+        typer.echo(f"✓ reference library {cache['key']}: {state} ({cache['library']})")
 
     # Hardware (J-Link/RTT) checks are informational: the FVP path never needs
     # them, so a missing tool is reported as missing without failing doctor.

@@ -24,6 +24,16 @@ from helia_core_tester.hardware.jlink_library import JLinkExecutable, JLinkLibra
 from helia_core_tester.hardware.nsx_app import AppOptions
 from helia_core_tester.tests.test_hardware_nsx_app import make_checkout
 
+
+@pytest.fixture(autouse=True)
+def _stub_host_check(monkeypatch):
+    """These tests stub generation, so there are no real cases to host-check;
+    the host-check stage itself is covered in test_hardware_host_check.py."""
+    from helia_core_tester.hardware import hardware_pipeline
+
+    monkeypatch.setattr(hardware_pipeline, "host_check_tests_for_board", lambda *a, **k: "host check stubbed")
+
+
 BOARD = resolve_board("apollo510_evb")
 SERIAL = 1160003180
 

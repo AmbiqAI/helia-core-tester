@@ -32,7 +32,7 @@ STAMP_FILENAME = ".stamp"
 
 # Version prefix of the stamp payload itself. Bump when the payload layout
 # changes so old stamps cannot accidentally validate against new semantics.
-_STAMP_SCHEMA = "helia-core-tester/generation-stamp/5"
+_STAMP_SCHEMA = "helia-core-tester/generation-stamp/6"
 
 # The lock file is the whole resolved dependency set, so it covers every package
 # that can move emitted bytes -- the converter and runtime, but equally numpy's
@@ -47,6 +47,10 @@ _EXTERNAL_GENERATOR_SOURCES = (
     Path("helia_core_tester") / "core" / "cpu_targets.py",
     Path("helia_core_tester") / "core" / "path_layout.py",
 )
+
+# The reference-kernel tree (vendored TFLM, shim, stubs) computes goldens and is
+# not Python, so the generation/**/*.py glob does not see it.
+_REFERENCE_KERNELS_DIR = Path("helia_core_tester") / "reference_kernels"
 
 # Subtrees (or single files) of the ns-cmsis-nn checkout that are generation
 # inputs: the public headers drive the temp-sizer probe's choice of template
@@ -89,6 +93,13 @@ def _iter_generator_sources() -> Iterator[Path]:
     for relative in _EXTERNAL_GENERATOR_SOURCES:
         yield repo_root / relative
 
+    reference_root = repo_root / _REFERENCE_KERNELS_DIR
+    if not reference_root.is_dir():
+        raise FileNotFoundError(f"Reference kernel tree not found: {reference_root}")
+    for path in sorted(reference_root.rglob("*")):
+        if path.is_file() and "__pycache__" not in path.parts:
+            yield path
+
     templates_root = find_tester_templates_dir(repo_root)
     if not templates_root.is_dir():
         raise FileNotFoundError(
@@ -128,7 +139,27 @@ def _environment_identity() -> Dict[str, str]:
         "lock_sha256": hashlib.sha256(lock_bytes).hexdigest(),
         "python": ".".join(str(part) for part in sys.version_info[:3]),
         "machine": platform.machine(),
+        # The host compilers build the reference library that computes goldens.
+        "host_cxx": _host_compiler_identity("cxx"),
+        "host_cc": _host_compiler_identity("cc"),
     }
+
+
+def _host_compiler_identity(kind: str) -> str:
+    """`<path> (<--version line>)`, or "absent": a missing compiler only matters
+    once a golden needs the reference library, which then fails on its own."""
+    from helia_core_tester.utils.host_compiler import (
+        HostCompilerMissing,
+        compiler_identity,
+        find_host_cc,
+        find_host_cxx,
+    )
+
+    try:
+        compiler = find_host_cxx() if kind == "cxx" else find_host_cc()
+        return f"{compiler} ({compiler_identity(compiler)})"
+    except HostCompilerMissing:
+        return "absent"
 
 
 def generator_version_hash() -> str:

@@ -1,0 +1,60 @@
+{
+  "schema": 1,
+  "upstream": {
+    "tflite_micro": {
+      "repo": "https://github.com/tensorflow/tflite-micro",
+      "commit": "9f5ac257ee7f6a07f1f3c28aa1c86411c05f11e3"
+    },
+    "gemmlowp": {
+      "repo": "https://github.com/google/gemmlowp",
+      "commit": "719139ce755a0f31cbf1c37f7f98adcc7fc9f425"
+    }
+  },
+  "sources": [
+    "third_party/tflite_micro/tensorflow/lite/kernels/internal/common.cc",
+    "third_party/tflite_micro/tensorflow/lite/kernels/internal/portable_tensor_utils.cc",
+    "third_party/tflite_micro/tensorflow/lite/kernels/internal/quantization_util.cc",
+    "third_party/tflite_micro/tensorflow/lite/kernels/internal/runtime_shape.cc"
+  ],
+  "files": {
+    "third_party/gemmlowp/AUTHORS": "9d2c3e4ba4775ac618d9fbccec9991afe3a3e22fce96ef66f6ecbd6138a3a6e7",
+    "third_party/gemmlowp/CONTRIBUTORS": "a4331095993e7eaf7c8027a257cc88abee2837aba76b9a72715f6d16835cc063",
+    "third_party/gemmlowp/LICENSE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "third_party/gemmlowp/fixedpoint/fixedpoint.h": "7e9cc245b8d32a39cb6df8bc84b4138fce96569a68c50a60968d5f358f76b962",
+    "third_party/gemmlowp/fixedpoint/fixedpoint_avx.h": "13b761750e96c482eae2c3c1197f5637d681ad122b4a3868684e37f66769405f",
+    "third_party/gemmlowp/fixedpoint/fixedpoint_msa.h": "96a857a6a10c845dc9aa754978951a4ca24b188002e6a45031806491bb871624",
+    "third_party/gemmlowp/fixedpoint/fixedpoint_neon.h": "700e958c35f4a844d8d766abe30959b4e3e2305511146a28054748e125af6f40",
+    "third_party/gemmlowp/fixedpoint/fixedpoint_sse.h": "45b34bfddf24fabf60afb6a47f510b11c293a0ba4a782473018369427b82ab83",
+    "third_party/gemmlowp/internal/detect_platform.h": "78451995ae47a6b3b773724a32f8a2c73a05274daf73a2df6e901f950ce5607f",
+    "third_party/tflite_micro/LICENSE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "third_party/tflite_micro/tensorflow/compiler/mlir/lite/core/c/builtin_op_data.h": "b45ea12f9bf0cba09aad3a9a2989f797df13a58b5c28eaac00d36d2c0d13cc60",
+    "third_party/tflite_micro/tensorflow/compiler/mlir/lite/core/c/tflite_types.h": "95aab94114488143177e7718816ab306f2b75309e34438f8876cfd680c7d0ba1",
+    "third_party/tflite_micro/tensorflow/lite/core/c/builtin_op_data.h": "f8b3fb1ce3bda24d4601636958dd6aca887ccba273b37e0b17a7805dc7318c80",
+    "third_party/tflite_micro/tensorflow/lite/core/c/c_api_types.h": "07b114901685808313247f84c5d37e6b29c95fb6ff5b2a8a950eb564844c45b0",
+    "third_party/tflite_micro/tensorflow/lite/core/c/common.h": "4e8a45b2af8ba0acfeccc30694c6fa1e77947ad3ba17b7ad11645d70f62a9dc1",
+    "third_party/tflite_micro/tensorflow/lite/core/macros.h": "717422e00ad7c0ab1a95d0a38fdd61ca8d85d9fc6ed7a7cf9c681fbc18eaf608",
+    "third_party/tflite_micro/tensorflow/lite/kernels/internal/common.cc": "ba5308bf76383d600d033c948fe0659710939e6f1f15a800b5413e5fc822ddfa",
+    "third_party/tflite_micro/tensorflow/lite/kernels/internal/common.h": "d6c5a9492bdc6c50d5f0997c411ad99e82b8e03898c6ebbe3daa138ef0106701",
+    "third_party/tflite_micro/tensorflow/lite/kernels/internal/compatibility.h": "2e6c675e7402525d79aef5108b47b03397ead0e57921c9cb337f150916b9725d",
+    "third_party/tflite_micro/tensorflow/lite/kernels/internal/cppmath.h": "94f13d13ba65fb93d3300921c6bbbd7d61680800b0dcf7939726eb3a3eb3a773",
+    "third_party/tflite_micro/tensorflow/lite/kernels/internal/optimized/neon_check.h": "b093a98868485ec76d9047d73a2ee66382d9e62ffe9606da1ddfc651969808c3",
+    "third_party/tflite_micro/tensorflow/lite/kernels/internal/portable_tensor_utils.cc": "0a713ded4e92d6a06eeff10d55cc4a66e88cc3e6892d44a9da1d750a036ab4df",
+    "third_party/tflite_micro/tensorflow/lite/kernels/internal/portable_tensor_utils.h": "7ce606e8aac49c9ee8ccef85208ae982b98ea66c9cf8f59520bb3fba1c445107",
+    "third_party/tflite_micro/tensorflow/lite/kernels/internal/quantization_util.cc": "22e46f15663437c407298f5230545600faa2f6b2f1b46488e20c97ff3a5c96f9",
+    "third_party/tflite_micro/tensorflow/lite/kernels/internal/quantization_util.h": "bc5c6f6dbd03145459e25069adc4c628d5a9ad3e20b15098fa123fe8fa79c5b7",
+    "third_party/tflite_micro/tensorflow/lite/kernels/internal/reference/conv.h": "e6f41ccd262ed10d001a58beb2125284c8b32cd10385d3689c6397783698174f",
+    "third_party/tflite_micro/tensorflow/lite/kernels/internal/reference/depthwiseconv_float.h": "6883cb0552169c04bf292ae179b6b60f2b41019766525d33894ea8439e3959f6",
+    "third_party/tflite_micro/tensorflow/lite/kernels/internal/reference/fully_connected.h": "9236b7418cf8fd60c5af273591538fc774b47c379adf73767a3150fb74689359",
+    "third_party/tflite_micro/tensorflow/lite/kernels/internal/reference/integer_ops/conv.h": "370f80020b9aa44e61bb3a0a0d081c035432f99aaf1cb66c6c3d072700a4bec8",
+    "third_party/tflite_micro/tensorflow/lite/kernels/internal/reference/integer_ops/depthwise_conv.h": "98d0e11ff47bb32e3485f3f891be77cf733f6a47d52b6fc236d437fc581a069c",
+    "third_party/tflite_micro/tensorflow/lite/kernels/internal/reference/integer_ops/fully_connected.h": "88beede059cee0eba102c5a108c0750b33fe823af25393053e618dd29781abd6",
+    "third_party/tflite_micro/tensorflow/lite/kernels/internal/reference/integer_ops/pooling.h": "4b09724e3d628ffa579efeb88624a7962ffd895d7d8ce16a4e1f65f18ac74bca",
+    "third_party/tflite_micro/tensorflow/lite/kernels/internal/reference/integer_ops/transpose_conv.h": "5b13e593e319a96eb1a04aabd33812c813f776ef66722ef70d2ac84ccd9a2643",
+    "third_party/tflite_micro/tensorflow/lite/kernels/internal/reference/pooling.h": "615659a7a9b35846fabcead8297b2979a296860c7e78d0995ae150782c80ad33",
+    "third_party/tflite_micro/tensorflow/lite/kernels/internal/reference/transpose_conv.h": "3d54a1a3c918f16fc699f1202aab0f4b4a4b7dc01ebfa761e1ea5301927e081c",
+    "third_party/tflite_micro/tensorflow/lite/kernels/internal/runtime_shape.cc": "751fe39569b989c9db5435e34764c7a65ba47a5c574dd541f8f9e2e1594a2095",
+    "third_party/tflite_micro/tensorflow/lite/kernels/internal/runtime_shape.h": "29d6246a880577a877e580a2d325e1bb10aa674095ae39cc8e7061421ec60516",
+    "third_party/tflite_micro/tensorflow/lite/kernels/internal/types.h": "aec710752c8329f6a73dd75b431fb9e56992d50f02ef7da7ea17f239ab4d6493",
+    "third_party/tflite_micro/tensorflow/lite/kernels/op_macros.h": "04aa91f5e338db51cba0a9fd84722ee806ed41fe4d64455bfa44bf3a0bd02fd1"
+  }
+}

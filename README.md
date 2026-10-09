@@ -18,6 +18,7 @@ uv run helia_core_tester --help
 - `uv run helia_core_tester clean`
 - `uv run helia_core_tester clean-all`
 - `uv run helia_core_tester doctor`
+- `uv run helia_core_tester host-check` (see [Host check](#host-check))
 - `uv run helia_core_tester coverage-merge`
 - `uv run helia_core_tester contract inventory` (see [Kernel contracts](#kernel-contracts-iteration-1))
 - `uv run helia_core_tester boards` / `probes list` / `probes match`
@@ -916,6 +917,49 @@ anything else fails generation instead of silently waiving nothing. `operand_sig
 is also declared in `helia_core_tester/generation/descriptors/schema.json`, but that schema is
 not enforced at load time (#100), so the rule lives in code.
 
+## Host check
+
+`full` and `hardware run` compile and run every generated int case on the host, against the
+ns-cmsis-nn kernels, after generation and before any FVP or board build; a failure blocks the
+build (`--no-fail-fast` does not override that). ns-cmsis-nn's cortex-m0 configuration (no
+`ARM_MATH_*` define) is pure C, so the generated harness runs natively and validates its golden
+exactly as it does on the FVP.
+
+```bash
+uv run helia_core_tester host-check --cpu cortex-m55                    # m0 kernels (default)
+uv run helia_core_tester host-check --cpu cortex-m55 --host-kernels m0,dsp
+uv run helia_core_tester full --cpu cortex-m55 --skip-host-check         # bypass
+```
+
+- `--host-kernels`: `m0` (pure C) and/or `dsp` (the Armv7E-M routes, through the mutation
+  harness's `dsp_shim.h`). Also `host_kernels` in `helia_core_tester.toml` /
+  `HELIA_CORE_TESTER_HOST_KERNELS`, and `skip_host_check` / `HELIA_CORE_TESTER_SKIP_HOST_CHECK`.
+- The cases checked are the ones `manifest.json` lists (what the FVP build compiles), and the run
+  seed comes from it: every failure prints `--seed <run_seed> --name <case>`. Every non-pass is a
+  failure, including a case that does not compile or link on the host.
+- A tree generated for a CPU with capabilities the host build lacks (cortex-m55's MVE) is judged
+  per case: a case whose `required_capabilities` the host build lacks is *not applicable* and
+  not run; a case the generator specialised for the target CPU (an `entry:` or `fault:` case, or
+  FullyConnected s8 folding its bias into the MVE-only kernel sums) still runs, but its failure is
+  *advisory* (reported, not blocking); everything else blocks. The report lists all three.
+- The kernel library (every int and f32 source of the checkout; f16 stays FVP-only) and the test
+  runtime are cached in `artifacts/host_kernels/<key>/`, keyed by the checkout's `Include/` and
+  `Source/` (commit when clean, content when dirty), the mode, flags and compiler identity.
+- The report is `artifacts/reports/generation/int/<cpu>/host_check.json`.
+- The compiler is `HCT_HOST_CC`, else `cc`/`gcc`/`clang` on `PATH`; `doctor` reports it.
+
+## Reference kernels
+
+`helia_core_tester/reference_kernels/` vendors the TFLM reference kernels
+(`tensorflow/lite/kernels/internal/reference/{,integer_ops}`) from upstream google/tflite-micro
+behind a C ABI shim (`shim/hct_ref.h`), built once per environment with the host C++ compiler
+into `artifacts/host_ref/<key>/libhct_ref.{so,dylib}` and called from Python through ctypes
+(`generation/reference/`). It is the golden oracle the generators move onto from the
+Keras/TFLiteConverter path; see `third_party/VENDOR.md` for the pinned commits and
+`scripts/vendor_tflm_reference.py` to refresh them. Every vendored file is hashed in
+`third_party/manifest.json` and verified before a build; the compiler is `HCT_HOST_CXX`, else
+`c++`/`g++`/`clang++`.
+
 ## Mutation scoring
 
 `python -m helia_core_tester.mutation run --cmsis-nn-root <checkout>` generates cases, applies
@@ -960,7 +1004,7 @@ Seeds:
   and `score` refuses to compare bundles drawn from different seeds.
 
 Generation reuse:
-- each generated case carries a `.stamp` over its descriptor document, the case name, target CPU, suite, seed, the identity of the ns-cmsis-nn checkout (commit when the checkout is a clean git tree, a content digest of its `Include/`, UnitTest TestData and `Tests/KernelContracts` export otherwise), and a generator-version hash (the generation sources, `core/cpu_targets.py`, `core/path_layout.py`, the templates under `assets/templates`, a SHA-256 of `uv.lock` for the resolved dependency set, and the Python version and machine architecture). Float precision is not a stamp input: it selects which descriptors a run generates, not what any one of them emits.
+- each generated case carries a `.stamp` over its descriptor document, the case name, target CPU, suite, seed, the identity of the ns-cmsis-nn checkout (commit when the checkout is a clean git tree, a content digest of its `Include/`, UnitTest TestData and `Tests/KernelContracts` export otherwise), and a generator-version hash (the generation sources, `core/cpu_targets.py`, `core/path_layout.py`, the templates under `assets/templates`, the reference-kernel tree under `helia_core_tester/reference_kernels`, a SHA-256 of `uv.lock` for the resolved dependency set, the Python version and machine architecture, and the host C/C++ compiler identities). Float precision is not a stamp input: it selects which descriptors a run generates, not what any one of them emits.
 - a case whose stamp still matches is reused: no TFLite conversion, no inference, no file emission. Its manifest entry is rebuilt from the on-disk sidecar, so build and run see the same tree either way.
 - a case whose stamp does not match has its directory removed before regeneration, so output a previous descriptor emitted under a different file name cannot survive into the new build.
 - capability and kernel-symbol skips are re-evaluated every run, because a different ns-cmsis-nn checkout can add or remove a symbol.

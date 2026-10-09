@@ -700,6 +700,8 @@ def run(
     seed: Optional[int] = typer.Option(None, "--seed", help="Run seed the generate step draws every case from (default: HCT_SEED, else a fresh draw recorded in the bundle). Pass the seed a run printed to reproduce its cases."),
     session_id: Optional[str] = typer.Option(None, "--session-id", help="Session ID; also the result-bundle directory name (default: <board>-<UTC timestamp>)."),
     skip_generate: bool = typer.Option(False, "--skip-generate", help="Reuse existing artifacts/generated_tests instead of regenerating."),
+    skip_host_check: bool = typer.Option(False, "--skip-host-check", help="Do not run the generated int cases on the host against the firmware's kernels before flashing (a failure there refuses the run)."),
+    host_kernels: str = typer.Option("m0", "--host-kernels", help="Host check kernel builds, comma-separated: m0 (pure C) and/or dsp."),
     skip_flash: bool = typer.Option(False, "--skip-flash", help="Skip build+flash and reuse whatever firmware is already running on the board (its TARGET_INFO build id is still checked against the build dir)."),
     force_flash: bool = typer.Option(False, "--force-flash", help=_FORCE_FLASH_HELP + " Mirror of `hardware flash --force`."),
     allow_unverified_firmware: bool = typer.Option(False, "--allow-unverified-firmware", help=_ALLOW_UNVERIFIED_HELP + " Only meaningful with --skip-flash."),
@@ -754,6 +756,7 @@ def run(
             skip_generate=skip_generate, skip_flash=skip_flash, force_flash=force_flash, jobs=jobs,
             force_reconfigure=force_reconfigure, echo=echo, progress_to_stderr=as_json,
             allow_unverified_firmware=allow_unverified_firmware, app_options=app_options,
-            update_dependencies=update_dependencies,
+            update_dependencies=update_dependencies, skip_host_check=skip_host_check,
+            host_kernels=tuple(m.strip() for m in host_kernels.split(",") if m.strip()),
         )
     _report(outcome, spec, options, as_json=as_json)

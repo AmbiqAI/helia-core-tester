@@ -207,14 +207,42 @@ def test_checkout_content_is_the_identity_when_the_root_is_not_a_git_tree(
 
 
 def test_stamp_schema_bump_invalidates_every_older_stamp(monkeypatch) -> None:
-    # Adding Tests/KernelContracts to the identity changed what a stamp means; a
-    # stamp minted under the previous schema must never validate a case now.
-    assert reuse._STAMP_SCHEMA == "helia-core-tester/generation-stamp/5"
+    # Folding the reference-kernel tree and the host compilers into the stamp
+    # changed what a stamp means; a stamp minted under the previous schema must
+    # never validate a case now.
+    assert reuse._STAMP_SCHEMA == "helia-core-tester/generation-stamp/6"
     assert "Tests/KernelContracts" in reuse._CMSIS_NN_INPUT_SUBTREES
     descriptor = {"name": "Add_s8_basic", "operator": "Add", "shape": [1, 4]}
     current = _stamp(descriptor)
-    monkeypatch.setattr(reuse, "_STAMP_SCHEMA", "helia-core-tester/generation-stamp/4")
+    monkeypatch.setattr(reuse, "_STAMP_SCHEMA", "helia-core-tester/generation-stamp/5")
     assert _stamp(descriptor) != current
+
+
+def test_generator_sources_cover_the_reference_kernel_tree() -> None:
+    # The shim and vendored TFLM compute goldens but are not Python, so the
+    # generation/**/*.py glob alone would let an edit to them reuse stale cases.
+    sources = {p.resolve() for p in reuse._iter_generator_sources()}
+    reference_root = reuse.find_repo_root() / "helia_core_tester" / "reference_kernels"
+    assert (reference_root / "shim" / "hct_ref.cc").resolve() in sources
+    assert (reference_root / "third_party" / "manifest.json").resolve() in sources
+    vendored = [p for p in (reference_root / "third_party").rglob("*.h")]
+    assert vendored and all(p.resolve() in sources for p in vendored)
+
+
+def test_environment_identity_names_the_host_compilers(monkeypatch) -> None:
+    identity = reuse._environment_identity()
+    assert {"host_cc", "host_cxx"} <= set(identity)
+
+    from helia_core_tester.utils import host_compiler
+
+    def missing():
+        raise host_compiler.HostCompilerMissing("no compiler")
+
+    monkeypatch.setattr(host_compiler, "find_host_cxx", missing)
+    monkeypatch.setattr(host_compiler, "find_host_cc", missing)
+    absent = reuse._environment_identity()
+    assert absent["host_cxx"] == "absent" and absent["host_cc"] == "absent"
+    assert absent != identity
 
 
 def test_a_clean_git_checkout_is_identified_by_its_commit(monkeypatch, tmp_path: Path) -> None:
