@@ -122,3 +122,24 @@ def test_archive_with_two_top_dirs_is_refused(tmp_path, fake_download, monkeypat
     with pytest.raises(RuntimeError, match="Expected one toolchain directory"):
         sd.setup_arm_gcc(tmp_path)
     assert not (tmp_path / "arm_gcc_download").exists()
+
+
+def test_hardware_entry_point_replaces_a_stale_install(tmp_path, fake_download, monkeypatch) -> None:
+    from helia_core_tester.hardware import firmware_build
+
+    downloads = tmp_path / firmware_build.DOWNLOADS_DIR
+    gcc = _old_install(downloads, None)
+    monkeypatch.setattr(firmware_build, "add_toolchain_to_path", lambda root: False)
+    firmware_build.ensure_build_tools(tmp_path)
+    assert sd.installed_arm_gcc_version(gcc) == sd.ARM_GCC_VERSION
+    assert len(fake_download["calls"]) == 1
+
+
+def test_hardware_entry_point_keeps_a_current_install(tmp_path, fake_download, monkeypatch) -> None:
+    from helia_core_tester.hardware import firmware_build
+
+    gcc = _old_install(tmp_path / firmware_build.DOWNLOADS_DIR, sd.ARM_GCC_VERSION)
+    monkeypatch.setattr(firmware_build, "add_toolchain_to_path", lambda root: False)
+    firmware_build.ensure_build_tools(tmp_path)
+    assert (gcc / "bin" / "arm-none-eabi-gcc").read_text() == "old\n"
+    assert fake_download["calls"] == []

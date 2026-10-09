@@ -17,7 +17,7 @@ from typer.testing import CliRunner
 
 from helia_core_tester.cli import app
 from helia_core_tester.hardware import cli as hardware_cli
-from helia_core_tester.hardware import firmware_build, hardware_pipeline, nsx_app, nsx_cli
+from helia_core_tester.hardware import firmware_build, hardware_pipeline, nsx_app, nsx_cli, toolchain
 from helia_core_tester.hardware.boards import resolve_board
 from helia_core_tester.hardware.hardware_pipeline import HardwareRunOutcome, StreamOptions
 from helia_core_tester.hardware.jlink_library import JLinkExecutable, JLinkLibraryError
@@ -73,6 +73,8 @@ def nsx(monkeypatch: pytest.MonkeyPatch) -> list[tuple]:
         calls.append(("build", jobs, frozen))
 
     monkeypatch.setattr(firmware_build, "ensure_build_tools", lambda repo_root: None)
+    # A host compiler on PATH must not leak in.
+    monkeypatch.setattr(toolchain.ToolchainSpec, "installed", lambda self: None)
     _use_jlink(monkeypatch, None)
     monkeypatch.setattr(nsx_cli, "starter_profile", lambda board: {"modules": ["nsx-core"]})
     monkeypatch.setattr(nsx_app, "render_app", render_app)
@@ -571,6 +573,91 @@ def test_saved_options_round_trip(tmp_path: Path) -> None:
     options = AppOptions(cmsis_nn_ref="v9", cmsis_nn_root=tmp_path, requantize_inline_asm=False)
     nsx_app.save_options(tmp_path, options)
     assert nsx_app.saved_options(tmp_path) == options
+
+
+@pytest.fixture
+def gcc_version(monkeypatch: pytest.MonkeyPatch, nsx: list[tuple]) -> dict[str, str]:
+    """Configure writes a compiler probe; -dumpversion answers from `state`."""
+    state = {"version": "14.2.1"}
+    configure = nsx_cli.configure_app
+
+    def configure_app(app_dir, board, *, build_dir, frozen=False):
+        configure(app_dir, board, build_dir=build_dir, frozen=frozen)
+        probe = build_dir / "CMakeFiles" / "3.31.0" / "CMakeCCompiler.cmake"
+        probe.parent.mkdir(parents=True, exist_ok=True)
+        probe.write_text('set(CMAKE_C_COMPILER "/dl/arm_gcc_download/bin/arm-none-eabi-gcc")\n', encoding="utf-8")
+
+    monkeypatch.setattr(nsx_cli, "configure_app", configure_app)
+    monkeypatch.setattr(toolchain, "compiler_version", lambda compiler: compiler and state["version"])
+    monkeypatch.setattr(toolchain.ToolchainSpec, "installed", lambda self: self.record("arm-none-eabi-gcc"))
+    return state
+
+
+def _built_version(build_dir: Path) -> str:
+    return firmware_build.built_record(firmware_build.nsx_app_dir(build_dir))["toolchain"]["version"]
+
+
+def test_compiler_swap_at_same_path_rebuilds_from_scratch(
+    tmp_path: Path, nsx: list[tuple], gcc_version: dict[str, str]
+) -> None:
+    """Ninja ignores a new binary at the configured path, so old objects must go."""
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
+    stale = tmp_path / "modules" / "CMakeFiles" / "kernel.dir" / "arm_conv.c.obj"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("14.2 object", encoding="utf-8")
+    gcc_version["version"] = "14.3.1"
+    nsx.clear()
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
+    assert _steps(nsx) == ["render", "configure", "build"]
+    assert not stale.exists()
+    assert (firmware_build.nsx_app_dir(tmp_path) / "nsx.yml").is_file()
+    assert _built_version(tmp_path) == "14.3.1"
+
+
+def test_unchanged_compiler_keeps_build_outputs(
+    tmp_path: Path, nsx: list[tuple], gcc_version: dict[str, str]
+) -> None:
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
+    kept = tmp_path / "modules" / "lib.a"
+    kept.parent.mkdir()
+    kept.write_text("", encoding="utf-8")
+    nsx.clear()
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
+    assert _steps(nsx) == ["render", "build"]
+    assert kept.is_file() and _built_version(tmp_path) == "14.2.1"
+
+
+def test_outputs_without_a_build_record_are_removed(
+    tmp_path: Path, nsx: list[tuple], gcc_version: dict[str, str]
+) -> None:
+    """A configured dir no good build recorded: unknown compiler, fail closed."""
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
+    (firmware_build.nsx_app_dir(tmp_path) / firmware_build.BUILT_INFO).unlink()
+    flashed = tmp_path / f".flashed-{SERIAL}.sha256"
+    flashed.write_text("0" * 64, encoding="utf-8")
+    nsx.clear()
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
+    assert "configure" in _steps(nsx)
+    assert not flashed.exists()
+    assert _built_version(tmp_path) == "14.2.1"
+
+
+def test_unknown_installed_compiler_counts_as_changed(
+    tmp_path: Path, nsx: list[tuple], gcc_version: dict[str, str], monkeypatch
+) -> None:
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
+    monkeypatch.setattr(toolchain.ToolchainSpec, "installed", lambda self: None)
+    nsx.clear()
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
+    assert "configure" in _steps(nsx)
+
+
+def test_fresh_build_dir_is_left_alone(tmp_path: Path, nsx: list[tuple], gcc_version: dict[str, str]) -> None:
+    """No CMake outputs: nothing is deleted, even without a record."""
+    keep = tmp_path / "notes.txt"
+    keep.write_text("mine", encoding="utf-8")
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
+    assert keep.read_text(encoding="utf-8") == "mine"
 
 
 def test_build_records_the_lock_and_kernels(tmp_path: Path, nsx: list[tuple], monkeypatch) -> None:
