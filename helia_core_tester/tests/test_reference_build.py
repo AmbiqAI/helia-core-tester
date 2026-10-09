@@ -43,7 +43,7 @@ def test_builds_once_and_reuses_the_cached_library(tree: Path, tmp_path: Path) -
 def test_any_source_edit_changes_the_key(tree: Path) -> None:
     cc = find_host_cc()
     before = build.library_key(cc)
-    add = tree / "src" / "basic_math" / "add.c"
+    add = tree / "src" / "basic_math" / "add_sub.c"
     add.write_text(add.read_text() + "\n/* edited */\n")
     assert build.library_key(cc) != before
     after_source = build.library_key(cc)

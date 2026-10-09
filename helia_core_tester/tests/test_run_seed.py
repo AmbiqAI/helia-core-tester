@@ -23,7 +23,7 @@ def _descriptor(name: str) -> dict:
 def _generate(tmp_path: Path, run_seed: int) -> Path:
     out = tmp_path / str(run_seed)
     generate_test(_descriptor(_CASE), str(out), run_seed=run_seed)
-    return next(p.parent for p in out.rglob(f"{_CASE}.tflite"))
+    return next(p.parent for p in out.rglob(f"{_CASE}.reference.json"))
 
 
 def test_case_seed_mixes_the_run_seed_with_the_name() -> None:

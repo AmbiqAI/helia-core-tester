@@ -180,6 +180,13 @@ class OperationBase(ABC):
         self._golden = golden
         return golden
 
+    def activation_quant(self, role: str, value_range: Tuple[float, float], kind: str):
+        """The descriptor's `quantization.<role>` block, else the policy over `value_range`."""
+        from helia_core_tester.generation.reference import policy
+
+        block = (self.desc.get("quantization") or {}).get(role)
+        return policy.descriptor_quant(block, kind) or policy.activation_quant(kind, value_range)
+
     def reference_probe(self, operands: Sequence[np.ndarray]) -> np.ndarray:
         """The recorded call re-run on replaced inputs (in the call's input order), for nonfinite masking."""
         call = self._reference_call
@@ -192,13 +199,18 @@ class OperationBase(ABC):
                     for n, o in zip(names, operands)}
         return call.with_inputs(**replaced).output()
 
+    def status_only(self) -> bool:
+        """True for a case that asserts the kernel's returned status alone: it has no golden,
+        so it neither records a reference call nor builds a model."""
+        return False
+
     def needs_keras_model(self) -> bool:
         """Return True if build_keras_model should be called for conversion."""
-        return not self.uses_reference()
+        return not (self.uses_reference() or self.status_only())
 
     def allow_no_tflite(self) -> bool:
         """Return True if this op can generate C/H without a .tflite."""
-        return self.uses_reference()
+        return self.uses_reference() or self.status_only()
 
     def activation_name(self) -> str:
         """Return the normalized descriptor activation name."""

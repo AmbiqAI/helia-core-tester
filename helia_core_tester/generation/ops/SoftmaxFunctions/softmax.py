@@ -1,11 +1,12 @@
 """
 Softmax operation implementation for Helia-Core Tester.
+
+Goldens come from the C reference: TFLite's Softmax<int8> (gemmlowp fixed point) for s8 input,
+SoftmaxInt16 with TFLM's LUTs for s16, and exp in binary64 rounded once for f32/f16.
 """
 
-import math
-from typing import Dict, Any, Tuple
+from typing import Any, Dict, Tuple
 import numpy as np
-import tensorflow as tf
 from pathlib import Path
 from helia_core_tester.generation.harness import ArgumentPool, ArrayLiteral, Declaration
 from helia_core_tester.generation.harness.simple import dims_count, tensor_case_pool
@@ -33,472 +34,126 @@ class OpSoftmax(OperationBase):
     """
     Softmax operation.
     """
-    
-    def build_keras_model(self) -> tf.keras.Model:
-        """Build Keras model for Softmax operation."""
-        input_shape = self.desc['input_shape']
-        
-        inputs = tf.keras.Input(shape=input_shape[1:], dtype=tf.float32, name='input')
-        
-        # Softmax operation
-        output = tf.keras.layers.Softmax()(inputs)
-        
-        model = tf.keras.Model(inputs=inputs, outputs=output)
-        return model
 
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        """Convert Keras model to TFLite with quantization."""
-        super().convert_to_tflite(model, out_path, rep_seed)
-    
-    def _select_cmsis_softmax_kernel(self) -> Dict[str, str]:
-        """
-        Select appropriate CMSIS-NN kernel function for Softmax operation.
-        
-        Returns:
-            Dictionary with kernel_fn, input_c_type, output_c_type
-        """
-        activation_dtype = self.tensor_dtype("input")
-        
-        if activation_dtype == 'S8':
-            return {
-                'kernel_fn': 'arm_softmax_s8',
-                'input_c_type': 'int8_t',
-                'output_c_type': 'int8_t'
-            }
-        elif activation_dtype == 'S16':
-            return {
-                'kernel_fn': 'arm_softmax_s16',
-                'input_c_type': 'int16_t',
-                'output_c_type': 'int16_t'
-            }
-        elif activation_dtype == 'FP32':
-            return {
-                'kernel_fn': 'arm_softmax_f32',
-                'input_c_type': 'float',
-                'output_c_type': 'float'
-            }
-        elif activation_dtype == 'FP16':
-            return {
-                'kernel_fn': 'arm_softmax_f16',
-                'input_c_type': 'float16_t',
-                'output_c_type': 'float16_t'
-            }
-        else:
-            raise NotImplementedError(f"Unsupported Softmax dtype: {activation_dtype}")
-
-    def needs_keras_model(self) -> bool:
-        if self.desc.get("hint", {}).get("force_cmsis", False):
-            return False
+    def uses_reference(self) -> bool:
         return True
 
-    def allow_no_tflite(self) -> bool:
-        if self.desc.get("hint", {}).get("force_cmsis", False):
-            return True
-        return False
+    def _select_cmsis_softmax_kernel(self) -> Dict[str, str]:
+        activation_dtype = self.tensor_dtype("input")
+        kernels = {
+            'S8': ('arm_softmax_s8', 'int8_t'),
+            'S16': ('arm_softmax_s16', 'int16_t'),
+            'FP32': ('arm_softmax_f32', 'float'),
+            'FP16': ('arm_softmax_f16', 'float16_t'),
+        }
+        if activation_dtype not in kernels:
+            raise NotImplementedError(f"Unsupported Softmax dtype: {activation_dtype}")
+        fn, c_type = kernels[activation_dtype]
+        return {'kernel_fn': fn, 'input_c_type': c_type, 'output_c_type': c_type}
 
-    @staticmethod
-    def _to_int32(value: int) -> int:
-        value &= 0xFFFFFFFF
-        if value & 0x80000000:
-            return value - 0x100000000
-        return value
+    def _hint(self) -> Dict[str, Any]:
+        hint = self.desc.get("hint", {})
+        return hint if isinstance(hint, dict) else {}
 
-    @staticmethod
-    def _clz32(value: int) -> int:
-        value &= 0xFFFFFFFF
-        if value == 0:
-            return 32
-        return 32 - value.bit_length()
+    def _s8_to_s16(self) -> bool:
+        """arm_softmax_s8_s16: only the CMSIS-direct cases with an S16 output hint select it."""
+        hint = self._hint()
+        extras = hint.get("extras", {}) or {}
+        output_dtype = str(hint.get("output_dtype", extras.get("output_dtype", ""))).upper()
+        return bool(hint.get("force_cmsis", False)) and output_dtype == "S16"
 
-    @staticmethod
-    def _doubling_high_mult(m1: int, m2: int) -> int:
-        nn_q31_min = -0x80000000
-        nn_q31_max = 0x7FFFFFFF
-        mult = 1 << 30
-        if (m1 < 0) ^ (m2 < 0):
-            mult = 1 - mult
-        mult = mult + (int(m1) * int(m2))
-        result = int(mult // (1 << 31))
-        if (m1 == m2) and (m1 == nn_q31_min):
-            result = nn_q31_max
-        return OpSoftmax._to_int32(result)
+    def _quantized_reference(self, kind: str, input_shape: Tuple[int, ...]):
+        """Input draw (every code), quantization, prepared params and the golden."""
+        from helia_core_tester.generation.reference import policy
+        from helia_core_tester.generation.reference import quant as ref_quant
+        from helia_core_tester.generation.reference.bindings import get_bindings
+        from helia_core_tester.generation.reference.call import ReferenceCall
 
-    @staticmethod
-    def _divide_by_power_of_two(dividend: int, exponent: int) -> int:
-        if exponent == 0:
-            return OpSoftmax._to_int32(dividend)
-        remainder_mask = (1 << exponent) - 1
-        remainder = dividend & remainder_mask
-        result = dividend >> exponent
-        threshold = remainder_mask >> 1
-        if result < 0:
-            threshold += 1
-        if remainder > threshold:
-            result += 1
-        return OpSoftmax._to_int32(result)
+        s8_to_s16 = kind == "s8" and self._s8_to_s16()
+        hint = self._hint()
+        if "input_scale" in hint:
+            in_quant = policy.TensorQuant(float(np.float32(hint["input_scale"])), 0, kind)
+        else:
+            # The range the converter used to calibrate over.
+            in_quant = self.activation_quant("input", (-1.0, 1.0), kind)
+        # The op fixes the output quantization.
+        if kind == "s16":
+            out_kind, out_scale, out_zp = "s16", 1.0 / 32768, 0
+        elif s8_to_s16:
+            out_kind, out_scale, out_zp = "s16", 1.0 / 65536, -32768
+        else:
+            out_kind, out_scale, out_zp = "s8", 1.0 / 256, -128
 
-    @staticmethod
-    def _mult_by_power_of_two(val: int, exp: int) -> int:
-        nn_q31_min = -0x80000000
-        nn_q31_max = 0x7FFFFFFF
-        thresh = (1 << (31 - exp)) - 1
-        result = int(val) << exp
-        if val > thresh:
-            result = nn_q31_max
-        if val < -thresh:
-            result = nn_q31_min
-        return OpSoftmax._to_int32(result)
+        rng_state = self.rng.__getstate__()
+        self.rng = np.random.default_rng(self.seed)
+        np_dtype = np.int8 if kind == "s8" else np.int16
+        info = np.iinfo(np_dtype)
+        input_q = self.rng.integers(info.min, info.max + 1, size=input_shape, dtype=np_dtype)
+        self.rng.__setstate__(rng_state)
 
-    @staticmethod
-    def _exp_on_negative_values(val: int) -> int:
-        nn_q31_max = 0x7FFFFFFF
-        mask = 0
-        shift = 24
+        params = get_bindings().prepare("softmax_prepare", {
+            "input_dtype": ref_quant.hct_dtype(kind.upper()), "output_dtype": ref_quant.hct_dtype(out_kind.upper()),
+            "beta": 1.0, "input_scale": in_quant.scale, "input_zero_point": in_quant.zero_point,
+            "output_scale": out_scale, "output_zero_point": out_zp})
+        if "diff_min" in hint:
+            params = {**params, "diff_min": int(hint["diff_min"])}
+        entry = "softmax_s8_s16" if s8_to_s16 else f"softmax_{kind}"
+        output = self.reference_golden(ReferenceCall(
+            entry, params, {"input": np.ascontiguousarray(input_q)}, {"output": input_shape},
+            quant={"input": in_quant.to_json(), "output": {"scale": out_scale, "zero_point": out_zp}, "beta": 1.0},
+        ))
+        return input_q, params, output, s8_to_s16
 
-        val_mod_minus_quarter = (val & ((1 << shift) - 1)) - (1 << shift)
-        remainder = val_mod_minus_quarter - val
-        x = (val_mod_minus_quarter << 5) + (1 << 28)
-        x2 = OpSoftmax._doubling_high_mult(x, x)
-
-        t1 = OpSoftmax._divide_by_power_of_two(OpSoftmax._doubling_high_mult(x2, x2), 2)
-        t2 = OpSoftmax._doubling_high_mult(x2, x)
-        t3 = t1 + t2
-        t4 = OpSoftmax._doubling_high_mult(t3, 715827883)
-        t5 = t4 + x2
-        t6 = OpSoftmax._divide_by_power_of_two(t5, 1)
-        t7 = x + t6
-        result = 1895147668 + OpSoftmax._doubling_high_mult(1895147668, t7)
-
-        def select_if_non_zero(const_val: int) -> Tuple[int, int]:
-            nonlocal mask, shift, remainder, result
-            mask = 1 if (remainder & (1 << shift)) != 0 else 0
-            shift += 1
-            if mask:
-                result = OpSoftmax._doubling_high_mult(result, const_val)
-            return mask, result
-
-        select_if_non_zero(1672461947)
-        select_if_non_zero(1302514674)
-        select_if_non_zero(790015084)
-        select_if_non_zero(290630308)
-        select_if_non_zero(39332535)
-        select_if_non_zero(720401)
-        select_if_non_zero(242)
-
-        if val == 0:
-            return nn_q31_max
-        return OpSoftmax._to_int32(result)
-
-    @staticmethod
-    def _one_over_one_plus_x(val: int) -> int:
-        nn_q31_max = 0x7FFFFFFF
-        sum_val = int(val) + nn_q31_max
-        half_denominator = int((sum_val + (1 if sum_val >= 0 else -1)) // 2)
-        x = 1515870810 + OpSoftmax._doubling_high_mult(half_denominator, -1010580540)
-
-        shift = 1 << 29
-        x = x + OpSoftmax._mult_by_power_of_two(
-            OpSoftmax._doubling_high_mult(x, shift - OpSoftmax._doubling_high_mult(half_denominator, x)), 2)
-        x = x + OpSoftmax._mult_by_power_of_two(
-            OpSoftmax._doubling_high_mult(x, shift - OpSoftmax._doubling_high_mult(half_denominator, x)), 2)
-        x = x + OpSoftmax._mult_by_power_of_two(
-            OpSoftmax._doubling_high_mult(x, shift - OpSoftmax._doubling_high_mult(half_denominator, x)), 2)
-
-        return OpSoftmax._mult_by_power_of_two(x, 1)
-
-    @staticmethod
-    def _softmax_common_s8(
-        input_data: np.ndarray,
-        num_rows: int,
-        row_size: int,
-        mult: int,
-        shift: int,
-        diff_min: int,
-        int16_output: bool,
-    ) -> np.ndarray:
-        nn_q7_min, nn_q7_max = -128, 127
-        nn_q15_min, nn_q15_max = -32768, 32767
-        accum_bits = 12
-        mask = 1 << shift
-
-        output = np.zeros((num_rows, row_size), dtype=np.int16 if int16_output else np.int8)
-        idx = 0
-        for row_idx in range(num_rows):
-            row = input_data[idx:idx + row_size]
-            idx += row_size
-
-            max_val = int(row[0])
-            for col in range(1, row_size):
-                max_val = max(max_val, int(row[col]))
-
-            sum_val = 0
-            for col in range(row_size):
-                diff = int(row[col]) - max_val
-                if diff >= diff_min:
-                    exp_res = OpSoftmax._exp_on_negative_values(
-                        OpSoftmax._doubling_high_mult(diff * mask, mult)
-                    )
-                    sum_val += OpSoftmax._divide_by_power_of_two(exp_res, accum_bits)
-
-            headroom = OpSoftmax._clz32(sum_val)
-            shifted = OpSoftmax._to_int32(sum_val << headroom) if sum_val > 0 else 0
-            shifted_scale = OpSoftmax._one_over_one_plus_x(
-                OpSoftmax._to_int32(shifted - (1 << 31))
-            )
-
-            if int16_output:
-                bits_over_unit = accum_bits - headroom + 15
-                for col in range(row_size):
-                    diff = int(row[col]) - max_val
-                    if diff >= diff_min:
-                        exp_res = OpSoftmax._exp_on_negative_values(
-                            OpSoftmax._doubling_high_mult(diff * mask, mult)
-                        )
-                        res = OpSoftmax._divide_by_power_of_two(
-                            OpSoftmax._doubling_high_mult(shifted_scale, exp_res), bits_over_unit
-                        ) + nn_q15_min
-                        res = max(nn_q15_min, min(nn_q15_max, res))
-                        output[row_idx, col] = np.int16(res)
-                    else:
-                        output[row_idx, col] = np.int16(nn_q15_min)
-            else:
-                bits_over_unit = accum_bits - headroom + 23
-                for col in range(row_size):
-                    diff = int(row[col]) - max_val
-                    if diff >= diff_min:
-                        exp_res = OpSoftmax._exp_on_negative_values(
-                            OpSoftmax._doubling_high_mult(diff * mask, mult)
-                        )
-                        res = OpSoftmax._divide_by_power_of_two(
-                            OpSoftmax._doubling_high_mult(shifted_scale, exp_res), bits_over_unit
-                        ) + nn_q7_min
-                        res = max(nn_q7_min, min(nn_q7_max, res))
-                        output[row_idx, col] = np.int8(res)
-                    else:
-                        output[row_idx, col] = np.int8(nn_q7_min)
-
-        return output
-    
     def generate_c_files(self, output_dir: Path) -> None:
-        """
-        Generate C and H files from templates for Softmax operation.
-        """
+        from helia_core_tester.generation.reference.call import ReferenceCall
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
-        from helia_core_tester.generation.utils.tflite_utils import calculate_multiplier_shift
-        
+
         name = self.desc['name']
-        force_cmsis = self.desc.get("hint", {}).get("force_cmsis", False)
-        tflite_path = output_dir / f"{name}.tflite"
-        if not force_cmsis and not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
-        
-        # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_softmax_kernel()
         float_kernel = kernel_info["input_c_type"] in {"float", "float16_t"}
-        if force_cmsis and kernel_info["input_c_type"] != "int8_t":
+        if self._hint().get("force_cmsis", False) and kernel_info["input_c_type"] != "int8_t":
             raise ValueError("CMSIS-only softmax currently supports int8 input only.")
-        
-        if force_cmsis:
-            input_shape = tuple(self.desc["input_shape"])
-            output_shape = input_shape
-            input_scale = float(self.desc.get("hint", {}).get("input_scale", 1.0 / 128.0))
-            input_zp = 0
-            output_scale = input_scale
-            output_zp = 0
-        else:
-            # Load LiteRT model for shape and quantization extraction
-            from helia_core_tester.generation.utils.litert_utils import get_operator_tensors_from_litert
-            model, subgraph = self.load_litert_model(str(tflite_path))
-            op_tensors = get_operator_tensors_from_litert(model, subgraph, 0)
-            
-            # Extract shapes from LiteRT
-            input_shape = op_tensors['inputs'][0]['shape']
-            output_shape = op_tensors['outputs'][0]['shape']
-        
-        # Ensure shapes are tuples
-        if input_shape is not None:
-            input_shape = tuple(input_shape)
-        if output_shape is not None:
-            output_shape = tuple(output_shape)
-        
-        if not force_cmsis and not float_kernel:
-            # Extract quantization from LiteRT
-            input_quant = op_tensors['inputs'][0]['quantization']
-            output_quant = op_tensors['outputs'][0]['quantization']
-            
-            input_scale = input_quant.get('scale', 1.0)
-            input_zp = input_quant.get('zero_point', 0)
-            output_scale = output_quant.get('scale', 1.0)
-            output_zp = output_quant.get('zero_point', 0)
-        
-        if not float_kernel:
-            if isinstance(input_scale, (list, np.ndarray)):
-                input_scale = float(input_scale[0])
-            if isinstance(input_zp, (list, np.ndarray)):
-                input_zp = int(input_zp[0])
-            if isinstance(output_scale, (list, np.ndarray)):
-                output_scale = float(output_scale[0])
-            if isinstance(output_zp, (list, np.ndarray)):
-                output_zp = int(output_zp[0])
+        input_shape = tuple(int(d) for d in self.desc["input_shape"])
+        if not input_shape or any(d < 1 for d in input_shape):
+            raise ValueError(f"{name}: invalid input_shape {input_shape}")
 
-            input_scale = float(input_scale)
-            input_zp = int(input_zp)
-            output_scale = float(output_scale)
-            output_zp = int(output_zp)
-        
         builder = TemplateContextBuilder()
-        
-        # Convert shapes to CMSIS dims
-        input_dims = builder.nhwc_to_cmsis_dims(input_shape)
-        output_dims = builder.nhwc_to_cmsis_dims(output_shape)
-        
-        # Calculate multipliers and shifts for softmax
-        # - For S8: use preprocess_softmax_scaling: beta * input_scale * (1 << 26)
-        # - For S16: use input_scale_beta_rescale = beta * input_scale / (10.0 / 65535.0)
-        softmax_input_integer_bits = 5  # scaled_diff_integer_bits, matches ns-cmsis-nn
-        beta = 1.0  # softmax beta parameter (typically 1.0)
-        
-        if float_kernel:
-            mult = shift = diff_min = 0
-        elif kernel_info["input_c_type"] == "int8_t":
-            # S8: preprocess_softmax_scaling
-            # input_beta_real_multiplier = min(beta * input_scale * (1 << (31 - scaled_diff_integer_bits)), max)
-            max_real_multiplier = (1 << 31) - 1
-            input_real_multiplier = min(beta * input_scale * (1 << (31 - softmax_input_integer_bits)), max_real_multiplier)
-        else:
-            # S16: input_scale_beta_rescale
-            # input_scale_beta_rescale = beta * input_scale / (10.0 / 65535.0)
-            input_scale_beta_rescale = beta * input_scale / (10.0 / 65535.0)
-            input_real_multiplier = input_scale_beta_rescale
-        
-        if not float_kernel:
-            mult, shift = calculate_multiplier_shift(input_real_multiplier)
-        
-        # Calculate diff_min for s8 softmax
-        # diff_min = -1.0 * calculate_input_radius(input_integer_bits, input_left_shift, total_signed_bits=31)
-        # where calculate_input_radius = floor(max_val * (1 << (31 - input_integer_bits)) / (1 << input_left_shift))
-        # Note: input_left_shift can be negative, so we handle division properly
-        if kernel_info["input_c_type"] == "int8_t":
-            # calculate_input_radius equivalent
-            max_val = (1 << softmax_input_integer_bits) - 1
-            if shift >= 0:
-                max_input_rescaled = max_val * (1 << (31 - softmax_input_integer_bits)) / (1 << shift)
-            else:
-                # When shift is negative, (1 << shift) would be fractional, so we multiply instead
-                max_input_rescaled = max_val * (1 << (31 - softmax_input_integer_bits)) * (1 << (-shift))
-            diff_min = -int(math.floor(max_input_rescaled))
-        else:
-            diff_min = 0  # Not used for s16
-        # Calculate num_rows and row_size
-        # Softmax operates on the last dimension (row_size)
-        # num_rows is the product of all dimensions except the last
-        if len(input_shape) >= 2:
-            num_rows = int(np.prod(input_shape[:-1]))
-            row_size = int(input_shape[-1])
-        else:
-            # 1D case
-            num_rows = 1
-            row_size = int(input_shape[0])
-        
-        # Generate input data and quantize
+        row_size = int(input_shape[-1])
+        num_rows = int(np.prod(input_shape[:-1])) if len(input_shape) >= 2 else 1
+
+        nonfinite_context: Dict[str, Any] = {}
         if float_kernel:
             float_dtype = np.float16 if kernel_info["input_c_type"] == "float16_t" else np.float32
             input_q = self._sample_uniform(input_shape, dtype=float_dtype)
-        else:
-            rng_state = self.rng.__getstate__()
-            self.rng = np.random.default_rng(self.seed)
-
-            if kernel_info["input_c_type"] == "int8_t":
-                np_in_dtype = np.int8
-                qmin, qmax = -128, 127
-                input_q = self.rng.integers(qmin, qmax + 1, size=input_shape, dtype=np_in_dtype)
-            elif kernel_info["input_c_type"] == "int16_t":
-                np_in_dtype = np.int16
-                qmin, qmax = -32768, 32767
-                input_q = self.rng.integers(qmin, qmax + 1, size=input_shape, dtype=np_in_dtype)
-            else:
-                raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
-
-            self.rng.__setstate__(rng_state)
-
-        if float_kernel:
-            def float_reference(operands, _dtype=input_q.dtype):
-                values = operands[0].astype(np.float32)
-                shifted = values - np.max(values, axis=-1, keepdims=True)
-                exp_vals = np.exp(shifted)
-                return (exp_vals / np.sum(exp_vals, axis=-1, keepdims=True)).astype(_dtype)
-
-            output_data = float_reference([input_q])
-        elif force_cmsis:
-            hint = self.desc.get("hint", {})
-            if isinstance(hint, dict) and "diff_min" in hint:
-                diff_min = int(hint["diff_min"])
-            hint = self.desc.get("hint", {})
-            extras = hint.get("extras", {}) if isinstance(hint, dict) else {}
-            output_dtype_hint = str(hint.get("output_dtype", extras.get("output_dtype", ""))).upper()
-            int16_output = output_dtype_hint == "S16"
-            output_data = self._softmax_common_s8(
-                input_q.flatten().astype(np.int8),
-                num_rows,
-                row_size,
-                int(mult),
-                int(shift),
-                int(diff_min),
-                int16_output,
-            )
-        else:
-            # Run inference using LiteRT interpreter
-            interpreter = self.load_litert_interpreter(str(tflite_path))
-            input_details = interpreter.get_input_details()
-            output_details = interpreter.get_output_details()
-            
-            interpreter.set_tensor(input_details[0]['index'], input_q)
-            interpreter.invoke()
-            output_data = interpreter.get_tensor(output_details[0]['index'])
-            output_data = np.array(output_data)
-        
-        # Format arrays
-        if float_kernel:
+            output_data = self.reference_golden(ReferenceCall(
+                "softmax_f16" if float_dtype == np.float16 else "softmax_f32", {"unused": 0},
+                {"input": np.ascontiguousarray(input_q)}, {"output": input_shape},
+            ))
             output_data, nonfinite_context = self.apply_nonfinite_policy(
-                output_data, reference=float_reference, inputs=[input_q]
+                output_data, reference=self.reference_probe, inputs=[input_q]
             )
+            mult = shift = diff_min = 0
+            kernel_fn, output_c_type, uses_lut = kernel_info["kernel_fn"], kernel_info["output_c_type"], False
         else:
-            nonfinite_context = {}
-        input_array_str = builder.format_array_as_c_literal(input_q)
-        expected_output_array_str = builder.format_array_as_c_literal(output_data)
-        
-        # Build template context
-        hint = self.desc.get("hint", {})
-        extras = hint.get("extras", {}) if isinstance(hint, dict) else {}
-        output_dtype_hint = str(hint.get("output_dtype", extras.get("output_dtype", ""))).upper()
-        is_s8_s16 = force_cmsis and output_dtype_hint == "S16" and kernel_info["input_c_type"] == "int8_t"
-        if float_kernel:
-            kernel_fn = kernel_info["kernel_fn"]
-            output_c_type = kernel_info["output_c_type"]
-            uses_lut = False
-            float_kernel = True
-        elif is_s8_s16:
-            kernel_fn = "arm_softmax_s8_s16"
-            output_c_type = "int16_t"
-            uses_lut = False
-            float_kernel = False
-        else:
-            kernel_fn = kernel_info["kernel_fn"]
-            output_c_type = kernel_info["output_c_type"]
-            uses_lut = kernel_info["input_c_type"] == "int16_t"
-            float_kernel = False
+            kind = "s8" if kernel_info["input_c_type"] == "int8_t" else "s16"
+            input_q, params, output_data, s8_to_s16 = self._quantized_reference(kind, input_shape)
+            mult, shift, diff_min = params["input_multiplier"], params["input_left_shift"], params["diff_min"]
+            if s8_to_s16:
+                kernel_fn, output_c_type, uses_lut = "arm_softmax_s8_s16", "int16_t", False
+            else:
+                kernel_fn, output_c_type, uses_lut = kernel_info["kernel_fn"], kernel_info["output_c_type"], kind == "s16"
 
         context = {
             'name': name,
-            'input_dims': input_dims,
-            'output_dims': output_dims,
+            'input_dims': builder.nhwc_to_cmsis_dims(input_shape),
+            'output_dims': builder.nhwc_to_cmsis_dims(input_shape),
             'num_rows': num_rows,
             'row_size': row_size,
             'mult': int(mult),
             'shift': int(shift),
             'diff_min': int(diff_min),
-            'input_data_array': input_array_str,
-            'expected_output_array': expected_output_array_str,
+            'input_data_array': builder.format_array_as_c_literal(input_q),
+            'expected_output_array': builder.format_array_as_c_literal(output_data),
             'input_dtype': kernel_info["input_c_type"],
             'output_dtype': output_c_type,
             'kernel_fn': kernel_fn,
@@ -511,4 +166,3 @@ class OpSoftmax(OperationBase):
             output_dir, stem="softmax", context=context, pool=softmax_argument_pool(context),
             validation_key="SoftmaxFunctions/softmax/softmax.c.j2", label="Softmax", operator="Softmax",
         )
-        

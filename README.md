@@ -923,8 +923,11 @@ Every golden is being moved onto one flow: descriptor -> seeded draw -> quantiza
 `ReferenceCall` -> a C reference kernel maintained in this repo -> golden plus
 `<case>.reference.json`. Operators on it say so with `uses_reference()`; the driver then builds no
 Keras model, converts nothing, and fails the case unless `generate_c_files()` recorded its call
-through `OperationBase.reference_golden()`. Add is the first operator on it; the rest follow per
-family.
+through `OperationBase.reference_golden()`. On it so far: the elementwise and activation families
+(Add, Sub, Mul, Minimum/Maximum, SquaredDifference, comparisons, Abs, Clamp, Relu/Relu6, LeakyRelu,
+PReLU/PReLUScalar, HardSwish, Tanh, Logistic, NNActivationS16, NNActivationFloat), Softmax, Sqrt,
+Rsqrt, Quantize, Dequantize and Requantize; the rest follow per family. A case that asserts only a
+returned status (an `ARG_ERROR` case) answers `status_only()` and has no golden at all.
 
 - `helia_core_tester/reference/` holds the library: plain scalar C11 written from each operator's
   definition (TFLite reference semantics for integer rounding), never from ns-cmsis-nn sources.
@@ -941,12 +944,34 @@ family.
   and compiler identity. Flags are strict: `-O1 -fno-fast-math -ffp-contract=off -Werror`, and
   binary16 is converted on bit patterns, so a golden does not depend on the host FPU or optimizer.
   Only the `hct_ref_*` symbols are exported.
-- float16 goldens compute in binary32 on the half operands and round once (the mathematical
-  result); tolerances for kernels that accumulate in fp16 are derived per operator.
+- Where ns-cmsis-nn deliberately differs from TFLite, the difference is a named reference entry,
+  never a tolerance: `hard_swish_precise_*` and `requantize_*` (arm_nn_requantize's tie-up high
+  multiply), the float16 tanh table (`tanh_lut_f16`, `tanh_lut_mve_f16`). Lookup tables the op
+  defines are part of the reference: int16 Softmax uses the tables TFLM's `LUTPopulate<int16_t>`
+  generates (the ones `arm_softmax_s16` is handed; TFLite core builds a 1/(1+x) table in double that
+  differs in two entries), int16 Rsqrt regenerates its table in float as TFLite does, and the
+  sigmoid table of Tanh/Logistic s16 is stored. A table needing a transcendental is stored rather
+  than regenerated, so it cannot drift with the host libm.
+- Quantization is a pure function of the case: `generation/reference/policy.py` (s8 asymmetric with
+  TFLite's zero-point nudge, s16 symmetric) over the range the operator draws from, a fixed preset
+  where the operator defines one, or an explicit descriptor block that overrides either:
+
+  ```yaml
+  quantization:
+    input: {scale: 0.0078125, zero_point: 0}   # or {range: [lo, hi]} for the policy
+    output: {range: [-0.375, 8.0]}
+  ```
+
+- float goldens are the exact result rounded once to the output type. float16 computes in binary32
+  on the half operands (or binary64 where a step is not exact in binary32) and rounds once; an
+  operator made of several binary16 steps (SquaredDifference) rounds each step, as IEEE binary16
+  arithmetic does. Minimum/Maximum follow IEEE 754-2019 (NaN propagates, -0 < +0). Tolerances for
+  kernels that accumulate in fp16 are derived per operator.
 - Tests: `reference/tests/test_common.c` (run by `tests/test_reference_c.py` under UBSan, and
   ASan where the host supports it) checks the fixed point against wide-integer models and binary16
   exhaustively; `tests/test_reference_*.py` cover the ABI, the build cache, the bindings' argument
-  checks and every status code, and each operator against independent models.
+  checks and every status code, and each operator against independent models
+  (`tests/reference_models.py`: Python-int fixed point, the LUT generators, numpy float models).
 
 ## Host check
 

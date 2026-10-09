@@ -11,11 +11,6 @@ from helia_core_tester.generation.ops.BasicMathFunctions.rsqrt import (
     make_rsqrt_per_op_lut,
     make_rsqrt_universal_lut,
 )
-from helia_core_tester.generation.utils.litert_builder import LITERT_AVAILABLE
-from helia_core_tester.generation.utils.litert_utils import (
-    get_operator_tensors_from_litert,
-    load_litert_model,
-)
 
 TESTER_ROOT = Path(__file__).resolve().parents[2]
 RSQRT_DESCRIPTOR_PATH = TESTER_ROOT / "assets" / "descriptors" / "BasicMathFunctions" / "rsqrt.yaml"
@@ -104,8 +99,10 @@ def test_rsqrt_positive_input_generation_stays_in_valid_domain() -> None:
         target_cpu="cortex-m55",
     )
 
+    from helia_core_tester.generation.reference import policy
+
     input_data = op._generate_positive_float_input((1, 2, 2, 3), 1.0 / 32768.0)
-    input_q = op._quantize_input(input_data, 1.0 / 32768.0, 0)
+    input_q = policy.quantize(input_data, policy.TensorQuant(1.0 / 32768.0, 0, "s16"))
 
     op._ensure_positive_domain_input(input_q, 0)
     assert np.all(input_q.astype(np.int32) >= 0)
@@ -164,7 +161,7 @@ def test_rsqrt_generator_rejects_unknown_call_style() -> None:
 
 
 @pytest.mark.parametrize(("name", "call_style", "shape", "expected_kernel"), RSQRT_PARITY_CASES)
-def test_rsqrt_parity_descriptors_generate_litert_and_c(
+def test_rsqrt_parity_descriptors_generate_from_the_reference(
     name: str,
     call_style: str,
     shape: tuple[int, ...],
@@ -172,56 +169,26 @@ def test_rsqrt_parity_descriptors_generate_litert_and_c(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    if not LITERT_AVAILABLE:
-        pytest.skip("ai_edge_litert is required for rsqrt LiteRT generation")
-
     monkeypatch.setenv("CMSIS_NN_REPO_ROOT", str(TESTER_ROOT))
     desc = _rsqrt_descriptor_map()[name]
     assert desc["hint"]["call_style"] == call_style
 
     op = OpRsqrt(desc, seed=1, target_cpu="cortex-m55")
-    tflite_path = tmp_path / f"{name}.tflite"
-
-    assert op.needs_keras_model() is False
-    with pytest.raises(NotImplementedError, match="LiteRT-only"):
-        op.build_keras_model()
-
-    op.convert_to_tflite(None, str(tflite_path), 1)
-
-    model, subgraph = load_litert_model(str(tflite_path))
-    op_tensors = get_operator_tensors_from_litert(model, subgraph, 0)
-    assert tuple(op_tensors["inputs"][0]["shape"]) == shape
-    assert tuple(op_tensors["outputs"][0]["shape"]) == shape
-
-    fake_output = np.zeros(shape, dtype=np.int16)
-
-    class _FakeInterpreter:
-        def get_input_details(self):
-            return [{"index": 0}]
-
-        def get_output_details(self):
-            return [{"index": 0}]
-
-        def set_tensor(self, index, value):
-            del index, value
-
-        def invoke(self):
-            return None
-
-        def get_tensor(self, index):
-            del index
-            return fake_output
-
-    monkeypatch.setattr(op, "load_litert_interpreter", lambda _path: _FakeInterpreter())
+    assert op.uses_reference() and not op.needs_keras_model() and not op.status_only()
     op.generate_c_files(tmp_path)
+    call = op.reference
+    assert call.entry == "rsqrt_s16" and call.inputs["input"].shape == shape
+    x = call.inputs["input"].astype(np.float64).ravel()
+    out = call.output().astype(np.float64).ravel()
+    assert np.all((out >= 0) & (out <= 32767))
+    # TFLite's LUT is coarse below 4096 codes (the small-input descriptors' wide tolerances);
+    # above it the golden tracks 1/sqrt within a few codes.
+    wide = x >= 4096
+    real = 1.0 / np.sqrt(x[wide] * call.params["input_scale"]) / call.params["output_scale"]
+    assert np.all(np.abs(out[wide] - np.minimum(real, 32767)) <= 4)
 
-    c_path = tmp_path / f"{name}_rsqrt.c"
-    h_path = tmp_path / "includes" / f"{name}_rsqrt.h"
-    assert c_path.exists()
-    assert h_path.exists()
-
-    c_content = c_path.read_text()
-    h_content = h_path.read_text()
+    c_content = (tmp_path / f"{name}_rsqrt.c").read_text()
+    h_content = (tmp_path / "includes" / f"{name}_rsqrt.h").read_text()
     assert expected_kernel in c_content
     if call_style == "universal":
         assert "int32_t" in h_content
@@ -240,9 +207,6 @@ def test_rsqrt_negative_input_case_generates_expected_status_contract(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    if not LITERT_AVAILABLE:
-        pytest.skip("ai_edge_litert is required for rsqrt LiteRT generation")
-
     monkeypatch.setenv("CMSIS_NN_REPO_ROOT", str(TESTER_ROOT))
     desc = {
         "name": f"rsqrt_negative_case_{call_style}_s16",
@@ -253,9 +217,9 @@ def test_rsqrt_negative_input_case_generates_expected_status_contract(
         "hint": {"call_style": call_style, "force_negative_input_case": True},
     }
     op = OpRsqrt(desc, seed=1, target_cpu="cortex-m55")
-    tflite_path = tmp_path / f"{desc['name']}.tflite"
-    op.convert_to_tflite(None, str(tflite_path), 1)
+    assert op.status_only() and not op.uses_reference() and not op.needs_keras_model() and op.allow_no_tflite()
     op.generate_c_files(tmp_path)
+    assert op.reference is None
 
     c_content = (tmp_path / f"{desc['name']}_rsqrt.c").read_text()
     assert expected_kernel in c_content

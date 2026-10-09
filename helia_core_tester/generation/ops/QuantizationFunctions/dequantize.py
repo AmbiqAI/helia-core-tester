@@ -1,9 +1,9 @@
 """
-Dequantize operation implementation.
+Dequantize operation implementation: goldens from the C reference (TFLite's Dequantize, the
+exact binary16 widening), the fused activation applied in float as the harness applies it.
 """
 
 import numpy as np
-import tensorflow as tf
 from pathlib import Path
 from helia_core_tester.generation.entry import check_entry_fault, resolve_entry
 from helia_core_tester.generation.ops._shared.quantization_base import QuantizationFamilyBase
@@ -33,64 +33,19 @@ class OpDequantize(QuantizationFamilyBase):
     Dequantize operation.
     """
 
-    def allow_no_tflite(self) -> bool:
+    def uses_reference(self) -> bool:
         return True
 
     def _widens_f16_bits(self) -> bool:
         """An `entry:` case: arm_dequantize_f16_bits_f32 on binary16 bit patterns, checked bit for bit
-        against each NaN rule rather than against a converted model."""
+        against each NaN rule."""
         return bool(self.desc.get("entry"))
 
     def _widens_f16(self) -> bool:
         """FP16 -> FP32 is arm_dequantize_f16_f32 (ns-cmsis-nn#475): a bit-exact widening
-        with no scale or zero point, built as a LiteRT DEQUANTIZE rather than a Keras model."""
+        with no scale or zero point."""
         return self.tensor_dtype("input") == "FP16"
 
-    def needs_keras_model(self) -> bool:
-        return not (self._widens_f16() or self._widens_f16_bits())
-
-    def build_keras_model(self) -> tf.keras.Model:
-        """Build Keras model for Dequantize operation."""
-        input_shape = self.desc['input_shape']
-        inputs = tf.keras.Input(shape=input_shape[1:], dtype=tf.float32, name='input')
-        x = tf.keras.layers.Lambda(lambda x: tf.cast(x, tf.float32))(inputs)
-        
-        # Apply activation only from descriptor fields.
-        activation_str = self.activation_name()
-        
-        if activation_str == 'RELU':
-            x = tf.keras.layers.ReLU()(x)
-        elif activation_str == 'RELU6':
-            x = tf.keras.layers.ReLU(max_value=6)(x)
-        elif activation_str != 'NONE':
-            raise ValueError(f"Unsupported activation: {activation_str}")
-        
-        model = tf.keras.Model(inputs=inputs, outputs=x)
-        return model
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        """Convert Keras model to TFLite with quantization."""
-        if self._widens_f16_bits():
-            raise NotImplementedError("a bit-pattern case has no golden model")
-        if self._widens_f16():
-            from helia_core_tester.generation.utils.litert_builder import build_unary_same_shape_op
-
-            model_bytes = build_unary_same_shape_op(
-                op_name="DEQUANTIZE",
-                input_shape=tuple(self.desc["input_shape"]),
-                dtype="float16",
-                output_dtype="float32",
-            )
-            self._write_tflite_bytes(out_path, model_bytes)
-            return
-        # Dequantize produces float32 output
-        self._convert_with_activation_quantization(
-            model,
-            out_path,
-            output_type=tf.float32,
-            rep_seed=rep_seed,
-        )
-    
     def _select_cmsis_dequantize_kernel(self) -> dict[str, str]:
         """
         Select appropriate CMSIS-NN kernel function for Dequantize operation.
@@ -147,7 +102,6 @@ class OpDequantize(QuantizationFamilyBase):
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
         
         name = self.desc['name']
-        tflite_path = output_dir / f"{name}.tflite"
         # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_dequantize_kernel()
         
@@ -163,125 +117,45 @@ class OpDequantize(QuantizationFamilyBase):
             self._generate_f16_bits(output_dir, kernel_info)
             return
 
+        from helia_core_tester.generation.reference import policy
+        from helia_core_tester.generation.reference import quant as ref_quant
+        from helia_core_tester.generation.reference.call import ReferenceCall
+
+        act_min, act_max = {"RELU": (0.0, float("inf")), "RELU6": (0.0, 6.0)}.get(
+            activation_str, (float("-inf"), float("inf")))
+        input_shape = tuple(int(dim) for dim in self.desc["input_shape"])
         if kernel_info.get("kernel_style") == "widen":
-            # No quantization parameters: the kernel widens every float16 bit
-            # pattern exactly, so numpy's astype is the reference. input_min/
-            # input_max bound the uniform draw; a range inside +/-6.1e-5 keeps
-            # every draw a float16 subnormal, and input_mode nonfinite_sweep
-            # puts NaN/+Inf/-Inf in the leading lanes.
-            input_shape = tuple(int(dim) for dim in self.desc["input_shape"])
             low = float(self.desc.get("input_min", -1.0))
             high = float(self.desc.get("input_max", 1.0))
             input_q = self._sample_uniform(input_shape, low=low, high=high, dtype=np.float16)
-            output_data = input_q.astype(np.float32)
-            input_scale = 0.0
-            input_zp = 0
-            if has_activation:
-                if activation_str == 'RELU':
-                    output_data = np.maximum(output_data, 0.0)
-                else:
-                    output_data = np.clip(output_data, 0.0, 6.0)
-        elif tflite_path.exists():
-            # Load interpreter to extract the input quantization chosen by the
-            # converted model, but do not use its output as the golden.
-            # Converted dequantize models can drift slightly from the direct
-            # CMSIS kernel formula even when fed the same quantized tensor.
-            interpreter = self.load_litert_interpreter(str(tflite_path))
-
-            # Get input details
-            input_details = interpreter.get_input_details()
-
-            input_shape = tuple(input_details[0]['shape'])
-
-            # Extract quantization from input (quantized tensor)
-            input_qp = input_details[0].get('quantization_parameters', {})
-            input_scale = input_qp.get('scales', [1.0])
-            input_zp = input_qp.get('zero_points', [0])
-            
-            # Handle array/list scales (take first element for per-tensor assumption)
-            if isinstance(input_scale, (list, np.ndarray)):
-                if len(input_scale) > 1:
-                    raise ValueError(
-                        f"Dequantize descriptor '{name}' has per-channel input "
-                        f"quantization with {len(input_scale)} scales, but "
-                        "arm_dequantize_s8_f32/arm_dequantize_s16_f32 are "
-                        "per-tensor kernels; using channel-0's scale for all "
-                        "channels would silently corrupt the golden output"
-                    )
-                elif len(input_scale) == 1:
-                    input_scale = input_scale[0]
-                else:
-                    # Empty array, use default
-                    input_scale = 1.0
-                
-            if isinstance(input_zp, (list, np.ndarray)):
-                if len(input_zp) > 1:
-                    raise ValueError(
-                        f"Dequantize descriptor '{name}' has per-channel input "
-                        f"quantization with {len(input_zp)} zero points, but "
-                        "arm_dequantize_s8_f32/arm_dequantize_s16_f32 are "
-                        "per-tensor kernels; using channel-0's zero point for all "
-                        "channels would silently corrupt the golden output"
-                    )
-                elif len(input_zp) == 1:
-                    input_zp = input_zp[0]
-                else:
-                    input_zp = 0
-                
-            input_scale = float(input_scale)
-            input_zp = int(input_zp)
-            
-            # For S16, generate input data that better utilizes the quantization range
-            # Calculate the effective float range based on scale and zero_point
-            if kernel_info["input_c_type"] == "int8_t":
-                np_in_dtype = np.int8
-                qmin, qmax = -128, 127
-                # For S8, use standard range
-                input_data_float = self._sample_uniform(input_shape)
-            elif kernel_info["input_c_type"] == "int16_t":
-                np_in_dtype = np.int16
-                qmin, qmax = -32768, 32767
-                # For S16, generate data that will quantize to a good range of int16 values
-                # Calculate float range that maps to a reasonable subset of int16 range
-                # Use approximately 80% of the int16 range to avoid edge cases
-                range_fraction = 0.8
-                effective_qmin = int(qmin + (1.0 - range_fraction) * (qmax - qmin) / 2)
-                effective_qmax = int(qmax - (1.0 - range_fraction) * (qmax - qmin) / 2)
-                float_min = (effective_qmin - input_zp) * input_scale
-                float_max = (effective_qmax - input_zp) * input_scale
-                # Ensure we have a valid range
-                if float_max > float_min:
-                    input_data_float = self._sample_uniform(input_shape, low=float_min, high=float_max)
-                else:
-                    # Fallback to standard range if calculated range is invalid
-                    input_data_float = self._sample_uniform(input_shape)
-            else:
-                raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
-            
-            # Quantize inputs: quantized = round(float_value / scale + zero_point)
-            input_q = np.round(input_data_float / float(input_scale) + float(input_zp)).astype(np.int32)
-            input_q = np.clip(input_q, qmin, qmax).astype(np_in_dtype)
-            
-            output_data = (input_q.astype(np.float32) - float(input_zp)) * float(input_scale)
-
-            if has_activation:
-                if activation_str == 'RELU':
-                    output_data = np.maximum(output_data, 0.0)
-                else:
-                    output_data = np.clip(output_data, 0.0, 6.0)
+            input_scale, input_zp = 0.0, 0
+            output_data = self.reference_golden(ReferenceCall(
+                "dequantize_f16_f32", {"activation_min": act_min, "activation_max": act_max},
+                {"input": np.ascontiguousarray(input_q)}, {"output": input_shape},
+                quant={"activation": activation_str},
+            ))
         else:
-            # No converted TFLite model is available to source real quantization
-            # parameters from. Dequantize is allow_no_tflite(), but silently
-            # substituting hardcoded default scale/zero-point (unrelated to the
-            # descriptor or converter) would produce a golden vector quantized
-            # with the wrong parameters. Fail loudly instead.
-            raise RuntimeError(
-                f"Dequantize descriptor '{name}' has no converted TFLite model "
-                "(conversion unavailable or failed) and no explicit descriptor "
-                "quantization parameters; refusing to substitute hardcoded "
-                "default input scale/zero-point"
-            )
-        
+            kind = ref_quant.kind(self.tensor_dtype("input"))
+            # The range the converter used to calibrate over.
+            in_quant = self.activation_quant("input", (-1.0, 1.0), kind)
+            input_scale, input_zp = in_quant.scale, in_quant.zero_point
+            qmin, qmax = policy.dtype_range(kind)
+            if kind == "s16":
+                # The middle 80% of the int16 range.
+                effective_qmin = int(qmin + 0.1 * (qmax - qmin))
+                effective_qmax = int(qmax - 0.1 * (qmax - qmin))
+                input_data_float = self._sample_uniform(input_shape, low=(effective_qmin - input_zp) * input_scale,
+                                                        high=(effective_qmax - input_zp) * input_scale)
+            else:
+                input_data_float = self._sample_uniform(input_shape)
+            input_q = policy.quantize(input_data_float, in_quant)
+            output_data = self.reference_golden(ReferenceCall(
+                f"dequantize_{kind}_f32",
+                {"scale": input_scale, "zero_point": input_zp, "activation_min": act_min, "activation_max": act_max},
+                {"input": np.ascontiguousarray(input_q)}, {"output": input_shape},
+                quant={"input": in_quant.to_json(), "activation": activation_str},
+            ))
+
         # Format arrays
         input_array_str = builder.format_array_as_c_literal(input_q)
         expected_output_array_str = builder.format_array_as_c_literal(output_data)
@@ -346,12 +220,16 @@ class OpDequantize(QuantizationFamilyBase):
         rest = self.rng.integers(0, 1 << 16, size=size - tail - classes.size).astype(np.uint16)
         bits = np.concatenate([classes, rest, np.array(_F16_TAIL_NANS[-tail:], dtype=np.uint16)])
 
-        frac = (bits & 0x3FF).astype(np.uint32)
-        sign = (bits >> 15).astype(np.uint32)
-        is_nan = ((bits >> 10) & 0x1F == 0x1F) & (frac != 0)
-        widened = bits.view(np.float16).astype(np.float32).view(np.uint32)
-        scalar = np.where(is_nan, (sign << 31) | 0x7FC00000 | (frac << 13), widened).astype(np.uint32)
-        vector = np.where(is_nan, np.uint32(0x7FC00000), widened).astype(np.uint32)
+        from helia_core_tester.generation.reference.call import ReferenceCall
+
+        is_nan = ((bits >> 10) & 0x1F == 0x1F) & ((bits & 0x3FF) != 0)
+        # The scalar rule is the IEEE widening (NaNs quieted, sign and payload kept); the MVE
+        # vector conversion gives the default NaN instead.
+        scalar = np.ascontiguousarray(self.reference_golden(ReferenceCall(
+            "dequantize_f16_f32", {"activation_min": float("-inf"), "activation_max": float("inf")},
+            {"input": np.ascontiguousarray(bits.view(np.float16))}, {"output": bits.shape},
+        ))).view(np.uint32)
+        vector = np.where(is_nan, np.uint32(0x7FC00000), scalar).astype(np.uint32)
 
         def hex_rows(values, digits):
             items = [f"0x{int(v):0{digits}X}u" for v in values]

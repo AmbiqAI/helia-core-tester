@@ -148,32 +148,15 @@ def test_template_context_formats_standalone_float_literals_for_c() -> None:
 
 
 def _load_nn_activation_float_module(monkeypatch):
-    import importlib.util
-    import sys
+    """The numpy activation models, which the C reference entries are checked against."""
     from types import SimpleNamespace
 
-    fake_tf = SimpleNamespace(
-        keras=SimpleNamespace(
-            Model=object,
-            activations=SimpleNamespace(sigmoid=lambda x: x, tanh=lambda x: x, linear=lambda x: x),
-        ),
-        nn=SimpleNamespace(),
-    )
-    monkeypatch.setitem(sys.modules, "tensorflow", fake_tf)
+    from helia_core_tester.tests import reference_models as models
 
-    module_path = (
-        Path(__file__).resolve().parents[1]
-        / "generation"
-        / "ops"
-        / "ActivationFunctions"
-        / "nn_activation_float.py"
-    )
-    spec = importlib.util.spec_from_file_location("nn_activation_float_test_module", module_path)
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return SimpleNamespace(_activation_reference=models.activation_reference,
+                           _TANH_LUT256_F16=models.TANH_LUT256_F16,
+                           _tanh_reference_f16=models.tanh_reference_f16,
+                           _tanh_reference_f16_mve=models.tanh_reference_f16_mve)
 
 
 def test_nn_activation_float_fp16_tanh_reference_matches_scalar_fallback(monkeypatch) -> None:

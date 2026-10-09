@@ -5,12 +5,10 @@ from __future__ import annotations
 from typing import Iterable
 
 import numpy as np
-import tensorflow as tf
 from pathlib import Path
 
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.harness import ArgumentPool, ArrayLiteral, Declaration, HarnessInput
-from helia_core_tester.generation.utils.tflite_utils import calculate_multiplier_shift, requantize_np
 
 
 def prelu_scalar_argument_pool(context: dict) -> ArgumentPool:
@@ -53,30 +51,11 @@ _DTYPE_INFO = {
 }
 
 
-class _ScalarInputPreluReference(tf.keras.layers.Layer):
-    """Keras reference layer that enforces explicit float casting before PReLU math."""
-
-    def call(self, inputs):
-        scalar_tensor, alpha_tensor = inputs
-        scalar_f32 = tf.cast(scalar_tensor, tf.float32)
-        alpha_f32 = tf.cast(alpha_tensor, tf.float32)
-        return tf.where(scalar_f32 >= 0.0, scalar_f32, scalar_f32 * alpha_f32)
-
-
 class OpPReLUScalar(OperationBase):
     """Generate direct scalar-input arm_prelu_scalar_s8/arm_prelu_scalar_s16 tests."""
 
-    def allow_no_tflite(self) -> bool:
+    def uses_reference(self) -> bool:
         return True
-
-    def needs_keras_model(self) -> bool:
-        return False
-
-    def build_keras_model(self):
-        raise NotImplementedError("PReLUScalar uses direct-kernel generation.")
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        raise NotImplementedError("PReLUScalar does not require a .tflite model.")
 
     @staticmethod
     def _resolve_alpha_values(alpha_shape: tuple[int, ...], values: Iterable[float] | None) -> np.ndarray:
@@ -174,45 +153,34 @@ class OpPReLUScalar(OperationBase):
             num_pixels, block_size
         )
 
-        output_multiplier_identity, output_shift_identity = calculate_multiplier_shift(input_scale / output_scale)
-        output_multiplier_alpha, output_shift_alpha = calculate_multiplier_shift((input_scale * alpha_scale) / output_scale)
+        from helia_core_tester.generation.reference import quant as ref_quant
+        from helia_core_tester.generation.reference.bindings import get_bindings
+        from helia_core_tester.generation.reference.call import ReferenceCall
 
-        input_offset = -input_zero_point
-        alpha_offset = -alpha_zero_point
-        output_offset = output_zero_point
+        params = get_bindings().prepare("prelu_prepare", {
+            "dtype": ref_quant.hct_dtype(activation_dtype),
+            "input_scale": input_scale, "input_zero_point": input_zero_point,
+            "alpha_scale": alpha_scale, "alpha_zero_point": alpha_zero_point,
+            "output_scale": output_scale, "output_zero_point": output_zero_point,
+        })
+        output_multiplier_identity, output_shift_identity = params["identity_multiplier"], params["identity_shift"]
+        output_multiplier_alpha, output_shift_alpha = params["alpha_multiplier"], params["alpha_shift"]
+        input_offset, alpha_offset, output_offset = params["input_offset"], params["alpha_offset"], params["output_offset"]
 
-        expected_q = np.zeros((num_pixels, block_size), dtype=np_dtype)
-        for pixel in range(num_pixels):
-            input_value = int(scalar_q[pixel]) + input_offset
-            if input_value >= 0:
-                out = requantize_np(
-                    np.array([input_value], dtype=np.int32),
-                    output_multiplier_identity,
-                    output_shift_identity,
-                )[0] + output_offset
-                pixel_expected = np.full(block_size, int(out), dtype=np.int32)
-            else:
-                alpha_centered = alpha_q[pixel].astype(np.int32) + alpha_offset
-                prod = alpha_centered * int(input_value)
-                pixel_expected = requantize_np(prod, output_multiplier_alpha, output_shift_alpha) + output_offset
-            expected_q[pixel] = np.clip(pixel_expected, qmin, qmax).astype(np_dtype)
+        # One scalar per pixel broadcasts across that pixel's alpha block.
+        expected_q = self.reference_golden(ReferenceCall(
+            f"prelu_{ref_quant.kind(activation_dtype)}", params,
+            {"input": np.ascontiguousarray(scalar_q.reshape(num_pixels, 1)),
+             "alpha": np.ascontiguousarray(alpha_q.reshape(num_pixels, block_size))},
+            {"output": (num_pixels, block_size)},
+            quant={"input": {"scale": input_scale, "zero_point": input_zero_point},
+                   "alpha": {"scale": alpha_scale, "zero_point": alpha_zero_point},
+                   "output": {"scale": output_scale, "zero_point": output_zero_point}},
+        ))
 
-        # Keep Keras-based reference generation in place for parity diagnostics.
-        scalar_input = tf.keras.Input(shape=(1,), dtype=tf.float32, name="scalar")
-        alpha_input = tf.keras.Input(shape=(block_size,), dtype=tf.float32, name="alpha")
-        reference_layer = _ScalarInputPreluReference(name="prelu_scalar_reference")
-        ref_model = tf.keras.Model([scalar_input, alpha_input], reference_layer([scalar_input, alpha_input]))
-        ref_float = ref_model(
-            [
-                tf.constant(scalar_float.reshape(num_pixels, 1), dtype=tf.float32),
-                tf.constant(alpha_float, dtype=tf.float32),
-            ],
-            training=False,
-        ).numpy()
-        # NOTE: for S16 this Keras/float reference is a diagnostic-only signal, since the
-        # LiteRT int16 PReLU reference (and its float-emulation path here) is known to be
-        # inaccurate on the negative branch (see PR description); expected_q above (computed
-        # directly from the CMSIS-NN fixed-point math) is the authoritative golden output.
+        # A float PReLU on the dequantized operands, kept as a parity diagnostic.
+        scalar_f32 = scalar_float.reshape(num_pixels, 1).astype(np.float32)
+        ref_float = np.where(scalar_f32 >= 0.0, scalar_f32, scalar_f32 * alpha_float.astype(np.float32))
         ref_q = self._quantize(ref_float, output_scale, output_zero_point, qmin, qmax, np_dtype).reshape(-1)
         reference_delta = (
             int(np.max(np.abs(ref_q.astype(np.int32) - expected_q.reshape(-1).astype(np.int32))))

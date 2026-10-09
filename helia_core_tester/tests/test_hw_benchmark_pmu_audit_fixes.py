@@ -5,8 +5,6 @@ Covers:
   F003 - depthwise_conv.yaml zero-sized filter multiplier fixed to 1, plus
          positive-dimension / channel-agreement validation for DepthwiseConv.
   F004 - S4 "no_bias" depthwise descriptors actually declare use_bias: false.
-  F009 - NNActivationS16._simulate_activation() writes through a real view
-         instead of a throwaway copy from .flatten().
   F010 - load_all_descriptors() fails atomically (DescriptorLoadError) unless
          best_effort=True is explicitly requested.
   F012 - setup_dependencies.download_file() requires and verifies a pinned
@@ -26,9 +24,6 @@ from helia_core_tester.generation.io.descriptors import (
     DescriptorLoadError,
     load_all_descriptors,
     load_descriptor,
-)
-from helia_core_tester.generation.ops.ActivationFunctions.nn_activation_s16 import (
-    OpNNActivationS16,
 )
 
 
@@ -106,36 +101,6 @@ def test_f003_depthwise_conv_rejects_channel_mismatch():
 def test_f004_s4_no_bias_descriptors_disable_bias(name):
     descs = _depthwise_descriptors()
     assert descs[name]["use_bias"] is False
-
-
-# ---------------------------------------------------------------------------
-# F009
-# ---------------------------------------------------------------------------
-
-def test_f009_activation_s16_writes_through_view_not_copy():
-    op = OpNNActivationS16.__new__(OpNNActivationS16)
-    # Avoid depending on the real sigmoid table file location.
-    op._load_sigmoid_table = lambda: list(range(256))
-
-    input_data = np.array([[100, -100, 0, 3000, -3000]], dtype=np.int32)
-    out = op._simulate_activation(input_data, left_shift=0, act_type="SIGMOID")
-
-    assert out.dtype == np.int16
-    assert out.shape == input_data.shape
-    # Prior to the fix, out.flatten() returned a copy, so `out` itself was
-    # never written and stayed as np.empty_like garbage; a real bug fix must
-    # produce a result that is not trivially uniform for varied inputs.
-    assert len(set(out.flatten().tolist())) > 1
-
-
-def test_f009_activation_s16_deterministic_across_calls():
-    op = OpNNActivationS16.__new__(OpNNActivationS16)
-    op._load_sigmoid_table = lambda: list(range(256))
-    input_data = np.array([[1, 2, 3, -4, -5]], dtype=np.int32)
-
-    out1 = op._simulate_activation(input_data, left_shift=0, act_type="TANH")
-    out2 = op._simulate_activation(input_data, left_shift=0, act_type="TANH")
-    assert np.array_equal(out1, out2)
 
 
 # ---------------------------------------------------------------------------
