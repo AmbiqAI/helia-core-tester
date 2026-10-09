@@ -49,8 +49,8 @@ def ensure_build_tools(repo_root: Path) -> None:
 
     downloads = repo_root / DOWNLOADS_DIR
     downloads.mkdir(parents=True, exist_ok=True)
-    if not (downloads / "arm_gcc_download").is_dir():
-        setup_arm_gcc(downloads)
+    # Returns early when the install matches the pin.
+    setup_arm_gcc(downloads)
     # NSX's toolchain file finds GCC on PATH.
     add_toolchain_to_path(repo_root)
 
@@ -152,6 +152,35 @@ def _drop_other_compiler(build_dir: Path, toolchain: Optional[str]) -> None:
         return
     typer.echo(f"[hardware] Dropping CMake cache built by {compiler}.")
     _drop_cache(build_dir)
+
+
+def _drop_stale_compiler_outputs(build_dir: Path, toolchain: Optional[str]) -> None:
+    """Remove every build output when the compiler version changed since the last good build.
+
+    Ninja does not rebuild when the compiler binary at a configured path changes, so an
+    in-place toolchain swap would otherwise link old objects and record the new version.
+    """
+    if not ((build_dir / "CMakeCache.txt").is_file() or (build_dir / "build.ninja").is_file()):
+        return
+    installed = (toolchain_spec(toolchain).installed() or {}).get("version")
+    info = _read_record(nsx_app_dir(build_dir) / BUILT_INFO)
+    # No record: outputs from an unknown compiler.
+    built = info.get("toolchain", False)
+    if built is not False:
+        built = built.get("version") if isinstance(built, dict) else None
+        if built == installed:
+            return
+    typer.echo(
+        f"[hardware] Compiler changed ({built or 'unrecorded'} -> {installed or 'unknown'}); "
+        f"removing build outputs in {build_dir}."
+    )
+    for child in build_dir.iterdir():
+        if child.name == NSX_APP_SUBDIR:
+            continue
+        if child.is_dir() and not child.is_symlink():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
 
 
 def _drop_foreign_cache(build_dir: Path, app_dir: Path) -> None:
@@ -404,6 +433,7 @@ def build_firmware(
     )
     app_dir = nsx_app_dir(build_dir)
     _drop_other_compiler(build_dir, options.toolchain)
+    _drop_stale_compiler_outputs(build_dir, options.toolchain)
     if not _configured_for(build_dir, app_dir, board):
         _drop_foreign_cache(build_dir, app_dir)
         with _jlink_path():
