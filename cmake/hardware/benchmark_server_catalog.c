@@ -1,4 +1,5 @@
 #include "benchmark_server_catalog.h"
+#include "benchmark_server_mram.h"
 
 
 /* The PMU capability is decided by the device header of the hardware build
@@ -18,6 +19,11 @@
 #define HCT_PLACEMENT_CAPABILITY_FLAGS HCT_CAP_WEIGHTS_MRAM
 #else
 #define HCT_PLACEMENT_CAPABILITY_FLAGS 0u
+#endif
+#if HCT_BLOB_STORE_BYTES > 0
+#define HCT_STORE_CAPABILITY_FLAGS HCT_CAP_BLOB_STORE
+#else
+#define HCT_STORE_CAPABILITY_FLAGS 0u
 #endif
 
 #ifndef HCT_BENCHMARK_SERVER_BOARD_ID
@@ -271,7 +277,8 @@ uint32_t hct_benchmark_server_capability_flags(void)
          | HCT_CAP_KERNEL_CATALOG
          | HCT_CAP_ABS_S8
          | HCT_PMU_CAPABILITY_FLAGS
-         | HCT_PLACEMENT_CAPABILITY_FLAGS;
+         | HCT_PLACEMENT_CAPABILITY_FLAGS
+         | HCT_STORE_CAPABILITY_FLAGS;
 }
 
 uint8_t hct_benchmark_server_pmu_counter_slots(void)

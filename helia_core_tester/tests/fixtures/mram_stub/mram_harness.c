@@ -6,6 +6,7 @@
 #include "arm_nn_types.h"
 #include "benchmark_server_adapters.h"
 #include "benchmark_server_catalog.h"
+#include "benchmark_server_mram.h"
 #include "benchmark_server_session.h"
 #include "hct_mram_stub.h"
 
@@ -30,12 +31,18 @@ static const blob_spec_t kCase[3] = {
 };
 
 static uint8_t workspace[32768u];
+#if defined(HCT_PLACEMENT_MRAM)
 static uint8_t probe_workspace[sizeof(workspace)];
 static uint8_t big_workspace[600u * 1024u];
 static uint8_t big_weights[BIG_WEIGHTS];
+#endif
 static uint8_t frame[2048];
 static uint8_t payload[1024];
 static uint32_t next_sequence;
+/* Store digests sent with CASE_META, if set. */
+static const uint64_t *meta_keys;
+/* REQUEST_BLOBs that start a blob. */
+static uint32_t blob_requests;
 
 static void put_u8(size_t *at, uint8_t value) { payload[(*at)++] = value; }
 
@@ -150,6 +157,15 @@ static hctp_status_t send_meta(hct_server_session_t *s, const char *case_id, con
         put_u8(&at, 0u);
     }
     put_u32(&at, 0u);
+    if (meta_keys != NULL)
+    {
+        put_u8(&at, 1u);
+        for (uint16_t index = 0u; index < count; ++index)
+        {
+            put_u32(&at, (uint32_t)meta_keys[index]);
+            put_u32(&at, (uint32_t)(meta_keys[index] >> 32));
+        }
+    }
     return send(s, HCTP_MSG_CASE_META, at);
 }
 
@@ -171,6 +187,7 @@ static hctp_status_t stream(hct_server_session_t *s, const blob_spec_t *blobs)
         id = get_u32(&view.payload[0]);
         offset = get_u32(&view.payload[4]);
         count = (uint32_t)view.payload[8] | ((uint32_t)view.payload[9] << 8);
+        blob_requests += offset == 0u ? 1u : 0u;
         if (count > blobs[id - 1u].length - offset) count = blobs[id - 1u].length - offset;
         put_u32(&at, id);
         put_u32(&at, offset);
@@ -182,6 +199,7 @@ static hctp_status_t stream(hct_server_session_t *s, const blob_spec_t *blobs)
     return HCTP_STATUS_OK;
 }
 
+#if defined(HCT_PLACEMENT_MRAM)
 /* Stream a session copy; expect a status. */
 static int probe_stream(const hct_server_session_t *s, hctp_status_t expected)
 {
@@ -208,6 +226,8 @@ static int check_placed(const hct_server_blob_t *blob, const blob_spec_t *spec, 
     return memcmp(blob->placed, spec->data, spec->length) == 0 ? 0 : 3;
 }
 
+#endif
+
 /* Correctness, ack, performance; then drain. */
 static int run_case(hct_server_session_t *s)
 {
@@ -226,6 +246,7 @@ static int run_case(hct_server_session_t *s)
     return send(s, HCTP_MSG_RUN_PERFORMANCE, 0u) == HCTP_STATUS_OK ? 0 : 5;
 }
 
+#if defined(HCT_PLACEMENT_MRAM)
 static int test_place_and_reuse(uintptr_t base)
 {
     static hct_server_session_t s;
@@ -345,14 +366,165 @@ static int test_pool_limits(uintptr_t base)
     return 0;
 }
 
+#endif
+
+#if HCT_BLOB_STORE_BYTES > 0
+static const uint64_t kKeys[3] = {0x1111111111111111ull, 0x2222222222222222ull, 0x3333333333333333ull};
+
+static uint8_t *store_base(void)
+{
+    return (uint8_t *)(hct_stub_mram_end - HCT_BLOB_STORE_BYTES);
+}
+
+/* One keyed case; count requests and programs. */
+static int store_case(const char *case_id, const uint64_t *keys, const blob_spec_t *blobs, uint32_t *requests, uint32_t *programs)
+{
+    static hct_server_session_t s;
+    const uint32_t calls = hct_mram_stub.program_calls;
+    int status = open_session(&s, workspace, sizeof(workspace), case_id);
+    if (status != 0) return 1;
+    meta_keys = keys;
+    blob_requests = 0u;
+    if (send_meta(&s, case_id, blobs, 3u) != HCTP_STATUS_OK) return 2;
+    meta_keys = NULL;
+    if (stream(&s, blobs) != HCTP_STATUS_OK) return 3;
+    *requests = blob_requests;
+    *programs = hct_mram_stub.program_calls - calls;
+    /* Hits must equal what streaming sends. */
+    for (uint16_t index = 0u; index < 3u; ++index)
+    {
+        const hct_server_blob_t *blob = &s.blobs[index];
+        if (memcmp(blob->placed != NULL ? blob->placed : &s.workspace[blob->arena_offset], blobs[index].data, blobs[index].length) != 0) return 4;
+    }
+    status = run_case(&s);
+    if (status != 0) return 10 + status;
+    return drain(&s) == HCTP_MSG_SESSION_COMPLETE ? 0 : 5;
+}
+
+static int test_store(void)
+{
+    /* Prototype store bytes at the base. */
+    static const uint32_t kStale[4] = {0x53544348u, 0x12345678u, 12u, 0xA5A5A5A5u};
+    uint64_t other[3] = {kKeys[0], kKeys[1], kKeys[2]};
+    uint32_t requests;
+    uint32_t programs;
+    uint32_t generation;
+    memcpy(store_base(), kStale, sizeof(kStale));
+    if ((hct_benchmark_server_capability_flags() & HCT_CAP_BLOB_STORE) == 0u) return 400;
+
+    /* Cold: stream all, save all. */
+    if (store_case("store_cold", kKeys, kCase, &requests, &programs) != 0 || requests != 3u || programs == 0u) return 401;
+    if (memcmp(store_base(), "HBS1", 4u) != 0) return 402;
+    generation = *(const uint32_t *)(store_base() + 16u);
+
+    /* Warm: nothing streams or programs. */
+    if (store_case("store_warm", kKeys, kCase, &requests, &programs) != 0 || requests != 0u || programs != 0u) return 403;
+
+    /* No keys: stream all, save none. */
+    if (store_case("store_unkeyed", NULL, kCase, &requests, &programs) != 0 || requests != 3u) return 404;
+
+    /* Same CRC and length, new digest: miss. */
+    other[0] ^= 1u;
+    if (store_case("store_digest", other, kCase, &requests, &programs) != 0 || requests != 1u || programs == 0u) return 405;
+
+    /* Corrupt copy fails its CRC: stream it. */
+    store_base()[64] ^= 0x40u;
+    if (store_case("store_corrupt", kKeys, kCase, &requests, &programs) != 0 || requests != 1u || programs == 0u) return 406;
+    if (store_case("store_healed", kKeys, kCase, &requests, &programs) != 0 || requests != 0u) return 407;
+    if (*(const uint32_t *)(store_base() + 16u) != generation) return 408;
+    printf("store hits\n");
+    return 0;
+}
+
+/* Full store wipes; big blobs skip it. */
+static int test_store_wipe(void)
+{
+    static uint8_t big[HCT_BLOB_STORE_BYTES / 3u];
+    const blob_spec_t blobs[3] = {
+        {"input_0", (const uint8_t *)kInput, sizeof(kInput), 1u},
+        {"weights", big, sizeof(big), 1u},
+        {"bias", kBias, sizeof(kBias), 4u},
+    };
+    const uint32_t generation = *(const uint32_t *)(store_base() + 16u);
+    uint64_t keys[3] = {0x4444u, 0u, 0x5555u};
+    uint32_t requests;
+    uint32_t programs;
+    for (uint32_t round = 0u; round < 4u; ++round)
+    {
+        for (uint32_t index = 0u; index < sizeof(big); ++index) big[index] = (uint8_t)(index * 13u + round);
+        keys[1] = 0x6666u + round;
+        if (store_case("store_fill", keys, blobs, &requests, &programs) != 0 || requests == 0u) return 500 + (int)round;
+    }
+    if (*(const uint32_t *)(store_base() + 16u) == generation) return 510;
+    /* The newest blob survives the wipe. */
+    if (store_case("store_fill", keys, blobs, &requests, &programs) != 0 || requests != 0u) return 511;
+    printf("store wiped\n");
+    return 0;
+}
+
+/* Exact fill, then one more: wipe. */
+static int test_store_exact_fill(void)
+{
+    /* Head, then 3 entries end at the top. */
+    static uint8_t mid[HCT_BLOB_STORE_BYTES - 6u * 32u];
+    const blob_spec_t blobs[3] = {
+        {"input_0", (const uint8_t *)kInput, sizeof(kInput), 1u},
+        {"weights", mid, sizeof(mid), 1u},
+        {"bias", kBias, sizeof(kBias), 4u},
+    };
+    uint64_t keys[3] = {0x7777u, 0x8888u, 0x9999u};
+    uint32_t requests;
+    uint32_t programs;
+    for (uint32_t index = 0u; index < sizeof(mid); ++index) mid[index] = (uint8_t)(index * 5u);
+    /* Foreign head: start an empty store. */
+    store_base()[0] ^= 0xFFu;
+    if (store_case("store_exact", keys, blobs, &requests, &programs) != 0 || requests != 3u) return 700;
+    /* New input wipes; all three restream. */
+    keys[0] = 0xAAAAu;
+    if (store_case("store_exact", keys, blobs, &requests, &programs) != 0 || requests != 3u) return 701;
+    if (store_case("store_exact", keys, blobs, &requests, &programs) != 0 || requests != 0u) return 702;
+    /* Zeroed head twice: old entries stay dead. */
+    memset(store_base(), 0, 32u);
+    if (store_case("store_exact", keys, blobs, &requests, &programs) != 0 || requests != 3u) return 703;
+    memset(store_base(), 0, 32u);
+    if (store_case("store_exact", keys, blobs, &requests, &programs) != 0 || requests != 3u) return 704;
+    printf("store exact fill\n");
+    return 0;
+}
+
+/* Pool reaching the store: store unused. */
+static int test_store_overlap(void)
+{
+    const uintptr_t saved = hct_stub_mram_end;
+    uint32_t requests;
+    uint32_t programs;
+    hct_stub_mram_end = (((uintptr_t)hct_stub_mram + 0xFFFFu) & ~(uintptr_t)0xFFFFu) + POOL_BYTES + HCT_BLOB_STORE_BYTES - 32u;
+    if (store_case("store_overlap", kKeys, kCase, &requests, &programs) != 0 || requests != 3u || programs != 0u) return 600;
+    hct_stub_mram_end = saved;
+    printf("store overlap refused\n");
+    return 0;
+}
+
+#endif
+
 int main(void)
 {
-    const uintptr_t base = ((uintptr_t)hct_stub_mram + 0xFFFFu) & ~(uintptr_t)0xFFFFu;
-    int status;
+    int status = 0;
     hct_stub_mram_end = (uintptr_t)hct_stub_mram + HCT_STUB_MRAM_BYTES;
-    if ((hct_benchmark_server_capability_flags() & HCT_CAP_WEIGHTS_MRAM) == 0u) return 10;
-    status = test_place_and_reuse(base);
-    if (status == 0) status = test_row_skip();
-    if (status == 0) status = test_pool_limits(base);
+#if defined(HCT_PLACEMENT_MRAM)
+    {
+        const uintptr_t base = ((uintptr_t)hct_stub_mram + 0xFFFFu) & ~(uintptr_t)0xFFFFu;
+        if ((hct_benchmark_server_capability_flags() & HCT_CAP_WEIGHTS_MRAM) == 0u) return 10;
+        status = test_place_and_reuse(base);
+        if (status == 0) status = test_row_skip();
+        if (status == 0) status = test_pool_limits(base);
+    }
+#endif
+#if HCT_BLOB_STORE_BYTES > 0
+    if (status == 0) status = test_store();
+    if (status == 0) status = test_store_wipe();
+    if (status == 0) status = test_store_exact_fill();
+    if (status == 0) status = test_store_overlap();
+#endif
     return status;
 }

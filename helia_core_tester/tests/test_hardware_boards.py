@@ -38,6 +38,7 @@ def test_board_table_seeds_apollo510_evb() -> None:
         ram_region="MCU_TCM",
         core_clock_hz=250_000_000,
         has_mram=True,
+        blob_store_bytes=2 * 1024 * 1024,
     )
 
 
@@ -109,3 +110,18 @@ def test_malformed_table_is_rejected(tmp_path: Path) -> None:
     missing.write_text("schema: hct.hardware_boards\nschema_version: 1\nboards:\n  - id: y\n", encoding="utf-8")
     with pytest.raises(ValueError, match="missing field"):
         load_board_table(missing)
+
+
+@pytest.mark.parametrize("extra", ["    blob_store_bytes: 64\n", "    has_mram: true\n    blob_store_bytes: 48\n"])
+def test_blob_store_needs_mram_and_lines(tmp_path: Path, extra: str) -> None:
+    bad = tmp_path / "boards.yaml"
+    bad.write_text(
+        "schema: hct.hardware_boards\nschema_version: 1\nboards:\n"
+        "  - id: x\n    nsx_board: x\n    soc: x\n    cpu: cortex-m55\n    pmu_tier: armv8m\n    has_mve: true\n"
+        "    jlink_device: X\n    swd_speed_khz: 1\n    workspace_bytes: 1\n"
+        "    flash_region: FLASH\n    ram_region: RAM\n" + extra,
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="blob_store_bytes"):
+        load_board_table(bad)
+

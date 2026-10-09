@@ -37,6 +37,8 @@ CAP_ABS_S8 = 1 << 5
 CAP_PMU_ARMV8M = 1 << 6
 # Weights and bias live in cached MRAM.
 CAP_WEIGHTS_MRAM = 1 << 7
+# Board caches blobs by CASE_META key.
+CAP_BLOB_STORE = 1 << 8
 
 CATALOG_HASH_SIZE = 32
 BLOB_MAX_RANK = 6
@@ -95,6 +97,10 @@ class TargetInfo:
     @property
     def placement(self) -> str:
         return "mram" if self.capability_flags & CAP_WEIGHTS_MRAM else "tcm"
+
+    @property
+    def has_blob_store(self) -> bool:
+        return bool(self.capability_flags & CAP_BLOB_STORE)
 
 
 def clock_mhz(hz: int) -> str:
@@ -427,6 +433,12 @@ class CaseMeta:
     scalar_parameters: tuple[tuple[str, int], ...]
     blobs: tuple[BlobDescriptor, ...]
     scratch_bytes: int
+    # Per-blob store digests; None sends none.
+    store_keys: tuple[int, ...] | None = None
+
+
+# CASE_META tail kind: store digests.
+STORE_KEYS_KIND = 1
 
 
 def encode_case_meta(meta: CaseMeta) -> bytes:
@@ -434,7 +446,8 @@ def encode_case_meta(meta: CaseMeta) -> bytes:
     i32 tolerance, u32 atol_q16, u32 rtol_q16, u8 scalar_count`, per scalar
     `text name, i32 value`, `u16 blob_count`, per blob `u32 blob_id, text role,
     text dtype, u8 rank, u32 dims[6], u32 byte_length, u32 alignment, u32 crc32,
-    u8 mutable_data`, then `u32 scratch_bytes`."""
+    u8 mutable_data`, then `u32 scratch_bytes`, then an optional tail:
+    `u8 kind (1)` and a `u64` store digest per blob."""
     writer = ByteWriter()
     writer.text(meta.case_id)
     writer.u32(meta.kernel_id)
@@ -462,6 +475,12 @@ def encode_case_meta(meta: CaseMeta) -> bytes:
         writer.u32(blob.crc32)
         writer.u8(1 if blob.mutable_data else 0)
     writer.u32(meta.scratch_bytes)
+    if meta.store_keys is not None:
+        if len(meta.store_keys) != len(meta.blobs):
+            raise ValueError(f"Need one store key per blob, got {len(meta.store_keys)}.")
+        writer.u8(STORE_KEYS_KIND)
+        for key in meta.store_keys:
+            writer.u64(key)
     return writer.finish()
 
 
@@ -496,6 +515,13 @@ def decode_case_meta(payload: bytes) -> CaseMeta:
                 mutable_data=bool(reader.u8()),
             )
         )
+    scratch_bytes = reader.u32()
+    store_keys = None
+    if reader.remaining():
+        kind = reader.u8()
+        if kind != STORE_KEYS_KIND:
+            raise ValueError(f"CASE_META tail kind {kind} is unknown.")
+        store_keys = tuple(reader.u64() for _ in blobs)
     return _consumed(reader, "CASE_META", CaseMeta(
         case_id=case_id,
         kernel_id=kernel_id,
@@ -506,7 +532,8 @@ def decode_case_meta(payload: bytes) -> CaseMeta:
         rtol_q16=rtol_q16,
         scalar_parameters=scalar_parameters,
         blobs=tuple(blobs),
-        scratch_bytes=reader.u32(),
+        scratch_bytes=scratch_bytes,
+        store_keys=store_keys,
     ))
 
 

@@ -9,7 +9,7 @@ from typing import Any, Callable, Sequence
 
 import numpy as np
 
-from .case_bundle import CaseBundle, blob_numpy, build_abs_s8_case_bundle, build_convolve_s8_case_bundle, load_case_bundle
+from .case_bundle import BlobInfo, CaseBundle, blob_numpy, build_abs_s8_case_bundle, build_convolve_s8_case_bundle, load_case_bundle
 from .comparison import ComparisonResult, compare_output, compare_status
 from .fake_target import FakeTargetTransport
 from .hctp import HCTP_FLAG_MORE, Frame, FrameDecoder, MessageType, SessionFrameValidator, encode_frame
@@ -137,6 +137,9 @@ class SessionResult:
     # from these (plus every counter any sample reported), so the schema follows the
     # selection rather than which counters the target happened to support.
     counter_passes: tuple[CounterPass, ...] = ()
+    # Keyed blobs sent; store hits among them.
+    store_blobs: int = 0
+    store_hits: int = 0
 
     @property
     def case_bundle(self) -> CaseBundle:
@@ -272,7 +275,12 @@ def session_plan_for_bundles(case_bundles: Sequence[CaseBundle], counter_passes:
     )
 
 
-def case_meta_for_bundle(case_bundle: CaseBundle) -> CaseMeta:
+def store_digest(blob: BlobInfo) -> int:
+    """First 8 SHA-256 bytes, little-endian."""
+    return int.from_bytes(bytes.fromhex(blob.sha256)[:8], "little")
+
+
+def case_meta_for_bundle(case_bundle: CaseBundle, *, store_keys: bool = False) -> CaseMeta:
     comparison = case_bundle.comparison
     scalar_parameters = dict(case_bundle.manifest.get("serialized_scalar_parameters", {}))
     scalar_parameters["output_capacity_bytes"] = case_bundle.expected_output.byte_length
@@ -299,6 +307,7 @@ def case_meta_for_bundle(case_bundle: CaseBundle) -> CaseMeta:
             for blob in case_bundle.streamable_blobs
         ),
         scratch_bytes=int(case_bundle.manifest.get("scratch_buffer", {}).get("bytes", 0)),
+        store_keys=tuple(store_digest(blob) for blob in case_bundle.streamable_blobs) if store_keys else None,
     )
 
 
@@ -309,8 +318,16 @@ def _encode_scalar(value: Any) -> int:
 
 
 class HostSession:
-    def __init__(self, transport: Transport, *, counter_passes: Sequence[CounterPass] | None = None) -> None:
+    def __init__(
+        self,
+        transport: Transport,
+        *,
+        counter_passes: Sequence[CounterPass] | None = None,
+        blob_store: bool = True,
+    ) -> None:
         self._transport = transport
+        # Send store keys when the board caches.
+        self._blob_store = blob_store
         self._decoder = FrameDecoder(max_payload=4096)
         self._session_id: int | None = None
         self._incoming_validator: SessionFrameValidator | None = None
@@ -444,6 +461,9 @@ class HostSession:
         comparison_result: ComparisonResult | None = None
         reported_status: int | None = None
         session_complete_cases = 0
+        keyed = self._blob_store and target_info.has_blob_store
+        store_blobs = store_hits = 0
+        unrequested: set[int] = set()
 
         while True:
             frame = self._recv_any()
@@ -457,7 +477,14 @@ class HostSession:
                 comparison_result = None
                 actual_output_bytes = bytearray()
                 reported_status = None
-                case_meta = encode_case_meta(case_meta_for_bundle(bundle))
+                case_meta = encode_case_meta(case_meta_for_bundle(bundle, store_keys=keyed))
+                if keyed and len(case_meta) > self.limits.max_plan_bytes:
+                    # Keys are optional; drop them first.
+                    case_meta = encode_case_meta(case_meta_for_bundle(bundle))
+                    unrequested = set()
+                elif keyed:
+                    unrequested = {blob.blob_id for blob in bundle.streamable_blobs}
+                store_blobs += len(unrequested)
                 if len(case_meta) > self.limits.max_plan_bytes:
                     raise RuntimeError(
                         f"CASE_META for case {bundle.case_id!r} is {len(case_meta)} bytes, over the target's "
@@ -469,8 +496,10 @@ class HostSession:
             elif message_type == MessageType.REQUEST_BLOB:
                 if self._case_id is None:
                     raise RuntimeError("Target requested a blob before selecting a case.")
-                self._handle_blob_request(frame.payload, case_map[self._case_id])
+                unrequested.discard(self._handle_blob_request(frame.payload, case_map[self._case_id]))
             elif message_type == MessageType.CASE_READY:
+                store_hits += len(unrequested)
+                unrequested = set()
                 self._send(MessageType.RUN_CORRECTNESS, b"")
             elif message_type == MessageType.CORRECTNESS_RESULT:
                 reported_status = decode_correctness_result(frame.payload).status
@@ -565,6 +594,8 @@ class HostSession:
             build_id=target_info.build_id,
             target_info=self._target_info,
             counter_passes=self._counter_passes,
+            store_blobs=store_blobs,
+            store_hits=store_hits,
         )
 
     def _take_trace(self) -> tuple[str, ...]:
@@ -597,11 +628,13 @@ class HostSession:
             )
         return entries
 
-    def _handle_blob_request(self, payload: bytes, case_bundle: CaseBundle) -> None:
+    def _handle_blob_request(self, payload: bytes, case_bundle: CaseBundle) -> int:
+        """Send the chunk; return its blob id."""
         request = decode_request_blob(payload)
         blob = next(blob for blob in case_bundle.streamable_blobs if blob.blob_id == request.blob_id)
         chunk = blob.path.read_bytes()[request.offset : request.offset + request.max_length]
         self._send(MessageType.BLOB_CHUNK, encode_blob_chunk(BlobChunk(blob_id=request.blob_id, offset=request.offset, data=chunk)))
+        return request.blob_id
 
     def _recv_any(self) -> Frame:
         # Sampling is silent until every pass ends.
