@@ -170,6 +170,20 @@ def test_c_blob_store(tmp_path: Path, placement: list[str]) -> None:
         assert line in result.stdout
 
 
+@pytest.mark.parametrize("size", ["64u", "48u"], ids=["below-minimum", "misaligned"])
+def test_c_blob_store_rejects_bad_size(tmp_path: Path, size: str) -> None:
+    cc = shutil.which("cc")
+    if cc is None:
+        pytest.skip("host C compiler not available")
+    hardware = PROJECT_ROOT / "cmake" / "hardware"
+    result = subprocess.run(
+        [cc, "-std=c99", "-c", "-DHCT_HOST_ABS_ONLY", f"-DHCT_BLOB_STORE_BYTES={size}", "-I", str(MRAM_STUB_DIR),
+         "-I", str(hardware), str(hardware / "benchmark_server_mram.c"), "-o", str(tmp_path / "mram.o")],
+        capture_output=True, text=True,
+    )
+    assert result.returncode != 0 and "store" in result.stderr
+
+
 def test_c_mram_placement(tmp_path: Path) -> None:
     binary = _build_mram_harness(tmp_path, "-DHCT_PLACEMENT_MRAM")
     result = subprocess.run([str(binary)], capture_output=True, text=True)

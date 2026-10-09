@@ -112,7 +112,16 @@ def test_malformed_table_is_rejected(tmp_path: Path) -> None:
         load_board_table(missing)
 
 
-@pytest.mark.parametrize("extra", ["    blob_store_bytes: 64\n", "    has_mram: true\n    blob_store_bytes: 48\n"])
+@pytest.mark.parametrize(
+    "extra",
+    [
+        "    blob_store_bytes: 96\n",
+        "    has_mram: true\n    blob_store_bytes: 48\n",
+        "    has_mram: true\n    blob_store_bytes: 64\n",
+        "    has_mram: true\n    blob_store_bytes: -32\n",
+    ],
+    ids=["no-mram", "misaligned", "below-minimum", "negative"],
+)
 def test_blob_store_needs_mram_and_lines(tmp_path: Path, extra: str) -> None:
     bad = tmp_path / "boards.yaml"
     bad.write_text(
@@ -124,4 +133,17 @@ def test_blob_store_needs_mram_and_lines(tmp_path: Path, extra: str) -> None:
     )
     with pytest.raises(ValueError, match="blob_store_bytes"):
         load_board_table(bad)
+
+
+@pytest.mark.parametrize("size", [0, 96])
+def test_blob_store_minimum_loads(tmp_path: Path, size: int) -> None:
+    good = tmp_path / "boards.yaml"
+    good.write_text(
+        "schema: hct.hardware_boards\nschema_version: 1\nboards:\n"
+        "  - id: x\n    nsx_board: x\n    soc: x\n    cpu: cortex-m55\n    pmu_tier: armv8m\n    has_mve: true\n"
+        "    jlink_device: X\n    swd_speed_khz: 1\n    workspace_bytes: 1\n"
+        f"    flash_region: FLASH\n    ram_region: RAM\n    has_mram: true\n    blob_store_bytes: {size}\n",
+        encoding="utf-8",
+    )
+    assert load_board_table(good)[0].blob_store_bytes == size
 

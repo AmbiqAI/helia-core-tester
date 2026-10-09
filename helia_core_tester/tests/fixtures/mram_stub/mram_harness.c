@@ -421,7 +421,7 @@ static int test_store(void)
     if (store_case("store_warm", kKeys, kCase, &requests, &programs) != 0 || requests != 0u || programs != 0u) return 403;
 
     /* No keys: stream all, save none. */
-    if (store_case("store_unkeyed", NULL, kCase, &requests, &programs) != 0 || requests != 3u) return 404;
+    if (store_case("store_unkeyed", NULL, kCase, &requests, &programs) != 0 || requests != 3u || programs != 0u) return 404;
 
     /* Same CRC and length, new digest: miss. */
     other[0] ^= 1u;

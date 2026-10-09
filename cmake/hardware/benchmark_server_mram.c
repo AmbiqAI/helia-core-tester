@@ -82,6 +82,8 @@ typedef struct
 _Static_assert(sizeof(hct_store_head_t) == HCT_MRAM_LINE_BYTES, "head fills one cache line");
 _Static_assert(sizeof(hct_store_entry_t) == HCT_MRAM_LINE_BYTES, "entry header fills one cache line");
 _Static_assert(HCT_BLOB_STORE_BYTES % HCT_MRAM_LINE_BYTES == 0u, "store size is whole lines");
+/* Head, entry header, one data line. */
+_Static_assert(HCT_BLOB_STORE_BYTES >= 3u * HCT_MRAM_LINE_BYTES, "store holds one entry");
 
 static uintptr_t store_base(void)
 {
