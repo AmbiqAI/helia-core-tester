@@ -23,6 +23,8 @@ _PMU_TIERS = ("dwt", "armv8m")
 
 DEFAULT_BOARD_ID = "apollo510_evb"
 BOARD_ENV_VAR = "HPX_BOARD"
+# Head, entry header, one data line.
+MIN_BLOB_STORE_BYTES = 3 * 32
 
 
 class UnknownBoardError(ValueError):
@@ -49,6 +51,8 @@ class BoardSpec:
     core_clock_hz: Optional[int] = None
     # MRAM behind an L1 D-cache.
     has_mram: bool = False
+    # Blob store at MRAM top; 0 is off.
+    blob_store_bytes: int = 0
 
     def build_dir(self, repo_root: Path) -> Path:
         """Board-keyed benchmark-server CMake build directory."""
@@ -80,6 +84,12 @@ def _parse_row(row: dict, path: Path) -> BoardSpec:
     missing = [key for key in required if key not in row]
     if missing:
         raise ValueError(f"{path}: board row {row.get('id', '?')!r} is missing field(s): {', '.join(missing)}")
+    store = int(row.get("blob_store_bytes", 0))
+    if store < 0 or (store and (not row.get("has_mram") or store % 32 or store < MIN_BLOB_STORE_BYTES)):
+        raise ValueError(
+            f"{path}: board {row['id']!r} blob_store_bytes must be 0 or MRAM, "
+            f">= {MIN_BLOB_STORE_BYTES}, whole 32-byte lines"
+        )
     pmu_tier = str(row["pmu_tier"])
     if pmu_tier not in _PMU_TIERS:
         raise ValueError(f"{path}: board {row['id']!r} has pmu_tier {pmu_tier!r}; expected one of {_PMU_TIERS}")
@@ -97,6 +107,7 @@ def _parse_row(row: dict, path: Path) -> BoardSpec:
         ram_region=str(row["ram_region"]),
         core_clock_hz=int(row["core_clock_hz"]) if "core_clock_hz" in row else None,
         has_mram=bool(row.get("has_mram", False)),
+        blob_store_bytes=store,
     )
 
 

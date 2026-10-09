@@ -38,7 +38,7 @@ _EXPECTED_MIN_ID = 7
 _EXPECTED_MAX_OPERATOR = "Maximum"
 _EXPECTED_MIN_OPERATOR = "Minimum"
 
-_HEADER = '#include "benchmark_server_catalog.h"\n'
+_HEADER = '#include "benchmark_server_catalog.h"\n#include "benchmark_server_mram.h"\n'
 
 
 def _load_registry() -> list[dict]:
@@ -132,6 +132,11 @@ def _render_catalog_c(entries: list[dict]) -> str:
     lines.append("#else")
     lines.append("#define HCT_PLACEMENT_CAPABILITY_FLAGS 0u")
     lines.append("#endif")
+    lines.append("#if HCT_BLOB_STORE_BYTES > 0")
+    lines.append("#define HCT_STORE_CAPABILITY_FLAGS HCT_CAP_BLOB_STORE")
+    lines.append("#else")
+    lines.append("#define HCT_STORE_CAPABILITY_FLAGS 0u")
+    lines.append("#endif")
     lines.append("")
     lines.append("#ifndef HCT_BENCHMARK_SERVER_BOARD_ID")
     lines.append('#define HCT_BENCHMARK_SERVER_BOARD_ID "apollo510_evb"')
@@ -219,7 +224,8 @@ def _render_catalog_c(entries: list[dict]) -> str:
     lines.append("         | HCT_CAP_KERNEL_CATALOG")
     lines.append("         | HCT_CAP_ABS_S8")
     lines.append("         | HCT_PMU_CAPABILITY_FLAGS")
-    lines.append("         | HCT_PLACEMENT_CAPABILITY_FLAGS;")
+    lines.append("         | HCT_PLACEMENT_CAPABILITY_FLAGS")
+    lines.append("         | HCT_STORE_CAPABILITY_FLAGS;")
     lines.append("}")
     lines.append("")
     lines.append("uint8_t hct_benchmark_server_pmu_counter_slots(void)")

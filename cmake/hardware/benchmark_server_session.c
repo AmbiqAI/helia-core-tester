@@ -11,6 +11,7 @@
 #include "benchmark_server_adapter.h"
 #include "benchmark_server_catalog.h"
 #include "benchmark_server_messages.h"
+#include "benchmark_server_mram.h"
 #include "arm_nnfunctions.h"
 
 /* Wrap-proof: `offset + needed` can overflow size_t on the 32-bit target for a
@@ -1078,6 +1079,27 @@ static hctp_status_t handle_session_plan(hct_server_session_t *session, const ui
     return queue_request_case(session);
 }
 
+/* Tail: u8 kind, u64 per blob. */
+#define HCT_STORE_KEYS_KIND 1u
+
+static hctp_status_t parse_store_keys(hct_server_session_t *session, hct_cursor_t *cursor)
+{
+    uint16_t index;
+    if (cursor->offset == cursor->length || cursor_u8(cursor) != HCT_STORE_KEYS_KIND)
+    {
+        return HCTP_STATUS_OK;
+    }
+    for (index = 0u; index < session->blob_count; ++index)
+    {
+        const uint32_t low = cursor_u32(cursor);
+        session->blobs[index].digest = ((uint64_t)cursor_u32(cursor) << 32) | low;
+        session->blobs[index].keyed = 1u;
+    }
+    return cursor->overrun ? HCTP_STATUS_TRUNCATED_FRAME : HCTP_STATUS_OK;
+}
+
+static hctp_status_t next_blob(hct_server_session_t *session);
+
 static hctp_status_t handle_case_meta(hct_server_session_t *session, const uint8_t *payload, size_t payload_length)
 {
     /* F006: converted to the bounded cursor API -- see its definition above for the
@@ -1206,34 +1228,15 @@ static hctp_status_t handle_case_meta(hct_server_session_t *session, const uint8
         }
     }
 
+    status = parse_store_keys(session, &cursor);
+    if (status != HCTP_STATUS_OK) return status;
+
     session->current_blob_index = 0u;
     session->state = HCT_SERVER_STATE_WAIT_BLOB_CHUNK;
-    return queue_request_blob(session);
+    return next_blob(session);
 }
 
 #if defined(HCT_PLACEMENT_MRAM)
-/* Pool sits past the image; 512 KiB. */
-#define HCT_MRAM_POOL_BYTES (512u * 1024u)
-#define HCT_MRAM_LINE_BYTES 32u
-/* NSX SBL script MCU_MRAM ends. */
-#if defined(HCT_MRAM_END)
-/* Host harness supplies its own. */
-#elif defined(AM_PART_APOLLO330P)
-#define HCT_MRAM_END 0x00600000u
-#else
-#define HCT_MRAM_END 0x00800000u
-#endif
-extern uint32_t _init_data, _sdata, _edata, _init_data_sram, _ssdata, _sedata;
-
-/* Pool start, or 0 when it overlaps. */
-static uintptr_t mram_pool_base(void)
-{
-    const uintptr_t data_end = (uintptr_t)&_init_data + ((uintptr_t)&_edata - (uintptr_t)&_sdata);
-    const uintptr_t sram_end = (uintptr_t)&_init_data_sram + ((uintptr_t)&_sedata - (uintptr_t)&_ssdata);
-    const uintptr_t image_end = data_end > sram_end ? data_end : sram_end;
-    const uintptr_t base = (image_end + 0xFFFFu) & ~(uintptr_t)0xFFFFu;
-    return (base + HCT_MRAM_POOL_BYTES <= HCT_MRAM_END) ? base : 0u;
-}
 
 volatile uint32_t hct_mram_rows_programmed;
 
@@ -1274,7 +1277,7 @@ static int program_changed_rows(const uint8_t *staged, uintptr_t address, uint32
 /* Program the staged copy into MRAM. */
 static hctp_status_t place_in_mram(hct_server_session_t *session, hct_server_blob_t *blob)
 {
-    const uintptr_t base = mram_pool_base();
+    const uintptr_t base = hct_mram_pool_base();
     /* allocate_blob padded the stage to rows. */
     const uint32_t length = (blob->byte_length + HCT_MRAM_ROW_BYTES - 1u) & ~(HCT_MRAM_ROW_BYTES - 1u);
     uint8_t *staged = &session->workspace[blob->arena_offset];
@@ -1322,6 +1325,74 @@ static hctp_status_t place_in_mram(hct_server_session_t *session, hct_server_blo
 }
 #endif
 
+static hct_store_key_t store_key(const hct_server_blob_t *blob)
+{
+    const hct_store_key_t key = {blob->byte_length, blob->crc32, blob->digest};
+    return key;
+}
+
+/* Copy a CRC-checked stored blob. */
+static bool store_load(hct_server_session_t *session, hct_server_blob_t *blob)
+{
+    hct_store_key_t key;
+    const uint8_t *stored;
+    /* Never touch MRAM inside a window. */
+    if (blob->keyed == 0u || hct_window.armed)
+    {
+        return false;
+    }
+    key = store_key(blob);
+    stored = hct_store_find(&key);
+    if (stored == NULL)
+    {
+        return false;
+    }
+    memcpy(blob_ptr(session, blob), stored, blob->byte_length);
+    blob->bytes_received = blob->byte_length;
+    return true;
+}
+
+static void store_save(hct_server_session_t *session, const hct_server_blob_t *blob)
+{
+    hct_store_key_t key;
+    if (blob->keyed == 0u || hct_window.armed)
+    {
+        return;
+    }
+    key = store_key(blob);
+    hct_store_save(&key, blob_ptr(session, blob));
+}
+
+/* Place a whole blob; step past it. */
+static hctp_status_t finish_blob(hct_server_session_t *session, hct_server_blob_t *blob)
+{
+    if (blob_in_mram(blob))
+    {
+        const hctp_status_t placed = place_in_mram(session, blob);
+        if (placed != HCTP_STATUS_OK) return placed;
+    }
+    session->current_blob_index += 1u;
+    return HCTP_STATUS_OK;
+}
+
+/* Copy stored blobs; request a miss. */
+static hctp_status_t next_blob(hct_server_session_t *session)
+{
+    while (session->current_blob_index < session->blob_count)
+    {
+        hct_server_blob_t *blob = &session->blobs[session->current_blob_index];
+        hctp_status_t status;
+        if (!store_load(session, blob))
+        {
+            return queue_request_blob(session);
+        }
+        status = finish_blob(session, blob);
+        if (status != HCTP_STATUS_OK) return status;
+    }
+    session->state = HCT_SERVER_STATE_WAIT_RUN_CORRECTNESS;
+    return queue_case_ready(session);
+}
+
 static hctp_status_t handle_blob_chunk(hct_server_session_t *session, const uint8_t *payload, size_t payload_length)
 {
     /* F006: converted to the bounded cursor API. */
@@ -1330,6 +1401,7 @@ static hctp_status_t handle_blob_chunk(hct_server_session_t *session, const uint
     uint32_t chunk_offset;
     uint32_t chunk_length;
     hct_server_blob_t *blob;
+    hctp_status_t status;
 
     cursor_init(&cursor, payload, payload_length);
     blob_id = cursor_u32(&cursor);
@@ -1359,21 +1431,9 @@ static hctp_status_t handle_blob_chunk(hct_server_session_t *session, const uint
     {
         return HCTP_STATUS_PAYLOAD_CRC_MISMATCH;
     }
-
-    if (blob_in_mram(blob))
-    {
-        const hctp_status_t placed = place_in_mram(session, blob);
-        if (placed != HCTP_STATUS_OK) return placed;
-    }
-
-    session->current_blob_index += 1u;
-    if (session->current_blob_index < session->blob_count)
-    {
-        return queue_request_blob(session);
-    }
-
-    session->state = HCT_SERVER_STATE_WAIT_RUN_CORRECTNESS;
-    return queue_case_ready(session);
+    store_save(session, blob);
+    status = finish_blob(session, blob);
+    return status != HCTP_STATUS_OK ? status : next_blob(session);
 }
 
 static bool has_mutable_blob(const hct_server_session_t *session)

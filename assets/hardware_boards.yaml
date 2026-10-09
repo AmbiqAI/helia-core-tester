@@ -27,6 +27,8 @@ boards:
     core_clock_hz: 250000000
     # Cached MRAM: --placement mram.
     has_mram: true
+    # Top 2 MiB: 0x600000-0x800000.
+    blob_store_bytes: 2097152
   - id: apollo330mP_evb
     nsx_board: apollo330mP_evb
     soc: apollo330P
@@ -43,6 +45,8 @@ boards:
     # HP2 mode.
     core_clock_hz: 250000000
     has_mram: true
+    # Off: untested; 512 KiB would fit.
+    blob_store_bytes: 0
   - id: apollo3p_evb
     nsx_board: apollo3p_evb
     soc: apollo3p

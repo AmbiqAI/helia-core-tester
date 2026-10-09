@@ -558,6 +558,7 @@ def stream_generated_tests(
     timing = {
         "stream_s": round(time.monotonic() - stream_started, 4),
         "batch_count": int(getattr(result, "batch_count", 1)),
+        "blob_store": {"hits": int(getattr(result, "store_hits", 0)), "blobs": int(getattr(result, "store_blobs", 0))},
         "cases": case_seconds,
     }
     # Unverified firmware: build symbols unknown.
@@ -579,10 +580,12 @@ def finalize_timing(outcome: HardwareRunOutcome, *, generate_s: float = 0.0, ech
     outcome.timing = timing
     write_timing(outcome.bundle, timing)
     case_count = len(timing.get("cases", {}))
+    store = timing.get("blob_store") or {}
+    store_note = f", store hits {store['hits']}/{store['blobs']}" if store.get("blobs") else ""
     echo(
         f"[hardware] timing: generate {timing['generate_s']:.1f}s  build {timing['build_s']:.1f}s  "
         f"flash {timing['flash_s']:.1f}s  stream {timing.get('stream_s', 0.0):.1f}s  "
-        f"({case_count} case(s) in {timing.get('batch_count', 1)} batch(es), total {timing['total_s']:.1f}s)"
+        f"({case_count} case(s) in {timing.get('batch_count', 1)} batch(es){store_note}, total {timing['total_s']:.1f}s)"
     )
 
 

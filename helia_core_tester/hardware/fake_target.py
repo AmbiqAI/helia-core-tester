@@ -31,6 +31,7 @@ from .pmu_catalog import CPU_CYCLES_EVENT_ID, CPU_CYCLES_NAME, counter_by_event_
 from .transfer import ArenaTracker, BlobAccumulator, BlobTransferSpec, CaseTooLargeError, staged_extent
 from .wire import (
     CAP_ABS_S8,
+    CAP_BLOB_STORE,
     CAP_CASE_STREAMING,
     CAP_CORRECTNESS,
     CAP_KERNEL_CATALOG,
@@ -245,8 +246,11 @@ class FakeTargetTransport:
         boot_status: int | None = 0,
         core_clock_hz: int | None = None,
         placement: str = "tcm",
+        blob_store: dict[tuple[int, int, int], bytes] | None = None,
     ) -> None:
         self.build_id = build_id
+        # (length, crc32, digest) -> bytes; None: no store.
+        self.blob_store = blob_store
         # Non-zero: failed init. None: old firmware.
         self._boot_status = boot_status
         # Default: the default board row's clock.
@@ -339,6 +343,8 @@ class FakeTargetTransport:
             flags |= CAP_PMU_ARMV8M
         if self._placement == "mram":
             flags |= CAP_WEIGHTS_MRAM
+        if self.blob_store is not None:
+            flags |= CAP_BLOB_STORE
         info = TargetInfo(
             build_id=self.build_id,
             catalog_hash=kernel_catalog_hash(self._catalog),
@@ -432,7 +438,7 @@ class FakeTargetTransport:
                 self._queue_error(str(exc))
                 return
             self._state = _TargetState.WAIT_BLOB_CHUNK
-            self._request_blob()
+            self._next_blob()
             return
         if frame.header.message_type == MessageType.BLOB_CHUNK:
             self._handle_blob_chunk(frame.payload)
@@ -511,14 +517,38 @@ class FakeTargetTransport:
         if self._pending_offset < self._blob_specs[chunk.blob_id].byte_length:
             self._request_blob()
             return
-        self._accumulators[chunk.blob_id].finish()
+        data = self._accumulators[chunk.blob_id].finish()
+        key = self._store_key(chunk.blob_id)
+        if key is not None:
+            self.blob_store[key] = data
         self._blob_index += 1
-        if self._blob_index < len(self._blob_order):
-            self._current_blob_id = self._blob_order[self._blob_index]
-            self._pending_offset = 0
-            self._request_blob()
-            return
-        self._queue(MessageType.CASE_READY, encode_case_ready(CaseReady(blob_id=chunk.blob_id, bytes_received=self._pending_offset)))
+        self._next_blob()
+
+    def _store_key(self, blob_id: int) -> tuple[int, int, int] | None:
+        """Store key, when the store and keys exist."""
+        assert self._case_meta is not None
+        if self.blob_store is None or self._case_meta.store_keys is None:
+            return None
+        index = self._blob_order.index(blob_id)
+        spec = self._blob_specs[blob_id]
+        return (spec.byte_length, spec.crc32, self._case_meta.store_keys[index])
+
+    def _next_blob(self) -> None:
+        """Copy stored blobs; request a miss."""
+        while self._blob_index < len(self._blob_order):
+            blob_id = self._blob_order[self._blob_index]
+            key = self._store_key(blob_id)
+            stored = self.blob_store.get(key) if key is not None else None
+            if stored is None:
+                self._current_blob_id = blob_id
+                self._pending_offset = 0
+                self._request_blob()
+                return
+            self._accumulators[blob_id].add_chunk(0, stored)
+            self._blob_index += 1
+        last = self._blob_order[-1]
+        ready = CaseReady(blob_id=last, bytes_received=self._blob_specs[last].byte_length)
+        self._queue(MessageType.CASE_READY, encode_case_ready(ready))
         self._state = _TargetState.WAIT_RUN_CORRECTNESS
 
     def _case_blobs(self) -> dict[str, np.ndarray]:
