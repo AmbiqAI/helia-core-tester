@@ -128,7 +128,7 @@ The firmware builds as a neuralspotx (NSX) app rendered into
 
 - Nested layout (the tester at `ns-cmsis-nn/Tests/helia-core-tester`): the
   enclosing ns-cmsis-nn checkout, working-tree edits included.
-- Standalone clone: the pinned ns-cmsis-nn release (`v7.40.0`).
+- Standalone clone: the pinned ns-cmsis-nn release (`v7.42.0`).
 - `--cmsis-nn-ref REF` builds another tag or commit; `--cmsis-nn-root PATH`
   builds another local checkout.
 
@@ -467,7 +467,7 @@ target:
   case_ids: []                 # optional `--case-id` filters
 kernels:
   repo: ~/ns-cmsis-nn          # any checkout that has the ref
-  ref: v7.40.0                 # tag, branch or SHA
+  ref: v7.42.0                 # tag, branch or SHA
 evals: 12                      # charged board evals
 cost_usd: 25                   # claude --max-budget-usd
 model: claude-opus-5-5
@@ -773,8 +773,8 @@ at flat index 72 of a `[1, 5, 5, 3]` input, the one real element of the bottom-r
 non-finite output may be pinned is a per-kernel question.
 
 - `strict` asserts the reference value on every lane. It is only legitimate where ns-cmsis-nn
-  documents the behaviour -- the elementwise family, the standalone hard swish, the
-  RELU/RELU6/LEAKY_RELU activations, `arm_reduce_sum_*` and `arm_nn_mean_*`, and
+  documents the behaviour -- the elementwise family, the standalone hard swish,
+  `arm_nn_gelu_f32`, the RELU/RELU6/LEAKY_RELU activations, `arm_reduce_sum_*` and `arm_nn_mean_*`, and
   `arm_gru_unidirectional_f32`/`_f16`, whose public declarations carry a NaN contract for a
   token in the input, the previous state or the candidate gate's weight or bias, and state that
   Inf follows the arithmetic (a token confined to the update or reset gate's weight or bias is
@@ -837,8 +837,8 @@ element is classified before that tolerance is computed. A NaN or infinite opera
 run through the tolerance, because `rtol * |Inf|` is `Inf` and `0 * |Inf|` is `NaN`, and
 `diff > tol` is false against either. Matched non-finite operands pass: NaN against NaN, or
 two infinities of the same sign. For the families whose ns-cmsis-nn header notes state it
-(elementwise add/sub/mul, `arm_nn_activation` RELU/RELU6/LEAKY_RELU, hard_swish, and
-mean/reduce_sum), `Include/arm_nnfunctions_flt.h` guarantees the NaN-ness of an element and not
+(elementwise add/sub/mul, `arm_nn_activation` RELU/RELU6/LEAKY_RELU, hard_swish,
+`arm_nn_gelu_f32`, and mean/reduce_sum), `Include/arm_nnfunctions_flt.h` guarantees the NaN-ness of an element and not
 its payload, so a matched NaN passes regardless of sign or payload (see AmbiqAI/ns-cmsis-nn#333).
 Minimum and maximum are documented as unspecified for non-finite inputs, so a matched NaN there
 is a property of the implementation rather than a guarantee. Every other pairing fails, including

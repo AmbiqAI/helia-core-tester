@@ -570,13 +570,16 @@ MUTANTS_V1: Tuple[Mutant, ...] = (
     ),
     Mutant(
         mutant_id="requantize_tail_drop",
-        description="arm_requantize_s8_s8 drops the trailing size % 4 elements",
+        description=(
+            "The shared 8-bit requantize loop drops the trailing size % 4 elements "
+            "(reached here through arm_requantize_s8_s8)"
+        ),
         family="QuantizationFunctions",
         edits=(
             Edit(
                 relpath="Source/QuantizationFunctions/arm_quantize_s8_s8.c",
-                pattern="int32_t count = (size + 3) / 4;",
-                replacement="int32_t count = size / 4; /* MUTANT requantize_tail_drop */",
+                pattern="const int32_t count = size / 4 + (size % 4 > 0);",
+                replacement="const int32_t count = size / 4; /* MUTANT requantize_tail_drop */",
                 count=1,
             ),
             Edit(

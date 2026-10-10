@@ -1,0 +1,20 @@
+#ifndef {{ name|upper }}_GELU_H
+#define {{ name|upper }}_GELU_H
+
+#include <stdint.h>
+// Golden arrays may carry NAN/INFINITY, and this header is included ahead of any
+// other translation-unit include that would define them.
+#include <math.h>
+#include "arm_nnfunctions.h"
+
+// Input data (for testing)
+static const {{ input_dtype }} {{ name }}_input[] = {
+{{ input_data_array }}
+};
+
+// Expected output (golden)
+static const {{ output_dtype }} {{ name }}_expected_output[] = {
+{{ expected_output_array }}
+};
+
+#endif
