@@ -12,9 +12,27 @@ static const {{ input_dtype }} {{ name }}_input[] = {
 {{ input_data_array }}
 };
 
+{% if not interval_lo_array %}
 // Expected output (golden)
 static const {{ output_dtype }} {{ name }}_expected_output[] = {
 {{ expected_output_array }}
 };
+{% else %}
+
+// Lowest and highest output bit patterns the contract allows, per element
+static const {{ interval_bits_type }} {{ name }}_interval_lo[] = {
+{{ interval_lo_array }}
+};
+static const {{ interval_bits_type }} {{ name }}_interval_hi[] = {
+{{ interval_hi_array }}
+};
+{% endif %}
+{% if interval_zero_ok_array %}
+
+// 1 or 2: a +0 or -0 result is also allowed (subnormal result under FZ16)
+static const uint8_t {{ name }}_interval_zero_ok[] = {
+{{ interval_zero_ok_array }}
+};
+{% endif %}
 
 #endif

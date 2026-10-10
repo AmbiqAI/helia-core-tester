@@ -82,3 +82,16 @@ def test_bridge_raises_unsupported_for_known_limitation_case(tmp_path, monkeypat
             output_root=tmp_path,
             require_fvp_pass=False,
         )
+
+
+@pytest.mark.parametrize("case_name", ["transpose_swap_wide_s8", "transpose_swap_wide_s16"])
+def test_wide_transpose_cases_are_fvp_only_because_no_board_fits_them(case_name, tmp_path, monkeypatch):
+    cases = discover_or_skip(_PROJECT_ROOT, family="TransposeFunctions", name_filter=case_name)
+    with pytest.raises(gtb.UnsupportedGeneratedTestError, match="runtime arena"):
+        gtb.build_case_bundle_from_generated_test(_PROJECT_ROOT, cases[0], output_root=tmp_path, require_fvp_pass=False)
+    # Without the entry the bundle exceeds every board, which is why the entry exists.
+    monkeypatch.delitem(known_limitations._KNOWN_LIMITATIONS, case_name)
+    bundle = gtb.build_case_bundle_from_generated_test(
+        _PROJECT_ROOT, cases[0], output_root=tmp_path / "bridged", require_fvp_pass=False
+    )
+    assert bundle.workspace_bytes_required > max(board.workspace_bytes for board in load_board_table())

@@ -183,3 +183,69 @@ input_shape:
 - 2
 - 4
 - 3
+---
+# ns-cmsis-nn #759 routes: an identity permutation is a copy (rank 4 on MVE
+# builds returned W and C swapped before v7.43.0), a swap of the last two axes
+# takes the MVE gather path up to 9362 columns, and wider swaps take the
+# general loop. The wide cases need several rows: with one row the transpose
+# leaves every byte in place, so a wrapped lane offset (the v7.42.0 behaviour
+# past 16 bits) could not show.
+operator: Transpose
+name: transpose_identity_rank4_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+expected_status: ARM_CMSIS_NN_SUCCESS
+hint:
+  call_style: per_tensor
+  force_cmsis: true
+  force_permutation: [0, 1, 2, 3]
+input_shape: [1, 2, 3, 4]
+---
+operator: Transpose
+name: transpose_identity_rank4_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+expected_status: ARM_CMSIS_NN_SUCCESS
+hint:
+  call_style: per_tensor
+  force_cmsis: true
+  force_permutation: [0, 1, 2, 3]
+input_shape: [1, 2, 3, 4]
+---
+operator: Transpose
+name: transpose_swap_last2_rank3_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+expected_status: ARM_CMSIS_NN_SUCCESS
+hint:
+  call_style: per_tensor
+  force_cmsis: true
+  force_permutation: [0, 2, 1]
+input_shape: [2, 4, 3]
+---
+operator: Transpose
+name: transpose_swap_wide_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+expected_status: ARM_CMSIS_NN_SUCCESS
+hint:
+  call_style: per_tensor
+  force_cmsis: true
+  force_permutation: [1, 0]
+input_shape: [8, 9363]
+---
+operator: Transpose
+name: transpose_swap_wide_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+expected_status: ARM_CMSIS_NN_SUCCESS
+hint:
+  call_style: per_tensor
+  force_cmsis: true
+  force_permutation: [1, 0]
+input_shape: [8, 9363]
