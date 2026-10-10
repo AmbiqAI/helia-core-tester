@@ -25,7 +25,10 @@ def _within(actual, expected, desc):
 
 def test_every_case_asserts_the_same_bound():
     # 2^-24 floor and 2^-21 relative from ns-cmsis-nn #743, plus 2^-24 (float32 unit roundoff) for the golden.
-    assert {_bound(desc) for desc in CASES} == {(2.0**-24, 2.0**-21 + 2.0**-24)}
+    golden = [desc for desc in CASES if "contract_interval" not in desc]
+    assert {_bound(desc) for desc in golden} == {(2.0**-24, 2.0**-21 + 2.0**-24)}
+    intervals = [desc["contract_interval"] for desc in CASES if "contract_interval" in desc]
+    assert intervals == [{"rtol": 2.0**-21, "atol": 2.0**-24}]
 
 
 def test_reference_nonfinite_lanes():

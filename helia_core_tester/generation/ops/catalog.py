@@ -100,7 +100,14 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
     "LeakyRelu": _spec("LeakyRelu", "ActivationFunctions", "leaky_relu", "OpLeakyRelu", "ActivationFunctions/leaky_relu.yaml", "ActivationFunctions/leaky_relu"),
     "Tanh": _spec("Tanh", "ActivationFunctions", "tanh", "OpTanh", "ActivationFunctions/tanh.yaml", "ActivationFunctions/tanh"),
     "Logistic": _spec("Logistic", "ActivationFunctions", "logistic", "OpLogistic", "ActivationFunctions/logistic.yaml", "ActivationFunctions/logistic"),
-    "Gelu": _spec("Gelu", "ActivationFunctions", "gelu", "OpGelu", "ActivationFunctions/gelu_float.yaml", "ActivationFunctions/gelu"),
+    "Gelu": _spec(
+        "Gelu",
+        "ActivationFunctions",
+        "gelu",
+        "OpGelu",
+        descriptor_relpaths=("ActivationFunctions/gelu_float.yaml", "ActivationFunctions/gelu_float16.yaml"),
+        template_relpath="ActivationFunctions/gelu",
+    ),
     "HardSwishPrecise": _spec(
         "HardSwishPrecise",
         "ActivationFunctions",

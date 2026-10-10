@@ -60,6 +60,24 @@ void helia_test_nonfinite_mismatch(
     double actual
 );
 void helia_test_nonfinite_mismatch_summary(int count);
+/*
+ * Contract-interval comparison for binary16 (width 2) or binary32 (width 4)
+ * outputs. lo and hi hold, per element, the lowest and highest bit patterns
+ * the contract allows; both are NaN for a NaN result and the same infinity
+ * for an infinite one. Finite intervals are compared in sign-magnitude order
+ * on the raw bits, so -0 sits below +0 and no floating-point instruction is
+ * involved. zero_ok may be NULL; otherwise an entry of 1 also accepts +0 and
+ * an entry of 2 also accepts -0. Returns the number of failing elements.
+ */
+int helia_test_float_interval(
+    const void *actual,
+    const void *lo,
+    const void *hi,
+    const uint8_t *zero_ok,
+    int count,
+    int width,
+    int max_reports
+);
 
 /*
  * Non-finite classification (issue #75).

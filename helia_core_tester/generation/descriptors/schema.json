@@ -121,6 +121,25 @@
         }
       }
     },
+    "contract_interval": {
+      "description": "Check each element against the exact set of outputs within rtol * |ref| + atol of the float64 reference, as lowest and highest allowed bit patterns, instead of a tolerance around a rounded golden. Gelu only.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rtol", "atol"],
+      "properties": {
+        "rtol": {"type": "number", "minimum": 0},
+        "atol": {"type": "number", "minimum": 0}
+      }
+    },
+    "input_bits": {
+      "description": "Inputs are every bit pattern in these half-open [start, stop) ranges, in order, instead of uniform draws; input_shape must hold exactly that many elements. Gelu only.",
+      "type": "array",
+      "items": {"type": "array", "items": {"type": "integer", "minimum": 0}, "minItems": 2, "maxItems": 2}
+    },
+    "fpscr_fz16": {
+      "description": "Set FPSCR.FZ16 around the kernel call on targets with half-precision arithmetic; with contract_interval, a result whose reference is FP16-subnormal may also be a zero of the reference's sign. Gelu only.",
+      "type": "boolean"
+    },
     "comparison": {
       "type": "object",
       "additionalProperties": false,

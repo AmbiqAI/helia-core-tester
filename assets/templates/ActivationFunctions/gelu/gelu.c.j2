@@ -11,12 +11,25 @@ int32_t {{ name }}_run(
     const {{ input_dtype }}* __restrict input,
     {{ output_dtype }}* __restrict output
 ) {
+{% if fpscr_fz16 %}
+#if defined(__arm__) && defined(__ARM_FEATURE_FP16_SCALAR_ARITHMETIC)
+    // FPSCR.FZ16 (bit 19) set for the call, then restored.
+    uint32_t fpscr;
+    __asm__ volatile("vmrs %0, fpscr" : "=r"(fpscr));
+    __asm__ volatile("vmsr fpscr, %0" : : "r"(fpscr | (1u << 19)));
+#endif
+{% endif %}
     // Exact GELU: 0.5 * x * erfc(-x / sqrt(2))
     arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(
         input,
         output,
         {{ output_size }}        // size
     );
+{% if fpscr_fz16 %}
+#if defined(__arm__) && defined(__ARM_FEATURE_FP16_SCALAR_ARITHMETIC)
+    __asm__ volatile("vmsr fpscr, %0" : : "r"(fpscr));
+#endif
+{% endif %}
 
     return kernel_status;
 }
@@ -29,7 +42,19 @@ int32_t {{ name }}_test_case_run(void)
     HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("Gelu") }} output", failures);
     HELIA_VALIDATE_STATUS("{{ validation_label | default("Gelu") }}", status);
 
+{% if interval_lo_array %}
+    failures += helia_test_float_interval(
+        {{ name }}_output,
+        {{ name }}_interval_lo,
+        {{ name }}_interval_hi,
+        {{ (name ~ "_interval_zero_ok") if interval_zero_ok_array else "NULL" }},
+        {{ name|upper }}_OUTPUT_SIZE,
+        {{ interval_width }},
+        {{ validation_report_limit | default(20) }}
+    );
+{% else %}
 {{ validation_outputs(validation_mode_token | default("FLOAT"), validation_tolerance | default(1)) }}
+{% endif %}
     HELIA_VALIDATE_RETURN_FAILURES(failures);
 }
 

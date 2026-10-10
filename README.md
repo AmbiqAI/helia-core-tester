@@ -774,7 +774,7 @@ non-finite output may be pinned is a per-kernel question.
 
 - `strict` asserts the reference value on every lane. It is only legitimate where ns-cmsis-nn
   documents the behaviour -- the elementwise family, the standalone hard swish,
-  `arm_nn_gelu_f32`, the RELU/RELU6/LEAKY_RELU activations, `arm_reduce_sum_*` and `arm_nn_mean_*`, and
+  `arm_nn_gelu_f32`/`_f16`, the RELU/RELU6/LEAKY_RELU activations, `arm_reduce_sum_*` and `arm_nn_mean_*`, and
   `arm_gru_unidirectional_f32`/`_f16`, whose public declarations carry a NaN contract for a
   token in the input, the previous state or the candidate gate's weight or bias, and state that
   Inf follows the arithmetic (a token confined to the update or reset gate's weight or bias is
@@ -838,7 +838,7 @@ run through the tolerance, because `rtol * |Inf|` is `Inf` and `0 * |Inf|` is `N
 `diff > tol` is false against either. Matched non-finite operands pass: NaN against NaN, or
 two infinities of the same sign. For the families whose ns-cmsis-nn header notes state it
 (elementwise add/sub/mul, `arm_nn_activation` RELU/RELU6/LEAKY_RELU, hard_swish,
-`arm_nn_gelu_f32`, and mean/reduce_sum), `Include/arm_nnfunctions_flt.h` guarantees the NaN-ness of an element and not
+`arm_nn_gelu_f32`/`_f16`, and mean/reduce_sum), `Include/arm_nnfunctions_flt.h` guarantees the NaN-ness of an element and not
 its payload, so a matched NaN passes regardless of sign or payload (see AmbiqAI/ns-cmsis-nn#333).
 Minimum and maximum are documented as unspecified for non-finite inputs, so a matched NaN there
 is a property of the implementation rather than a guarantee. Every other pairing fails, including
@@ -878,6 +878,20 @@ classify-after-widening validator actually loses lanes, so it is what holds the 
 smaller probes stay correct on the same compiler either way. The Arm targets are compiled and
 their classification call sites counted, not executed, with the toolchains and results recorded
 in the pull request.
+
+### Contract intervals
+
+Where ns-cmsis-nn states a numerical contract of the form `|out - ref| <= rtol * |ref| + atol`, a
+descriptor can assert it directly with `contract_interval: {rtol, atol}` (Gelu only today). The
+generator turns the float64 reference into the lowest and highest output bit patterns the contract
+allows for each element, deciding candidates near the edge in exact rational arithmetic and
+refusing any that stay within the reference's own error, and `helia_test_float_interval` compares
+the output's bits against them in sign-magnitude order. There is no golden rounding term to derive,
+an input zero must keep its sign, and NaN and infinite results are classified by their bits. Two
+companion keys serve these cases: `input_bits` lists `[start, stop)` bit-pattern ranges to use as
+inputs instead of uniform draws (the float16 GELU cases sweep every finite input this way), and
+`fpscr_fz16` sets FPSCR.FZ16 around the kernel call on targets with half-precision arithmetic,
+where a result whose reference is float16-subnormal may also be a zero of the reference's sign.
 
 ## Operand sign span
 

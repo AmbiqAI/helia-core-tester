@@ -7,12 +7,13 @@
 # Tolerance is the ns-cmsis-nn #743 bound, |out - ref| <= 2^-21 * |ref| + 2^-24,
 # with ref the exact value at the float32 input. The golden is ref rounded to
 # float32, which moves it by at most 2^-24 * |ref| (the float32 unit
-# roundoff), so the cases compare against it with rtol 2^-21 + 2^-24 and atol
-# 2^-24. The bound comes from float32 resolution and the conditioning of erfc,
-# not from this kernel's error. In the negative tail erfc is ill-conditioned:
-# there the kernel's relative error reaches tens of ULP and the 2^-24 floor
-# governs, so the contract does not promise tail relative accuracy and these
-# cases do not assert it.
+# roundoff), so the golden-based cases compare against it with rtol
+# 2^-21 + 2^-24 and atol 2^-24; the signed-zero case checks its contract
+# interval instead. The bound comes from float32 resolution and the
+# conditioning of erfc, not from this kernel's error. In the negative tail
+# erfc is ill-conditioned: there the kernel's relative error reaches tens of
+# ULP and the 2^-24 floor governs, so the contract does not promise tail
+# relative accuracy and these cases do not assert it.
 #
 # required_kernel_symbols gates each case on the target ns-cmsis-nn checkout
 # declaring the kernel, so checkouts before v7.42.0 skip them.
@@ -90,4 +91,18 @@ tensor_dtypes:
 input_shape: [1, 4, 4, 8]
 input_mode: nonfinite_sweep
 nonfinite_policy: strict
+required_kernel_symbols: [arm_nn_gelu_f32]
+---
+# Signed zero: the header keeps the sign of zero, which an ordinary float
+# comparison cannot see (-0 == +0). contract_interval pins an input zero to the
+# zero of its own sign and compares bit patterns.
+operator: Gelu
+name: gelu_float_signed_zero_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 1, 1, 2]
+input_bits: [[0x00000000, 0x00000001], [0x80000000, 0x80000001]]
+contract_interval: {rtol: 4.76837158203125e-07, atol: 5.960464477539063e-08}
 required_kernel_symbols: [arm_nn_gelu_f32]
