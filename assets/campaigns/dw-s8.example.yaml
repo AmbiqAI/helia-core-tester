@@ -11,7 +11,7 @@ target:
   case_ids: []
 kernels:
   repo: ~/ns-cmsis-nn
-  ref: v7.42.0
+  ref: v7.43.0
 # Charged board evals for the agent.
 evals: 12
 # Last evals for cutting code size; 0 for none.

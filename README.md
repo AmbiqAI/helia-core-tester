@@ -128,7 +128,7 @@ The firmware builds as a neuralspotx (NSX) app rendered into
 
 - Nested layout (the tester at `ns-cmsis-nn/Tests/helia-core-tester`): the
   enclosing ns-cmsis-nn checkout, working-tree edits included.
-- Standalone clone: the pinned ns-cmsis-nn release (`v7.42.0`).
+- Standalone clone: the pinned ns-cmsis-nn release (`v7.43.0`).
 - `--cmsis-nn-ref REF` builds another tag or commit; `--cmsis-nn-root PATH`
   builds another local checkout.
 
@@ -467,7 +467,7 @@ target:
   case_ids: []                 # optional `--case-id` filters
 kernels:
   repo: ~/ns-cmsis-nn          # any checkout that has the ref
-  ref: v7.42.0                 # tag, branch or SHA
+  ref: v7.43.0                 # tag, branch or SHA
 evals: 12                      # charged board evals
 cost_usd: 25                   # claude --max-budget-usd
 model: claude-opus-5-5
