@@ -1,0 +1,93 @@
+# Exact float32 GELU cases for arm_nn_gelu_f32 (ns-cmsis-nn #743, v7.42.0):
+# status fn(input, output, size) computing 0.5f * x * erfcf(x * -1/sqrt(2)),
+# the exact-mode GELU of TFLite, not the tanh approximation. Goldens use the
+# same expression in float64 (math.erfc), rounded once to float32; neither
+# TFLite nor the kernel's erfcf produces them.
+#
+# Tolerance is the ns-cmsis-nn #743 bound, |out - ref| <= 2^-21 * |ref| + 2^-24,
+# with ref the exact value at the float32 input. The golden is ref rounded to
+# float32, which moves it by at most 2^-24 * |ref| (the float32 unit
+# roundoff), so the cases compare against it with rtol 2^-21 + 2^-24 and atol
+# 2^-24. The bound comes from float32 resolution and the conditioning of erfc,
+# not from this kernel's error. In the negative tail erfc is ill-conditioned:
+# there the kernel's relative error reaches tens of ULP and the 2^-24 floor
+# governs, so the contract does not promise tail relative accuracy and these
+# cases do not assert it.
+#
+# required_kernel_symbols gates each case on the target ns-cmsis-nn checkout
+# declaring the kernel, so checkouts before v7.42.0 skip them.
+operator: Gelu
+name: gelu_float_default_f32
+comparison: {atol: 5.960464477539063e-08, rtol: 5.364418029785156e-07}
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 4, 4, 8]
+required_kernel_symbols: [arm_nn_gelu_f32]
+---
+# [-4, 4] sampled densely: the tanh approximation is furthest from the exact
+# form here (4.7e-4 at x = 2.7, 350 times the #743 bound; 7400 at x = -2.75).
+operator: Gelu
+name: gelu_float_curve_f32
+comparison: {atol: 5.960464477539063e-08, rtol: 5.364418029785156e-07}
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 4, 8, 8]
+input_min: -4.0
+input_max: 4.0
+required_kernel_symbols: [arm_nn_gelu_f32]
+---
+# Short odd count (7). The v7.42.0 kernel is a scalar loop, so this is a size
+# case, not the negative tail; it would reach the remainder of a vector loop.
+operator: Gelu
+name: gelu_float_tail_f32
+comparison: {atol: 5.960464477539063e-08, rtol: 5.364418029785156e-07}
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 1, 1, 7]
+required_kernel_symbols: [arm_nn_gelu_f32]
+---
+# Negative tail, where the kernel uses erfc instead of 0.5 * x * (1 + erf(x /
+# sqrt(2))). In float32 that form cancels: its absolute error near x = -5 is
+# about the 2^-24 floor, and below about -6 both forms sit under the floor, so
+# this case samples [-6, -3] where the bound can tell them apart. On Corstone-300
+# (Cortex-M55, GCC, -Ofast) the v7.42.0 kernel uses 4% of the bound here, while
+# the 1 + erf form exceeds it on at least 20 of the 256 lanes, by up to 1.38x.
+# Outputs here are normal float32 values (|y| >= 5.9e-9), so the result does
+# not depend on flush-to-zero.
+operator: Gelu
+name: gelu_float_negtail_f32
+comparison: {atol: 5.960464477539063e-08, rtol: 5.364418029785156e-07}
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 4, 8, 8]
+input_min: -6.0
+input_max: -3.0
+required_kernel_symbols: [arm_nn_gelu_f32]
+---
+# Non-finite inputs. Include/arm_nnfunctions_flt.h (v7.42.0) documents that the
+# expression propagates NaN, maps +Inf to +Inf and maps -Inf to NaN, with NaN
+# payloads unspecified. -Inf -> NaN is not GELU's limit (0) but follows from
+# (-Inf) * erfc(+Inf) = (-Inf) * 0. TFLite's GELU (approximate=False, LiteRT
+# 2.1.6 builtin and reference kernels) and TF 2.20 tf.nn.gelu give the same
+# three results, so all three tokens are asserted. The XNNPACK delegate is not
+# a reference for this op: it also returns -0 for x = -9, where the exact value
+# is -1.0e-18.
+operator: Gelu
+name: gelu_float_nonfinite_f32
+comparison: {atol: 5.960464477539063e-08, rtol: 5.364418029785156e-07}
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 4, 4, 8]
+input_mode: nonfinite_sweep
+nonfinite_policy: strict
+required_kernel_symbols: [arm_nn_gelu_f32]
