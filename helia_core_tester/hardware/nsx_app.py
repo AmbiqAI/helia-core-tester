@@ -40,7 +40,7 @@ SIZE_PROBE_TARGET = "hct_universal_size_probe"
 CMSIS_NN_MODULE = "nsx-cmsis-nn"
 CMSIS_NN_PROJECT = "ns-cmsis-nn"
 CMSIS_NN_METADATA = "modules/ns-cmsis-nn/nsx/nsx-module.yaml"
-CMSIS_NN_REF = "v7.40.0"
+CMSIS_NN_REF = "v7.42.0"
 # The pin while records lacked the flag.
 _PRE_FLAG_PIN = "v7.35.1"
 
