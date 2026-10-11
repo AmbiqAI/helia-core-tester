@@ -11,7 +11,7 @@ static cmsis_nn_context transpose_conv_float_default_f16_ctx;
 // Runtime scratch buffer (max upper bound; actual size queried at runtime)
 // Buffer size calculated conservatively to handle MVE and DSP implementations
 #define TRANSPOSE_CONV_FLOAT_DEFAULT_F16_BUFFER_SIZE_MAX 1024
-static struct {
+static struct __attribute__((aligned(16))) {
     uint8_t head[HELIA_GUARD_BYTES];
     uint8_t body[TRANSPOSE_CONV_FLOAT_DEFAULT_F16_BUFFER_SIZE_MAX];
     uint8_t tail[HELIA_GUARD_BYTES];
@@ -21,7 +21,7 @@ static struct {
 // Reverse convolution context buffer (output_ctx parameter in arm_transpose_conv_wrapper_s8)
 // Size: output width * output height * output channel * 4
 #define TRANSPOSE_CONV_FLOAT_DEFAULT_F16_REVERSE_CONV_CTX_SIZE 1024
-static struct {
+static struct __attribute__((aligned(16))) {
     uint8_t head[HELIA_GUARD_BYTES];
     uint8_t body[TRANSPOSE_CONV_FLOAT_DEFAULT_F16_REVERSE_CONV_CTX_SIZE];
     uint8_t tail[HELIA_GUARD_BYTES];
@@ -31,7 +31,7 @@ static cmsis_nn_context transpose_conv_float_default_f16_reverse_conv_ctx;
 
 
 #define TRANSPOSE_CONV_FLOAT_DEFAULT_F16_OUTPUT_SIZE (1 * 8 * 8 * 3)
-static struct {
+static struct __attribute__((aligned(16))) {
     uint8_t head[HELIA_GUARD_BYTES];
     float16_t body[TRANSPOSE_CONV_FLOAT_DEFAULT_F16_OUTPUT_SIZE];
     uint8_t tail[HELIA_GUARD_BYTES];

@@ -142,3 +142,41 @@ def test_rendered_declaration_hides_the_guard_behind_the_buffer_name() -> None:
     assert "uint8_t tail[HELIA_GUARD_BYTES];" in decls
     assert "} sanity_output_guard;" in decls
     assert "#define sanity_output (sanity_output_guard.body)" in decls
+
+
+ALIGNMENT_TEMPLATE = """\
+#include <stdint.h>
+#include "test_runtime/helia_test_runtime.h"
+{% from "common/standalone/runtime_common.j2" import helia_guard_declare %}
+static uint8_t pad_before;
+{{ helia_guard_declare("uint8_t", "byte_scratch", 3) }}
+static uint8_t pad_between;
+{{ helia_guard_declare("int8_t", "byte_output", 5) }}
+_Static_assert(_Alignof(__typeof__(byte_scratch_guard)) >= 16, "guarded uint8_t body under-aligned");
+_Static_assert(_Alignof(__typeof__(byte_output_guard)) >= 16, "guarded int8_t body under-aligned");
+int main(void) {
+    pad_before = pad_between = 1;
+    return (int)(((uintptr_t)byte_scratch | (uintptr_t)byte_output) % 16u);
+}
+"""
+
+
+def test_guarded_byte_buffers_are_16_byte_aligned(tmp_path: Path) -> None:
+    """Kernels use guarded uint8_t scratch and weight-sum bodies as int32_t or vector storage (#452)."""
+    cc = shutil.which("cc")
+    if cc is None:
+        pytest.skip("host C compiler not available")
+    env = jinja2.Environment(
+        loader=jinja2.FileSystemLoader(str(TEMPLATES_ROOT)),
+        trim_blocks=True,
+        lstrip_blocks=True,
+    )
+    source = tmp_path / "guard_alignment.c"
+    source.write_text(env.from_string(ALIGNMENT_TEMPLATE).render())
+    binary = tmp_path / "guard_alignment"
+    subprocess.run(
+        [cc, "-std=gnu11", "-O2", "-I", str(C_HOST_DIR), "-I", str(PROJECT_ROOT / "src"), str(source), "-o", str(binary)],
+        check=True,
+        cwd=PROJECT_ROOT,
+    )
+    assert subprocess.run([str(binary)]).returncode == 0

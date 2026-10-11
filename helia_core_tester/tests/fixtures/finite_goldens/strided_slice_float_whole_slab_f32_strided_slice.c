@@ -6,7 +6,7 @@
 
 
 #define STRIDED_SLICE_FLOAT_WHOLE_SLAB_F32_OUTPUT_SIZE (1 * 3 * 4 * 2)
-static struct {
+static struct __attribute__((aligned(16))) {
     uint8_t head[HELIA_GUARD_BYTES];
     float body[STRIDED_SLICE_FLOAT_WHOLE_SLAB_F32_OUTPUT_SIZE];
     uint8_t tail[HELIA_GUARD_BYTES];

@@ -15,7 +15,7 @@ static cmsis_nn_context max_pool_float_default_f32_ctx;
 static uint8_t* max_pool_float_default_f32_buffer = NULL;
 
 #define MAX_POOL_FLOAT_DEFAULT_F32_OUTPUT_SIZE (1 * 3 * 3 * 3)
-static struct {
+static struct __attribute__((aligned(16))) {
     uint8_t head[HELIA_GUARD_BYTES];
     float body[MAX_POOL_FLOAT_DEFAULT_F32_OUTPUT_SIZE];
     uint8_t tail[HELIA_GUARD_BYTES];
