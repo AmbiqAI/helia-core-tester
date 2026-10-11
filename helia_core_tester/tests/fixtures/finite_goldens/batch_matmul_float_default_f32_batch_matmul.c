@@ -11,7 +11,7 @@ static cmsis_nn_context batch_matmul_float_default_f32_ctx;
 // Runtime scratch buffer (max upper bound; actual size queried at runtime)
 // Buffer size calculated conservatively to handle MVE and DSP implementations
 #define BATCH_MATMUL_FLOAT_DEFAULT_F32_BUFFER_SIZE_MAX 1024
-static struct {
+static struct __attribute__((aligned(16))) {
     uint8_t head[HELIA_GUARD_BYTES];
     uint8_t body[BATCH_MATMUL_FLOAT_DEFAULT_F32_BUFFER_SIZE_MAX];
     uint8_t tail[HELIA_GUARD_BYTES];
@@ -19,7 +19,7 @@ static struct {
 #define batch_matmul_float_default_f32_buffer (batch_matmul_float_default_f32_buffer_guard.body)
 
 #define BATCH_MATMUL_FLOAT_DEFAULT_F32_OUTPUT_SIZE (1 * 1 * 4 * 2)
-static struct {
+static struct __attribute__((aligned(16))) {
     uint8_t head[HELIA_GUARD_BYTES];
     float body[BATCH_MATMUL_FLOAT_DEFAULT_F32_OUTPUT_SIZE];
     uint8_t tail[HELIA_GUARD_BYTES];
