@@ -90,7 +90,7 @@ int32_t batch_matmul_float_default_f16_test_case_run(void)
         batch_matmul_float_default_f16_expected_output,
         BATCH_MATMUL_FLOAT_DEFAULT_F16_OUTPUT_SIZE,
         1,
-        0.001f,
+        1e-05f,
         0.001f,
         20,
         failures

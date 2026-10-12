@@ -30,8 +30,9 @@ def _record(name: str, out_dir: Path) -> dict:
 )
 def test_fp16_golden_takes_float16_weights_and_bias(name: str, tmp_path: Path) -> None:
     record = _record(name, tmp_path)
-    assert record["entry"].endswith("_f16")
-    assert all(record["inputs"][role]["dtype"] == "float16" for role in ("input", "filter", "bias"))
+    assert record["entry"].endswith("_f16") or record["entry"].endswith("_f16_mve")
+    roles = ("lhs", "rhs", "bias") if record["entry"] == "matmul_nt_t_f16_mve" else ("input", "filter", "bias")
+    assert all(record["inputs"][role]["dtype"] == "float16" for role in roles)
 
 
 @pytest.mark.parametrize(

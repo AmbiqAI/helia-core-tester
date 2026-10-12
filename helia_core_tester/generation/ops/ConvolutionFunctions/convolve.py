@@ -458,6 +458,7 @@ class OpConvolve(OperationBase):
         else:
             context['quant_params'] = quant_params_dict
         context.update(nonfinite_context)
+        context.update(case.get("kernel_faithful") or {})
 
         pool = convolve_argument_pool(context, has_biases=has_biases, bias_is_struct=bias_is_struct)
         fault = self.fault_kind()

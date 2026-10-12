@@ -542,6 +542,40 @@ structs:
       - [activation_min, float32]
       - [activation_max, float32]
 
+  HctMatMulF16MveParams:
+    doc: >-
+      ns-cmsis-nn float16 matmul arithmetic on Helium (named variant). route 0: arm_nn_mat_mult_nt_t_f16, where
+      acc16 selects the _acc16 entry (float16 lanes throughout) and otherwise rows longer than ARM_NN_F16_ACC_BLOCK
+      fold float16 lane partials into float32. route 1: arm_batch_matmul_f16's adjoint-path dot product (float16
+      lanes, float16 reduce, no bias). routes 2 and 3: its scalar loop, fused or not.
+    fields:
+      - [route, int32]
+      - [acc16, int32]
+      - [activation_min, float32]
+      - [activation_max, float32]
+
+  HctLstmF32CmsisParams:
+    doc: >-
+      ns-cmsis-nn arm_lstm_unidirectional_f32 arithmetic (named variant). target 0 Helium, 1 scalar with an FPU
+      (fused as GCC -Ofast contracts), 2 soft float (nothing fused).
+    fields:
+      - [time_major, int32]
+      - [cell_clip, float32]
+      - [target, int32]
+
+  HctConv1xNF16MveParams:
+    doc: >-
+      ns-cmsis-nn float16 1xN convolution on Helium (named variant): arm_convolve_1_x_n_f16 and its entries. acc16
+      selects the _acc16 entries (float16 lanes throughout, never folding); packed selects NT_N_PACKED filters, which
+      run every row through arm_nn_mat_mult_nt_n_packed_f16. The filter operand is always the unpacked OHWI tensor.
+    fields:
+      - [stride_w, int32]
+      - [pad_w, int32]
+      - [acc16, int32]
+      - [packed, int32]
+      - [activation_min, float32]
+      - [activation_max, float32]
+
 prepare:
   quantize_multiplier:
     in: HctQuantizeMultiplierIn
@@ -1210,3 +1244,16 @@ kernels:
     params: HctSvdfFloatParams
     inputs: {input: float16, weights_feature: float16, weights_time: float16, bias: float16, state: float16}
     outputs: {output: float16, state_out: float16}
+  # Kernel-faithful float variants: the arithmetic of a specific ns-cmsis-nn route, bit for bit.
+  matmul_nt_t_f16_mve:
+    params: HctMatMulF16MveParams
+    inputs: {lhs: float16, rhs: float16, bias: float16}
+    outputs: {output: float16}
+  lstm_f32_cmsis:
+    params: HctLstmF32CmsisParams
+    inputs: {input: float32, input_weights: float32, recurrent_weights: float32, bias: float32}
+    outputs: {output: float32}
+  conv_1xn_f16_mve:
+    params: HctConv1xNF16MveParams
+    inputs: {input: float16, filter: float16, bias: float16}
+    outputs: {output: float16}

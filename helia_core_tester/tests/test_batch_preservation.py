@@ -73,9 +73,14 @@ def test_declared_batches_reach_emitted_data(tmp_path, family, desc):
         else [desc["input_1_shape"], desc["input_2_shape"]]
     )
     batch = shapes[0][0]
-    names = ["input"] if len(shapes) == 1 else ["lhs", "rhs"]
-    assert all(record["inputs"][name]["shape"][0] == batch for name in names)
-    output_shape = record["outputs"]["output"]
+    if record["entry"] == "matmul_nt_t_f16_mve" and len(shapes) == 1:
+        # The kernel-faithful FullyConnected records the matmul it runs: lhs [1, batch, K].
+        assert record["inputs"]["lhs"]["shape"][1] == batch
+        output_shape = record["outputs"]["output"][1:]
+    else:
+        names = ["input"] if len(shapes) == 1 else ["lhs", "rhs"]
+        assert all(record["inputs"][name]["shape"][0] == batch for name in names)
+        output_shape = record["outputs"]["output"]
     assert output_shape[0] == batch
 
     header = "\n".join(p.read_text() for p in (case / "includes").glob("*.h"))

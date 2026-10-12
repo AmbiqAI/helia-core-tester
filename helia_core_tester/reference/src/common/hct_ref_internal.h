@@ -273,6 +273,11 @@ static inline int32_t hct_store_xsum(HctTensor *t, int64_t i, const HctXsum *x, 
  * and right shift (multiplier 3 << k, shift 0 in the power-of-two case). */
 int32_t hct_tanh_logistic_s16_value(int32_t value, int32_t multiplier, int32_t shift, int is_tanh);
 
+/* ns-cmsis-nn's float32 activation tables (binary32 bits): 2^(i/256), i = 0..256, and
+ * tanh(6 i / 384), i = 0..384. */
+extern const uint32_t hct_cmsis_exp2_lut_f32_bits[257];
+extern const uint32_t hct_cmsis_tanh_lut_f32_bits[385];
+
 /* Checks a two-input, one-output broadcasting entry and sets up its iteration. */
 int32_t hct_binary_setup(const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs,
                          int32_t in_dtype, int32_t out_dtype, HctBroadcast2 *bc);

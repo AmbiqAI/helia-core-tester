@@ -4,6 +4,7 @@ from pathlib import Path
 
 import numpy as np
 
+from helia_core_tester.generation.ops._shared import kernel_faithful as kf
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.ops._shared.recurrent_pool import recurrent_argument_pool
 from helia_core_tester.generation.reference.call import ReferenceCall
@@ -101,9 +102,19 @@ class OpLSTMUnidirectional(OperationBase):
                          else np.zeros((0,), dtype=float_dtype)),
             }
             shape_io = (time_steps, batch_size) if time_major else (batch_size, time_steps)
-            call = ReferenceCall(entry, {"time_major": int(time_major), "cell_clip": cell_clip},
-                                 {"input": np.ascontiguousarray(input_tensor.reshape(*shape_io, input_size)), **stacked},
-                                 {"output": (*shape_io, hidden_size)})
+            operands = {"input": np.ascontiguousarray(input_tensor.reshape(*shape_io, input_size)), **stacked}
+            faithful = activation_dtype == "FP32"
+            if faithful:
+                # The kernel's own activation tables and operation order on this target.
+                call = ReferenceCall("lstm_f32_cmsis", {"time_major": int(time_major), "cell_clip": cell_clip,
+                                                        "target": kf.float_target(self.target_cpu)},
+                                     operands, {"output": (*shape_io, hidden_size)})
+                kf.check_close_to_exact(name, call, ReferenceCall(
+                    entry, {"time_major": int(time_major), "cell_clip": cell_clip}, operands,
+                    {"output": (*shape_io, hidden_size)}), atol=1e-4)
+            else:
+                call = ReferenceCall(entry, {"time_major": int(time_major), "cell_clip": cell_clip}, operands,
+                                     {"output": (*shape_io, hidden_size)})
             output_ref = self._status_aware_golden(call).reshape(-1)
             output_ref, nonfinite_context = self.apply_nonfinite_policy(
                 output_ref,
@@ -144,6 +155,8 @@ class OpLSTMUnidirectional(OperationBase):
                 "dst_size": batch_size * time_steps * hidden_size,
                 "use_bias": use_bias,
             }
+            if faithful:
+                context.update(kf.tolerance_context(np.float32))
             context.update(nonfinite_context)
 
             # ns-cmsis-nn#377 / tester#71: generation-time feature probe for

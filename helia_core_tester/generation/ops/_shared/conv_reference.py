@@ -74,6 +74,51 @@ def weight_rng(op) -> np.random.Generator:
     return np.random.default_rng([int(op.seed), 0x57])
 
 
+# Entries that are arm_convolve_1_x_n_f16's body; the routers below reach it for 1xN shapes the conv1d k3/k5
+# specializations do not claim.
+_CONV_1XN_F16_ENTRIES = frozenset(
+    f"arm_convolve_1_x_n_{stem}f16{acc}" for stem in ("", "nhwc_", "nhwc_ohwi_", "nhwc_packed_")
+    for acc in ("", "_acc16"))
+_CONV_F16_ROUTERS = frozenset(
+    f"arm_convolve_{stem}f16{acc}" for stem in ("", "nhwc_", "wrapper_") for acc in ("", "_acc16"))
+
+
+def conv_1xn_f16_route(op, kernel_info: Dict[str, Any], input_shape, filter_shape, output_shape,
+                       window: Dict[str, int], groups: int) -> Optional[Dict[str, bool]]:
+    """{acc16, packed} when this float16 case runs arm_convolve_1_x_n_f16's body on a Helium target, else None."""
+    from helia_core_tester.generation.ops._shared import kernel_faithful as kf
+
+    if not kf.mve_float16_target(op.target_cpu):
+        return None
+    fn = str(kernel_info.get("kernel_fn", ""))
+    n, h, _, in_c = input_shape
+    _, kh, kw, filt_c = filter_shape
+    is_1xn = (h == 1 and output_shape[1] == 1 and kh == 1 and kw > 1 and window["stride_h"] == 1
+              and window["stride_w"] > 0 and window["pad_h"] == 0 and window["dilation_h"] == 1
+              and window["dilation_w"] == 1 and groups == 1 and in_c == filt_c)
+    if not is_1xn:
+        return None
+    if fn in _CONV_F16_ROUTERS:
+        conv1d = n == 1 and kw in (3, 5) and window["stride_w"] == 1 and window["pad_w"] == 0
+        if conv1d:
+            return None
+    elif fn not in _CONV_1XN_F16_ENTRIES:
+        return None
+    hint = op.desc.get("hint") or {}
+    weight_format = str(hint.get("weight_format", "STANDARD") if isinstance(hint, dict) else "STANDARD").upper()
+    return {"acc16": fn.endswith("_acc16"),
+            "packed": weight_format in {"NT_N_PACKED", "ARM_NN_WEIGHT_FORMAT_NT_N_PACKED"}}
+
+
+def conv_1xn_patches(x: np.ndarray, kw: int, stride_w: int, pad_w: int, out_w: int) -> np.ndarray:
+    """[N, OW, KW * C] patch rows of a [N, 1, W, C] input, zero outside the row."""
+    n, _, w, c = x.shape
+    padded = np.zeros((n, w + 2 * pad_w + kw + out_w * stride_w, c), dtype=x.dtype)
+    padded[:, pad_w:pad_w + w] = x[:, 0]
+    rows = [padded[:, ox * stride_w:ox * stride_w + kw].reshape(n, kw * c) for ox in range(out_w)]
+    return np.stack(rows, axis=1)
+
+
 def conv_reference_case(op, kernel_info: Dict[str, Any], float_kernel: bool, float_dtype) -> Dict[str, Any]:
     from helia_core_tester.generation.reference import policy, weighted
     from helia_core_tester.generation.reference.bindings import get_bindings
@@ -110,15 +155,30 @@ def conv_reference_case(op, kernel_info: Dict[str, Any], float_kernel: bool, flo
         weights = weighted.glorot_uniform(wrng, filter_shape, fan_in, fan_out, desc.get("weight_gain")).astype(float_dtype)
         bias = (wrng.uniform(-0.25, 0.25, out_c) if use_bias else np.zeros(0)).astype(float_dtype)
         lo, hi = float_bounds(op)
+        conv_params = {**window, "input_offset": 0, "output_offset": 0, "activation_min": lo, "activation_max": hi}
+        result = {"input_shape": input_shape, "output_shape": output_shape, "weights_shape": filter_shape,
+                  "input": x, "weights": weights, "biases": bias if use_bias else None,
+                  "conv_params": conv_params, "quant_params": None, "filter_operand": weights, "bias_operand": bias}
+        route = (conv_1xn_f16_route(op, kernel_info, input_shape, filter_shape, output_shape, window, groups)
+                 if float_dtype == np.float16 else None)
+        if route is not None:
+            from helia_core_tester.generation.ops._shared import kernel_faithful as kf
+
+            # The kernel's own float16 arithmetic (arm_convolve_1_x_n_f16 on Helium), bit for bit.
+            call = kf.conv_1xn_f16_mve_call(x, weights, bias if use_bias else None, stride_w=sw, pad_w=pw,
+                                            out_w=output_shape[2], acc16=route["acc16"], packed=route["packed"],
+                                            activation=(lo, hi))
+            output = op.reference_golden(call)
+            patches = conv_1xn_patches(x, kw, sw, pw, output_shape[2])
+            kf.check_within_bound(name, output.reshape(1, -1, out_c), patches.reshape(1, -1, patches.shape[-1]),
+                                  weights.reshape(1, out_c, -1), bias if use_bias else None, float_dtype)
+            return {**result, "output": output, "kernel_faithful": kf.tolerance_context(float_dtype)}
         entry = "conv_f16" if float_dtype == np.float16 else "conv_f32"
         params = {**window, "activation_min": lo, "activation_max": hi}
         output = op.reference_golden(ReferenceCall(
             entry, params, {"input": np.ascontiguousarray(x), "filter": weights, "bias": bias},
             {"output": output_shape}))
-        conv_params = {**window, "input_offset": 0, "output_offset": 0, "activation_min": lo, "activation_max": hi}
-        return {"input_shape": input_shape, "output_shape": output_shape, "weights_shape": filter_shape,
-                "input": x, "weights": weights, "biases": bias if use_bias else None, "output": output,
-                "conv_params": conv_params, "quant_params": None, "filter_operand": weights, "bias_operand": bias}
+        return {**result, "output": output}
 
     kind = "s16" if kernel_info["input_c_type"] == "int16_t" else "s8"
     weight_dtype = str(desc.get("weight_dtype", "S8")).upper()

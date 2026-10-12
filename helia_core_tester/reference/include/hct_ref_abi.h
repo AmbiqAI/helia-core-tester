@@ -635,6 +635,34 @@ typedef struct
     float activation_max;
 } HctSvdfFloatParams;
 
+/* ns-cmsis-nn float16 matmul arithmetic on Helium (named variant). route 0: arm_nn_mat_mult_nt_t_f16, where acc16 selects the _acc16 entry (float16 lanes throughout) and otherwise rows longer than ARM_NN_F16_ACC_BLOCK fold float16 lane partials into float32. route 1: arm_batch_matmul_f16's adjoint-path dot product (float16 lanes, float16 reduce, no bias). routes 2 and 3: its scalar loop, fused or not. */
+typedef struct
+{
+    int32_t route;
+    int32_t acc16;
+    float activation_min;
+    float activation_max;
+} HctMatMulF16MveParams;
+
+/* ns-cmsis-nn arm_lstm_unidirectional_f32 arithmetic (named variant). target 0 Helium, 1 scalar with an FPU (fused as GCC -Ofast contracts), 2 soft float (nothing fused). */
+typedef struct
+{
+    int32_t time_major;
+    float cell_clip;
+    int32_t target;
+} HctLstmF32CmsisParams;
+
+/* ns-cmsis-nn float16 1xN convolution on Helium (named variant): arm_convolve_1_x_n_f16 and its entries. acc16 selects the _acc16 entries (float16 lanes throughout, never folding); packed selects NT_N_PACKED filters, which run every row through arm_nn_mat_mult_nt_n_packed_f16. The filter operand is always the unpacked OHWI tensor. */
+typedef struct
+{
+    int32_t stride_w;
+    int32_t pad_w;
+    int32_t acc16;
+    int32_t packed;
+    float activation_min;
+    float activation_max;
+} HctConv1xNF16MveParams;
+
 int32_t hct_ref_abi_version(void);
 
 int32_t hct_ref_quantize_multiplier(const HctQuantizeMultiplierIn *in, HctQuantizeMultiplierOut *out);
@@ -1113,6 +1141,15 @@ int32_t hct_ref_svdf_f32(const HctSvdfFloatParams *params,
     const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
 /* inputs [input:float16, weights_feature:float16, weights_time:float16, bias:float16, state:float16] -> outputs [output:float16, state_out:float16] */
 int32_t hct_ref_svdf_f16(const HctSvdfFloatParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [lhs:float16, rhs:float16, bias:float16] -> outputs [output:float16] */
+int32_t hct_ref_matmul_nt_t_f16_mve(const HctMatMulF16MveParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float32, input_weights:float32, recurrent_weights:float32, bias:float32] -> outputs [output:float32] */
+int32_t hct_ref_lstm_f32_cmsis(const HctLstmF32CmsisParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float16, filter:float16, bias:float16] -> outputs [output:float16] */
+int32_t hct_ref_conv_1xn_f16_mve(const HctConv1xNF16MveParams *params,
     const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
 
 #if defined(__GNUC__)
