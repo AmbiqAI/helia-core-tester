@@ -311,6 +311,102 @@ static void test_tensor_and_broadcast(void)
         test();                                                                                                        \
     } while (0)
 
+static double xsum_of(const double *terms, int n, int64_t divisor, int32_t dtype, int32_t *status)
+{
+    HctXsum x;
+    hct_xsum_init(&x);
+    for (int i = 0; i < n; ++i)
+    {
+        hct_xsum_add(&x, terms[i]);
+    }
+    double out = 0.0;
+    *status = hct_xsum_round(&x, divisor, dtype, &out);
+    return out;
+}
+
+/* Expected values are chosen so the exact result and its rounding are known in closed form. */
+static void test_xsum(void)
+{
+    int32_t st = 0;
+    const double u = ldexp(1.0, -24); /* half an ulp of binary32 at 1 */
+    const double cancel[] = {1e30, 1.0, -1e30};
+    CHECK(xsum_of(cancel, 3, 1, HCT_FLOAT32, &st) == 1.0 && st == HCT_OK, "cancellation");
+    const double tie_even[] = {1.0, u};
+    CHECK(xsum_of(tie_even, 2, 1, HCT_FLOAT32, &st) == 1.0, "tie to even stays");
+    const double tie_sticky[] = {1.0, u, ldexp(1.0, -300)};
+    CHECK(xsum_of(tie_sticky, 3, 1, HCT_FLOAT32, &st) == 1.0 + 2 * u, "sticky below a tie rounds up");
+    const double tie_up[] = {1.0, 3 * u};
+    CHECK(xsum_of(tie_up, 2, 1, HCT_FLOAT32, &st) == 1.0 + 4 * u, "tie to even goes up");
+    const double neg_tie[] = {-1.0, -3 * u};
+    CHECK(xsum_of(neg_tie, 2, 1, HCT_FLOAT32, &st) == -1.0 - 4 * u, "negative tie");
+    const double one[] = {1.0};
+    CHECK((float)xsum_of(one, 1, 3, HCT_FLOAT32, &st) == 1.0f / 3.0f, "exact division");
+    const double two_thirds_tie[] = {3.0 * (1.0 + 2 * u) + 3.0 * u}; /* /3 = 1 + 3u: a tie */
+    CHECK(xsum_of(two_thirds_tie, 1, 3, HCT_FLOAT32, &st) == 1.0 + 4 * u, "tie after division");
+    const double sub_tie[] = {ldexp(1.0, -150)};
+    CHECK(xsum_of(sub_tie, 1, 1, HCT_FLOAT32, &st) == 0.0, "subnormal tie to zero");
+    const double sub_up[] = {ldexp(3.0, -150)};
+    CHECK(xsum_of(sub_up, 1, 1, HCT_FLOAT32, &st) == ldexp(1.0, -148), "subnormal tie up");
+    const double big[] = {ldexp(1.0, 254), -ldexp(1.0, 254), 2.0};
+    CHECK(xsum_of(big, 3, 1, HCT_FLOAT32, &st) == 2.0, "top of the product range");
+    const double f16_tie[] = {65504.0, 16.0};
+    CHECK(isinf(xsum_of(f16_tie, 2, 1, HCT_FLOAT16, &st)), "binary16 overflow on a tie");
+    const double f16_below[] = {65504.0, 15.0};
+    CHECK(xsum_of(f16_below, 2, 1, HCT_FLOAT16, &st) == 65504.0, "binary16 just below overflow");
+    const double f32_over[] = {ldexp(1.0, 127), ldexp(1.0, 127)};
+    CHECK(isinf(xsum_of(f32_over, 2, 1, HCT_FLOAT32, &st)) && st == HCT_OK, "binary32 overflow");
+    const double nan_terms[] = {1.0, NAN};
+    CHECK(isnan(xsum_of(nan_terms, 2, 1, HCT_FLOAT32, &st)), "NaN propagates");
+    const double infs[] = {INFINITY, -INFINITY};
+    CHECK(isnan(xsum_of(infs, 2, 1, HCT_FLOAT32, &st)), "inf - inf");
+    const double inf_one[] = {-INFINITY, 1e30};
+    CHECK(xsum_of(inf_one, 2, 1, HCT_FLOAT32, &st) == -INFINITY, "inf dominates");
+    CHECK(xsum_of(cancel, 0, 1, HCT_FLOAT32, &st) == 0.0 && !signbit(xsum_of(cancel, 0, 1, HCT_FLOAT32, &st)),
+          "empty sum is +0");
+    const double huge[] = {1e300};
+    xsum_of(huge, 1, 1, HCT_FLOAT32, &st);
+    CHECK(st == HCT_E_PARAM, "a term outside the range fails");
+    const double tiny[] = {ldexp(1.0, -400)};
+    xsum_of(tiny, 1, 1, HCT_FLOAT32, &st);
+    CHECK(st == HCT_E_PARAM, "a term below the range fails");
+    xsum_of(one, 1, 0, HCT_FLOAT32, &st);
+    CHECK(st == HCT_E_PARAM, "zero divisor");
+    xsum_of(one, 1, (int64_t)HCT_MAX_ELEMENTS + 1, HCT_FLOAT32, &st);
+    CHECK(st == HCT_E_PARAM, "divisor above the element bound");
+    xsum_of(one, 1, 1, HCT_INT8, &st);
+    CHECK(st == HCT_E_PARAM, "integer dtype");
+
+    /* Enough terms to force the periodic carry, with a negative total. */
+    HctXsum x;
+    hct_xsum_init(&x);
+    for (int64_t i = 0; i < ((int64_t)1 << 28) + 3; ++i)
+    {
+        hct_xsum_add(&x, -1.0);
+    }
+    hct_xsum_add(&x, 0.5);
+    double out = 0.0;
+    CHECK(hct_xsum_round(&x, 1, HCT_FLOAT32, &out) == HCT_OK && out == -268435456.0, "carry, negative total");
+
+    /* Random products against an exact pairwise model: integers scaled by powers of two whose
+     * sum fits 53 bits, so binary64 addition of them is exact. */
+    for (int trial = 0; trial < 2000; ++trial)
+    {
+        HctXsum r;
+        hct_xsum_init(&r);
+        double exact = 0.0;
+        const int shift = (int)(next_u32() % 200) - 100;
+        for (int k = 0; k < 16; ++k)
+        {
+            const float a = ldexpf((float)((int32_t)(next_u32() % 4096) - 2048), shift / 2);
+            const float b = (float)((int32_t)(next_u32() % 4096) - 2048);
+            hct_xsum_add_product(&r, a, b);
+            exact += (double)a * (double)b;
+        }
+        CHECK(hct_xsum_round(&r, 1, HCT_FLOAT32, &out) == HCT_OK && out == (double)(float)exact,
+              "random products, trial %d", trial);
+    }
+}
+
 int main(void)
 {
     RUN(test_srdhm);
@@ -320,6 +416,7 @@ int main(void)
     RUN(test_activation_range);
     RUN(test_float16);
     RUN(test_tensor_and_broadcast);
+    RUN(test_xsum);
     if (failures)
     {
         printf("%d failure(s)\n", failures);

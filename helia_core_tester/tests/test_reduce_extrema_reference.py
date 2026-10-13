@@ -11,7 +11,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from helia_core_tester.generation.ops._shared.reduce_extrema_reference import (
+from helia_core_tester.tests.reference_models import (
     canonical_qnan,
     reduce_extrema_reference,
 )

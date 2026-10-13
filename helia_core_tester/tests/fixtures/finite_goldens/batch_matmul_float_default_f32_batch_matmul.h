@@ -36,7 +36,7 @@ static const cmsis_nn_dims batch_matmul_float_default_f32_output_dims = {
 static const cmsis_nn_bmm_params_f32 batch_matmul_float_default_f32_bmm_params = {
     .adj_x = false,
     .adj_y = true,
-    .activation = {.min = -1.0e+30f, .max = 1.0e+30f},
+    .activation = {.min = -1.000000015e+30f, .max = 1.000000015e+30f},
     .rhs_format = ARM_NN_WEIGHT_FORMAT_STANDARD
 };
 
@@ -52,7 +52,7 @@ static const float batch_matmul_float_default_f32_input_rhs[] = {
 
 // Expected output (golden)
 static const float batch_matmul_float_default_f32_expected_output[] = {
-    0.037320275f, -0.320868999f, -0.155409038f, 0.46607098f, 0.635480523f, -0.152594566f, -0.477644652f, 0.384981692f
+    0.037320286f, -0.320868999f, -0.155409023f, 0.46607098f, 0.635480523f, -0.152594566f, -0.477644652f, 0.384981692f
 };
 
 #endif

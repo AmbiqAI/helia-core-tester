@@ -408,6 +408,131 @@ typedef struct
     float act_param;
 } HctFloatActivationTypeParams;
 
+/* PopulateConvolutionQuantizationParams: each channel's (input_scale * filter_scale[c]) / output_scale, formed in double from the float32 scales, through QuantizeMultiplier. */
+typedef struct
+{
+    float input_scale;
+    float output_scale;
+} HctPerChannelQuantParams;
+
+/* TFLite ConvParams for the quantized convolutions: input_offset is -input_zero_point, output_offset the output zero point (both 0 for int16); groups follow from input depth / filter input depth. */
+typedef struct
+{
+    int32_t stride_h;
+    int32_t stride_w;
+    int32_t dilation_h;
+    int32_t dilation_w;
+    int32_t pad_h;
+    int32_t pad_w;
+    int32_t input_offset;
+    int32_t output_offset;
+    int32_t activation_min;
+    int32_t activation_max;
+} HctConvParams;
+
+typedef struct
+{
+    int32_t stride_h;
+    int32_t stride_w;
+    int32_t dilation_h;
+    int32_t dilation_w;
+    int32_t pad_h;
+    int32_t pad_w;
+    float activation_min;
+    float activation_max;
+} HctConvFloatParams;
+
+/* TFLite FullyConnectedParams: input_offset is -input_zero_point, filter_offset -filter_zero_point (0 when the filter is symmetric, as per-channel filters are), output_offset the output zero point. */
+typedef struct
+{
+    int32_t input_offset;
+    int32_t filter_offset;
+    int32_t output_offset;
+    int32_t activation_min;
+    int32_t activation_max;
+} HctFullyConnectedParams;
+
+/* adj_x / adj_y (0 or 1) mean the stored operand is transposed in its last two dims; offsets are -zero_point for the operands, +zero_point for the output; one per-tensor multiplier and shift. */
+typedef struct
+{
+    int32_t adj_x;
+    int32_t adj_y;
+    int32_t lhs_offset;
+    int32_t rhs_offset;
+    int32_t output_offset;
+    int32_t multiplier;
+    int32_t shift;
+    int32_t activation_min;
+    int32_t activation_max;
+} HctBatchMatMulParams;
+
+typedef struct
+{
+    int32_t adj_x;
+    int32_t adj_y;
+    float activation_min;
+    float activation_max;
+} HctBatchMatMulFloatParams;
+
+typedef struct
+{
+    int32_t stride_h;
+    int32_t stride_w;
+    int32_t filter_h;
+    int32_t filter_w;
+    int32_t pad_h;
+    int32_t pad_w;
+    int32_t activation_min;
+    int32_t activation_max;
+} HctPoolParams;
+
+typedef struct
+{
+    int32_t stride_h;
+    int32_t stride_w;
+    int32_t filter_h;
+    int32_t filter_w;
+    int32_t pad_h;
+    int32_t pad_w;
+    float activation_min;
+    float activation_max;
+} HctPoolFloatParams;
+
+/* Bit d set reduces input dim d. */
+typedef struct
+{
+    int32_t axis_mask;
+} HctAxisMaskParams;
+
+typedef struct
+{
+    int32_t axis;
+} HctAxisParams;
+
+/* QuantizedMeanOrSum's requantization for a reduction over `count` elements. */
+typedef struct
+{
+    float input_scale;
+    float output_scale;
+    int64_t count;
+} HctMeanQuant;
+
+/* input_scale / output_scale through QuantizeMultiplier, with 1 / count folded in as TFLM folds it. */
+typedef struct
+{
+    int32_t multiplier;
+    int32_t shift;
+} HctMeanParams;
+
+typedef struct
+{
+    int32_t axis_mask;
+    int32_t input_zero_point;
+    int32_t output_zero_point;
+    int32_t multiplier;
+    int32_t shift;
+} HctMeanQuantizedParams;
+
 int32_t hct_ref_abi_version(void);
 
 int32_t hct_ref_quantize_multiplier(const HctQuantizeMultiplierIn *in, HctQuantizeMultiplierOut *out);
@@ -426,6 +551,7 @@ int32_t hct_ref_hard_swish_precise_prepare(const HctHardSwishQuant *in, HctHardS
 int32_t hct_ref_tanh_prepare(const HctTanhLogisticQuant *in, HctTanhLogisticParams *out);
 int32_t hct_ref_logistic_prepare(const HctTanhLogisticQuant *in, HctTanhLogisticParams *out);
 int32_t hct_ref_softmax_prepare(const HctSoftmaxQuant *in, HctSoftmaxParams *out);
+int32_t hct_ref_mean_prepare(const HctMeanQuant *in, HctMeanParams *out);
 
 /* inputs [input1:int8, input2:int8] -> outputs [output:int8] */
 int32_t hct_ref_add_s8(const HctAddParams *params,
@@ -544,6 +670,12 @@ int32_t hct_ref_prelu_f32(const HctNoParams *params,
 /* inputs [input:float16, alpha:float16] -> outputs [output:float16] */
 int32_t hct_ref_prelu_f16(const HctNoParams *params,
     const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float32, scale:float32, bias:float32] -> outputs [output:float32] */
+int32_t hct_ref_batch_norm_f32(const HctNoParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float16, scale:float16, bias:float16] -> outputs [output:float16] */
+int32_t hct_ref_batch_norm_f16(const HctNoParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
 /* inputs [input:int8] -> outputs [output:int8] */
 int32_t hct_ref_hard_swish_s8(const HctHardSwishParams *params,
     const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
@@ -633,6 +765,159 @@ int32_t hct_ref_tanh_lut_f16(const HctNoParams *params,
     const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
 /* inputs [input:float16] -> outputs [output:float16] */
 int32_t hct_ref_tanh_lut_mve_f16(const HctNoParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [filter_scale:float32] -> outputs [multiplier:int32, shift:int32] */
+int32_t hct_ref_per_channel_quant(const HctPerChannelQuantParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:int8, filter:int8, bias:int32, multiplier:int32, shift:int32] -> outputs [output:int8] */
+int32_t hct_ref_conv_s8(const HctConvParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:int16, filter:int8, bias:int64, multiplier:int32, shift:int32] -> outputs [output:int16] */
+int32_t hct_ref_conv_s16(const HctConvParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float32, filter:float32, bias:float32] -> outputs [output:float32] */
+int32_t hct_ref_conv_f32(const HctConvFloatParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float16, filter:float16, bias:float16] -> outputs [output:float16] */
+int32_t hct_ref_conv_f16(const HctConvFloatParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:int8, filter:int8, bias:int32, multiplier:int32, shift:int32] -> outputs [output:int8] */
+int32_t hct_ref_depthwise_conv_s8(const HctConvParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:int16, filter:int8, bias:int64, multiplier:int32, shift:int32] -> outputs [output:int16] */
+int32_t hct_ref_depthwise_conv_s16(const HctConvParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float32, filter:float32, bias:float32] -> outputs [output:float32] */
+int32_t hct_ref_depthwise_conv_f32(const HctConvFloatParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float16, filter:float16, bias:float16] -> outputs [output:float16] */
+int32_t hct_ref_depthwise_conv_f16(const HctConvFloatParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:int8, filter:int8, bias:int32, multiplier:int32, shift:int32] -> outputs [output:int8] */
+int32_t hct_ref_transpose_conv_s8(const HctConvParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:int16, filter:int8, bias:int64, multiplier:int32, shift:int32] -> outputs [output:int16] */
+int32_t hct_ref_transpose_conv_s16(const HctConvParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float32, filter:float32, bias:float32] -> outputs [output:float32] */
+int32_t hct_ref_transpose_conv_f32(const HctConvFloatParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float16, filter:float16, bias:float16] -> outputs [output:float16] */
+int32_t hct_ref_transpose_conv_f16(const HctConvFloatParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:int8, filter:int8, bias:int32, multiplier:int32, shift:int32] -> outputs [output:int8] */
+int32_t hct_ref_fully_connected_s8(const HctFullyConnectedParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:int16, filter:int8, bias:int64, multiplier:int32, shift:int32] -> outputs [output:int16] */
+int32_t hct_ref_fully_connected_s16(const HctFullyConnectedParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float32, filter:float32, bias:float32] -> outputs [output:float32] */
+int32_t hct_ref_fully_connected_f32(const HctFloatActivationParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float16, filter:float16, bias:float16] -> outputs [output:float16] */
+int32_t hct_ref_fully_connected_f16(const HctFloatActivationParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [lhs:int8, rhs:int8] -> outputs [output:int8] */
+int32_t hct_ref_batch_matmul_s8(const HctBatchMatMulParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [lhs:int16, rhs:int16] -> outputs [output:int16] */
+int32_t hct_ref_batch_matmul_s16(const HctBatchMatMulParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [lhs:float32, rhs:float32] -> outputs [output:float32] */
+int32_t hct_ref_batch_matmul_f32(const HctBatchMatMulFloatParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [lhs:float16, rhs:float16] -> outputs [output:float16] */
+int32_t hct_ref_batch_matmul_f16(const HctBatchMatMulFloatParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:int8] -> outputs [output:int8] */
+int32_t hct_ref_avg_pool_s8(const HctPoolParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:int16] -> outputs [output:int16] */
+int32_t hct_ref_avg_pool_s16(const HctPoolParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float32] -> outputs [output:float32] */
+int32_t hct_ref_avg_pool_f32(const HctPoolFloatParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float16] -> outputs [output:float16] */
+int32_t hct_ref_avg_pool_f16(const HctPoolFloatParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:int8] -> outputs [output:int8] */
+int32_t hct_ref_max_pool_s8(const HctPoolParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:int16] -> outputs [output:int16] */
+int32_t hct_ref_max_pool_s16(const HctPoolParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float32] -> outputs [output:float32] */
+int32_t hct_ref_max_pool_f32(const HctPoolFloatParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float16] -> outputs [output:float16] */
+int32_t hct_ref_max_pool_f16(const HctPoolFloatParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:int8] -> outputs [output:int8] */
+int32_t hct_ref_mean_s8(const HctMeanQuantizedParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:int16] -> outputs [output:int16] */
+int32_t hct_ref_mean_s16(const HctMeanQuantizedParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float32] -> outputs [output:float32] */
+int32_t hct_ref_mean_f32(const HctAxisMaskParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float16] -> outputs [output:float16] */
+int32_t hct_ref_mean_f16(const HctAxisMaskParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float32] -> outputs [output:float32] */
+int32_t hct_ref_reduce_sum_f32(const HctAxisMaskParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float16] -> outputs [output:float16] */
+int32_t hct_ref_reduce_sum_f16(const HctAxisMaskParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float32] -> outputs [output:float32] */
+int32_t hct_ref_reduce_max_f32(const HctAxisMaskParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float16] -> outputs [output:float16] */
+int32_t hct_ref_reduce_max_f16(const HctAxisMaskParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float32] -> outputs [output:float32] */
+int32_t hct_ref_reduce_min_f32(const HctAxisMaskParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float16] -> outputs [output:float16] */
+int32_t hct_ref_reduce_min_f16(const HctAxisMaskParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:int8] -> outputs [output:int8] */
+int32_t hct_ref_reduce_max_s8(const HctAxisMaskParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:int16] -> outputs [output:int16] */
+int32_t hct_ref_reduce_max_s16(const HctAxisMaskParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:int8] -> outputs [output:int8] */
+int32_t hct_ref_reduce_min_s8(const HctAxisMaskParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:int16] -> outputs [output:int16] */
+int32_t hct_ref_reduce_min_s16(const HctAxisMaskParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:int8] -> outputs [output:int32] */
+int32_t hct_ref_arg_max_s8(const HctAxisParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:int16] -> outputs [output:int32] */
+int32_t hct_ref_arg_max_s16(const HctAxisParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float32] -> outputs [output:int32] */
+int32_t hct_ref_arg_max_f32(const HctAxisParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float16] -> outputs [output:int32] */
+int32_t hct_ref_arg_max_f16(const HctAxisParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:int8] -> outputs [output:int32] */
+int32_t hct_ref_arg_min_s8(const HctAxisParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:int16] -> outputs [output:int32] */
+int32_t hct_ref_arg_min_s16(const HctAxisParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float32] -> outputs [output:int32] */
+int32_t hct_ref_arg_min_f32(const HctAxisParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float16] -> outputs [output:int32] */
+int32_t hct_ref_arg_min_f16(const HctAxisParams *params,
     const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
 
 #if defined(__GNUC__)

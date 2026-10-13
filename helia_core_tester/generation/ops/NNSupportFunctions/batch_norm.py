@@ -7,6 +7,7 @@ import numpy as np
 from helia_core_tester.generation.harness import ArgumentPool, ArrayLiteral, Declaration
 from helia_core_tester.generation.harness.simple import dims_count, tensor_case_pool
 from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.reference.call import ReferenceCall
 
 
 def batch_norm_argument_pool(context: dict) -> ArgumentPool:
@@ -23,14 +24,8 @@ class OpBatchNorm(OperationBase):
     def allow_no_tflite(self) -> bool:
         return True
 
-    def needs_keras_model(self) -> bool:
-        return False
-
-    def build_keras_model(self):
-        raise NotImplementedError("BatchNorm uses direct CMSIS-NN generated tests.")
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        raise NotImplementedError("BatchNorm does not produce a TFLite model.")
+    def uses_reference(self) -> bool:
+        return True
 
     def generate_c_files(self, output_dir: Path) -> None:
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
@@ -53,16 +48,11 @@ class OpBatchNorm(OperationBase):
         input_data = self._sample_uniform(input_shape, dtype=float_dtype)
         scale = np.linspace(0.5, 1.5, num=channels, dtype=float_dtype)
         bias = np.linspace(-0.25, 0.25, num=channels, dtype=float_dtype)
-        def reference(operands):
-            return (
-                operands[0].astype(np.float32)
-                * scale.astype(np.float32).reshape((1, 1, 1, channels))
-                + bias.astype(np.float32).reshape((1, 1, 1, channels))
-            ).astype(float_dtype)
-
-        output_data = reference([input_data])
+        output_data = self.reference_golden(ReferenceCall(
+            "batch_norm_f16" if activation_dtype == "FP16" else "batch_norm_f32", {"unused": 0},
+            {"input": input_data, "scale": scale, "bias": bias}, {"output": input_shape}))
         output_data, nonfinite_context = self.apply_nonfinite_policy(
-            output_data, reference=reference, inputs=[input_data]
+            output_data, reference=lambda ops: self.reference_probe([ops[0], scale, bias]), inputs=[input_data]
         )
 
         builder = TemplateContextBuilder()

@@ -48,15 +48,15 @@ static const cmsis_nn_fc_params_f16 fully_connected_float_default_f16_fc_params 
 
 // Weights
 static const float16_t fully_connected_float_default_f16_weights[] = {
-    (float16_t)0.287109375f, (float16_t)-0.342529297f, (float16_t)-0.026535034f, (float16_t)-0.272705078f, (float16_t)0.510253906f, (float16_t)0.150390625f, (float16_t)0.467041016f, (float16_t)-0.188354492f, (float16_t)-0.520996094f, (float16_t)-0.51171875f, (float16_t)0.390136719f, (float16_t)0.430664062f, (float16_t)0.560546875f, (float16_t)-0.037384033f, (float16_t)0.084106445f, (float16_t)0.14050293f,
-    (float16_t)0.347167969f, (float16_t)0.122924805f, (float16_t)0.545410156f, (float16_t)-0.418212891f, (float16_t)-0.110351562f, (float16_t)-5.90133667e-03f, (float16_t)-0.254394531f, (float16_t)0.541992188f, (float16_t)-0.352539062f, (float16_t)0.579589844f, (float16_t)-0.234985352f, (float16_t)-0.061340332f, (float16_t)0.212402344f, (float16_t)-0.354003906f, (float16_t)-0.119384766f, (float16_t)0.294677734f,
-    (float16_t)0.585449219f, (float16_t)0.505371094f, (float16_t)0.519042969f, (float16_t)0.258056641f, (float16_t)0.33984375f, (float16_t)0.568847656f, (float16_t)0.368652344f, (float16_t)0.391113281f, (float16_t)-0.232543945f, (float16_t)0.247802734f, (float16_t)0.560058594f, (float16_t)-0.173461914f, (float16_t)0.052185059f, (float16_t)-0.027099609f, (float16_t)0.182617188f, (float16_t)0.366210938f,
-    (float16_t)-0.095214844f, (float16_t)-0.336181641f, (float16_t)-0.098449707f, (float16_t)0.30859375f, (float16_t)0.517578125f, (float16_t)-0.035003662f, (float16_t)0.044342041f, (float16_t)-0.016281128f, (float16_t)0.040222168f, (float16_t)0.092712402f, (float16_t)-0.248901367f, (float16_t)-0.2578125f
+    (float16_t)-0.53125f, (float16_t)0.292724609f, (float16_t)-0.356445312f, (float16_t)-0.100402832f, (float16_t)-0.161010742f, (float16_t)-0.301025391f, (float16_t)0.187744141f, (float16_t)-0.50390625f, (float16_t)-0.504882812f, (float16_t)-0.282958984f, (float16_t)0.10357666f, (float16_t)0.254394531f, (float16_t)-0.199584961f, (float16_t)0.192504883f, (float16_t)-0.100891113f, (float16_t)0.322265625f,
+    (float16_t)-0.381591797f, (float16_t)-0.338623047f, (float16_t)0.566894531f, (float16_t)0.287841797f, (float16_t)-0.323974609f, (float16_t)-0.221557617f, (float16_t)0.552734375f, (float16_t)0.217285156f, (float16_t)-0.496582031f, (float16_t)0.466064453f, (float16_t)0.384521484f, (float16_t)-0.366210938f, (float16_t)-0.51171875f, (float16_t)-0.499267578f, (float16_t)-0.080200195f, (float16_t)-0.361328125f,
+    (float16_t)-0.3671875f, (float16_t)0.159057617f, (float16_t)-0.565917969f, (float16_t)-0.140136719f, (float16_t)-0.328613281f, (float16_t)0.217529297f, (float16_t)-0.579589844f, (float16_t)0.005592346f, (float16_t)-0.454101562f, (float16_t)0.423339844f, (float16_t)0.24987793f, (float16_t)-0.077331543f, (float16_t)0.339599609f, (float16_t)-0.190673828f, (float16_t)0.411865234f, (float16_t)-0.400390625f,
+    (float16_t)-0.142822266f, (float16_t)0.418701172f, (float16_t)-0.146484375f, (float16_t)-0.579101562f, (float16_t)0.325927734f, (float16_t)-0.39453125f, (float16_t)-0.259765625f, (float16_t)-0.291503906f, (float16_t)-0.373535156f, (float16_t)0.157226562f, (float16_t)-0.404296875f, (float16_t)-0.344482422f
 };
 
 // Biases
 static const float16_t fully_connected_float_default_f16_biases[] = {
-    (float16_t)0.080871582f, (float16_t)-0.224975586f, (float16_t)0.219482422f, (float16_t)0.21472168f, (float16_t)0.221557617f
+    (float16_t)-0.070373535f, (float16_t)0.073059082f, (float16_t)0.081237793f, (float16_t)-0.065795898f, (float16_t)-0.028366089f
 };
 
 // Input data (for testing)
@@ -66,7 +66,7 @@ static const float16_t fully_connected_float_default_f16_input[] = {
 
 // Expected output (golden)
 static const float16_t fully_connected_float_default_f16_expected_output[] = {
-    (float16_t)0.150878906f, (float16_t)-0.185668945f, (float16_t)-0.841308594f, (float16_t)1.377929688f, (float16_t)-0.284179688f
+    (float16_t)0.388183594f, (float16_t)1.10546875f, (float16_t)0.783691406f, (float16_t)0.67578125f, (float16_t)0.039550781f
 };
 
 #endif
