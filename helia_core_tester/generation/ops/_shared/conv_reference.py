@@ -69,6 +69,46 @@ def per_channel_multipliers(input_scale: float, output_scale: float, filter_scal
     return r["multiplier"], r["shift"]
 
 
+def operand_magnitude(call) -> np.ndarray:
+    """sum|terms| per output of an exact accumulating entry: `call` re-run on its operands' absolute values with
+    the activation clamp off (+-inf, so a lane a nonfinite token reaches stays nonfinite and linear_bound skips
+    it). Evaluated here, never recorded as the case's reference."""
+    from dataclasses import replace
+
+    if "activation_min" not in call.params or "activation_max" not in call.params:
+        raise ValueError(f"{call.entry}: the magnitude run needs an entry with an activation clamp")
+    inputs = {k: np.abs(v) if np.issubdtype(v.dtype, np.floating) else v for k, v in call.inputs.items()}
+    params = {**call.params, "activation_min": float("-inf"), "activation_max": float("inf")}
+    return replace(call, params=params, inputs=inputs).output()
+
+
+def window_taps(size: int, kernel: int, stride: int, pad: int, dilation: int, out: int) -> int:
+    """The most kernel taps of one axis that land inside the input over the `out` output positions."""
+    if min(kernel, stride, dilation) < 1 or size < 0 or out < 0:
+        raise ValueError(f"window needs kernel, stride and dilation >= 1, got {kernel}, {stride}, {dilation}")
+    pos = (np.arange(out) * stride - pad)[:, None] + dilation * np.arange(kernel)[None, :]
+    return int(np.max(((pos >= 0) & (pos < size)).sum(axis=1), initial=0))
+
+
+def transpose_window_taps(size: int, kernel: int, stride: int, pad: int, out: int) -> int:
+    """The most (input, tap) pairs of one axis that a transpose convolution scatters onto one output position."""
+    if kernel < 1 or stride < 1 or size < 0 or out < 0:
+        raise ValueError(f"transpose window needs kernel and stride >= 1, got {kernel}, {stride}")
+    counts = np.zeros(max(out, 0), dtype=np.int64)
+    pos = (np.arange(size) * stride - pad)[:, None] + np.arange(kernel)[None, :]
+    pos = pos[(pos >= 0) & (pos < out)]
+    np.add.at(counts, pos, 1)
+    return int(np.max(counts, initial=0))
+
+
+def exact_comparison(op, call, k: int, dtype) -> Dict[str, Any]:
+    """The comparison of an exact accumulating golden: assert_close's defaults widened by kf.linear_bound over
+    the k terms each output sums (bias included), at the unit roundoff of the kernel's dtype."""
+    from helia_core_tester.generation.ops._shared import kernel_faithful as kf
+
+    return kf.comparison_context(op, dtype, *kf.linear_bound(operand_magnitude(call), k, dtype))
+
+
 def weight_rng(op) -> np.random.Generator:
     """A stream for weights and bias, independent of the input draw (which uses the case seed)."""
     return np.random.default_rng([int(op.seed), 0x57])
@@ -88,7 +128,7 @@ def conv_1xn_f16_route(op, kernel_info: Dict[str, Any], input_shape, filter_shap
     """{acc16, packed} when this float16 case runs arm_convolve_1_x_n_f16's body on a Helium target, else None."""
     from helia_core_tester.generation.ops._shared import kernel_faithful as kf
 
-    if not kf.mve_float16_target(op.target_cpu):
+    if not kf.mve_float16_route(op):
         return None
     fn = str(kernel_info.get("kernel_fn", ""))
     n, h, _, in_c = input_shape
@@ -133,7 +173,7 @@ def conv_f16_route(op, kernel_info: Dict[str, Any], input_shape, filter_shape, o
     models it), for an entry that returns an error status, and off Helium."""
     from helia_core_tester.generation.ops._shared import kernel_faithful as kf
 
-    if not kf.mve_float16_target(op.target_cpu):
+    if not kf.mve_float16_route(op):
         return None
     fn = str(kernel_info.get("kernel_fn", ""))
     acc16 = fn.endswith("_acc16")
@@ -297,14 +337,16 @@ def conv_reference_case(op, kernel_info: Dict[str, Any], float_kernel: bool, flo
                 return build(np.asarray(ops[0]).reshape(x.shape), np.asarray(ops[1]).reshape(weights.shape),
                              b_op if b_op.size else None).output()
 
-            return {**result, "output": output, "kernel_faithful": kf.tolerance_context(float_dtype),
+            return {**result, "output": output, "comparison": kf.comparison_context(op, float_dtype),
                     "reference_probe": probe}
         entry = "conv_f16" if float_dtype == np.float16 else "conv_f32"
         params = {**window, "activation_min": lo, "activation_max": hi}
-        output = op.reference_golden(ReferenceCall(
-            entry, params, {"input": np.ascontiguousarray(x), "filter": weights, "bias": bias},
-            {"output": output_shape}))
-        return {**result, "output": output}
+        call = ReferenceCall(entry, params, {"input": np.ascontiguousarray(x), "filter": weights, "bias": bias},
+                             {"output": output_shape})
+        output = op.reference_golden(call)
+        # Each output sums the in-range taps of its group's filt_c channels, plus the bias.
+        k = (window_taps(h, kh, sh, ph, dh, oh) * window_taps(w, kw, sw, pw, dw, ow) * filt_c + int(use_bias))
+        return {**result, "output": output, "comparison": exact_comparison(op, call, k, float_dtype)}
 
     kind = "s16" if kernel_info["input_c_type"] == "int16_t" else "s8"
     weight_dtype = str(desc.get("weight_dtype", "S8")).upper()
@@ -409,7 +451,7 @@ def depthwise_f16_route(op, kernel_info: Dict[str, Any], input_shape, output_sha
     whose entry declines the shape keeps the exact golden: it asserts a status)."""
     from helia_core_tester.generation.ops._shared import kernel_faithful as kf
 
-    if not kf.mve_float16_target(op.target_cpu):
+    if not kf.mve_float16_route(op):
         return None
     fn = str(kernel_info.get("kernel_fn", ""))
     n, h, _, in_c = input_shape
@@ -551,12 +593,15 @@ def depthwise_reference_case(op, kernel_info: Dict[str, Any], float_kernel: bool
             output, probe = depthwise_faithful_case(op, x, weights, bias if use_bias else None, kh, kw, mult, window,
                                                     output_shape, route, (lo, hi), float_dtype)
             return {**result, "output": output, "probe": probe,
-                    "kernel_faithful": kf.tolerance_context(float_dtype)}
+                    "comparison": kf.comparison_context(op, float_dtype)}
         entry = "depthwise_conv_f16" if float_dtype == np.float16 else "depthwise_conv_f32"
-        output = op.reference_golden(ReferenceCall(
-            entry, {**window, "activation_min": lo, "activation_max": hi},
-            {"input": np.ascontiguousarray(x), "filter": weights, "bias": bias}, {"output": output_shape}))
-        return {**result, "output": output}
+        call = ReferenceCall(entry, {**window, "activation_min": lo, "activation_max": hi},
+                             {"input": np.ascontiguousarray(x), "filter": weights, "bias": bias},
+                             {"output": output_shape})
+        output = op.reference_golden(call)
+        # Channels stay independent: each output sums its in-range taps, plus the bias.
+        k = window_taps(h, kh, sh, ph, dh, oh) * window_taps(w, kw, sw, pw, dw, ow) + int(use_bias)
+        return {**result, "output": output, "comparison": exact_comparison(op, call, k, float_dtype)}
 
     kind = "s16" if kernel_info["input_c_type"] == "int16_t" else "s8"
     weight_dtype = str(desc.get("weight_dtype", "S8")).upper()
@@ -670,7 +715,7 @@ def transpose_conv_reference_case(op, kernel_info: Dict[str, Any], float_kernel:
                   "filter_operand": weights, "bias_operand": bias}
         from helia_core_tester.generation.ops._shared import kernel_faithful as kf
 
-        if (float_dtype == np.float16 and kf.mve_float16_target(op.target_cpu)
+        if (float_dtype == np.float16 and kf.mve_float16_route(op)
                 and kf.transpose_conv_f16_mve_route(kh, kw, in_c)):
             # The kernel's own float16 arithmetic (arm_transpose_conv_f16's gathered vfmaq_m), bit for bit.
             call = kf.transpose_conv_f16_mve_call(x, weights, bias if use_bias else None, window, output_shape,
@@ -679,12 +724,16 @@ def transpose_conv_reference_case(op, kernel_info: Dict[str, Any], float_kernel:
             patches, rows = kf.transpose_conv_patches(x, weights, window, output_shape)
             kf.check_within_bound(name, kf.unclamped_output(call).reshape(1, -1, out_c), patches, rows,
                                   bias if use_bias else None, float_dtype)
-            return {**result, "output": output, "kernel_faithful": kf.tolerance_context(float_dtype)}
+            return {**result, "output": output, "comparison": kf.comparison_context(op, float_dtype)}
         entry = "transpose_conv_f16" if float_dtype == np.float16 else "transpose_conv_f32"
-        output = op.reference_golden(ReferenceCall(
-            entry, {**window, "activation_min": lo, "activation_max": hi},
-            {"input": np.ascontiguousarray(x), "filter": weights, "bias": bias}, {"output": output_shape}))
-        return {**result, "output": output}
+        call = ReferenceCall(entry, {**window, "activation_min": lo, "activation_max": hi},
+                             {"input": np.ascontiguousarray(x), "filter": weights, "bias": bias},
+                             {"output": output_shape})
+        output = op.reference_golden(call)
+        # Each output sums the (input, tap) pairs scattered onto it over in_c channels, plus the bias.
+        k = (transpose_window_taps(h, kh, sh, window["pad_h"], oh)
+             * transpose_window_taps(w, kw, sw, window["pad_w"], ow) * in_c + int(use_bias))
+        return {**result, "output": output, "comparison": exact_comparison(op, call, k, float_dtype)}
 
     kind = "s16" if kernel_info["input_c_type"] == "int16_t" else "s8"
     in_range = (value_range(desc, "calibration_range", ()) if desc.get("calibration_range")

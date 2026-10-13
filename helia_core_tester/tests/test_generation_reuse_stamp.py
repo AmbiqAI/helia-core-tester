@@ -186,13 +186,13 @@ def test_checkout_content_is_the_identity_when_the_root_is_not_a_git_tree(
 
 
 def test_stamp_schema_bump_invalidates_every_older_stamp(monkeypatch) -> None:
-    # Folding the C reference tree into the generator sources changed what a stamp
+    # Adding the kernel numerics (shipped or bounded build) changed what a stamp
     # means; a stamp minted under the previous schema must never validate a case now.
-    assert reuse._STAMP_SCHEMA == "helia-core-tester/generation-stamp/7"
+    assert reuse._STAMP_SCHEMA == "helia-core-tester/generation-stamp/8"
     assert reuse._CMSIS_NN_INPUT_SUBTREES == ("Include", "Tests/KernelContracts")
     descriptor = {"name": "Add_s8_basic", "operator": "Add", "shape": [1, 4]}
     current = _stamp(descriptor)
-    monkeypatch.setattr(reuse, "_STAMP_SCHEMA", "helia-core-tester/generation-stamp/6")
+    monkeypatch.setattr(reuse, "_STAMP_SCHEMA", "helia-core-tester/generation-stamp/7")
     assert _stamp(descriptor) != current
 
 

@@ -80,8 +80,8 @@ int32_t avg_pool_float_default_f32_test_case_run(void)
         avg_pool_float_default_f32_expected_output,
         AVG_POOL_FLOAT_DEFAULT_F32_OUTPUT_SIZE,
         1,
-        5e-05f,
-        2e-05f,
+        1.9298324584960937e-05f,
+        1.4192092895507813e-06f,
         20,
         failures
     );

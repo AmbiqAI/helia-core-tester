@@ -35,9 +35,11 @@ _DTYPE_TO_LITERT = {
     "BOOL": "bool",
 }
 
+# torch.testing.assert_close's defaults. A descriptor may only tighten them; a generator widens them only by a
+# bound it derives for an exact golden (kernel_faithful.bounded_context).
 _DEFAULT_FLOAT_COMPARISON = {
-    "FP32": {"atol": 5.0e-5, "rtol": 2.0e-5},
-    "FP16": {"atol": 1.0e-3, "rtol": 1.0e-3},
+    "FP32": {"atol": 1.0e-5, "rtol": 1.3e-6},
+    "FP16": {"atol": 1.0e-5, "rtol": 1.0e-3},
 }
 
 

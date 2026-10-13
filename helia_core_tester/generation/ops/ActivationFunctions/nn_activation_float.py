@@ -1,10 +1,11 @@
 """Float activation operation (arm_nn_activation_f32/f16): goldens from the C reference.
 
 Relu, relu6, leaky relu and none are exact in the kernel, so their golden is the exact result rounded once.
-Sigmoid, tanh and hardswish follow the kernel's own arithmetic on the case's target (kernel_faithful:
-nn_activation_f32_cmsis per float32 target, nn_activation_f16_mve and tanh_lut_mve_f16 on Helium), compared at
-PyTorch's tolerances; the exact result stays the oracle (kf.check_close_to_exact). Float16 off Helium keeps
-the exact golden (tanh: the scalar table variant tanh_lut_f16) and the descriptor's tolerance.
+On the shipped build sigmoid, tanh and hardswish follow the kernel's own arithmetic on the case's target
+(kernel_faithful: nn_activation_f32_cmsis per float32 target, nn_activation_f16_mve and tanh_lut_mve_f16 on
+Helium), compared at PyTorch's tolerances; the exact result stays the oracle (kf.check_close_to_exact). Every
+other build, and float16 off Helium, keeps the exact golden widened by the activation's guard budget. A
+descriptor's tightened comparison wins on every build (kf.comparison_context).
 """
 
 from pathlib import Path
@@ -25,39 +26,28 @@ class OpNNActivationFloat(OperationBase):
     def _activation_symbol(self) -> str:
         return str(self.desc["activation_type"]).upper()
 
-    def _exact_comparison(self) -> bool:
-        """A descriptor that pins atol = rtol = 0 keeps that stricter comparison."""
-        comparison = self.desc.get("comparison") or {}
-        return float(comparison.get("atol", -1.0)) == 0.0 and float(comparison.get("rtol", -1.0)) == 0.0
-
     def _kernel_call(self, activation_type: str, activation_dtype: str, input_data: np.ndarray, act_param: float,
                      exact):
-        """The golden's reference call and whether it is the kernel's own arithmetic on this target.
+        """The golden's reference call, and whether it is the kernel's own arithmetic on this build.
 
         Relu, relu6, leaky relu and none round at most one product, so the exact call is the kernel's result on
-        every target. Sigmoid, tanh and hardswish follow the kernel: float32 on each float target (Helium,
-        scalar FPU, soft float), float16 on Helium. Float16 off Helium keeps the exact golden (tanh: the scalar
-        table variant) and its descriptor tolerance."""
+        every build. On the shipped build sigmoid, tanh and hardswish follow the kernel: float32 on each float
+        target (Helium, scalar FPU, soft float), float16 on Helium. Every other case keeps the exact golden,
+        widened by the activation's guard budget (kf.activation_atol)."""
         from helia_core_tester.generation.reference.abi import float_activation_code
         from helia_core_tester.generation.reference.call import ReferenceCall
 
         code = float_activation_code(activation_type)
-        approximated = activation_type in kf.APPROXIMATED_ACTIVATIONS
-        if activation_dtype == "FP32":
-            if not approximated:
-                return exact, True
-            return kf.nn_activation_f32_cmsis_call(input_data, code, act_param,
-                                                   kf.float_target(self.target_cpu)), True
-        if kf.mve_float16_target(self.target_cpu):
-            if not approximated:
-                return exact, True
+        if activation_type not in kf.APPROXIMATED_ACTIVATIONS:
+            return exact, True
+        target = kf.float_route(self) if activation_dtype == "FP32" else None
+        if target is not None:
+            return kf.nn_activation_f32_cmsis_call(input_data, code, act_param, target), True
+        if activation_dtype == "FP16" and kf.mve_float16_route(self):
             if activation_type == "ARM_NN_FLT_ACT_TANH":
                 return ReferenceCall("tanh_lut_mve_f16", {"unused": 0}, dict(exact.inputs), dict(exact.output_shapes),
                                      quant=exact.quant), True
             return kf.nn_activation_f16_mve_call(input_data, code, act_param), True
-        if activation_type == "ARM_NN_FLT_ACT_TANH":
-            return ReferenceCall("tanh_lut_f16", {"unused": 0}, dict(exact.inputs), dict(exact.output_shapes),
-                                 quant=exact.quant), False
         return exact, False
 
     def generate_c_files(self, output_dir: Path) -> None:
@@ -110,8 +100,8 @@ class OpNNActivationFloat(OperationBase):
             "output_dtype": output_dtype,
             "kernel_fn": kernel_fn,
         }
-        if faithful and not self._exact_comparison():
-            context.update(kf.tolerance_context(float_dtype))
+        bound = 0.0 if faithful else kf.activation_atol(input_data, activation_type)
+        context.update(kf.comparison_context(self, float_dtype, bound))
 
         self.render_harness_case(
             output_dir, stem="nn_activation_float", context=context,

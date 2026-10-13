@@ -200,7 +200,7 @@ class OpBatchMatMul(OperationBase):
         Generate C and H files for BatchMatMul, with the golden from the C reference (TFLite's
         BatchMatMul; float exact then rounded once).
         """
-        from helia_core_tester.generation.ops._shared.conv_reference import FLOAT_UNBOUNDED
+        from helia_core_tester.generation.ops._shared.conv_reference import FLOAT_UNBOUNDED, exact_comparison
         from helia_core_tester.generation.reference import policy
         from helia_core_tester.generation.reference.bindings import get_bindings
         from helia_core_tester.generation.reference.call import ReferenceCall
@@ -267,7 +267,7 @@ class OpBatchMatMul(OperationBase):
         if float_kernel:
             lo = float(np.float32(self.desc.get("activation_min", -FLOAT_UNBOUNDED)))
             hi = float(np.float32(self.desc.get("activation_max", FLOAT_UNBOUNDED)))
-            faithful = float_dtype == np.float16 and kf.mve_float16_target(self.target_cpu)
+            faithful = float_dtype == np.float16 and kf.mve_float16_route(self)
             if faithful:
                 # The kernel's own float16 arithmetic: CMSIS non-adjoint (descriptor adj_y) runs
                 # arm_nn_mat_mult_nt_t_f16; the adjoint paths dot in float16 lanes while every strided
@@ -294,13 +294,18 @@ class OpBatchMatMul(OperationBase):
                 output_data = self.reference_golden(call).reshape(output_shape)
                 kf.check_within_bound(name, output_data, call.inputs["lhs"], call.inputs["rhs"], None, float_dtype)
                 probe = lambda ops: faithful_call(ops[0], ops[1]).output().reshape(output_shape)  # noqa: E731
+                comparison = kf.comparison_context(self, float_dtype)
             else:
-                output_data = self.reference_golden(ReferenceCall(
+                call = ReferenceCall(
                     "batch_matmul_f16" if float_dtype == np.float16 else "batch_matmul_f32",
                     {"adj_x": int(adj_x), "adj_y": int(adj_y), "activation_min": lo, "activation_max": hi},
                     {"lhs": np.ascontiguousarray(input_lhs_data), "rhs": np.ascontiguousarray(input_rhs_data)},
-                    {"output": output_shape}))
+                    {"output": output_shape})
+                output_data = self.reference_golden(call)
                 probe = self.reference_probe
+                # Each output is a K-term dot product (K = the LHS inner dimension), no bias.
+                inner = int(input_lhs_shape[-2] if adj_x else input_lhs_shape[-1])
+                comparison = exact_comparison(self, call, inner, float_dtype)
             output_data, nonfinite_context = self.apply_nonfinite_policy(
                 output_data, reference=probe, inputs=[input_lhs_data, input_rhs_data]
             )
@@ -335,8 +340,7 @@ class OpBatchMatMul(OperationBase):
                 'bmm_activation_max_literal': builder.format_float_literal(hi),
                 'validation_mode': 'float',
             }
-            if faithful:
-                context.update(kf.tolerance_context(float_dtype))
+            context.update(comparison)
             context.update(nonfinite_context)
             self._render_batch_matmul(output_dir, context)
             self._write_cmake(output_dir)

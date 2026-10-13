@@ -58,8 +58,8 @@ int32_t reduce_sum_float_axis_c_f32_test_case_run(void)
         reduce_sum_float_axis_c_f32_expected_output,
         REDUCE_SUM_FLOAT_AXIS_C_F32_OUTPUT_SIZE,
         1,
-        5e-05f,
-        2e-05f,
+        1.1326741625007345e-05f,
+        1.4192092895507813e-06f,
         20,
         failures
     );

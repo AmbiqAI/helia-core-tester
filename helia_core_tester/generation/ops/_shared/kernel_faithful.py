@@ -11,10 +11,14 @@ from typing import Optional, Tuple
 import numpy as np
 
 from helia_core_tester.core.cpu_targets import get_cpu_profile
+from helia_core_tester.generation.io.dtypes import _DEFAULT_FLOAT_COMPARISON as _DTYPE_DEFAULTS
 from helia_core_tester.generation.reference.call import ReferenceCall
 
-# torch.testing.assert_close defaults: (atol, rtol).
-PYTORCH_TOLERANCE = {np.dtype(np.float32): (1e-5, 1.3e-6), np.dtype(np.float16): (1e-5, 1e-3)}
+# torch.testing.assert_close defaults: (atol, rtol), the same values as dtypes.default_comparison_for_dtype.
+PYTORCH_TOLERANCE = {
+    np.dtype(np.float32): (_DTYPE_DEFAULTS["FP32"]["atol"], _DTYPE_DEFAULTS["FP32"]["rtol"]),
+    np.dtype(np.float16): (_DTYPE_DEFAULTS["FP16"]["atol"], _DTYPE_DEFAULTS["FP16"]["rtol"]),
+}
 
 # ARM_NN_MVE_F16_MAX_GATHER_STRIDE_8: the largest row count an eight-lane gather can stride.
 MVE_F16_GATHER_ROWS = 65535 // 7
@@ -37,6 +41,65 @@ def float_target(cpu: str) -> int:
     if profile.has_mve:
         return 0
     return 2 if profile.supports_capability("soft_float") else 1
+
+
+def shipped(op) -> bool:
+    """Whether the case's kernels build as shipped (-Ofast, no coverage): only then do emulated goldens apply."""
+    numerics = getattr(op, "kernel_numerics", "shipped")
+    if numerics not in ("shipped", "bounded"):
+        raise ValueError(f"kernel_numerics must be 'shipped' or 'bounded', got {numerics!r}")
+    return numerics == "shipped"
+
+
+def mve_float16_route(op) -> bool:
+    """The case runs a float16 Helium route that an emulated golden reproduces."""
+    return shipped(op) and mve_float16_target(op.target_cpu)
+
+
+def float_route(op) -> Optional[int]:
+    """The float32 leg an emulated golden reproduces (see float_target), or None off the shipped build."""
+    return float_target(op.target_cpu) if shipped(op) else None
+
+
+def bounded_context(dtype, atol_extra: float, rtol_extra: float = 0.0) -> dict:
+    """The comparison for an exact golden: assert_close's defaults widened by the case's derived bound."""
+    if not (np.isfinite(atol_extra) and np.isfinite(rtol_extra)) or atol_extra < 0 or rtol_extra < 0:
+        raise ValueError(f"bound must be finite and non-negative, got atol {atol_extra!r}, rtol {rtol_extra!r}")
+    atol, rtol = PYTORCH_TOLERANCE[np.dtype(dtype)]
+    return {"validation_atol": atol + float(atol_extra), "validation_rtol": rtol + float(rtol_extra),
+            "kernel_faithful": False}
+
+
+def descriptor_tightening(desc) -> Optional[Tuple[float, float]]:
+    """The (atol, rtol) a descriptor states, which may only tighten the defaults (test_float_tolerance_policy)."""
+    stated = desc.get("comparison") if isinstance(desc, dict) else None
+    if not isinstance(stated, dict) or stated.get("atol") is None:
+        return None
+    return float(stated["atol"]), float(stated.get("rtol", 0.0))
+
+
+def comparison_context(op, dtype, atol_extra: float = 0.0, rtol_extra: float = 0.0) -> dict:
+    """The comparison a float case emits. A descriptor's tightened comparison wins; otherwise an emulated golden
+    (no extra) is held to assert_close's defaults and an exact golden to those widened by its derived bound."""
+    stated = descriptor_tightening(op.desc)
+    if stated is not None:
+        return {"validation_atol": stated[0], "validation_rtol": stated[1],
+                "kernel_faithful": shipped(op) and not (atol_extra or rtol_extra)}
+    if atol_extra or rtol_extra:
+        return bounded_context(dtype, atol_extra, rtol_extra)
+    return tolerance_context(dtype)
+
+
+def linear_bound(magnitude: np.ndarray, k: int, dtype) -> Tuple[float, float]:
+    """(atol, rtol) covering any evaluation order of a k-term sum in `dtype` against the exact golden:
+    |computed - golden| <= (k + 2) u sum|terms| + 2 u |exact|. `magnitude` is sum|terms| per output, e.g. the
+    exact reference re-run on the operands' absolute values with the activation clamp off."""
+    if k < 0:
+        raise ValueError(f"term count must be non-negative, got {k}")
+    mag = np.asarray(magnitude, dtype=np.float64)
+    finite = mag[np.isfinite(mag)]
+    u = _U[np.dtype(dtype)]
+    return (k + 2) * u * float(np.max(finite, initial=0.0)), 2.0 * u
 
 
 def check_close_to_exact(name: str, call: ReferenceCall, exact: ReferenceCall, atol: float) -> None:
@@ -508,3 +571,75 @@ def gru_f32_cmsis_call(exact: ReferenceCall, cpu: str) -> ReferenceCall:
         raise ValueError(f"gru_f32_cmsis emulates gru_f32, got {exact.entry}")
     return ReferenceCall("gru_f32_cmsis", {**exact.params, "target": float_target(cpu)}, dict(exact.inputs),
                          dict(exact.output_shapes))
+
+# ------------------------------------------- exact-golden bounds (rest family: pooling, reductions, recurrent)
+
+# The guard budget of lstm_f32_cmsis against the exact lstm_f32, the counterpart of GRU_F32_ATOL.
+LSTM_F32_ATOL = 1e-4
+
+
+def abs_magnitude(call: ReferenceCall, output: Optional[str] = None) -> np.ndarray:
+    """sum|terms| per output of an accumulating exact entry (linear_bound's `magnitude`): `call` re-run on the
+    absolute values of its float operands with its activation clamp off, as float64. A float16 entry with a float32
+    twin (`<op>_f32`) runs that twin on the widened operands, so the magnitude is not rounded to float16. It is
+    evaluated here, never recorded as the case's golden."""
+    from dataclasses import replace
+
+    from helia_core_tester.generation.reference.abi import load_spec
+
+    entry = call.entry
+    widen = entry.endswith("_f16") and f"{entry[:-4]}_f32" in load_spec().kernels
+    if widen:
+        entry = f"{entry[:-4]}_f32"
+
+    def _abs(v):
+        if not np.issubdtype(v.dtype, np.floating):
+            return v
+        return np.abs(v).astype(np.float32) if widen and v.dtype == np.float16 else np.abs(v)
+
+    inputs = {k: _abs(v) for k, v in call.inputs.items()}
+    params = dict(call.params)
+    if "activation_min" in params or "activation_max" in params:
+        params.update(activation_min=float("-inf"), activation_max=float("inf"))
+    probe = replace(call, entry=entry, params=params, inputs=inputs)
+    out = probe.output() if output is None else probe.run()[output]
+    return np.asarray(out, dtype=np.float64)
+
+
+def float32_accumulation_bound(magnitude: np.ndarray, k: int, dtype) -> Tuple[float, float]:
+    """linear_bound for a kernel that accumulates (and scales) in float32 on every route and rounds once to
+    `dtype` when it stores (arm_reduce_sum_f16, arm_nn_mean_f16): the float32 summation bound as atol, and that
+    store plus the golden's own rounding, 2 u(dtype), as rtol."""
+    atol, _ = linear_bound(magnitude, k, np.float32)
+    return atol, 2.0 * _U[np.dtype(dtype)]
+
+
+def recurrent_dot_bound(x: np.ndarray, input_weights: np.ndarray, recurrent_weights: np.ndarray,
+                        biases, dtype, state_bound: Optional[float] = None) -> float:
+    """The atol an exact LSTM/GRU golden widens by for the gate dot products, per step.
+
+    Each gate pre-activation is a sum of I input terms, H recurrent terms (|h| <= 1: h is o tanh(c), or a convex
+    combination of tanh outputs) and the biases, so linear_bound bounds its error by d = (k + 2) u M + 2 u M over
+    the largest such magnitude M. A step's output moves by at most d (1.5 + S / 4): the sigmoid gates pass a
+    quarter of their error, tanh all of it, and the error of the gate multiplying a carried quantity of magnitude
+    S scales by S: the cell state for an LSTM (`state_bound`), W_h h + b_h for a GRU's candidate (None: M bounds
+    it). The carry of earlier steps' error is left to the guard budget this is added to."""
+    w_in = np.abs(np.asarray(input_weights, np.float64))
+    w_h = np.abs(np.asarray(recurrent_weights, np.float64))
+    if w_in.ndim != 3 or w_h.ndim != 3 or w_in.shape[:2] != w_h.shape[:2] or w_h.shape[1] != w_h.shape[2]:
+        raise ValueError(f"gate weights must be [G,H,I] and [G,H,H], got {w_in.shape} and {w_h.shape}")
+    if state_bound is not None and (not np.isfinite(state_bound) or state_bound < 0):
+        raise ValueError(f"state bound must be finite and non-negative, got {state_bound!r}")
+    rows = np.abs(np.asarray(x, np.float64)).reshape(-1, w_in.shape[2])
+    rows = rows[np.all(np.isfinite(rows), axis=1)]
+    mag = np.einsum("ghi,ri->grh", w_in, rows) + w_h.sum(axis=2)[:, None, :]
+    terms = w_in.shape[2] + w_h.shape[2]
+    for b in biases:
+        b = np.asarray(b, np.float64)
+        if b.size:
+            mag = mag + np.abs(b).reshape(w_in.shape[0], 1, w_in.shape[1])
+            terms += 1
+    atol, rtol = linear_bound(mag, terms, dtype)
+    worst = float(np.max(mag, initial=0.0))
+    carried = worst if state_bound is None else float(state_bound)
+    return (atol + rtol * worst) * (1.5 + carried / 4.0)

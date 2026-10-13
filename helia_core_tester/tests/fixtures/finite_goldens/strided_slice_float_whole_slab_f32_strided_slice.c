@@ -59,8 +59,8 @@ int32_t strided_slice_float_whole_slab_f32_test_case_run(void)
         strided_slice_float_whole_slab_f32_expected_output,
         STRIDED_SLICE_FLOAT_WHOLE_SLAB_F32_OUTPUT_SIZE,
         1,
-        5e-05f,
-        2e-05f,
+        1e-05f,
+        1.3e-06f,
         20,
         failures
     );

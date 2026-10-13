@@ -63,7 +63,7 @@ def test_tensor_dtypes_only_descriptor_derives_legacy_quantized_side(tmp_path: P
     assert desc["activation_dtype"] == "S8"
     assert desc.get("weight_dtype") is None
     assert desc["resolved_tensor_dtypes"] == {"input": "S8", "output": "FP32"}
-    assert desc["resolved_comparison"] == {"mode": "float", "atol": 5.0e-5, "rtol": 2.0e-5}
+    assert desc["resolved_comparison"] == {"mode": "float", "atol": 1.0e-5, "rtol": 1.3e-6}
 
 
 def test_tensor_dtypes_only_descriptor_uses_fp16_default_comparison(tmp_path: Path) -> None:
@@ -84,7 +84,7 @@ def test_tensor_dtypes_only_descriptor_uses_fp16_default_comparison(tmp_path: Pa
 
     assert desc["activation_dtype"] == "FP16"
     assert desc["resolved_tensor_dtypes"] == {"input": "FP16", "output": "FP16"}
-    assert desc["resolved_comparison"] == {"mode": "float", "atol": 1.0e-3, "rtol": 1.0e-3}
+    assert desc["resolved_comparison"] == {"mode": "float", "atol": 1.0e-5, "rtol": 1.0e-3}
 
 
 def test_tensor_dtypes_accept_fp16_and_comparison_override(tmp_path: Path) -> None:

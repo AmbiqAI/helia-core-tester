@@ -148,8 +148,8 @@ int32_t svdf_float_default_f32_test_case_run(void)
         svdf_float_default_f32_expected_output,
         4,
         1,
-        5e-05f,
-        2e-05f,
+        1.1739494393859787e-05f,
+        1.4192092895507813e-06f,
         20,
         failures
     );

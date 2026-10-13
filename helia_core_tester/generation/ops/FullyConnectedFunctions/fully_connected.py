@@ -377,7 +377,7 @@ class OpFullyConnected(OperationBase):
         if float_kernel:
             has_biases = biases is not None and biases.size > 0
             input_data = case["input"]
-            if case.get("kernel_faithful"):
+            if case.get("emulated"):
                 recorded = self.reference
 
                 def probe(ops):
@@ -434,7 +434,7 @@ class OpFullyConnected(OperationBase):
                 'fc_activation_max_literal': builder.format_float_literal(fc_params['activation_max']),
                 'validation_mode': 'float',
             }
-            context.update(case.get("kernel_faithful") or {})
+            context.update(case.get("comparison") or {})
             context.update(nonfinite_context)
             self._render_fully_connected(output_dir, context)
             self._write_cmake(output_dir)

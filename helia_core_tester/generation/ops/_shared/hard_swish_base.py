@@ -140,8 +140,9 @@ class HardSwishFamilyBase(OperationBase):
         """arm_hard_swish_f32/f16 (ns-cmsis-nn #413) with the kernel's own arithmetic as the golden.
 
         arm_hard_swish_f32 computes x * clamp(fma(x, 1/6, 0.5), 0, 1) on every target (hard_swish_f32_cmsis);
-        arm_hard_swish_f16 on Helium x * (clamp(x + 3, 0, 6) * h(1/6)) in float16 (hard_swish_f16_mve). Both
-        are compared at PyTorch's tolerances and must stay within kf.hard_swish_atol of the exact result."""
+        arm_hard_swish_f16 on Helium x * (clamp(x + 3, 0, 6) * h(1/6)) in float16 (hard_swish_f16_mve). On the
+        shipped build both are the golden, compared at PyTorch's tolerances, and must stay within
+        kf.hard_swish_atol of the exact result; elsewhere the exact result is the golden, widened by that budget."""
         from helia_core_tester.generation.reference.call import ReferenceCall
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
@@ -161,14 +162,16 @@ class HardSwishFamilyBase(OperationBase):
             "hard_swish_f16" if is_f16 else "hard_swish_f32", {"unused": 0},
             {"input": np.ascontiguousarray(input_data)}, {"output": input_shape},
         )
-        # The kernel's own arithmetic on this target (float32 everywhere, float16 on Helium), the exact
-        # result staying the oracle; float16 off Helium keeps the exact golden and its tolerance.
-        call = kf.hard_swish_cmsis_call(input_data, self.target_cpu)
+        # On the shipped build the kernel's own arithmetic on this target (float32 everywhere, float16 on
+        # Helium), the exact result staying the oracle; every other case keeps the exact golden, widened by
+        # the guard budget.
+        call = kf.hard_swish_cmsis_call(input_data, self.target_cpu) if kf.shipped(self) else None
+        budget = kf.hard_swish_atol(input_data)
         if call is None:
             output_data = self.reference_golden(exact)
         else:
             output_data = self.reference_golden(call)
-            kf.check_close_to_exact(name, call, exact, kf.hard_swish_atol(input_data))
+            kf.check_close_to_exact(name, call, exact, budget)
 
         builder = TemplateContextBuilder()
         context = {
@@ -184,8 +187,7 @@ class HardSwishFamilyBase(OperationBase):
             'float_kernel': True,
             'validation_mode': 'float',
         }
-        if call is not None:
-            context.update(kf.tolerance_context(float_dtype))
+        context.update(kf.comparison_context(self, float_dtype, 0.0 if call is not None else budget))
         self.render_harness_case(
             output_dir, stem="hard_swish", context=context,
             pool=tensor_case_pool(context, {"size": context["output_size"]}),

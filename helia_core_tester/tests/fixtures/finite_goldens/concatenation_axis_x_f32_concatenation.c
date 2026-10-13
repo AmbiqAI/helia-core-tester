@@ -88,8 +88,8 @@ int32_t concatenation_axis_x_f32_test_case_run(void)
         concatenation_axis_x_f32_expected_output,
         CONCATENATION_AXIS_X_F32_OUTPUT_SIZE,
         1,
-        5e-05f,
-        2e-05f,
+        1e-05f,
+        1.3e-06f,
         20,
         failures
     );

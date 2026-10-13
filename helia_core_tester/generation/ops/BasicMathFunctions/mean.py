@@ -153,9 +153,10 @@ class OpMean(OperationBase):
 
         Mirrors OpReduceSum's float path: same call shape (4D NHWC input
         dims + 4D binary axis mask + 4D output dims), with the kernel
-        dividing by the reduction count before the single store. On Helium the
-        golden is the kernel's float32 accumulation (kernel_faithful); elsewhere
-        the exact mean rounded once (the C reference).
+        dividing by the reduction count before the single store. On the shipped
+        build's Helium float16 route the golden is the kernel's float32
+        accumulation (kernel_faithful); elsewhere the exact mean rounded once,
+        compared within kernel_faithful.float32_accumulation_bound.
         """
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
@@ -184,7 +185,7 @@ class OpMean(OperationBase):
 
         from helia_core_tester.generation.reference.call import ReferenceCall
 
-        faithful = float_dtype == np.float16 and kf.mve_float16_target(self.target_cpu)
+        faithful = float_dtype == np.float16 and kf.mve_float16_route(self)
         if faithful:
             # The kernel's own float32 accumulation order on Helium, rounded as the kernel rounds it.
             route = kf.reduce_f16_route("mean", input_q.shape, normalized_axes)
@@ -192,17 +193,23 @@ class OpMean(OperationBase):
                 kf.reduce_f16_f32acc_call(input_q, normalized_axes, mean=True, route=route))
             rows, weights = kf.reduce_operands(input_q, normalized_axes, mean=True)
             kf.check_within_bound(name, output_data, rows, weights, None, float_dtype)
+            comparison = kf.comparison_context(self, float_dtype)
         else:
-            output_data = self.reference_golden(ReferenceCall(
+            # The exact mean rounded once; the kernel sums the reduced elements in float32, in an order its
+            # build picks, then scales by the count, which float32_accumulation_bound covers.
+            exact = ReferenceCall(
                 "mean_f16" if float_dtype == np.float16 else "mean_f32",
                 {"axis_mask": sum(1 << a for a in normalized_axes)},
                 {"input": np.ascontiguousarray(input_q)},
-                {"output": tuple(1 if i in normalized_axes else d for i, d in enumerate(input_shape))}))
+                {"output": tuple(1 if i in normalized_axes else d for i, d in enumerate(input_shape))})
+            output_data = self.reference_golden(exact)
+            count = int(np.prod([input_q.shape[a] for a in normalized_axes]))
+            comparison = kf.comparison_context(
+                self, float_dtype, *kf.float32_accumulation_bound(kf.abs_magnitude(exact), count, float_dtype))
         output_data, nonfinite_context = self.apply_nonfinite_policy(
             output_data, reference=self.reference_probe, inputs=[input_q]
         )
-        if faithful:
-            nonfinite_context = {**kf.tolerance_context(float_dtype), **nonfinite_context}
+        nonfinite_context = {**comparison, **nonfinite_context}
 
         context = {
             'name': name,

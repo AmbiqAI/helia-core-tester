@@ -1,10 +1,11 @@
 """GRUUnidirectional operation implementation.
 
 CMSIS-only (force_cmsis) float test generation for arm_gru_unidirectional_f16
-and arm_gru_unidirectional_f32. The golden is the kernel's arithmetic on the target
+and arm_gru_unidirectional_f32. On the shipped build the golden is the kernel's arithmetic on the target
 (gru_f32_cmsis for float32 on every target, gru_f16_mve for float16 on Helium),
 checked against the exact gru_f32/gru_f16 entry (gates update z, reset r,
-candidate n; reset-after and pre-reset forms); float16 elsewhere keeps the exact one.
+candidate n; reset-after and pre-reset forms); every other case keeps the exact one,
+widened by the guard budget and the gate dot-product bound.
 """
 
 from pathlib import Path
@@ -162,24 +163,32 @@ class OpGRUUnidirectional(OperationBase):
                           cand_b_hidden if use_bias else None),
         }
         call = self.gru_call(input_tensor, gates, time_major=time_major, reset_after=reset_after)
-        faithful = False
+        comparison = {}
         if self.status_only():
             # The kernel rejects the call before writing; the header still declares an expected
             # array, filled from the same reference but not recorded as a golden.
             output_ref = call.output()
             nonfinite_context = {}
         else:
-            if float_dtype == np.float16 and kf.mve_float16_target(self.target_cpu):
+            budget = kf.GRU_F32_ATOL if float_dtype == np.float32 else kf.RNN_F16_ATOL
+            if float_dtype == np.float16 and kf.mve_float16_route(self):
                 # arm_nn_gru_step_f16 on Helium: float16 lane dots, the kernel's float16 tables and the
                 # pre-reset sum as GCC vectorised it.
                 exact, call = call, kf.rnn_f16_mve_call(call)
-                kf.check_close_to_exact(name, call, exact, atol=kf.RNN_F16_ATOL)
-                faithful = True
-            elif float_dtype == np.float32:
+                kf.check_close_to_exact(name, call, exact, atol=budget)
+                comparison = kf.comparison_context(self, float_dtype)
+            elif float_dtype == np.float32 and kf.float_route(self) is not None:
                 # arm_nn_gru_step_f32 on this target: the kernel's float32 tables and operation order.
                 exact, call = call, kf.gru_f32_cmsis_call(call, self.target_cpu)
-                kf.check_close_to_exact(name, call, exact, atol=kf.GRU_F32_ATOL)
-                faithful = True
+                kf.check_close_to_exact(name, call, exact, atol=budget)
+                comparison = kf.comparison_context(self, float_dtype)
+            else:
+                # The exact GRU: the kernel's activation tables stay within the guard budget of it, and its gate
+                # dot products within recurrent_dot_bound.
+                ins = call.inputs
+                dots = kf.recurrent_dot_bound(ins["input"], ins["input_weights"], ins["recurrent_weights"],
+                                              (ins["input_bias"], ins["recurrent_bias"]), float_dtype)
+                comparison = kf.comparison_context(self, float_dtype, budget + dots)
             output_ref = self.reference_golden(call)
             output_ref, nonfinite_context = self.apply_nonfinite_policy(
                 output_ref,
@@ -224,8 +233,7 @@ class OpGRUUnidirectional(OperationBase):
             "expected_status": self.expected_status(),
             "use_bias": use_bias,
         }
-        if faithful:
-            context.update(kf.tolerance_context(float_dtype))
+        context.update(comparison)
         context.update(nonfinite_context)
 
         # ns-cmsis-nn#377 / tester#71: generation-time feature probe for the

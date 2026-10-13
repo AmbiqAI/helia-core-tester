@@ -423,7 +423,7 @@ class OpDepthwiseConv(OperationBase):
                 'dw_activation_min_literal': builder.format_float_literal(dw_conv_params['activation_min']),
                 'dw_activation_max_literal': builder.format_float_literal(dw_conv_params['activation_max']),
             }
-            context.update(case.get("kernel_faithful") or {})
+            context.update(case.get("comparison") or {})
             context.update(nonfinite_context)
             self._render_depthwise(output_dir, context)
             self._write_cmake(output_dir)

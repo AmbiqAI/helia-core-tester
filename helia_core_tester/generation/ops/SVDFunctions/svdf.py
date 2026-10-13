@@ -160,13 +160,20 @@ class OpSVDF(OperationBase):
                 {"output": (sequence_steps, input_batches, unit_count),
                  "state_out": (input_batches, feature_batches, time_batches)},
             )
+            bound = (0.0, 0.0)
             if (activation_dtype == "FP16" and not self.status_only()
-                    and kf.mve_float16_target(self.target_cpu)):
+                    and kf.mve_float16_route(self)):
                 # arm_svdf_f16 on Helium: float16 lane dots, the float32 rank sum, maxNum/minNum clamp.
                 call = kf.rnn_f16_mve_call(call)
                 faithful = True
             else:
                 faithful = False
+                if not self.status_only():
+                    # The exact SVDF rounded once. Each output nests three sums the build may order freely: the
+                    # input_height-term feature projection (rounded into the state), the time_batches-term time
+                    # reduction and the rank-term sum with the bias, so linear_bound over all of them.
+                    terms = input_height + time_batches + rank + 2
+                    bound = kf.linear_bound(kf.abs_magnitude(call, "output")[-1], terms, float_dtype)
             # The harness runs sequence_steps kernel calls and compares the last step's output.
             outputs = self._svdf_outputs(call)
             if faithful:
@@ -213,8 +220,8 @@ class OpSVDF(OperationBase):
                 "output_activation_max_literal": builder.format_float_literal(output_activation_max),
             }
             context.update(self._ctx_sizer_context(kernel_fn))
-            if faithful:
-                context.update(kf.tolerance_context(float_dtype))
+            if faithful or bound != (0.0, 0.0):
+                context.update(kf.comparison_context(self, float_dtype, *bound))
             context.update(nonfinite_context)
             fault = self.fault_kind()
             variant = "svdf_f32"

@@ -13,6 +13,14 @@ from helia_core_tester.core.logging import get_logger
 from helia_core_tester.core.path_layout import generated_tests_dir, generated_tests_root
 from helia_core_tester.utils.command_runner import run_command
 
+SHIPPED_OPTIMIZATION = "-Ofast"
+
+
+def kernel_numerics(config) -> str:
+    """'shipped' when the kernels build as ns-cmsis-nn ships them, which kernel-faithful goldens model."""
+    shipped = config.optimization == SHIPPED_OPTIMIZATION and not config.coverage
+    return "shipped" if shipped else "bounded"
+
 
 class GenerateStep(StepBase):
     """Step for generating TFLite models."""
@@ -74,6 +82,7 @@ class GenerateStep(StepBase):
         """Build pytest command list. include_seed=False for dry-run preview."""
         cmd = ["pytest", "test_ops.py::test_generation", "-v"]
         cmd.extend(["--cpu", cpu])
+        cmd.extend(["--kernel-numerics", kernel_numerics(self.config)])
         cmd.extend(["--suite", suite])
         if self.config.hidden_dir is None:
             cmd.extend(["--generated-tests-dir", str(self._cpu_generated_tests_dir(cpu, suite=suite))])
