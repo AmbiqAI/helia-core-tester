@@ -22,6 +22,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "hct_cmsis_act_f32.h"
 #include "hct_ref_internal.h"
 
 typedef struct
@@ -30,64 +31,23 @@ typedef struct
     int target;
 } Arith;
 
-static float bits_f(uint32_t b)
-{
-    float f;
-    memcpy(&f, &b, sizeof(f));
-    return f;
-}
-
 static float madd(const Arith *a, float x, float y, float z)
 {
     return a->fused ? fmaf(x, y, z) : (float)(x * y) + z;
 }
 
-static float exp_lut(const Arith *a, float x)
-{
-    x = x < 80.0f ? x : 80.0f;
-    x = x > -80.0f ? x : -80.0f;
-    const float t = x * 1.44269504088896341f;
-    int32_t n = (int32_t)t;
-    n = t < (float)n ? n - 1 : n;
-    const float f = t - (float)n;
-    const float idx_f = f * 256.0f;
-    int32_t idx = (int32_t)idx_f;
-    idx = idx < 0 ? 0 : (idx > 255 ? 255 : idx);
-    const float frac = idx_f - (float)idx;
-    const float y0 = bits_f(hct_cmsis_exp2_lut_f32_bits[idx]);
-    const float y1 = bits_f(hct_cmsis_exp2_lut_f32_bits[idx + 1]);
-    n = n < -126 ? -126 : (n > 127 ? 127 : n);
-    return madd(a, y1 - y0, frac, y0) * bits_f((uint32_t)(n + 127) << 23);
-}
-
 static float sigmoid(const Arith *a, float x)
 {
-    if (x >= 0.0f)
-    {
-        return 1.0f / (1.0f + exp_lut(a, -x));
-    }
-    const float e = exp_lut(a, x);
-    return e / (1.0f + e);
+    float y = 0.0f;
+    (void)hct_cmsis_sigmoid_f32(x, a->target, &y);
+    return y;
 }
 
-static float tanh_lut(const Arith *a, float x, int floor_index)
+static float tanh_lut(const Arith *a, float x)
 {
-    if (isnan(x))
-    {
-        return x;
-    }
-    const float ax = fabsf(x);
-    if (!(ax < 6.0f))
-    {
-        return copysignf(1.0f, x);
-    }
-    const float t = ax * 64.0f;
-    int32_t idx = floor_index ? (int32_t)floorf(t) : (int32_t)t;
-    idx = idx > 383 ? 383 : idx;
-    const float frac = t - (float)idx;
-    const float y0 = bits_f(hct_cmsis_tanh_lut_f32_bits[idx]);
-    const float y1 = bits_f(hct_cmsis_tanh_lut_f32_bits[idx + 1]);
-    return copysignf(madd(a, y1 - y0, frac, y0), x);
+    float y = 0.0f;
+    (void)hct_cmsis_tanh_f32(x, a->target, &y);
+    return y;
 }
 
 static float dot(const Arith *a, const float *x, const float *w, int32_t n)
@@ -220,7 +180,7 @@ int32_t hct_ref_lstm_f32_cmsis(const HctLstmF32CmsisParams *params, const HctTen
                         }
                         acc += dot(&a, h_prev, wrow, H);
                     }
-                    gates[g] = g == 2 ? tanh_lut(&a, acc, 0) : sigmoid(&a, acc);
+                    gates[g] = g == 2 ? tanh_lut(&a, acc) : sigmoid(&a, acc);
                 }
                 float *c = &cell[(size_t)b * H + u];
                 float cv = 0.0f;
@@ -241,7 +201,7 @@ int32_t hct_ref_lstm_f32_cmsis(const HctLstmF32CmsisParams *params, const HctTen
                     cv = hct_clamp_f32(cv, -clip, clip);
                 }
                 *c = cv;
-                h_new[u] = gates[3] * tanh_lut(&a, cv, params->target == 0);
+                h_new[u] = gates[3] * tanh_lut(&a, cv);
                 hct_store_f32(&outputs[0], xr * H + u, h_new[u]);
             }
             memcpy(h_prev, h_new, (size_t)H * sizeof(float));

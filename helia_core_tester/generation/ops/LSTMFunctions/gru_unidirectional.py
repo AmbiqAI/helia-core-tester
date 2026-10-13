@@ -1,8 +1,10 @@
 """GRUUnidirectional operation implementation.
 
 CMSIS-only (force_cmsis) float test generation for arm_gru_unidirectional_f16
-and arm_gru_unidirectional_f32. The golden is the C reference's gru_f32/gru_f16
-entry (gates update z, reset r, candidate n; reset-after and pre-reset forms).
+and arm_gru_unidirectional_f32. The golden is the kernel's arithmetic on the target
+(gru_f32_cmsis for float32 on every target, gru_f16_mve for float16 on Helium),
+checked against the exact gru_f32/gru_f16 entry (gates update z, reset r,
+candidate n; reset-after and pre-reset forms); float16 elsewhere keeps the exact one.
 """
 
 from pathlib import Path
@@ -160,19 +162,24 @@ class OpGRUUnidirectional(OperationBase):
                           cand_b_hidden if use_bias else None),
         }
         call = self.gru_call(input_tensor, gates, time_major=time_major, reset_after=reset_after)
-        mve16 = False
+        faithful = False
         if self.status_only():
             # The kernel rejects the call before writing; the header still declares an expected
             # array, filled from the same reference but not recorded as a golden.
             output_ref = call.output()
             nonfinite_context = {}
         else:
-            mve16 = float_dtype == np.float16 and kf.mve_float16_target(self.target_cpu)
-            if mve16:
+            if float_dtype == np.float16 and kf.mve_float16_target(self.target_cpu):
                 # arm_nn_gru_step_f16 on Helium: float16 lane dots, the kernel's float16 tables and the
                 # pre-reset sum as GCC vectorised it.
                 exact, call = call, kf.rnn_f16_mve_call(call)
                 kf.check_close_to_exact(name, call, exact, atol=kf.RNN_F16_ATOL)
+                faithful = True
+            elif float_dtype == np.float32:
+                # arm_nn_gru_step_f32 on this target: the kernel's float32 tables and operation order.
+                exact, call = call, kf.gru_f32_cmsis_call(call, self.target_cpu)
+                kf.check_close_to_exact(name, call, exact, atol=kf.GRU_F32_ATOL)
+                faithful = True
             output_ref = self.reference_golden(call)
             output_ref, nonfinite_context = self.apply_nonfinite_policy(
                 output_ref,
@@ -217,7 +224,7 @@ class OpGRUUnidirectional(OperationBase):
             "expected_status": self.expected_status(),
             "use_bias": use_bias,
         }
-        if mve16:
+        if faithful:
             context.update(kf.tolerance_context(float_dtype))
         context.update(nonfinite_context)
 

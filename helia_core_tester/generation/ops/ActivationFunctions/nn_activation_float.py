@@ -1,15 +1,17 @@
 """Float activation operation (arm_nn_activation_f32/f16): goldens from the C reference.
 
-Each activation's exact result rounded once to the output; float16 tanh is CMSIS-NN's table with
-interpolation, as the named variants tanh_lut_f16 (per-step rounding) and tanh_lut_mve_f16 (fused,
-the Helium path), chosen by the generation profile.
+Relu, relu6, leaky relu and none are exact in the kernel, so their golden is the exact result rounded once.
+Sigmoid, tanh and hardswish follow the kernel's own arithmetic on the case's target (kernel_faithful:
+nn_activation_f32_cmsis per float32 target, nn_activation_f16_mve and tanh_lut_mve_f16 on Helium), compared at
+PyTorch's tolerances; the exact result stays the oracle (kf.check_close_to_exact). Float16 off Helium keeps
+the exact golden (tanh: the scalar table variant tanh_lut_f16) and the descriptor's tolerance.
 """
 
 from pathlib import Path
 
 import numpy as np
 
-from helia_core_tester.core.cpu_targets import get_cpu_profile
+from helia_core_tester.generation.ops._shared import kernel_faithful as kf
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.harness.simple import tensor_case_pool
 
@@ -22,6 +24,41 @@ class OpNNActivationFloat(OperationBase):
 
     def _activation_symbol(self) -> str:
         return str(self.desc["activation_type"]).upper()
+
+    def _exact_comparison(self) -> bool:
+        """A descriptor that pins atol = rtol = 0 keeps that stricter comparison."""
+        comparison = self.desc.get("comparison") or {}
+        return float(comparison.get("atol", -1.0)) == 0.0 and float(comparison.get("rtol", -1.0)) == 0.0
+
+    def _kernel_call(self, activation_type: str, activation_dtype: str, input_data: np.ndarray, act_param: float,
+                     exact):
+        """The golden's reference call and whether it is the kernel's own arithmetic on this target.
+
+        Relu, relu6, leaky relu and none round at most one product, so the exact call is the kernel's result on
+        every target. Sigmoid, tanh and hardswish follow the kernel: float32 on each float target (Helium,
+        scalar FPU, soft float), float16 on Helium. Float16 off Helium keeps the exact golden (tanh: the scalar
+        table variant) and its descriptor tolerance."""
+        from helia_core_tester.generation.reference.abi import float_activation_code
+        from helia_core_tester.generation.reference.call import ReferenceCall
+
+        code = float_activation_code(activation_type)
+        approximated = activation_type in kf.APPROXIMATED_ACTIVATIONS
+        if activation_dtype == "FP32":
+            if not approximated:
+                return exact, True
+            return kf.nn_activation_f32_cmsis_call(input_data, code, act_param,
+                                                   kf.float_target(self.target_cpu)), True
+        if kf.mve_float16_target(self.target_cpu):
+            if not approximated:
+                return exact, True
+            if activation_type == "ARM_NN_FLT_ACT_TANH":
+                return ReferenceCall("tanh_lut_mve_f16", {"unused": 0}, dict(exact.inputs), dict(exact.output_shapes),
+                                     quant=exact.quant), True
+            return kf.nn_activation_f16_mve_call(input_data, code, act_param), True
+        if activation_type == "ARM_NN_FLT_ACT_TANH":
+            return ReferenceCall("tanh_lut_f16", {"unused": 0}, dict(exact.inputs), dict(exact.output_shapes),
+                                 quant=exact.quant), False
+        return exact, False
 
     def generate_c_files(self, output_dir: Path) -> None:
         from helia_core_tester.generation.reference.abi import float_activation_code
@@ -50,19 +87,16 @@ class OpNNActivationFloat(OperationBase):
         )
         activation_type = self._activation_symbol()
         act_param = float(self.desc.get("act_param", 0.0))
-        # Select the reference by generation profile, not compiled kernel route.
-        # M55-generated cases also run on the scalar fallback; off-grid rounding
-        # can differ there, so existing comparison budgets remain necessary.
-        if activation_type == "ARM_NN_FLT_ACT_TANH" and activation_dtype == "FP16":
-            entry = "tanh_lut_mve_f16" if get_cpu_profile(self.target_cpu).has_mve else "tanh_lut_f16"
-            params = {"unused": 0}
-        else:
-            entry = "nn_activation_f16" if activation_dtype == "FP16" else "nn_activation_f32"
-            params = {"activation_type": float_activation_code(activation_type), "act_param": act_param}
-        output_data = self.reference_golden(ReferenceCall(
-            entry, params, {"input": np.ascontiguousarray(input_data)}, {"output": input_shape},
+        exact = ReferenceCall(
+            "nn_activation_f16" if activation_dtype == "FP16" else "nn_activation_f32",
+            {"activation_type": float_activation_code(activation_type), "act_param": act_param},
+            {"input": np.ascontiguousarray(input_data)}, {"output": input_shape},
             quant={"activation_type": activation_type},
-        ))
+        )
+        call, faithful = self._kernel_call(activation_type, activation_dtype, input_data, act_param, exact)
+        output_data = self.reference_golden(call)
+        if call is not exact:
+            kf.check_close_to_exact(name, call, exact, kf.activation_atol(input_data, activation_type))
 
         builder = TemplateContextBuilder()
         context = {
@@ -76,6 +110,8 @@ class OpNNActivationFloat(OperationBase):
             "output_dtype": output_dtype,
             "kernel_fn": kernel_fn,
         }
+        if faithful and not self._exact_comparison():
+            context.update(kf.tolerance_context(float_dtype))
 
         self.render_harness_case(
             output_dir, stem="nn_activation_float", context=context,

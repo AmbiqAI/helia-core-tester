@@ -153,13 +153,14 @@ def test_golden_matches_an_independent_model(desc: dict, tmp_path: Path) -> None
     call = op.reference
     assert call is not None and op.uses_reference()
     dtype = np.float16 if desc["name"].endswith("_f16") else np.float32
-    # cortex-m55 runs arm_nn_gru_step_f16 on Helium, so a float16 golden is that route's arithmetic (gru_f16_mve);
-    # the independent model below checks the exact entry on the same operands.
-    assert call.entry == ("gru_f16_mve" if dtype == np.float16 else "gru_f32")
+    # cortex-m55 runs arm_nn_gru_step_f16/_f32 on Helium, so the golden is that route's arithmetic (gru_f16_mve,
+    # gru_f32_cmsis target 0); the independent model below checks the exact entry on the same operands.
+    assert call.entry == ("gru_f16_mve" if dtype == np.float16 else "gru_f32_cmsis")
     time_major = bool(desc.get("time_major", False))
     reset_after = bool(desc.get("reset_after", True))
     use_bias = bool(desc.get("use_bias", True))
-    assert dict(call.params) == {"time_major": int(time_major), "reset_after": int(reset_after)}
+    exact_params = {"time_major": int(time_major), "reset_after": int(reset_after)}
+    assert dict(call.params) == (exact_params if dtype == np.float16 else {**exact_params, "target": 0})
 
     emitted = _emitted(tmp_path, desc["name"])
     x = call.inputs["input"]
@@ -190,11 +191,12 @@ def test_golden_matches_an_independent_model(desc: dict, tmp_path: Path) -> None
     assert golden.shape == (x.shape[0], x.shape[1], hidden)
     assert _same_bits(_parse_literal(emitted["expected_output"], dtype), golden)
     expected = _model(x, gates, time_major=time_major, reset_after=reset_after, dtype=dtype)
-    exact = ReferenceCall("gru_f16", call.params, call.inputs, call.output_shapes) if dtype == np.float16 else call
+    exact = ReferenceCall("gru_f16" if dtype == np.float16 else "gru_f32", exact_params, call.inputs,
+                          call.output_shapes)
     assert _same_bits(exact.output(), expected)
-    if dtype == np.float16:
-        finite = np.isfinite(golden) & np.isfinite(expected)
-        assert np.all(np.abs(golden[finite].astype(np.float64) - expected[finite]) <= kf.RNN_F16_ATOL)
+    finite = np.isfinite(golden) & np.isfinite(expected)
+    atol = kf.RNN_F16_ATOL if dtype == np.float16 else kf.GRU_F32_ATOL
+    assert np.all(np.abs(golden[finite].astype(np.float64) - expected[finite]) <= atol)
 
 
 @pytest.mark.parametrize("dtype", [np.float32, np.float16])

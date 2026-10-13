@@ -391,3 +391,120 @@ def depthwise_f16_mve_call(x: np.ndarray, weights: np.ndarray, bias: Optional[np
                           "activation_max": float(activation[1])},
                          {"input": x, "filter": weights, "bias": b},
                          {"output": (x.shape[0], int(out_hw[0]), int(out_hw[1]), weights.shape[3])})
+
+# ------------------------------------------------ activation arithmetic per target (act family, step 2)
+
+# The activations whose float golden follows the kernel's approximation (the others are exact in the kernel:
+# relu, relu6, leaky relu and none round at most one product, as the exact reference does).
+APPROXIMATED_ACTIVATIONS = ("ARM_NN_FLT_ACT_SIGMOID", "ARM_NN_FLT_ACT_TANH", "ARM_NN_FLT_ACT_HARDSWISH")
+
+# Distance allowed between a kernel activation and the exact one rounded once (both legs of the comparison
+# round, so each budget carries the golden's half ulp too):
+#  - float32 tanh: the 384-segment table's interpolation error, 2.35e-5 inside |x| < 6 per the kernel header,
+#    and the 1 - tanh(6) = 1.2e-5 saturation step, plus two roundings at |y| <= 1 (2^-24).
+#  - float32 sigmoid: linear interpolation of 2^f over 1/256 steps is within (ln 2)^2 2 / (8 * 256^2) = 1.8e-6
+#    relative of exp, the table entries within 2^-24; sigmoid's sensitivity to e's relative error is
+#    s (1 - s) <= 1/4, and three float32 roundings follow, so 1e-6.
+#  - float16 sigmoid: the float16 exp2 table and e's float16 rounding put e within 2^-11 relative, a quarter
+#    of that reaches the output, then the float32 result, the float16 output and the golden each round:
+#    2^-10 (two float16 ulps below 1).
+#  - tanh f16 (the [0, 4] float16 table): the table and interpolation error of tanh_lut_mve_f16, 2^-9.
+ACTIVATION_ATOL = {
+    (np.dtype(np.float32), "ARM_NN_FLT_ACT_TANH"): 2.5e-5,
+    (np.dtype(np.float32), "ARM_NN_FLT_ACT_SIGMOID"): 1e-6,
+    (np.dtype(np.float16), "ARM_NN_FLT_ACT_SIGMOID"): 2.0 ** -10,
+    (np.dtype(np.float16), "ARM_NN_FLT_ACT_TANH"): 2.0 ** -9,
+}
+
+# |h(1/6) * 6 - 1| (2.44e-4): the float16 kernels scale by 1/6 rounded to float16.
+_SIXTH_F16_REL = abs(float(np.float16(1.0 / 6.0)) * 6.0 - 1.0)
+
+
+def hard_swish_atol(x: np.ndarray) -> float:
+    """Distance allowed between a kernel hard swish and the exact one: the gate x / 6 + 1/2 (or (x + 3) / 6) is
+    within 2u (two roundings) plus the scale's own error (float16: h(1/6)), the gate is in [0, 1], and the
+    product and the golden each round, so |x| (4u + scale error) bounds it; |x| is taken at least 1."""
+    dtype = np.dtype(x.dtype)
+    a = np.abs(x.astype(np.float64))
+    worst = max(1.0, float(np.max(a[np.isfinite(a)], initial=0.0)))
+    scale = _SIXTH_F16_REL if dtype == np.dtype(np.float16) else 0.0
+    return worst * (4.0 * _U[dtype] + scale)
+
+
+def activation_atol(x: np.ndarray, activation_type: str) -> float:
+    if activation_type == "ARM_NN_FLT_ACT_HARDSWISH":
+        return hard_swish_atol(x)
+    return ACTIVATION_ATOL[(np.dtype(x.dtype), activation_type)]
+
+
+def nn_activation_f32_cmsis_call(x: np.ndarray, activation_code: int, act_param: float, target: int) -> ReferenceCall:
+    """arm_nn_activation_f32 on float target `target` (float_target): the kernel's sigmoid/tanh tables and
+    hardswish contraction as that target compiles them."""
+    x = np.ascontiguousarray(x, dtype=np.float32)
+    if target not in (0, 1, 2):
+        raise ValueError(f"unknown float32 target {target!r}")
+    return ReferenceCall("nn_activation_f32_cmsis",
+                         {"activation_type": int(activation_code), "act_param": float(act_param),
+                          "target": int(target)}, {"input": x}, {"output": x.shape})
+
+
+def nn_activation_f16_mve_call(x: np.ndarray, activation_code: int, act_param: float) -> ReferenceCall:
+    """arm_nn_activation_f16 on Helium."""
+    x = np.ascontiguousarray(x, dtype=np.float16)
+    return ReferenceCall("nn_activation_f16_mve", {"activation_type": int(activation_code),
+                                                   "act_param": float(act_param)}, {"input": x}, {"output": x.shape})
+
+
+def hard_swish_cmsis_call(x: np.ndarray, cpu: str) -> Optional[ReferenceCall]:
+    """arm_hard_swish_f32 (every target) or arm_hard_swish_f16 on Helium; None for float16 off Helium."""
+    if np.dtype(x.dtype) == np.dtype(np.float32):
+        x = np.ascontiguousarray(x)
+        return ReferenceCall("hard_swish_f32_cmsis", {"target": float_target(cpu)}, {"input": x},
+                             {"output": x.shape})
+    if np.dtype(x.dtype) == np.dtype(np.float16) and mve_float16_target(cpu):
+        x = np.ascontiguousarray(x)
+        return ReferenceCall("hard_swish_f16_mve", {"unused": 0}, {"input": x}, {"output": x.shape})
+    return None
+
+
+def softmax_f32_cmsis_call(x: np.ndarray, target: int) -> ReferenceCall:
+    """arm_softmax_f32 on float target `target` over the last dim (the 1 x 2 specialisation included)."""
+    x = np.ascontiguousarray(x, dtype=np.float32)
+    if target not in (0, 1, 2):
+        raise ValueError(f"unknown float32 target {target!r}")
+    return ReferenceCall("softmax_f32_cmsis", {"target": int(target)}, {"input": x}, {"output": x.shape})
+
+
+# exp's relative error in arm_softmax_f32: the LUT exp's interpolation (1.8e-6, see ACTIVATION_ATOL) and table
+# (2^-24) on the scalar legs; arm_nn_vexpq_poly_mve_f32's degree-7 polynomial is tighter.
+SOFTMAX_F32_EXP_REL = 2e-6
+
+
+def softmax_f32_atol(x: np.ndarray) -> float:
+    """Distance allowed between the kernel's float32 softmax and the exact one: x - max rounds (u |x - max|
+    relative in exp), exp is within SOFTMAX_F32_EXP_REL, the sum (at most a few float32 roundings per element,
+    relative per element of the row), 1 / sum and the product each round. Every output is <= 1, so
+    (|x - max| + cols + 8) u plus twice the exp error (numerator and sum) bounds the absolute error."""
+    a = x.astype(np.float64).reshape(-1, x.shape[-1])
+    a = np.where(np.isfinite(a), a, np.nan)
+    with np.errstate(invalid="ignore"):
+        spread = np.nanmax(a, axis=1) - np.nanmin(a, axis=1)
+    worst = float(np.nanmax(spread)) if np.any(np.isfinite(spread)) else 0.0
+    return (worst + x.shape[-1] + 8.0) * _U[np.dtype(np.float32)] + 2.0 * SOFTMAX_F32_EXP_REL
+
+# ------------------------------------------------------- float32 GRU per target (gru_f32_cmsis.c)
+
+# gru_f32_cmsis against the exact gru_f32: the kernel's sigmoid (exp2 table, within ~1e-7 relative) and tanh
+# (384-segment table, interpolation error <= 2.35e-5, a step of 1.2e-5 at the saturation point) are the only
+# approximations; the recurrence carries them through weights of magnitude < 1. The FVP measured 7.8e-6..1.9e-5
+# against the exact golden on every target; 1e-4 (the LSTM variant's bound) leaves room without hiding a wrong
+# emulation, whose error would be of the order of the activations themselves.
+GRU_F32_ATOL = 1e-4
+
+
+def gru_f32_cmsis_call(exact: ReferenceCall, cpu: str) -> ReferenceCall:
+    """The emulation of an exact gru_f32 call as arm_gru_unidirectional_f32 computes it on `cpu`."""
+    if exact.entry != "gru_f32":
+        raise ValueError(f"gru_f32_cmsis emulates gru_f32, got {exact.entry}")
+    return ReferenceCall("gru_f32_cmsis", {**exact.params, "target": float_target(cpu)}, dict(exact.inputs),
+                         dict(exact.output_shapes))

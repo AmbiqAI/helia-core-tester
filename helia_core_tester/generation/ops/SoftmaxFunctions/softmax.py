@@ -2,8 +2,9 @@
 Softmax operation implementation for Helia-Core Tester.
 
 Goldens come from the C reference: TFLite's Softmax<int8> (gemmlowp fixed point) for s8 input,
-SoftmaxInt16 with TFLM's LUTs for s16, and exp in binary64 rounded once for f32/f16 (f16 on Helium:
-arm_softmax_f16's own arithmetic, kernel_faithful.softmax_f16_mve_call).
+SoftmaxInt16 with TFLM's LUTs for s16, and for f32/f16 the kernel's own arithmetic (kernel_faithful:
+arm_softmax_f32 per float target, softmax_f32_cmsis_call; arm_softmax_f16 on Helium, softmax_f16_mve_call),
+with exp in binary64 rounded once as the oracle (and the golden for f16 off Helium).
 """
 
 from typing import Any, Dict, Tuple
@@ -131,8 +132,13 @@ class OpSoftmax(OperationBase):
                 "softmax_f16" if float_dtype == np.float16 else "softmax_f32", {"unused": 0},
                 {"input": np.ascontiguousarray(input_q)}, {"output": input_shape},
             )
-            faithful = float_dtype == np.float16 and kf.mve_float16_target(self.target_cpu)
-            if faithful:
+            faithful = float_dtype == np.float32 or kf.mve_float16_target(self.target_cpu)
+            if faithful and float_dtype == np.float32:
+                # arm_softmax_f32's own arithmetic on this float target (Helium polynomial exp, scalar LUT exp).
+                call = kf.softmax_f32_cmsis_call(input_q, kf.float_target(self.target_cpu))
+                output_data = self.reference_golden(call)
+                kf.check_close_to_exact(name, call, exact, kf.softmax_f32_atol(input_q))
+            elif faithful:
                 # The kernel's own float16 arithmetic (arm_softmax_f16 on Helium), bit for bit; the exact
                 # softmax stays the oracle within the rounding the kernel's operation order allows.
                 call = kf.softmax_f16_mve_call(input_q)

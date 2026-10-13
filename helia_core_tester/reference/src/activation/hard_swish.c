@@ -6,6 +6,10 @@
  *   hard_swish_s8:          TFLite's reference_ops::HardSwish<int8_t> with HardSwishPrepare's params.
  *   hard_swish_precise_*:   CMSIS-NN's int32 variant (no TFLite counterpart), named rather than toleranced.
  *   hard_swish_f32/f16:     the exact result rounded once to the output type.
+ *   hard_swish_f32_cmsis:   arm_hard_swish_f32 on every target: x * clamp(fma(x, 1/6, 1/2), 0, 1), the fma
+ *                           correctly rounded (vfmaq on Helium, VFMA or __builtin_fmaf on the scalar legs).
+ *   hard_swish_f16_mve:     arm_hard_swish_f16 on Helium, in float16: t = x + 3, maxnm 0, minnm 6, then
+ *                           x * (t * h(1/6)), every operation rounded to float16.
  */
 #include <math.h>
 
@@ -280,4 +284,72 @@ int32_t hct_ref_hard_swish_f16(const HctNoParams *params, const HctTensor *input
                                HctTensor *outputs, int32_t num_outputs)
 {
     return hard_swish_float(params, inputs, num_inputs, outputs, num_outputs, HCT_FLOAT16);
+}
+
+/* ------------------------------------------- kernel-faithful (ns-cmsis-nn arithmetic per target) */
+
+/* VMAXNM / VMINNM for a non-NaN a against a bound: +0 beats -0. */
+static float maxnm0(float a, float b)
+{
+    return a == b ? (signbit(a) ? b : a) : (a > b ? a : b);
+}
+
+static float minnm0(float a, float b)
+{
+    return a == b ? (signbit(a) ? a : b) : (a < b ? a : b);
+}
+
+int32_t hct_ref_hard_swish_f32_cmsis(const HctCmsisTargetParams *params, const HctTensor *inputs, int32_t num_inputs,
+                                     HctTensor *outputs, int32_t num_outputs)
+{
+    if (params == NULL)
+    {
+        return HCT_E_NULL;
+    }
+    int64_t count = 0;
+    HCT_TRY(hct_unary_setup(inputs, num_inputs, outputs, num_outputs, HCT_FLOAT32, HCT_FLOAT32, &count));
+    if (params->target < 0 || params->target > 2)
+    {
+        return HCT_E_PARAM;
+    }
+    for (int64_t i = 0; i < count; ++i)
+    {
+        const float x = ((const float *)inputs[0].data)[i];
+        float t = fmaf(x, 1.0f / 6.0f, 0.5f);
+        if (params->target == 0)
+        {
+            /* vmaxnm/vminnm: a NaN t becomes 0 (and x * 0 is still NaN). */
+            t = isnan(t) ? 0.0f : minnm0(maxnm0(t, 0.0f), 1.0f);
+        }
+        else
+        {
+            /* ARM_NN_CLAMP(t, 1, 0) = MAX(MIN(t, 1), 0). */
+            t = t < 1.0f ? t : 1.0f;
+            t = t > 0.0f ? t : 0.0f;
+        }
+        ((float *)outputs[0].data)[i] = x * t;
+    }
+    return HCT_OK;
+}
+
+int32_t hct_ref_hard_swish_f16_mve(const HctNoParams *params, const HctTensor *inputs, int32_t num_inputs,
+                                   HctTensor *outputs, int32_t num_outputs)
+{
+    if (params == NULL)
+    {
+        return HCT_E_NULL;
+    }
+    int64_t count = 0;
+    HCT_TRY(hct_unary_setup(inputs, num_inputs, outputs, num_outputs, HCT_FLOAT16, HCT_FLOAT16, &count));
+    const float sixth = hct_round_f16(1.0f / 6.0f);
+    for (int64_t i = 0; i < count; ++i)
+    {
+        const uint16_t bits = ((const uint16_t *)inputs[0].data)[i];
+        const float x = hct_f16_to_f32(bits);
+        float t = hct_round_f16(x + 3.0f);
+        t = isnan(t) ? 0.0f : minnm0(maxnm0(t, 0.0f), 6.0f);
+        const float s = hct_round_f16(t * sixth);
+        ((uint16_t *)outputs[0].data)[i] = hct_f32_to_f16(x * s);
+    }
+    return HCT_OK;
 }

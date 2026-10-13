@@ -18,6 +18,7 @@ import pytest
 
 import helia_core_tester.generation.test_ops as generation_module
 from helia_core_tester.generation.io.descriptors import load_descriptor
+from helia_core_tester.generation.ops._shared import kernel_faithful as kf
 from helia_core_tester.generation.ops._shared.hard_swish_base import HardSwishFamilyBase
 from helia_core_tester.generation.ops.ActivationFunctions.hard_swish_precise import OpHardSwishPrecise
 from helia_core_tester.generation.ops.BasicMathFunctions.mean import OpMean
@@ -404,20 +405,26 @@ def test_hard_swish_float_generates_size_call_and_contract_golden(
     np.testing.assert_array_equal(expected_values[identity], input_values[identity])
     assert np.all(expected_values[zero] == np_dtype(0.0))
 
-    # Curved region: the f32 serializer's %.9f literals round-trip values in
-    # [1e-4, 1) to ~7 significant digits, so recomputing from the parsed
-    # input can land 1 ulp away from the generated golden. The on-device
-    # comparison is unaffected (the device compares against the same
-    # literal); assert closeness here, exactness in the saturated regions
-    # above.
+    # Curved region: the golden is the kernel's own arithmetic on Helium (kernel_faithful), restated here
+    # independently: f32 x * clamp(fma(x, 1/6, 1/2), 0, 1); f16 x * (clamp(x + 3, 0, 6) * h(1/6)) with every
+    # step rounded to float16. The f32 serializer's %.9f literals round-trip ~7 significant digits, so the
+    # restatement is computed from the generator's own input and compared with the recorded golden.
+    from fractions import Fraction
+
+    raw = op._seeded_rng().uniform(-8.0, 8.0, size=(1, 4, 4, 8)).astype(np_dtype).reshape(-1)
+    if np_dtype == np.float32:
+        sixth = np.float32(1.0 / 6.0)
+        t = np.array([np.float32(float(Fraction(float(v)) * Fraction(float(sixth)) + Fraction(1, 2))) for v in raw])
+        restated = (raw * np.clip(t, np.float32(0.0), np.float32(1.0))).astype(np.float32)
+    else:
+        t = np.clip((raw + np.float16(3.0)).astype(np.float16), np.float16(0.0), np.float16(6.0))
+        restated = (raw * (t * np.float16(1.0 / 6.0)).astype(np.float16)).astype(np.float16)
+    np.testing.assert_array_equal(np.asarray(op._golden).reshape(-1), restated)
+
     reference = input_values.astype(np.float64)
-    golden = (reference * np.clip(reference + 3.0, 0.0, 6.0) / 6.0).astype(np_dtype)
-    np.testing.assert_allclose(
-        expected_values.astype(np.float64),
-        golden.astype(np.float64),
-        rtol=1e-6,
-        atol=1e-8,
-    )
+    golden = reference * np.clip(reference + 3.0, 0.0, 6.0) / 6.0
+    np.testing.assert_allclose(expected_values.astype(np.float64), golden, rtol=0.0,
+                               atol=kf.hard_swish_atol(input_values))
 
 
 def test_hard_swish_compat_rejects_float_dtypes() -> None:

@@ -633,6 +633,34 @@ structs:
       - [activation_min, float32]
       - [activation_max, float32]
 
+  # Kernel-faithful float activations and softmax (step 2, act family).
+  HctFloatActivationTargetParams:
+    doc: >-
+      ns-cmsis-nn arm_nn_activation_f32 arithmetic on one target (named variant): an HctFloatActivation, its
+      parameter (the LeakyRelu slope; ignored otherwise) and target 0 Helium, 1 scalar with an FPU (fused as GCC
+      -Ofast contracts), 2 soft float (nothing fused).
+    fields:
+      - [activation_type, int32]
+      - [act_param, float32]
+      - [target, int32]
+  HctCmsisTargetParams:
+    doc: >-
+      The float32 leg an ns-cmsis-nn kernel runs (named variants): 0 Helium, 1 scalar with an FPU (fused as GCC
+      -Ofast contracts), 2 soft float (nothing fused).
+    fields:
+      - [target, int32]
+
+
+  HctGruF32CmsisParams:
+    doc: >-
+      ns-cmsis-nn arm_gru_unidirectional_f32 arithmetic (named variant). target 0 Helium, 1 scalar with an FPU
+      (fused as GCC -Ofast contracts), 2 soft float (nothing fused but the combine's fmaf).
+    fields:
+      - [time_major, int32]
+      - [reset_after, int32]
+      - [target, int32]
+
+
 prepare:
   quantize_multiplier:
     in: HctQuantizeMultiplierIn
@@ -1363,3 +1391,31 @@ kernels:
     params: HctDepthwiseF16MveParams
     inputs: {input: float16, filter: float16, bias: float16}
     outputs: {output: float16}
+
+  # Kernel-faithful float activations and softmax (step 2, act family).
+  nn_activation_f32_cmsis:
+    params: HctFloatActivationTargetParams
+    inputs: {input: float32}
+    outputs: {output: float32}
+  nn_activation_f16_mve:
+    params: HctFloatActivationTypeParams
+    inputs: {input: float16}
+    outputs: {output: float16}
+  hard_swish_f32_cmsis:
+    params: HctCmsisTargetParams
+    inputs: {input: float32}
+    outputs: {output: float32}
+  hard_swish_f16_mve:
+    params: HctNoParams
+    inputs: {input: float16}
+    outputs: {output: float16}
+  softmax_f32_cmsis:
+    params: HctCmsisTargetParams
+    inputs: {input: float32}
+    outputs: {output: float32}
+
+  # Kernel-faithful float32 GRU per target (gru_f32_cmsis.c).
+  gru_f32_cmsis:
+    params: HctGruF32CmsisParams
+    inputs: {input: float32, input_weights: float32, recurrent_weights: float32, input_bias: float32, recurrent_bias: float32}
+    outputs: {output: float32}

@@ -707,6 +707,28 @@ typedef struct
     float activation_max;
 } HctDepthwiseF16MveParams;
 
+/* ns-cmsis-nn arm_nn_activation_f32 arithmetic on one target (named variant): an HctFloatActivation, its parameter (the LeakyRelu slope; ignored otherwise) and target 0 Helium, 1 scalar with an FPU (fused as GCC -Ofast contracts), 2 soft float (nothing fused). */
+typedef struct
+{
+    int32_t activation_type;
+    float act_param;
+    int32_t target;
+} HctFloatActivationTargetParams;
+
+/* The float32 leg an ns-cmsis-nn kernel runs (named variants): 0 Helium, 1 scalar with an FPU (fused as GCC -Ofast contracts), 2 soft float (nothing fused). */
+typedef struct
+{
+    int32_t target;
+} HctCmsisTargetParams;
+
+/* ns-cmsis-nn arm_gru_unidirectional_f32 arithmetic (named variant). target 0 Helium, 1 scalar with an FPU (fused as GCC -Ofast contracts), 2 soft float (nothing fused but the combine's fmaf). */
+typedef struct
+{
+    int32_t time_major;
+    int32_t reset_after;
+    int32_t target;
+} HctGruF32CmsisParams;
+
 int32_t hct_ref_abi_version(void);
 
 int32_t hct_ref_quantize_multiplier(const HctQuantizeMultiplierIn *in, HctQuantizeMultiplierOut *out);
@@ -1227,6 +1249,24 @@ int32_t hct_ref_svdf_f16_mve(const HctSvdfFloatParams *params,
     const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
 /* inputs [input:float16, filter:float16, bias:float16] -> outputs [output:float16] */
 int32_t hct_ref_depthwise_f16_mve(const HctDepthwiseF16MveParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float32] -> outputs [output:float32] */
+int32_t hct_ref_nn_activation_f32_cmsis(const HctFloatActivationTargetParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float16] -> outputs [output:float16] */
+int32_t hct_ref_nn_activation_f16_mve(const HctFloatActivationTypeParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float32] -> outputs [output:float32] */
+int32_t hct_ref_hard_swish_f32_cmsis(const HctCmsisTargetParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float16] -> outputs [output:float16] */
+int32_t hct_ref_hard_swish_f16_mve(const HctNoParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float32] -> outputs [output:float32] */
+int32_t hct_ref_softmax_f32_cmsis(const HctCmsisTargetParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float32, input_weights:float32, recurrent_weights:float32, input_bias:float32, recurrent_bias:float32] -> outputs [output:float32] */
+int32_t hct_ref_gru_f32_cmsis(const HctGruF32CmsisParams *params,
     const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
 
 #if defined(__GNUC__)

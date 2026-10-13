@@ -1,12 +1,14 @@
 """Shared golden path of the hard-swish operators, on the C reference.
 
 Compat s8 is TFLite's HardSwish<int8_t>; precise s8/s16 is CMSIS-NN's int32 variant, a named
-reference entry since TFLite has no counterpart; f32/f16 are the exact result rounded once.
+reference entry since TFLite has no counterpart; f32/f16 follow the kernel's own float
+arithmetic per target (kernel_faithful), the exact result as the oracle.
 """
 
 from typing import Dict, Tuple
 import numpy as np
 from pathlib import Path
+from helia_core_tester.generation.ops._shared import kernel_faithful as kf
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.harness.simple import tensor_case_pool
 
@@ -135,11 +137,11 @@ class HardSwishFamilyBase(OperationBase):
         )
 
     def _generate_float_c_files(self, output_dir: Path, kernel_info: Dict[str, str]) -> None:
-        """arm_hard_swish_f32/f16 (ns-cmsis-nn #413) against the exact result rounded once.
+        """arm_hard_swish_f32/f16 (ns-cmsis-nn #413) with the kernel's own arithmetic as the golden.
 
-        The kernels compute x * clamp(fma(x, 1/6, 0.5), 0, 1): x >= 3 returns x and x <= -3
-        exact zero, matching the reference bit-exactly; the curved region sits well inside
-        the float tolerances (#413 measured 1.24e-7 f32 / 3.4e-4 f16)."""
+        arm_hard_swish_f32 computes x * clamp(fma(x, 1/6, 0.5), 0, 1) on every target (hard_swish_f32_cmsis);
+        arm_hard_swish_f16 on Helium x * (clamp(x + 3, 0, 6) * h(1/6)) in float16 (hard_swish_f16_mve). Both
+        are compared at PyTorch's tolerances and must stay within kf.hard_swish_atol of the exact result."""
         from helia_core_tester.generation.reference.call import ReferenceCall
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
@@ -155,10 +157,18 @@ class HardSwishFamilyBase(OperationBase):
             high=float(self.desc.get("input_max", 8.0)),
             dtype=float_dtype,
         )
-        output_data = self.reference_golden(ReferenceCall(
+        exact = ReferenceCall(
             "hard_swish_f16" if is_f16 else "hard_swish_f32", {"unused": 0},
             {"input": np.ascontiguousarray(input_data)}, {"output": input_shape},
-        ))
+        )
+        # The kernel's own arithmetic on this target (float32 everywhere, float16 on Helium), the exact
+        # result staying the oracle; float16 off Helium keeps the exact golden and its tolerance.
+        call = kf.hard_swish_cmsis_call(input_data, self.target_cpu)
+        if call is None:
+            output_data = self.reference_golden(exact)
+        else:
+            output_data = self.reference_golden(call)
+            kf.check_close_to_exact(name, call, exact, kf.hard_swish_atol(input_data))
 
         builder = TemplateContextBuilder()
         context = {
@@ -174,6 +184,8 @@ class HardSwishFamilyBase(OperationBase):
             'float_kernel': True,
             'validation_mode': 'float',
         }
+        if call is not None:
+            context.update(kf.tolerance_context(float_dtype))
         self.render_harness_case(
             output_dir, stem="hard_swish", context=context,
             pool=tensor_case_pool(context, {"size": context["output_size"]}),
