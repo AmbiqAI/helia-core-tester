@@ -172,7 +172,8 @@ class ReportGenerator:
             for key, value in report.metadata.items():
                 if value is None:
                     continue
-                ET.SubElement(props, "property", {"name": str(key), "value": str(value)})
+                text = str(value).lower() if isinstance(value, bool) else str(value)
+                ET.SubElement(props, "property", {"name": str(key), "value": text})
 
         for desc_name, desc_result in report.descriptor_results.items():
             duration = desc_result.test_result.duration if desc_result.test_result else 0.0

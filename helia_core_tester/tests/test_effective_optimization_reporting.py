@@ -159,13 +159,13 @@ def test_coverage_leg_reports_requested_and_effective(tmp_path, monkeypatch) -> 
     report_dir = _run(
         tmp_path, monkeypatch, ["--no-build", "--coverage"], CMSIS_OPTIMIZATION_LEVEL="-Ofast", ENABLE_COVERAGE="ON"
     )
-    assert _triple(_junit_props(report_dir)) == ("-Ofast", "-O0", "True")
+    assert _triple(_junit_props(report_dir)) == ("-Ofast", "-O0", "true")
     assert _triple(_json_metadata(report_dir)) == ("-Ofast", "-O0", True)
 
 
 def test_run_step_reports_the_built_level_not_the_argparse_default(tmp_path, monkeypatch) -> None:
     report_dir = _run(tmp_path, monkeypatch, ["--no-build"], CMSIS_OPTIMIZATION_LEVEL="-O2", ENABLE_COVERAGE="OFF")
-    assert _triple(_junit_props(report_dir)) == ("-O2", "-O2", "False")
+    assert _triple(_junit_props(report_dir)) == ("-O2", "-O2", "false")
     assert _triple(_json_metadata(report_dir)) == ("-O2", "-O2", False)
 
 
@@ -175,4 +175,23 @@ def test_without_a_cache_the_opt_flag_is_reported(tmp_path, monkeypatch) -> None
 
 
 def test_default_opt_is_reported_when_nothing_else_is_known(tmp_path, monkeypatch) -> None:
-    assert _triple(_junit_props(_run(tmp_path, monkeypatch, []))) == ("-Ofast", "-Ofast", "False")
+    assert _triple(_junit_props(_run(tmp_path, monkeypatch, []))) == ("-Ofast", "-Ofast", "false")
+
+
+def test_junit_writes_booleans_like_json(tmp_path) -> None:
+    from datetime import datetime
+
+    from helia_core_tester.reporting.generator import ReportGenerator
+    from helia_core_tester.reporting.models import TestReport
+
+    now = datetime.now()
+    report = TestReport(
+        run_id="r", start_time=now, end_time=now, cpu="cortex-m55", descriptor_results={},
+        all_descriptors=[], project_root=tmp_path,
+        metadata={"coverage": True, "other": False, "count": 1, "skipped": None, "label": "True"},
+    )
+    path = ReportGenerator(output_dir=tmp_path).generate_reports(report, ["junit"])["junit"]
+    root = ET.parse(path).getroot()
+    suite = root if root.tag == "testsuite" else root.find("testsuite")
+    props = {p.get("name"): p.get("value") for p in suite.iter("property")}
+    assert props == {"coverage": "true", "other": "false", "count": "1", "label": "True"}
