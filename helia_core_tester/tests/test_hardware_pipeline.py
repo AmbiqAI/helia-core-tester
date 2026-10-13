@@ -126,6 +126,7 @@ def test_generation_exports_the_kernel_root(tmp_path: Path, monkeypatch) -> None
     envs: list = []
     monkeypatch.setattr(generate, "run_command", lambda cmd, cwd, verbosity, env: envs.append(env))
     monkeypatch.delenv("HELIA_CORE_TESTER_CONFIG", raising=False)
+    (tmp_path / "CMakeLists.txt").write_text("project(cmsis-nn)\n")
     generate_tests_for_board(PROJECT_ROOT, BOARD, "int", cmsis_nn_root=tmp_path)
     assert envs and all(env["CMSIS_NN_ROOT"] == str(tmp_path.resolve()) for env in envs)
 

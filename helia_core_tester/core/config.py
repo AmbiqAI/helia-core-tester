@@ -220,7 +220,7 @@ class Config:
             self.reports_root = Path(self.reports_root).resolve()
 
         if self.cmsis_nn_root is not None:
-            self.cmsis_nn_root = Path(self.cmsis_nn_root).resolve()
+            self.cmsis_nn_root = Path(self.cmsis_nn_root).expanduser().resolve()
         if self.hidden_dir is not None:
             self.hidden_dir = Path(self.hidden_dir).resolve()
         if self.hidden_seed_file is not None:
@@ -532,6 +532,27 @@ class Config:
     def generation_report_dir_for(self, cpu: str, suite: Optional[str] = None) -> Path:
         suite_name = normalize_suite(suite or self.default_suite())
         return generation_report_dir(self.project_root, cpu, suite=suite_name)
+
+    def cmsis_nn_root_error(self) -> Optional[str]:
+        """Why an explicit cmsis_nn_root is unusable, or None when it is unset or valid."""
+        if self.cmsis_nn_root is None:
+            return None
+        root = Path(self.cmsis_nn_root)
+        if not (root / "CMakeLists.txt").is_file():
+            return (
+                f"ns-cmsis-nn checkout not found: {root} (from {self._cmsis_nn_root_source()}) has no "
+                f"CMakeLists.txt. Set it with --cmsis-nn-root or {ENV_PREFIX}CMSIS_NN_ROOT "
+                "(a bare CMSIS_NN_ROOT is not read)."
+            )
+        return None
+
+    def _cmsis_nn_root_source(self) -> str:
+        # Mirrors __post_init__ precedence: explicit argument > env var > config file.
+        if "cmsis_nn_root" in (self._explicit_overrides or set()):
+            return "--cmsis-nn-root"
+        if os.environ.get(f"{ENV_PREFIX}CMSIS_NN_ROOT") is not None:
+            return f"{ENV_PREFIX}CMSIS_NN_ROOT"
+        return f"cmsis_nn_root in {self.config_file}" if self.config_file else "config"
 
     def tests_report_dir_for(self, cpu: str, suite: Optional[str] = None) -> Path:
         suite_name = normalize_suite(suite or self.default_suite())

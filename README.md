@@ -676,6 +676,10 @@ HELIA_GCC_VERSION=15.2.rel1 uv run helia_core_tester full --cpu cortex-m55
 
 `build`, `run` and `full` take `--toolchain gcc|armclang` (default `gcc`; also `toolchain` in `helia_core_tester.toml` and `HELIA_CORE_TESTER_TOOLCHAIN`). `armclang` selects ethos-u-core-platform's `armclang.cmake` and needs Arm Compiler 6 (`armclang`) on `PATH`; it is not fetched by `setup_dependencies.py`. Build output goes to `artifacts/build-<suite>-<cpu>-arm-compiler/`. `--toolchain armclang` is mutually exclusive with `--coverage` (gcov instrumentation is GCC-only). `doctor` reports which of `arm-none-eabi-gcc` / `armclang` it finds.
 
+### ns-cmsis-nn checkout (`--cmsis-nn-root`)
+
+The FVP build compiles the ns-cmsis-nn checkout two levels up (`../..`, the nested layout) by default. `generate`, `build` and `full` take `--cmsis-nn-root <path>` to use another checkout; the environment form is `HELIA_CORE_TESTER_CMSIS_NN_ROOT` (also `cmsis_nn_root` in `helia_core_tester.toml`). A bare `CMSIS_NN_ROOT` environment variable does not reach the build. A path with no `CMakeLists.txt` fails before CMake runs.
+
 ## Canonical Artifacts
 
 Generated tests:

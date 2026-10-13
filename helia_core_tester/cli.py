@@ -142,6 +142,7 @@ def generate(
     shape_seed: Optional[int] = typer.Option(None, "--shape-seed", help="Seed for --random-shapes, 0 to 2**32-1 (default 0)"),
     hidden_dir: Optional[Path] = typer.Option(None, "--hidden-dir", help="Write secret-seeded shapes here, outside the tree"),
     hidden_seed_file: Optional[Path] = typer.Option(None, "--hidden-seed-file", help="Secret seed file; else HCT_HIDDEN_SEED"),
+    cmsis_nn_root: Optional[Path] = typer.Option(None, "--cmsis-nn-root", help="Override the ns-cmsis-nn checkout used for the CMake build (defaults to CMakeLists.txt's ../.. sibling checkout)"),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help="Verbosity level (0-3)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be done"),
     plan: bool = typer.Option(False, "--plan", help="Print execution plan and exit"),
@@ -166,6 +167,7 @@ def generate(
         shape_seed=shape_seed,
         hidden_dir=hidden_dir,
         hidden_seed_file=hidden_seed_file,
+        cmsis_nn_root=cmsis_nn_root,
     )
     if config.plan:
         _print_plan_item(GenerateStep(config).plan())
@@ -189,6 +191,7 @@ def build(
     coverage_mve_int: bool = typer.Option(False, "--coverage-mve-int", help="Enable Cortex-M55 integer MVE paths (no ARM_MATH_AUTOVECTORIZE) during coverage builds"),
     suite: str = typer.Option("int", "--suite", help="Test suite selection: int, float, or both"),
     float_precision: str = typer.Option("both", "--float-precision", help="Float precision selection for float suite: f16, f32, or both"),
+    cmsis_nn_root: Optional[Path] = typer.Option(None, "--cmsis-nn-root", help="Override the ns-cmsis-nn checkout used for the CMake build (defaults to CMakeLists.txt's ../.. sibling checkout)"),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help="Verbosity level (0-3)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be done"),
     plan: bool = typer.Option(False, "--plan", help="Print execution plan and exit"),
@@ -209,6 +212,7 @@ def build(
         coverage_mve_int=coverage_mve_int,
         suite=suite,
         float_precision=float_precision,
+        cmsis_nn_root=cmsis_nn_root,
     )
     if config.plan:
         _print_plan_item(BuildStep(config).plan())
