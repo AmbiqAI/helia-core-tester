@@ -167,3 +167,56 @@ def test_cmake_error_names_the_option_and_env_var() -> None:
     block = text[text.index('message(FATAL_ERROR\n    "cmsis-nn CMakeLists.txt not found'):]
     block = block[: block.index(")\n")]
     assert "--cmsis-nn-root" in block and ENV_NAME in block
+
+
+def test_tilde_root_is_expanded(tmp_path, monkeypatch) -> None:
+    checkout = _checkout(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config = _config(_repo(tmp_path), cmsis_nn_root=Path("~") / checkout.name)
+    assert config.cmsis_nn_root == checkout.resolve()
+    assert config.cmsis_nn_root_error() is None
+
+
+def test_tilde_root_from_env_is_expanded(tmp_path, monkeypatch) -> None:
+    checkout = _checkout(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv(ENV_NAME, f"~/{checkout.name}")
+    config = Config(project_root=_repo(tmp_path), _explicit_overrides={"project_root"})
+    assert config.cmsis_nn_root == checkout.resolve()
+
+
+def test_tilde_root_from_toml_is_expanded(tmp_path, monkeypatch) -> None:
+    checkout = _checkout(tmp_path)
+    repo = _repo(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("HELIA_CORE_TESTER_CONFIG", raising=False)
+    (repo / "helia_core_tester.toml").write_text(f'[helia_core_tester]\ncmsis_nn_root = "~/{checkout.name}"\n')
+    config = Config(project_root=repo, _explicit_overrides={"project_root"})
+    assert config.cmsis_nn_root == checkout.resolve()
+    assert config.cmsis_nn_root_error() is None
+
+
+def test_error_names_the_flag_as_the_source(tmp_path) -> None:
+    error = _config(_repo(tmp_path), cmsis_nn_root=tmp_path / "missing").cmsis_nn_root_error()
+    assert "(from --cmsis-nn-root)" in error
+
+
+def test_error_names_the_env_var_as_the_source(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv(ENV_NAME, str(tmp_path / "missing"))
+    error = Config(project_root=_repo(tmp_path), _explicit_overrides={"project_root"}).cmsis_nn_root_error()
+    assert f"(from {ENV_NAME})" in error
+
+
+def test_error_names_the_toml_file_as_the_source(tmp_path, monkeypatch) -> None:
+    repo = _repo(tmp_path)
+    monkeypatch.delenv("HELIA_CORE_TESTER_CONFIG", raising=False)
+    toml = repo / "helia_core_tester.toml"
+    toml.write_text(f'[helia_core_tester]\ncmsis_nn_root = "{tmp_path / "missing"}"\n')
+    error = Config(project_root=repo, _explicit_overrides={"project_root"}).cmsis_nn_root_error()
+    assert f"(from cmsis_nn_root in {toml.resolve()})" in error
+
+
+def test_flag_source_wins_over_env_in_the_error(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv(ENV_NAME, str(tmp_path / "env-missing"))
+    error = _config(_repo(tmp_path), cmsis_nn_root=tmp_path / "flag-missing").cmsis_nn_root_error()
+    assert "flag-missing" in error and "(from --cmsis-nn-root)" in error
