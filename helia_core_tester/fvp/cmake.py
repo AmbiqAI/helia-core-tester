@@ -172,6 +172,28 @@ def compiler_launcher_args(verbosity: int = 0) -> List[str]:
     return [f"-DCMAKE_C_COMPILER_LAUNCHER={launcher}"]
 
 
+def read_cmake_cache_value(build_dir: Path, key: str) -> Optional[str]:
+    """Raw value of one CMakeCache.txt entry (any type), or None when absent or unreadable."""
+    cache = build_dir / "CMakeCache.txt"
+    try:
+        text = cache.read_text(errors="ignore")
+    except OSError:
+        return None
+    match = re.search(rf"^{re.escape(key)}(?::[^=]*)?=(.*)$", text, re.MULTILINE)
+    return match.group(1).strip() if match else None
+
+
+def cmake_truthy(value: str) -> bool:
+    """CMake's if(<constant>) truth rule for cache values."""
+    upper = value.strip().upper()
+    if upper in {"1", "ON", "YES", "TRUE", "Y"}:
+        return True
+    try:
+        return float(upper) != 0
+    except ValueError:
+        return False
+
+
 def read_cmake_cache_path(build_dir: Path, key: str) -> Optional[Path]:
     cache = build_dir / "CMakeCache.txt"
     if not cache.exists():
