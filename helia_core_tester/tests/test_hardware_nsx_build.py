@@ -660,6 +660,22 @@ def test_fresh_build_dir_is_left_alone(tmp_path: Path, nsx: list[tuple], gcc_ver
     assert keep.read_text(encoding="utf-8") == "mine"
 
 
+def test_foreign_cmake_build_dir_keeps_its_outputs(
+    tmp_path: Path, nsx: list[tuple], gcc_version: dict[str, str]
+) -> None:
+    """A --build-dir another project configured loses only its cache, never its other files."""
+    (tmp_path / "CMakeCache.txt").write_text(
+        f"CMAKE_HOME_DIRECTORY:INTERNAL={tmp_path / 'elsewhere'}\n", encoding="utf-8"
+    )
+    (tmp_path / "build.ninja").write_text("", encoding="utf-8")
+    theirs = tmp_path / "app" / "main.c.obj"
+    theirs.parent.mkdir()
+    theirs.write_text("theirs", encoding="utf-8")
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
+    assert theirs.read_text(encoding="utf-8") == "theirs"
+    assert "configure" in _steps(nsx)
+
+
 def test_build_records_the_lock_and_kernels(tmp_path: Path, nsx: list[tuple], monkeypatch) -> None:
     import json
 

@@ -62,6 +62,7 @@ ARM_GCC_VERSION = "14.3.rel1"
 # Written into the install once it is complete. An install without it, or with another
 # version, is stale: a restored CI cache or a reused volume must not keep an old compiler.
 ARM_GCC_VERSION_MARKER = ".hct-arm-gcc-version"
+ARM_GCC_STAGING_PREFIX = ".arm_gcc_staging-"
 
 
 def arm_gcc_url(arch: str, version: str = ARM_GCC_VERSION) -> str:
@@ -313,7 +314,11 @@ def setup_arm_gcc(downloads_dir: Path, force: bool = False) -> None:
     gcc_url = arm_gcc_url(arch)
     expected_sha256 = PINNED_SHA256[("arm_gcc", arch)]
 
-    with tempfile.TemporaryDirectory() as temp_dir:
+    downloads_dir.mkdir(parents=True, exist_ok=True)
+    for leftover in downloads_dir.glob(f"{ARM_GCC_STAGING_PREFIX}*"):
+        shutil.rmtree(leftover, ignore_errors=True)
+    # Staged next to the install so the swap below is a rename, not a cross-device copy.
+    with tempfile.TemporaryDirectory(prefix=ARM_GCC_STAGING_PREFIX, dir=downloads_dir) as temp_dir:
         temp_path = Path(temp_dir)
         archive_file = temp_path / "arm_gcc.tar.xz"
 
@@ -328,14 +333,13 @@ def setup_arm_gcc(downloads_dir: Path, force: bool = False) -> None:
         toolchain_dir = toolchain_dirs[0]
         if not (toolchain_dir / "bin").is_dir():
             raise RuntimeError(f"Toolchain archive has no bin/ under {toolchain_dir.name}")
+        (toolchain_dir / ARM_GCC_VERSION_MARKER).write_text(ARM_GCC_VERSION + "\n")
 
-        # The old install goes only once the new one is verified and extracted.
+        # The old install goes only once the new one is verified, extracted and marked.
         if gcc_dir.exists():
-            print(f"Removing existing ARM GCC installation at {gcc_dir}...")
-            shutil.rmtree(gcc_dir)
-        print(f"Moving toolchain from {toolchain_dir.name} to {gcc_dir}")
-        shutil.move(str(toolchain_dir), str(gcc_dir))
-        (gcc_dir / ARM_GCC_VERSION_MARKER).write_text(ARM_GCC_VERSION + "\n")
+            print(f"Replacing existing ARM GCC installation at {gcc_dir}...")
+            os.replace(gcc_dir, temp_path / "previous")
+        os.replace(toolchain_dir, gcc_dir)
 
     print(f"ARM GCC {ARM_GCC_VERSION} setup complete")
 

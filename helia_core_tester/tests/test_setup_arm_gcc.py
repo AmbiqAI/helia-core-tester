@@ -124,6 +124,49 @@ def test_archive_with_two_top_dirs_is_refused(tmp_path, fake_download, monkeypat
     assert not (tmp_path / "arm_gcc_download").exists()
 
 
+def _staging(downloads: Path) -> list[Path]:
+    return list(downloads.glob(f"{sd.ARM_GCC_STAGING_PREFIX}*"))
+
+
+def test_install_stages_beside_the_target_and_leaves_nothing_behind(tmp_path, fake_download, monkeypatch) -> None:
+    """Staging under downloads_dir makes the swap a same-filesystem rename."""
+    gcc = _old_install(tmp_path, "14.2.rel1")
+    seen = []
+    real_replace = sd.os.replace
+
+    def _replace(src, dst):
+        seen.append((Path(src), Path(dst)))
+        real_replace(src, dst)
+
+    monkeypatch.setattr(sd.os, "replace", _replace)
+    sd.setup_arm_gcc(tmp_path)
+    assert all(src.is_relative_to(tmp_path) and dst.is_relative_to(tmp_path) for src, dst in seen)
+    assert seen[-1][1] == gcc
+    assert _staging(tmp_path) == []
+    assert sd.installed_arm_gcc_version(gcc) == "14.3.rel1"
+
+
+def test_failed_install_leaves_no_staging_dir(tmp_path, fake_download) -> None:
+    _old_install(tmp_path, "14.2.rel1")
+    fake_download["payload"] = _archive_bytes(with_bin=False)
+    with pytest.raises(RuntimeError):
+        sd.setup_arm_gcc(tmp_path)
+    assert _staging(tmp_path) == []
+
+
+def test_staging_left_by_a_killed_run_is_removed(tmp_path, fake_download) -> None:
+    leftover = tmp_path / f"{sd.ARM_GCC_STAGING_PREFIX}dead"
+    (leftover / "extracted").mkdir(parents=True)
+    sd.setup_arm_gcc(tmp_path)
+    assert not leftover.exists()
+
+
+def test_missing_downloads_dir_is_created(tmp_path, fake_download) -> None:
+    downloads = tmp_path / "not" / "yet"
+    sd.setup_arm_gcc(downloads)
+    assert sd.installed_arm_gcc_version(downloads / "arm_gcc_download") == "14.3.rel1"
+
+
 def test_hardware_entry_point_replaces_a_stale_install(tmp_path, fake_download, monkeypatch) -> None:
     from helia_core_tester.hardware import firmware_build
 

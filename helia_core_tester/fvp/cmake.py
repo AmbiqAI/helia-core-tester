@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -231,6 +232,84 @@ def cmake_configure(
     rc = subprocess.call(cmd, cwd=str(REPO_ROOT), env=env, stdout=stdout, stderr=None)
     if rc != 0:
         raise FvpScriptError(f"CMake configure failed for {cpu} (rc={rc})")
+    _clean_if_compiler_changed(build_dir, verbosity, env)
+
+
+COMPILER_STAMP = ".hct-compiler.json"
+
+
+def _configured_compiler(build_dir: Path, env: dict) -> Optional[Path]:
+    """The C compiler CMake configured: the newest CMakeCCompiler.cmake probe (a toolchain
+    file's plain set() never reaches the cache), else CMAKE_C_COMPILER from the cache.
+    A bare name is looked up on env's PATH."""
+    value: Optional[str] = None
+    probes = sorted(build_dir.glob("CMakeFiles/*/CMakeCCompiler.cmake"), key=lambda p: p.stat().st_mtime)
+    if probes:
+        match = re.search(r'^set\(CMAKE_C_COMPILER "([^"]+)"\)', probes[-1].read_text(errors="ignore"), re.MULTILINE)
+        value = match.group(1) if match else None
+    cache = build_dir / "CMakeCache.txt"
+    if value is None and cache.is_file():
+        for line in cache.read_text(errors="ignore").splitlines():
+            key, sep, rest = line.partition("=")
+            if sep and key.split(":", 1)[0] == "CMAKE_C_COMPILER" and rest.strip():
+                value = rest.strip()
+                break
+    if not value:
+        return None
+    if os.path.isabs(value):
+        return Path(value)
+    found = shutil.which(value, path=env.get("PATH"))
+    return Path(found) if found else None
+
+
+def _compiler_identity(build_dir: Path, env: dict) -> Optional[dict]:
+    """The configured C compiler's resolved path, version and file stat, or None
+    when CMake recorded no compiler that exists."""
+    compiler = _configured_compiler(build_dir, env)
+    if compiler is None:
+        return None
+    try:
+        resolved = compiler.resolve(strict=True)
+        st = resolved.stat()
+    except OSError:
+        return None
+    try:
+        done = subprocess.run(
+            [str(resolved), "-dumpversion"], capture_output=True, text=True, timeout=30, env=env, check=True
+        )
+        version = done.stdout.strip() or None
+    except (OSError, subprocess.SubprocessError):
+        version = None
+    return {"path": str(resolved), "version": version, "size": st.st_size, "mtime_ns": st.st_mtime_ns}
+
+
+def _clean_if_compiler_changed(build_dir: Path, verbosity: int, env: dict) -> None:
+    """Ninja does not rebuild when the compiler binary at a configured path changes, so
+    an in-place toolchain swap would link old objects. Clean the build tree when the
+    configured compiler differs from the one the last configure recorded, or when no
+    record exists (outputs from an unknown compiler)."""
+    identity = _compiler_identity(build_dir, env)
+    if identity is None:
+        return
+    stamp = build_dir / COMPILER_STAMP
+    try:
+        recorded = json.loads(stamp.read_text())
+    except (OSError, ValueError):
+        recorded = None
+    if recorded == identity:
+        return
+    if verbosity >= 1:
+        before = recorded.get("version") if isinstance(recorded, dict) else "unrecorded"
+        print(f"Compiler changed ({before} -> {identity['version']}); cleaning {build_dir}")
+    stdout = subprocess.DEVNULL if verbosity <= 1 else None
+    rc = subprocess.call(
+        ["cmake", "--build", str(build_dir), "--target", "clean"],
+        cwd=str(REPO_ROOT), env=env, stdout=stdout, stderr=None,
+    )
+    if rc != 0:
+        stamp.unlink(missing_ok=True)
+        raise FvpScriptError(f"Cleaning {build_dir} after a compiler change failed (rc={rc})")
+    stamp.write_text(json.dumps(identity))
 
 
 def cmake_build(build_dir: Path, verbosity: int, env: dict, jobs: Optional[int]) -> None:

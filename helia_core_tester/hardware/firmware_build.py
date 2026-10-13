@@ -159,8 +159,10 @@ def _drop_stale_compiler_outputs(build_dir: Path, toolchain: Optional[str]) -> N
 
     Ninja does not rebuild when the compiler binary at a configured path changes, so an
     in-place toolchain swap would otherwise link old objects and record the new version.
+    Only a cache this NSX app configured is wiped; a foreign one is left to
+    `_drop_foreign_cache`, which removes just the cache.
     """
-    if not ((build_dir / "CMakeCache.txt").is_file() or (build_dir / "build.ninja").is_file()):
+    if _cache_value(build_dir, "CMAKE_HOME_DIRECTORY") != str(nsx_app_dir(build_dir).resolve()):
         return
     installed = (toolchain_spec(toolchain).installed() or {}).get("version")
     info = _read_record(nsx_app_dir(build_dir) / BUILT_INFO)
