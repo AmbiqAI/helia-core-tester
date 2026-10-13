@@ -709,6 +709,11 @@ Use `tensor_dtypes` for new float-aware descriptors. Legacy `activation_dtype` a
 still work, but the loader now normalizes both styles into `resolved_tensor_dtypes` and
 `resolved_comparison`.
 
+Every descriptor document, and every expanded variation, is validated against
+`helia_core_tester/generation/descriptors/schema.json` when it is loaded; a violation fails the load
+with the descriptor name, file and JSON path. Integer-suite descriptors (no `suite: float` and no
+`_float` file stem) must give `act_min`/`act_max` as integers.
+
 Example:
 
 ```yaml
@@ -852,9 +857,9 @@ strict bundles need no migration. Matching NaNs and same-sign infinities pass st
 comparison; other non-finite pairings fail. This does not impose NaN-payload or signed-zero
 bit equality.
 
-`nonfinite_policy` is required by `OperationBase.nonfinite_policy()`, not by the schema: the
-`if`/`then` gate in `schema.json` is documentation until the descriptor loader validates the whole
-schema (#100).
+`nonfinite_policy` is required whenever `input_mode` is `nonfinite_sweep`: the descriptor loader
+enforces the `if`/`then` gate in `schema.json`, and `OperationBase.nonfinite_policy()` checks it
+again at generation time.
 
 To scaffold a new tester op, start from `helia_core_tester/scripts/scaffold_operator.py`.
 
@@ -978,8 +983,8 @@ operand_sign_span_exempt:
 The reason is required, and the key must name an operand the operator actually submits to the
 rule: each wired operator declares those labels as `SIGN_SPAN_OPERANDS`, and a waiver on
 anything else fails generation instead of silently waiving nothing. `operand_sign_span_exempt`
-is also declared in `helia_core_tester/generation/descriptors/schema.json`, but that schema is
-not enforced at load time (#100), so the rule lives in code.
+is also declared in `helia_core_tester/generation/descriptors/schema.json`, which the loader
+enforces, but the operand check needs the operator's labels, so it lives in code.
 
 ## Mutation scoring
 

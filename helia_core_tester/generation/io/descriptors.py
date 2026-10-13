@@ -4,6 +4,7 @@ Descriptor ingestion with dtype validation and kernel resolution.
 
 import copy
 import functools
+import json
 import yaml
 import os
 from typing import Dict, Any, List, Tuple
@@ -203,6 +204,48 @@ def _validate_profile_requirements(
             raise ValueError(f"{operator}{suffix} only supports {field}={expected}")
 
 
+SCHEMA_PATH = Path(__file__).resolve().parent.parent / "descriptors" / "schema.json"
+
+
+def _descriptor_suite(desc: Dict[str, Any], source_stem: str) -> str:
+    return str(desc.get("suite") or ("float" if source_stem.endswith("_float") else "default"))
+
+
+@functools.lru_cache(maxsize=None)
+def _schema_validator(schema_path: str):
+    """Draft 2020-12 validator for schema.json; any problem loading it fails closed."""
+    from jsonschema import Draft202012Validator
+    from jsonschema.exceptions import SchemaError
+
+    try:
+        schema = json.loads(Path(schema_path).read_text())
+        Draft202012Validator.check_schema(schema)
+    except (OSError, ValueError, SchemaError) as exc:
+        raise RuntimeError(f"Descriptor schema {schema_path} is unusable: {exc}") from exc
+    return Draft202012Validator(schema)
+
+
+def validate_descriptor_schema(doc: Any, source_stem: str = "") -> None:
+    """Validate one raw descriptor document against schema.json.
+
+    The suite is defaulted from the source file stem first, as
+    _annotate_descriptor_source does, so suite-gated rules see the effective
+    suite. Raises ValueError listing every violation with its JSON path.
+    """
+    if not isinstance(doc, dict):
+        raise ValueError(f"descriptor must be a mapping, got {type(doc).__name__}")
+    candidate = dict(doc)
+    candidate.setdefault("suite", _descriptor_suite(doc, source_stem))
+    errors = sorted(
+        _schema_validator(str(SCHEMA_PATH)).iter_errors(candidate),
+        key=lambda err: (err.json_path, err.message),
+    )
+    if errors:
+        name = doc.get("name", "<unnamed>")
+        details = "; ".join(f"{err.json_path}: {err.message}" for err in errors)
+        raise ValueError(f"descriptor '{name}' violates schema.json: {details}")
+
+
 def _annotate_descriptor_source(
     desc: Dict[str, Any],
     desc_path: str,
@@ -225,7 +268,7 @@ def _annotate_descriptor_source(
     annotated["_source_family"] = source_rel.parts[0] if len(source_rel.parts) > 1 else ""
     annotated["_source_stem"] = source_rel.stem
     annotated["_source_relpath"] = source_relpath
-    annotated["_descriptor_suite"] = str(annotated.get("suite") or ("float" if source_rel.stem.endswith("_float") else "default"))
+    annotated["_descriptor_suite"] = _descriptor_suite(annotated, source_rel.stem)
     annotated["_family"] = spec.family
     annotated["_parity_kind"] = spec.parity_kind
     return annotated
@@ -360,9 +403,11 @@ def load_descriptor(desc_path: str) -> List[Dict[str, Any]]:
         raise ValueError(f"No valid descriptors found in {desc_path}")
     
     # Validate and normalize each descriptor
+    source_stem = Path(desc_path).stem
     descriptors = []
     for i, doc in enumerate(documents):
         try:
+            validate_descriptor_schema(doc, source_stem)
             validated_desc = _validate_and_normalize_descriptor(doc)
             descriptors.append(validated_desc)
         except Exception as e:
@@ -456,6 +501,10 @@ def expand_descriptor_variations(desc: Dict[str, Any]) -> List[Dict[str, Any]]:
         # Store base descriptor name for filtering purposes
         variation_desc['_base_name'] = base_name
 
+        validate_descriptor_schema(
+            {k: v for k, v in variation_desc.items() if not k.startswith(('_', 'resolved_'))},
+            str(desc.get('_source_stem', '')),
+        )
         normalized_variation = _validate_and_normalize_descriptor(variation_desc)
         operator = normalized_variation['operator']
         _validate_profile_requirements(normalized_variation, operator, variation=True)
