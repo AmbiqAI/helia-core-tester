@@ -17,6 +17,8 @@ from helia_core_tester.utils.command_runner import run_command
 class GenerateStep(StepBase):
     """Step for generating TFLite models."""
     
+    _run_seed: Optional[tuple[int, bool]] = None
+
     def __init__(self, config):
         super().__init__(config)
         self.logger = get_logger(__name__)
@@ -89,8 +91,11 @@ class GenerateStep(StepBase):
             )
             if effective_float_precision:
                 cmd.extend(["--float-precision", effective_float_precision])
-        if include_seed and self.config.seed is not None:
-            cmd.extend(["--seed", str(self.config.seed)])
+        if include_seed:
+            seed, chosen = self.run_seed()
+            cmd.extend(["--seed", str(seed)])
+            if not chosen:
+                cmd.append("--fresh-seed")
         if self.config.force_generate:
             cmd.append("--force-generate")
         if self.config.keep_unselected:
@@ -104,10 +109,26 @@ class GenerateStep(StepBase):
             cmd.extend(["--shape-seed", str(self.config.shape_seed)])
         return cmd
     
+    def run_seed(self) -> tuple[int, bool]:
+        """The run seed and whether it was chosen (--seed / HCT_SEED) rather than drawn.
+
+        Drawn once per step so every generation command of one run (each cpu and suite)
+        derives its cases from the same seed, and recorded in the step details."""
+        if self._run_seed is None:
+            from helia_core_tester.generation.test_ops import resolve_run_seed
+
+            self._run_seed = resolve_run_seed({"seed": self.config.seed})
+        return self._run_seed
+
     def _do_execute(self) -> StepResult:
         """Execute TFLite model generation."""
+        seed, chosen = self.run_seed()
         if self.config.verbosity >= 1:
-            self.logger.info("Generating TensorFlow Lite models using pytest")
+            self.logger.info("Generating reference models and test cases using pytest")
+            self.logger.info(
+                f"Run seed: {seed} ({'chosen' if chosen else 'fresh draw'}; pass --seed {seed} to reproduce"
+                f"{'' if chosen else ' or reuse'})"
+            )
         # Propagate an overridden CMSIS-NN root (--cmsis-nn-root) so LSTM
         # unit-test data lookups (lstm_data.py) resolve against it instead of
         # assuming the repo is nested under ns-cmsis-nn/Tests/. Uses
@@ -154,7 +175,8 @@ class GenerateStep(StepBase):
                         "dtype": self.config.dtype_filter,
                         "name": self.config.name_filter,
                         "limit": self.config.limit,
-                        "seed": self.config.seed,
+                        "seed": seed,
+                        "seed_chosen": chosen,
                     },
                 },
             )

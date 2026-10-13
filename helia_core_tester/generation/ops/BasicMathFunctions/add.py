@@ -2,31 +2,10 @@
 Add operation implementation.
 """
 
-from typing import Dict, Any
+from typing import Dict
 import numpy as np
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.binary_basic_math_base import BinaryBasicMathBase
-from helia_core_tester.generation.utils.litert_builder import build_binary_broadcast_op
-
-
-def build_add_op(
-    *,
-    input_1_shape,
-    input_2_shape,
-    dtype: str = "int8",
-) -> bytes:
-    from ai_edge_litert import schema_py_generated as litert
-
-    options = litert.AddOptionsT()
-    options.fusedActivationFunction = litert.ActivationFunctionType.NONE
-    return build_binary_broadcast_op(
-        op_name="ADD",
-        input_1_shape=input_1_shape,
-        input_2_shape=input_2_shape,
-        dtype=dtype,
-        options=options,
-        options_type=litert.BuiltinOptions.AddOptions,
-    )
 
 
 class OpAdd(BinaryBasicMathBase):
@@ -36,34 +15,11 @@ class OpAdd(BinaryBasicMathBase):
 
     SIGN_SPAN_OPERANDS = ("input_1", "input_2")
     
-    def needs_keras_model(self) -> bool:
-        return False
+    # Fixed per-tensor quantization of the integer cases (every tensor alike).
+    INT_QUANT = {"S8": (0.125, 0), "S16": (1.0 / 32768.0, 0)}
 
-    def build_keras_model(self):
-        raise NotImplementedError("Add uses LiteRT-only model generation.")
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        activation_dtype = self.tensor_dtype("input")
-        if activation_dtype == "S8":
-            dtype = "int8"
-        elif activation_dtype == "S16":
-            dtype = "int16"
-        elif activation_dtype == "FP32":
-            dtype = "float32"
-        elif activation_dtype == "FP16":
-            dtype = "float16"
-        else:
-            raise NotImplementedError(f"Unsupported Add dtype: {activation_dtype}")
-
-        input_1_shape = tuple(self.desc["input_1_shape"])
-        input_2_shape = tuple(self.desc["input_2_shape"])
-
-        model_bytes = build_add_op(
-            input_1_shape=input_1_shape,
-            input_2_shape=input_2_shape,
-            dtype=dtype,
-        )
-        self._write_tflite_bytes(out_path, model_bytes)
+    def uses_reference(self) -> bool:
+        return True
 
     def _select_cmsis_add_kernel(self) -> Dict[str, str]:
         """
@@ -124,32 +80,17 @@ class OpAdd(BinaryBasicMathBase):
         """
         Generate C and H files from templates for Add operation.
         """
+        from helia_core_tester.generation.reference.abi import activation_code, dtype_code
+        from helia_core_tester.generation.reference.bindings import get_bindings, output_shape_for
+        from helia_core_tester.generation.reference.call import ReferenceCall
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
-        from helia_core_tester.generation.utils.tflite_utils import (
-            scalar_scale_zp,
-            activation_bounds,
-            elementwise_addsub_quant_params,
-        )
-        
+
         name = self.desc['name']
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
-        
-        # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_add_kernel()
-        
-        # Load LiteRT model for shape and quantization extraction
-        from helia_core_tester.generation.utils.litert_utils import get_operator_tensors_from_litert
-        model, subgraph = self.load_litert_model(str(tflite_path))
-        op_tensors = get_operator_tensors_from_litert(model, subgraph, 0)
-        
-        input1_shape = self._ensure_shape_tuple(op_tensors['inputs'][0]['shape'])
-        input2_shape = self._ensure_shape_tuple(
-            op_tensors['inputs'][1]['shape'] if len(op_tensors['inputs']) > 1 else op_tensors['inputs'][0]['shape']
-        )
-        output_shape = self._ensure_shape_tuple(op_tensors['outputs'][0]['shape'])
-        
+        input1_shape = tuple(int(d) for d in self.desc["input_1_shape"])
+        input2_shape = tuple(int(d) for d in self.desc["input_2_shape"])
+        output_shape = output_shape_for("add", input1_shape, input2_shape)
+
         builder = TemplateContextBuilder()
         input1_dims = builder.nhwc_to_cmsis_dims(input1_shape)
         input2_dims = builder.nhwc_to_cmsis_dims(input2_shape)
@@ -165,11 +106,12 @@ class OpAdd(BinaryBasicMathBase):
             input2_q = input2_f32.astype(float_dtype)
             activation_min = float(self.desc.get("act_min", -1.0e30))
             activation_max = float(self.desc.get("act_max", 1.0e30))
-            output_data = np.clip(
-                input1_q.astype(np.float32) + input2_q.astype(np.float32),
-                activation_min,
-                activation_max,
-            ).astype(float_dtype)
+            output_data = self.reference_golden(ReferenceCall(
+                "add_f16" if float_dtype == np.float16 else "add_f32",
+                {"activation_min": activation_min, "activation_max": activation_max},
+                {"input1": input1_q, "input2": input2_q},
+                {"output": output_shape},
+            ))
             if not kernel_info.get("float_broadcast"):
                 # The flat kernel sees the broadcast already materialised.
                 input1_q = np.broadcast_to(input1_q, output_shape).astype(float_dtype, copy=True)
@@ -179,73 +121,47 @@ class OpAdd(BinaryBasicMathBase):
             mult1 = shift1 = mult2 = shift2 = output_mult = output_shift = left_shift = 0
             input1_zp = input2_zp = output_zp = 0
         else:
-            input1_quant = op_tensors['inputs'][0]['quantization']
-            input2_quant = op_tensors['inputs'][1]['quantization'] if len(op_tensors['inputs']) > 1 else input1_quant
-            output_quant = op_tensors['outputs'][0]['quantization']
-
-            input1_scale, input1_zp = scalar_scale_zp(input1_quant)
-            input2_scale, input2_zp = scalar_scale_zp(input2_quant)
-            output_scale, output_zp = scalar_scale_zp(output_quant)
-
-            activation_min, activation_max = activation_bounds(activation_dtype)
-            addsub_qparams = elementwise_addsub_quant_params(
-                input1_scale=float(input1_scale),
-                input2_scale=float(input2_scale),
-                output_scale=float(output_scale),
-                activation_dtype=activation_dtype,
-            )
-            mult1 = addsub_qparams["input1_mult"]
-            shift1 = addsub_qparams["input1_shift"]
-            mult2 = addsub_qparams["input2_mult"]
-            shift2 = addsub_qparams["input2_shift"]
-            output_mult = addsub_qparams["out_mult"]
-            output_shift = addsub_qparams["out_shift"]
-            left_shift = addsub_qparams["left_shift"]
+            scale, zero_point = self.INT_QUANT[activation_dtype]
+            params = get_bindings().prepare("add_prepare", {
+                "dtype": dtype_code("int8" if activation_dtype == "S8" else "int16"),
+                "activation": activation_code("NONE"),
+                "input1_scale": scale, "input1_zero_point": zero_point,
+                "input2_scale": scale, "input2_zero_point": zero_point,
+                "output_scale": scale, "output_zero_point": zero_point,
+            })
+            input1_scale = input2_scale = scale
+            input1_zp = input2_zp = output_zp = zero_point
+            mult1, shift1 = params["input1_multiplier"], params["input1_shift"]
+            mult2, shift2 = params["input2_multiplier"], params["input2_shift"]
+            output_mult, output_shift = params["output_multiplier"], params["output_shift"]
+            left_shift = params["left_shift"]
+            activation_min, activation_max = params["activation_min"], params["activation_max"]
 
             # Draw both operands from one RNG stream: reseeding per call would
             # make input1 == input2 and weaken/vacuously pass the golden.
             input1_data, input2_data = self._sample_dual_uniform_inputs(input1_shape, input2_shape)
             input1_data = self._widen_s8(input1_data, input1_scale, kernel_info["input_c_type"])
             input2_data = self._widen_s8(input2_data, input2_scale, kernel_info["input_c_type"])
-            qmin, qmax = activation_bounds(activation_dtype)
             np_in_dtype = np.int16 if activation_dtype == "S16" else np.int8
+            info = np.iinfo(np_in_dtype)
             input1_q = np.round(input1_data / float(input1_scale) + float(input1_zp)).astype(np.int32)
-            input1_q = np.clip(input1_q, qmin, qmax).astype(np_in_dtype)
-
+            input1_q = np.clip(input1_q, info.min, info.max).astype(np_in_dtype)
             input2_q = np.round(input2_data / float(input2_scale) + float(input2_zp)).astype(np.int32)
-            input2_q = np.clip(input2_q, qmin, qmax).astype(np_in_dtype)
+            input2_q = np.clip(input2_q, info.min, info.max).astype(np_in_dtype)
             input1_q, input2_q = self._enforce_int_operand_sign_span(
                 (("input_1", input1_q, input1_zp), ("input_2", input2_q, input2_zp)),
                 steerable=("input_1", "input_2"),
             )
+            output_data = self.reference_golden(ReferenceCall(
+                "add_s8" if activation_dtype == "S8" else "add_s16",
+                params,
+                {"input1": np.ascontiguousarray(input1_q), "input2": np.ascontiguousarray(input2_q)},
+                {"output": output_shape},
+                quant={"input1": {"scale": scale, "zero_point": zero_point},
+                       "input2": {"scale": scale, "zero_point": zero_point},
+                       "output": {"scale": scale, "zero_point": zero_point}},
+            ))
 
-            if input1_shape == input2_shape:
-                interpreter = self.load_litert_interpreter(str(tflite_path))
-                input_details = interpreter.get_input_details()
-                output_details = interpreter.get_output_details()
-                interpreter.set_tensor(input_details[0]['index'], input1_q)
-                interpreter.set_tensor(input_details[1]['index'], input2_q)
-                interpreter.invoke()
-                output_data = np.array(interpreter.get_tensor(output_details[0]['index']))
-            else:
-                output_data = self._simulate_add_quantized(
-                    input1_q,
-                    input2_q,
-                    input1_offset=-int(input1_zp),
-                    input2_offset=-int(input2_zp),
-                    input1_mult=int(mult1),
-                    input1_shift=int(shift1),
-                    input2_mult=int(mult2),
-                    input2_shift=int(shift2),
-                    left_shift=int(left_shift),
-                    out_offset=int(output_zp),
-                    out_mult=int(output_mult),
-                    out_shift=int(output_shift),
-                    out_activation_min=int(activation_min),
-                    out_activation_max=int(activation_max),
-                    out_dtype=np_in_dtype,
-                )
-        
         # Format arrays
         input1_array_str = builder.format_array_as_c_literal(input1_q)
         input2_array_str = builder.format_array_as_c_literal(input2_q)
@@ -306,36 +222,6 @@ class OpAdd(BinaryBasicMathBase):
             'operator_name': 'add',
         }
         self._write_op_outputs(output_dir, "add", "BasicMathFunctions/add/add.h.j2", "BasicMathFunctions/add/add.c.j2", context, cmake_context)
-
-    @classmethod
-    def _simulate_add_quantized(
-        cls,
-        input1_q: np.ndarray,
-        input2_q: np.ndarray,
-        *,
-        input1_offset: int,
-        input2_offset: int,
-        input1_mult: int,
-        input1_shift: int,
-        input2_mult: int,
-        input2_shift: int,
-        left_shift: int,
-        out_offset: int,
-        out_mult: int,
-        out_shift: int,
-        out_activation_min: int,
-        out_activation_max: int,
-        out_dtype: np.dtype,
-    ) -> np.ndarray:
-        a = (input1_q.astype(np.int32) + int(input1_offset)) << int(left_shift)
-        b = (input2_q.astype(np.int32) + int(input2_offset)) << int(left_shift)
-        a = cls._requantize_np(a, int(input1_mult), int(input1_shift))
-        b = cls._requantize_np(b, int(input2_mult), int(input2_shift))
-        s = a + b
-        s = cls._requantize_np(s, int(out_mult), int(out_shift))
-        s = s + int(out_offset)
-        s = np.clip(s, int(out_activation_min), int(out_activation_max))
-        return s.astype(out_dtype)
 
 
 from helia_core_tester.generation.harness.registry import harness_pool  # noqa: E402

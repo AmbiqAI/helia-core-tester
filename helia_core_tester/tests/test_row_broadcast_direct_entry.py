@@ -22,7 +22,7 @@ def _descriptor(name: str) -> dict:
 
 def _source(name: str, tmp_path: Path, **overrides) -> str:
     generate_test({**_descriptor(name), **overrides}, str(tmp_path))
-    case_dir = next(p.parent for p in tmp_path.rglob(f"{name}.tflite"))
+    case_dir = next(p.parent for p in tmp_path.rglob("descriptor.yaml") if p.parent.name == name)
     return "".join(p.read_text() for p in case_dir.glob("*.c"))
 
 

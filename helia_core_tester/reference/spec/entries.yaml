@@ -1,0 +1,125 @@
+# Single source of truth for the hct_ref C ABI.
+#
+# `python -m helia_core_tester.generation.reference.abi --write` renders
+# include/hct_ref_abi.h from this file; the Python bindings build their ctypes
+# structs from it at import. tests/test_reference_abi.py fails on a stale header.
+#
+# Every kernel entry has one signature:
+#   int32_t hct_ref_<entry>(const <params> *params,
+#                           const HctTensor *inputs, int32_t num_inputs,
+#                           HctTensor *outputs, int32_t num_outputs);
+# Every prepare entry has one signature:
+#   int32_t hct_ref_<entry>(const <in> *in, <out> *out);
+#
+# Field types: int32, int64, float32, float64. Tensor dtypes: int8, int16, int32,
+# int64, float32, float16 (binary16 bits in uint16 storage), bool (uint8).
+
+abi_version: 1
+max_rank: 8
+
+dtypes:
+  int8: 1
+  int16: 2
+  int32: 3
+  int64: 4
+  float32: 5
+  float16: 6
+  bool: 7
+
+status:
+  OK: 0
+  E_NULL: 1      # a NULL params/tensor/data pointer
+  E_COUNT: 2     # wrong number of input or output tensors
+  E_DTYPE: 3     # a tensor dtype the entry does not take
+  E_SHAPE: 4     # rank or dims invalid, or inconsistent with the other tensors
+  E_PARAM: 5     # a parameter out of its valid range
+  E_SIZE: 6      # element count above HCT_MAX_ELEMENTS
+
+activations:
+  NONE: 0
+  RELU: 1
+  RELU6: 2
+  RELU_N1_TO_1: 3
+
+structs:
+  HctQuantizeMultiplierIn:
+    doc: A real multiplier, as TFLite's QuantizeMultiplier takes it.
+    fields:
+      - [real_multiplier, float64]
+  HctQuantizeMultiplierOut:
+    fields:
+      - [multiplier, int32]
+      - [shift, int32]
+
+  HctActivationRangeIn:
+    doc: CalculateActivationRangeQuantized. activation is an HctActivation value.
+    fields:
+      - [activation, int32]
+      - [dtype, int32]
+      - [scale, float32]
+      - [zero_point, int32]
+  HctActivationRangeOut:
+    fields:
+      - [min, int32]
+      - [max, int32]
+
+  HctAddQuant:
+    doc: Per-tensor quantization of an int8/int16 Add, scales as float32 as TFLite stores them.
+    fields:
+      - [dtype, int32]
+      - [activation, int32]
+      - [input1_scale, float32]
+      - [input1_zero_point, int32]
+      - [input2_scale, float32]
+      - [input2_zero_point, int32]
+      - [output_scale, float32]
+      - [output_zero_point, int32]
+  HctAddParams:
+    doc: Offsets follow CMSIS-NN; input offsets are -zero_point, output offset is +zero_point.
+    fields:
+      - [left_shift, int32]
+      - [input1_offset, int32]
+      - [input1_multiplier, int32]
+      - [input1_shift, int32]
+      - [input2_offset, int32]
+      - [input2_multiplier, int32]
+      - [input2_shift, int32]
+      - [output_offset, int32]
+      - [output_multiplier, int32]
+      - [output_shift, int32]
+      - [activation_min, int32]
+      - [activation_max, int32]
+  HctFloatActivationParams:
+    doc: Float clamp; +/-INFINITY leaves the side unbounded.
+    fields:
+      - [activation_min, float32]
+      - [activation_max, float32]
+
+prepare:
+  quantize_multiplier:
+    in: HctQuantizeMultiplierIn
+    out: HctQuantizeMultiplierOut
+  activation_range_quantized:
+    in: HctActivationRangeIn
+    out: HctActivationRangeOut
+  add_prepare:
+    in: HctAddQuant
+    out: HctAddParams
+
+kernels:
+  add_s8:
+    params: HctAddParams
+    inputs: {input1: int8, input2: int8}
+    outputs: {output: int8}
+  add_s16:
+    params: HctAddParams
+    inputs: {input1: int16, input2: int16}
+    outputs: {output: int16}
+  add_f32:
+    params: HctFloatActivationParams
+    inputs: {input1: float32, input2: float32}
+    outputs: {output: float32}
+  add_f16:
+    params: HctFloatActivationParams
+    inputs: {input1: float16, input2: float16}
+    outputs: {output: float16}

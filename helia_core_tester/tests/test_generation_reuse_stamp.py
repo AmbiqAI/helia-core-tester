@@ -207,14 +207,27 @@ def test_checkout_content_is_the_identity_when_the_root_is_not_a_git_tree(
 
 
 def test_stamp_schema_bump_invalidates_every_older_stamp(monkeypatch) -> None:
-    # Adding Tests/KernelContracts to the identity changed what a stamp means; a
-    # stamp minted under the previous schema must never validate a case now.
-    assert reuse._STAMP_SCHEMA == "helia-core-tester/generation-stamp/5"
+    # Folding the C reference tree into the generator sources changed what a stamp
+    # means; a stamp minted under the previous schema must never validate a case now.
+    assert reuse._STAMP_SCHEMA == "helia-core-tester/generation-stamp/6"
     assert "Tests/KernelContracts" in reuse._CMSIS_NN_INPUT_SUBTREES
     descriptor = {"name": "Add_s8_basic", "operator": "Add", "shape": [1, 4]}
     current = _stamp(descriptor)
-    monkeypatch.setattr(reuse, "_STAMP_SCHEMA", "helia-core-tester/generation-stamp/4")
+    monkeypatch.setattr(reuse, "_STAMP_SCHEMA", "helia-core-tester/generation-stamp/5")
     assert _stamp(descriptor) != current
+
+
+def test_host_compiler_identity_is_a_stamp_input(monkeypatch) -> None:
+    monkeypatch.setattr(reuse, "_host_cc_identity", lambda: "cc 1.0")
+    first = reuse._environment_identity()
+    monkeypatch.setattr(reuse, "_host_cc_identity", lambda: "cc 2.0")
+    assert reuse._environment_identity() != first
+
+
+def test_reference_sources_are_generator_inputs() -> None:
+    # An edited reference kernel must regenerate its cases, not reuse a stale golden.
+    names = {p.name for p in reuse._iter_generator_sources()}
+    assert {"entries.yaml", "hct_ref_abi.h", "fixed_point.c", "add.c"} <= names
 
 
 def test_a_clean_git_checkout_is_identified_by_its_commit(monkeypatch, tmp_path: Path) -> None:

@@ -11,11 +11,12 @@ import contextlib
 import json
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, List, Optional, Sequence, Union
 
 from ..core.cpu_targets import get_cpu_profile, normalize_cpu
+from ..utils.file_lock import exclusive_lock
 from .boards import BoardSpec, default_session_id
 from .firmware_build import (
     FlashDecision,
@@ -175,19 +176,8 @@ def resolve_pmu_options(pmu_counters: Sequence[str], pmu_groups: Optional[str], 
 def generation_lock(repo_root: Path, cpu: str) -> Iterator[None]:
     """Serialize generation into one CPU's tree."""
     # Same-CPU boards share generated tests.
-    try:
-        import fcntl
-    except ImportError:  # pragma: no cover - no flock on Windows
+    with exclusive_lock(repo_root / "artifacts" / "generated_tests" / f".{cpu}.lock"):
         yield
-        return
-    path = repo_root / "artifacts" / "generated_tests" / f".{cpu}.lock"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w") as handle:
-        fcntl.flock(handle, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(handle, fcntl.LOCK_UN)
 
 
 def generate_tests_for_board(
@@ -197,7 +187,8 @@ def generate_tests_for_board(
     float_precision: Optional[str] = None,
     cmsis_nn_root: Optional[Path] = None,
     select: Optional[CaseSelection] = None,
-) -> None:
+    seed: Optional[int] = None,
+) -> Optional[int]:
     """Run the generate step for the board's CPU and the requested suite, exactly as
     `helia_core_tester generate --cpu <board.cpu> --suite <suite>
     [--float-precision <float_precision>]` would. `float_precision` (f16/f32/both)
@@ -207,19 +198,49 @@ def generate_tests_for_board(
     from ..core.logging import setup_logger
     from ..core.steps import GenerateStep
 
-    config = _board_config(repo_root, board, suite, float_precision, cmsis_nn_root, select)
+    config = _board_config(repo_root, board, suite, float_precision, cmsis_nn_root, select, seed)
     setup_logger(verbosity=config.verbosity)
     with generation_lock(repo_root, board.cpu):
         result = GenerateStep(config).execute()
     if not (result.success or result.skipped):
         raise RuntimeError(f"Generation failed: {result.message}")
+    # The seed the step generated with (its own draw when none was given).
+    return ((getattr(result, "details", None) or {}).get("filters") or {}).get("seed")
+
+
+def host_check_tests_for_board(
+    repo_root: Path,
+    board: BoardSpec,
+    suite: str,
+    cmsis_nn_root: Path,
+    host_kernels: Sequence[str] = ("m0",),
+    seed: Optional[int] = None,
+    jobs: Optional[int] = None,
+) -> str:
+    """Host-check the board CPU's generated int cases against `cmsis_nn_root`, the
+    kernel tree the firmware compiles, exactly as `helia_core_tester host-check`
+    would. Raises RunRefused on any failure so nothing is flashed or streamed."""
+    from ..core.logging import setup_logger
+    from ..core.steps import HostCheckStep
+
+    extra = {"host_kernels": list(host_kernels)}
+    if jobs is not None:
+        extra["jobs"] = jobs
+    config = _board_config(repo_root, board, suite, None, cmsis_nn_root, None, seed, extra=extra)
+    setup_logger(verbosity=config.verbosity)
+    result = HostCheckStep(config).execute()
+    if result.skipped:
+        return result.message
+    if not result.success:
+        raise RunRefused(f"Host check failed: {result.message}")
+    return result.message
 
 
 def _board_config(
     repo_root: Path, board: BoardSpec, suite: str, float_precision: Optional[str], cmsis_nn_root: Optional[Path] = None,
-    select: Optional[CaseSelection] = None,
+    select: Optional[CaseSelection] = None, seed: Optional[int] = None, extra: Optional[dict[str, Any]] = None,
 ):
-    """Generation config for the board's CPU."""
+    """Generation config for the board's CPU; `extra` sets further Config fields."""
     from ..core.config import Config
 
     overrides = {"project_root", "cpu", "suite"}
@@ -239,6 +260,12 @@ def _board_config(
     if cmsis_nn_root is not None:
         kwargs["cmsis_nn_root"] = cmsis_nn_root
         overrides.add("cmsis_nn_root")
+    if seed is not None:
+        kwargs["seed"] = seed
+        overrides.add("seed")
+    for key, value in (extra or {}).items():
+        kwargs[key] = value
+        overrides.add(key)
     return Config(
         project_root=repo_root,
         cpu=board.cpu,
@@ -278,6 +305,8 @@ def resolved_selection(repo_root: Path, board: BoardSpec, options: "StreamOption
         "pmu_counters": options.pmu_counters,
         "fvp_gate": options.fvp_gate or DEFAULT_GATE,
         "compare": options.compare_record(),
+        # The generation seed the cases were drawn from (None: --skip-generate kept older cases).
+        "seed": options.seed,
     }
     if options.hidden_set is not None:
         selection["hidden_set"] = hidden_record(options.hidden_set, board.cpu)
@@ -353,6 +382,8 @@ class StreamOptions:
     """Accept golden cases the past run failed."""
     hidden_set: Optional[Path] = None
     """Root from `generate --hidden-dir`; its cases join the run."""
+    seed: Optional[int] = None
+    """Run seed for the generate step; None draws a fresh one (recorded in the bundle)."""
 
     def selection(self) -> CaseSelection:
         """The op, dtype and id filters."""
@@ -603,6 +634,8 @@ def run_hardware_pipeline(
     allow_unverified_firmware: bool = False,
     app_options: Optional["AppOptions"] = None,
     update_dependencies: bool = False,
+    skip_host_check: bool = False,
+    host_kernels: Sequence[str] = ("m0",),
 ) -> HardwareRunOutcome:
     """stage kernels -> generate (board cpu) -> build -> flash unless the board already runs this build -> stream -> bundle."""
     if skip_flash and force_flash:
@@ -636,11 +669,21 @@ def run_hardware_pipeline(
         precision_note = f" float_precision={options.float_precision}" if options.float_precision else ""
         echo(f"[hardware] Generating tests (cpu={board.cpu} suite={options.suite}{precision_note} kernels={kernel_root})...")
         generate_started = time.monotonic()
-        generate_tests_for_board(
+        run_seed = generate_tests_for_board(
             repo_root, board, options.suite, float_precision=options.float_precision, cmsis_nn_root=kernel_root,
-            select=options.selection(),
+            select=options.selection(), seed=options.seed,
         )
         generate_s = time.monotonic() - generate_started
+        # The bundle records the seed the cases were actually drawn from.
+        options = replace(options, seed=run_seed)
+        echo(f"[hardware] Generation seed: {run_seed} (pass --seed {run_seed} to reproduce these cases)")
+        if skip_host_check:
+            echo("[hardware] --skip-host-check set; the generated int cases were not run on the host.")
+        else:
+            echo(f"[hardware] Host-checking generated int cases ({','.join(host_kernels)}) against {kernel_root}...")
+            echo("[hardware] " + host_check_tests_for_board(
+                repo_root, board, options.suite, kernel_root, host_kernels=host_kernels, seed=run_seed, jobs=jobs,
+            ))
 
     # Check goldens and hidden cases before touching the board.
     checked = options.golden_from is not None or options.hidden_set is not None

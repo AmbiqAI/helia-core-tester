@@ -82,6 +82,8 @@ class Bundle:
     symbols: dict[str, str]
     hidden: frozenset[str] = frozenset()
     commitment: str | None = None
+    # The generation seed the bundle's cases were drawn from, from its session summary.
+    seed: int | None = None
 
     @property
     def session_id(self) -> str:
@@ -116,8 +118,9 @@ def load_bundle(path: Path) -> Bundle:
     hidden = frozenset(case_id for case_id, row in rows.items() if row.get("hidden") == "true")
     summary_path = root / "session_summary.json"
     summary = json.loads(summary_path.read_text(encoding="utf-8")) if summary_path.exists() else {}
-    hidden_set = (summary.get("selection") or {}).get("hidden_set") or {}
-    return Bundle(root, manifest, rows, digests, symbols, hidden, hidden_set.get("seed_commitment"))
+    selection = summary.get("selection") or {}
+    hidden_set = selection.get("hidden_set") or {}
+    return Bundle(root, manifest, rows, digests, symbols, hidden, hidden_set.get("seed_commitment"), selection.get("seed"))
 
 
 def harness_print(manifest: dict) -> dict:
@@ -162,12 +165,14 @@ def refusals(baselines: list[Bundle], candidates: list[Bundle], check: dict | No
         if changed:
             reasons.append(f"{bundle.session_id}: harness differs in {', '.join(changed)}")
     reasons += _compare_refusals(baselines, candidates)
-    # Hidden sets must match exactly.
+    # Hidden sets must match exactly, and every bundle must have drawn its cases from one seed.
     for bundle in baselines[1:] + candidates:
         if bundle.commitment != baselines[0].commitment:
             reasons.append(f"{bundle.session_id}: hidden seed commitment differs")
         elif bundle.hidden != baselines[0].hidden:
             reasons.append(f"{bundle.session_id}: hidden case set differs")
+        if bundle.seed != baselines[0].seed:
+            reasons.append(f"{bundle.session_id}: generation seed {bundle.seed} != {baselines[0].seed}")
     for side, bundles in (("baseline", baselines), ("candidate", candidates)):
         kernels = [_kernel_id(b) for b in bundles]
         if len(bundles) > 1 and None in kernels:

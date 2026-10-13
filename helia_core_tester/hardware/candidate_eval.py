@@ -29,6 +29,7 @@ interrupted (no verdict).
 from __future__ import annotations
 
 import json
+import secrets
 import math
 import os
 import re
@@ -40,7 +41,7 @@ import subprocess
 import sys
 import traceback
 from collections import Counter
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Optional
@@ -64,7 +65,8 @@ SCHEMA = "hct.candidate_eval"
 BASELINE_SCHEMA = "hct.candidate_baseline"
 # Verdict 3: touched-only gates, hidden kernels.
 SCHEMA_VERSION = 3
-BASELINE_VERSION = 1
+# 2: the run spec pins the generation seed.
+BASELINE_VERSION = 2
 BASELINE_FILE = "baseline.json"
 GRAPH_FILE = "code_graph.json"
 # Every verdict stage, in order.
@@ -92,6 +94,8 @@ class RunSpec:
     case_ids: tuple[str, ...] = ()
     hidden_set: Optional[Path] = None
     pmu: tuple[str, ...] = ()
+    # Generation seed: drawn once at baseline time so every run compares the same cases.
+    seed: Optional[int] = None
 
     def to_json(self) -> dict[str, Any]:
         return {key: str(value) if isinstance(value, Path) else value for key, value in asdict(self).items()}
@@ -131,6 +135,8 @@ def run_args(
     if spec.hidden_set is not None:
         # TODO(hidden-run): flag lands with the hidden-set PR.
         args += ["--hidden-set", str(spec.hidden_set)]
+    if spec.seed is not None:
+        args += ["--seed", str(spec.seed)]
     if golden_from is not None:
         args += ["--golden-from", str(golden_from)]
     if skip_generate:
@@ -192,6 +198,9 @@ def _emit(verdict: dict) -> None:
 def write_baseline(spec: RunSpec, out: Path, repeats: int, run=None) -> dict:
     """Run the clean tree `repeats` times; save bundles."""
     run = run or hardware_run
+    if spec.seed is None:
+        # Pinned here: the candidate's cases must be the baseline's.
+        spec = replace(spec, seed=secrets.randbits(32))
     base = _git(spec.kernels, "rev-parse", "HEAD").decode().strip()
     report = check_candidate(spec.kernels, base)
     if report["files"] or not report["ok"]:
@@ -243,10 +252,12 @@ def read_baseline(path: Path) -> dict:
     if not (isinstance(sessions, list) and sessions and all(isinstance(s, str) and s for s in sessions)):
         raise ValueError(f"{path}: no baseline sessions")
     try:
-        RunSpec.from_json(run, path)
+        spec = RunSpec.from_json(run, path)
         resolve_board(run["board"])
     except (TypeError, KeyError, AttributeError, UnknownBoardError) as exc:
         raise ValueError(f"{path}: bad run options ({exc})") from exc
+    if not isinstance(spec.seed, int) or isinstance(spec.seed, bool):
+        raise ValueError(f"{path}: run options pin no generation seed")
     for session in sessions:
         bundle = path / "bundles" / session
         missing = [name for name in BUNDLE_FILES if not (bundle / name).is_file()]
@@ -570,6 +581,7 @@ def baseline_command(
     hidden_set: Optional[Path] = typer.Option(
         None, "--hidden-set", exists=True, file_okay=False, resolve_path=True, help="Hidden case dir from `generate --hidden-dir`.",
     ),
+    seed: Optional[int] = typer.Option(None, "--seed", help="Generation seed to pin (default: drawn once and stored in baseline.json)."),
 ) -> None:
     """Run a clean base tree N times for `candidate eval`."""
     if tester_dirty():
@@ -579,7 +591,7 @@ def baseline_command(
         raise typer.BadParameter(f"{out} is not empty", param_hint="--out")
     try:
         spec = RunSpec(board, kernels, placement, inline_asm, tuple(op or ()), tuple(dtype or ()), tuple(case_id or ()),
-                       hidden_set, agent_pmu(board))
+                       hidden_set, agent_pmu(board), seed)
     except UnknownBoardError as exc:
         raise typer.BadParameter(str(exc), param_hint="--board") from exc
     # Same rules as hardware run.

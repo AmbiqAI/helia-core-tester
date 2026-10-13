@@ -77,6 +77,11 @@ jobs:
       - name: Install Python dependencies (no ARM toolchain needed)
         run: ./scripts/setup_ci.sh --skip-build-deps
 
+      # The C reference library (goldens) and the host check compile on the
+      # host: fail loudly here if a runner image ever drops its compiler.
+      - name: Host compiler
+        run: cc --version
+
       - name: Run pytest
         env:
           CMSIS_NN_ROOT: ${{ github.workspace }}/ns-cmsis-nn-scratch

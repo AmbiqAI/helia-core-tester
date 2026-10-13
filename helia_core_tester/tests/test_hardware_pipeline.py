@@ -47,6 +47,16 @@ from helia_core_tester.hardware.result_bundle import write_result_bundle
 from helia_core_tester.hardware.run_summary import build_json_summary, print_run_report
 from helia_core_tester.hardware.session import BootFailure, HostSession, read_target_info
 
+
+@pytest.fixture(autouse=True)
+def _stub_host_check(monkeypatch):
+    """These tests stub generation, so there are no real cases to host-check;
+    the host-check stage itself is covered in test_hardware_host_check.py."""
+    from helia_core_tester.hardware import hardware_pipeline
+
+    monkeypatch.setattr(hardware_pipeline, "host_check_tests_for_board", lambda *a, **k: "host check stubbed")
+
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 BOARD = resolve_board("apollo510_evb")
 SERIAL = 1160002276
@@ -593,7 +603,7 @@ def test_json_summary_identifies_its_schema(tmp_path: Path, monkeypatch) -> None
     assert datetime.fromisoformat(encoded["generated_at"]).utcoffset() == timedelta(0)
     assert encoded["selection"] == {
         "suite": "float", "limit": 2, "family": "ActivationFunctions", "test_name": None,
-        "ops": [], "dtypes": [], "case_ids": [], "precision": "f32",
+        "ops": [], "dtypes": [], "case_ids": [], "precision": "f32", "seed": None,
         "pmu_counters": {"cpu": "all"}, "fvp_gate": "strict",
         "compare": {"strict": False, "golden_from": None, "golden_session_id": None},
     }
@@ -649,7 +659,7 @@ def test_run_hardware_pipeline_generates_flashes_then_streams(tmp_path: Path, mo
     board = resolve_board("apollo510_evb")
     order: list[str] = []
 
-    def _generate(repo_root, spec, suite, float_precision=None, cmsis_nn_root=None, select=None):
+    def _generate(repo_root, spec, suite, float_precision=None, cmsis_nn_root=None, select=None, seed=None):
         order.append(f"generate:{spec.cpu}:{suite}:{float_precision}:{cmsis_nn_root}")
 
     def _stage(spec, *, build_dir, options, force_sync, update_dependencies):
