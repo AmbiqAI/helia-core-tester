@@ -1035,6 +1035,7 @@ Compiler cache (opt-in):
 - `HELIA_CORE_TESTER_COMPILER_LAUNCHER` names a specific tool; a name that is not on `PATH` fails the configure rather than building uncached. Set it to `none` (or empty) to build without a launcher even where one is installed, which is what a reproducibility build wants.
 - no image ships either tool; a host without one builds exactly as before.
 - With `ENABLE_COVERAGE=ON` (including `--coverage`), the instrumented `cmsis-nn` target bypasses `CMAKE_C_COMPILER_LAUNCHER`: cached objects can contain another build's profile-output paths. Uninstrumented harness targets and non-coverage builds retain their launcher. This does not bypass caches hidden inside compiler wrappers or custom compile rules.
+- A coverage build compiles `cmsis-nn` at `-O0` whatever `--opt` asks for, because the last `-O` wins. The run report's metadata and the JUnit `<properties>` record both levels: `optimization` is the requested `CMSIS_OPTIMIZATION_LEVEL`, and `cmsis_nn_optimization` is the level the kernels were compiled at. `coverage` records whether the build was instrumented (`true`/`false` in both JSON and JUnit). All three are read from the build directory's `CMakeCache.txt`, falling back to the run's own flags when there is no cache.
 
 ## Coverage Merge
 
