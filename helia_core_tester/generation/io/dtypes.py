@@ -24,17 +24,6 @@ _DTYPE_TO_C_TYPE = {
     "BOOL": "bool",
 }
 
-_DTYPE_TO_LITERT = {
-    "FP32": "float32",
-    "FP16": "float16",
-    "S8": "int8",
-    "S16": "int16",
-    "S32": "int32",
-    "S4": "int4",
-    "U16": "uint16",
-    "BOOL": "bool",
-}
-
 # torch.testing.assert_close's defaults. A descriptor may only tighten them; a generator widens them only by a
 # bound it derives for an exact golden (kernel_faithful.bounded_context).
 _DEFAULT_FLOAT_COMPARISON = {
@@ -67,10 +56,6 @@ def normalize_tensor_dtypes(tensor_dtypes: Mapping[str, Any] | None) -> Dict[str
 
 def descriptor_dtype_to_c_type(dtype: str) -> str:
     return _DTYPE_TO_C_TYPE[normalize_dtype(dtype)]
-
-
-def descriptor_dtype_to_litert_dtype(dtype: str) -> str:
-    return _DTYPE_TO_LITERT[normalize_dtype(dtype)]
 
 
 def is_float_dtype(dtype: str) -> bool:

@@ -142,7 +142,6 @@ def test_op_file_has_no_converter_path() -> None:
 @pytest.mark.parametrize("desc", CASES, ids=[d["name"] for d in CASES])
 def test_golden_matches_an_independent_model(desc: dict, tmp_path: Path) -> None:
     op = OpGRUUnidirectional(desc, seed=1234, target_cpu="cortex-m55")
-    assert op.needs_keras_model() is False and op.allow_no_tflite()
     op.generate_c_files(tmp_path)
     if desc.get("expected_status", _SUCCESS) != _SUCCESS:
         assert op.status_only() and not op.uses_reference()

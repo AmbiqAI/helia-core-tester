@@ -46,7 +46,7 @@ def _dequantize_desc(name: str, activation: str, dtype: str, **extra) -> dict:
 def test_quantize_takes_the_policy_quantization(tmp_path: Path, activation, dtype, value_range) -> None:
     op = OpQuantize(_quantize_desc(f"quantize_policy_{dtype.lower()}", activation, dtype), seed=1,
                     target_cpu="cortex-m55")
-    assert op.uses_reference() and not op.needs_keras_model()
+    assert op.uses_reference()
     op.generate_c_files(tmp_path)
     call = op.reference
     want = policy.activation_quant(dtype.lower(), value_range)
@@ -82,7 +82,7 @@ def test_quantize_refuses_a_malformed_quantization_block(tmp_path: Path, block) 
 def test_dequantize_takes_the_policy_quantization(tmp_path: Path, dtype) -> None:
     op = OpDequantize(_dequantize_desc(f"dequantize_policy_{dtype.lower()}", "NONE", dtype), seed=1,
                       target_cpu="cortex-m55")
-    assert op.uses_reference() and not op.needs_keras_model()
+    assert op.uses_reference()
     op.generate_c_files(tmp_path)
     want = policy.activation_quant(dtype.lower(), (-1.0, 1.0))
     assert (op.reference.params["scale"], op.reference.params["zero_point"]) == (want.scale, want.zero_point)

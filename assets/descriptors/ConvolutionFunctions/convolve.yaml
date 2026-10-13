@@ -3350,7 +3350,7 @@ padding: VALID
 use_bias: true
 expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 ---
-# BEGIN mlperf model shapes (scripts/extract_model_shapes.py)
+# BEGIN mlperf model shapes (layer shapes of the MLPerf Tiny int8 models)
 operator: Convolve
 name: convolve_mlperf_ic_l0_s8
 activation_dtype: S8

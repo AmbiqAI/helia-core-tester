@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from functools import lru_cache
 from pathlib import Path
@@ -22,7 +23,11 @@ def _build_and_run(tmp_path: Path, sanitizers: str) -> subprocess.CompletedProce
            *[str(p) for p in c_sources()], str(TEST_SOURCE), "-lm", "-o", str(exe)]
     build = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
     assert build.returncode == 0, build.stderr[-4000:]
-    return subprocess.run([str(exe)], capture_output=True, text=True, timeout=300)
+    # Linux libasan enables the use-after-return fake stack by default, and test_xsum's 2^28
+    # hct_xsum_add calls then run for well over the timeout (GCC 13, aarch64: >10 min vs 4 s).
+    env = {**os.environ, "ASAN_OPTIONS": ":".join(filter(None, [os.environ.get("ASAN_OPTIONS", ""),
+                                                                "detect_stack_use_after_return=0"]))}
+    return subprocess.run([str(exe)], capture_output=True, text=True, timeout=300, env=env)
 
 
 @lru_cache(maxsize=None)
@@ -49,7 +54,10 @@ def test_c_unit_tests_pass_under_ubsan(tmp_path: Path) -> None:
 
 def test_c_unit_tests_pass_under_asan(tmp_path: Path) -> None:
     if not _asan_works(find_host_cc()):
-        pytest.skip("AddressSanitizer does not run on this host (a trivial ASan program hangs or fails)")
+        reason = "AddressSanitizer does not run on this host (a trivial ASan program hangs or fails)"
+        if os.environ.get("HCT_REQUIRE_ASAN"):
+            pytest.fail(f"{reason}, and HCT_REQUIRE_ASAN is set")
+        pytest.skip(reason)
     run = _build_and_run(tmp_path, "address,undefined")
     assert run.returncode == 0, run.stdout[-4000:] + run.stderr[-4000:]
     assert run.stdout.strip().endswith("ok")

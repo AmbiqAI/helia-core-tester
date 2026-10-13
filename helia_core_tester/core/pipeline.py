@@ -63,7 +63,7 @@ class FullTestPipeline:
         Run the complete test pipeline.
         
         The pipeline executes steps in order:
-        1. Generate TFLite models (if not skipped)
+        1. Generate test cases (if not skipped)
         2. Host-check the generated int cases (if not skipped)
         3. Build FVP executables (if not skipped)
         4. Run tests on FVP (if not skipped)
@@ -87,7 +87,7 @@ class FullTestPipeline:
         try:
             if self.config.skip_generation:
                 if self.config.verbosity >= 1:
-                    self.logger.info("Skipping TFLite model generation (--skip-generation)")
+                    self.logger.info("Skipping test-case generation (--skip-generation)")
             elif overall_success:
                 success, stop = _run_step(
                     GenerateStep(self.config), self.logger,

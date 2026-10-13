@@ -43,15 +43,6 @@ def operator_to_class_name(operator: str) -> str:
     return f"Op{operator}"
 
 
-def _operator_to_builtin_name(operator: str, module_basename: str) -> str:
-    del operator
-    return module_basename.upper()
-
-
-def _wrapper_function_name(module_basename: str) -> str:
-    return f"build_{module_basename}" if module_basename.endswith("_op") else f"build_{module_basename}_op"
-
-
 def _format_python_assignment(name: str, value: Any) -> str:
     return f"{name} = {pprint.pformat(value, width=100, sort_dicts=True)}\n"
 
@@ -360,116 +351,25 @@ def _module_template(
     operator: str,
     class_name: str,
     module_basename: str,
-    descriptor_profile: str,
-    builder_op_name: str,
+    reference_entry: str,
 ) -> str:
-    common_header = (
-        f'"""{operator} operation implementation."""\n\n'
-        "from pathlib import Path\n"
-        "from helia_core_tester.generation.ops._shared.base import OperationBase\n"
-    )
-    op_fn_name = _wrapper_function_name(module_basename)
-
-    if descriptor_profile == "single_input_unary":
-        return (
-            common_header
-            + "from helia_core_tester.generation.utils.litert_builder import build_unary_same_shape_op\n\n\n"
-            + f"def {op_fn_name}(*, input_shape, dtype: str = \"int8\", output_dtype: str | None = None) -> bytes:\n"
-            + "    return build_unary_same_shape_op(\n"
-            + f"        op_name=\"{builder_op_name}\",\n"
-            + "        input_shape=input_shape,\n"
-            + "        dtype=dtype,\n"
-            + "        output_dtype=output_dtype,\n"
-            + "    )\n\n\n"
-            + f"class {class_name}(OperationBase):\n"
-            + f"    \"\"\"{operator} operation.\"\"\"\n\n"
-            + "    def needs_keras_model(self) -> bool:\n"
-            + "        return False\n\n"
-            + "    def build_keras_model(self):\n"
-            + f"        raise NotImplementedError(\"{operator} uses LiteRT-only model generation.\")\n\n"
-            + "    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:\n"
-            + f"        model_bytes = {op_fn_name}(\n"
-            + "            input_shape=tuple(self.desc[\"input_shape\"]),\n"
-            + "            dtype=self.tensor_litert_dtype(\"input\"),\n"
-            + "            output_dtype=self.tensor_litert_dtype(\"output\"),\n"
-            + "        )\n"
-            + "        self._write_tflite_bytes(out_path, model_bytes)\n\n"
-            + "    def generate_c_files(self, output_dir: Path) -> None:\n"
-            + f"        raise NotImplementedError(\"{operator} generate_c_files is not implemented.\")\n"
-        )
-
-    if descriptor_profile == "dual_input_elementwise":
-        return (
-            common_header
-            + "from helia_core_tester.generation.utils.litert_builder import build_binary_broadcast_op\n\n\n"
-            + f"def {op_fn_name}(*, input_1_shape, input_2_shape, dtype: str = \"int8\") -> bytes:\n"
-            + "    return build_binary_broadcast_op(\n"
-            + f"        op_name=\"{builder_op_name}\",\n"
-            + "        input_1_shape=input_1_shape,\n"
-            + "        input_2_shape=input_2_shape,\n"
-            + "        dtype=dtype,\n"
-            + "    )\n\n\n"
-            + f"class {class_name}(OperationBase):\n"
-            + f"    \"\"\"{operator} operation.\"\"\"\n\n"
-            + "    def needs_keras_model(self) -> bool:\n"
-            + "        return False\n\n"
-            + "    def build_keras_model(self):\n"
-            + f"        raise NotImplementedError(\"{operator} uses LiteRT-only model generation.\")\n\n"
-            + "    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:\n"
-            + f"        model_bytes = {op_fn_name}(\n"
-            + "            input_1_shape=tuple(self.desc[\"input_1_shape\"]),\n"
-            + "            input_2_shape=tuple(self.desc[\"input_2_shape\"]),\n"
-            + "            dtype=self.tensor_litert_dtype(\"input\"),\n"
-            + "        )\n"
-            + "        self._write_tflite_bytes(out_path, model_bytes)\n\n"
-            + "    def generate_c_files(self, output_dir: Path) -> None:\n"
-            + f"        raise NotImplementedError(\"{operator} generate_c_files is not implemented.\")\n"
-        )
-
-    if descriptor_profile == "arg_reduction":
-        return (
-            common_header
-            + "from helia_core_tester.generation.utils.litert_builder import build_arg_reduction_op\n\n\n"
-            + f"def {op_fn_name}(*, input_shape, axis: int = -1, dtype: str = \"int8\") -> bytes:\n"
-            + "    return build_arg_reduction_op(\n"
-            + f"        op_name=\"{builder_op_name}\",\n"
-            + "        input_shape=input_shape,\n"
-            + "        axis=axis,\n"
-            + "        dtype=dtype,\n"
-            + "    )\n\n\n"
-            + f"class {class_name}(OperationBase):\n"
-            + f"    \"\"\"{operator} operation.\"\"\"\n\n"
-            + "    def needs_keras_model(self) -> bool:\n"
-            + "        return False\n\n"
-            + "    def build_keras_model(self):\n"
-            + f"        raise NotImplementedError(\"{operator} uses LiteRT-only model generation.\")\n\n"
-            + "    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:\n"
-            + f"        model_bytes = {op_fn_name}(\n"
-            + "            input_shape=tuple(self.desc[\"input_shape\"]),\n"
-            + "            axis=self.desc.get(\"axis\", -1),\n"
-            + "            dtype=self.tensor_litert_dtype(\"input\"),\n"
-            + "        )\n"
-            + "        self._write_tflite_bytes(out_path, model_bytes)\n\n"
-            + "    def generate_c_files(self, output_dir: Path) -> None:\n"
-            + f"        raise NotImplementedError(\"{operator} generate_c_files is not implemented.\")\n"
-        )
-
+    """A reference-backed operator: the golden is a ReferenceCall on the tester's C reference."""
     return (
-        common_header
-        + "\n\n"
-        + f"def {op_fn_name}(**kwargs) -> bytes:\n"
-        + "    del kwargs\n"
-        + f"    raise NotImplementedError(\"{operator} LiteRT wrapper is not implemented. Replace {op_fn_name}().\")\n\n\n"
-        + f"class {class_name}(OperationBase):\n"
-        + f"    \"\"\"{operator} operation.\"\"\"\n\n"
-        + "    def needs_keras_model(self) -> bool:\n"
-        + "        return False\n\n"
-        + "    def build_keras_model(self):\n"
-        + f"        raise NotImplementedError(\"{operator} uses LiteRT-only model generation.\")\n\n"
-        + "    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:\n"
-        + f"        raise NotImplementedError(\"{operator} convert_to_tflite() must be implemented with {op_fn_name}().\")\n\n"
-        + "    def generate_c_files(self, output_dir: Path) -> None:\n"
-        + f"        raise NotImplementedError(\"{operator} generate_c_files is not implemented.\")\n"
+        f'"""{operator} operation implementation: the golden from the C reference."""\n\n'
+        "from pathlib import Path\n\n"
+        "from helia_core_tester.generation.ops._shared.base import OperationBase\n\n\n"
+        f"class {class_name}(OperationBase):\n"
+        f"    \"\"\"{operator} operation.\"\"\"\n\n"
+        "    # The C reference entry computing the golden (helia_core_tester/reference/spec/entries.yaml),\n"
+        "    # with the dtype suffix of the case appended (_s8, _s16, _f32, _f16).\n"
+        f"    REFERENCE_ENTRY = \"{reference_entry}\"\n\n"
+        "    def uses_reference(self) -> bool:\n"
+        "        return True\n\n"
+        "    def generate_c_files(self, output_dir: Path) -> None:\n"
+        "        # Draw the inputs from self._seeded_rng(), record the golden with\n"
+        "        # self.reference_golden(ReferenceCall(entry, params, inputs, output_shapes)),\n"
+        "        # then render the case through the generic harness (render_harness_case).\n"
+        f"        raise NotImplementedError(\"{operator} generate_c_files is not implemented.\")\n"
     )
 
 
@@ -483,7 +383,7 @@ def create_operator_skeleton(
     module_basename: str | None = None,
     descriptor_stem: str | None = None,
     class_name: str | None = None,
-    builder_op_name: str | None = None,
+    reference_entry: str | None = None,
     require_fields: tuple[str, ...] = (),
     activation_dtype_const: str | None = None,
     create_descriptor: bool = True,
@@ -495,7 +395,7 @@ def create_operator_skeleton(
     module_basename = module_basename or operator_to_module_basename(operator)
     descriptor_stem = descriptor_stem or module_basename
     class_name = class_name or operator_to_class_name(operator)
-    builder_op_name = builder_op_name or _operator_to_builtin_name(operator, module_basename)
+    reference_entry = reference_entry or module_basename
 
     if create_descriptor:
         if descriptor_profile is None:
@@ -528,8 +428,7 @@ def create_operator_skeleton(
             operator=operator,
             class_name=class_name,
             module_basename=module_basename,
-            descriptor_profile=descriptor_profile or "custom",
-            builder_op_name=builder_op_name,
+            reference_entry=reference_entry,
         )
     )
     created["module"] = module_path
@@ -606,7 +505,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("family")
     parser.add_argument("parity_kind", choices=("cmsis", "extension"))
     parser.add_argument("--descriptor-profile", choices=SUPPORTED_DESCRIPTOR_PROFILES)
-    parser.add_argument("--builder-op-name")
+    parser.add_argument("--reference-entry", help="C reference entry stem (default: the module basename)")
     parser.add_argument("--require-field", action="append", default=[])
     parser.add_argument("--activation-dtype-const")
     parser.add_argument("--module-basename")
@@ -626,7 +525,7 @@ def main(argv: list[str] | None = None) -> int:
         module_basename=args.module_basename,
         descriptor_stem=args.descriptor_stem,
         class_name=args.class_name,
-        builder_op_name=args.builder_op_name,
+        reference_entry=args.reference_entry,
         require_fields=tuple(args.require_field),
         activation_dtype_const=args.activation_dtype_const,
         create_descriptor=not args.no_descriptor,

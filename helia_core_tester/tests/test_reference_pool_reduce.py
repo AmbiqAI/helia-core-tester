@@ -9,8 +9,7 @@ import numpy as np
 import pytest
 
 from helia_core_tester.generation.reference.bindings import ReferenceKernelError, get_bindings
-from helia_core_tester.generation.utils.tflite_utils import calculate_multiplier_shift
-from helia_core_tester.tests.reference_models import mbqm
+from helia_core_tester.tests.reference_models import mbqm, quantize_multiplier
 
 KINDS = {"s8": np.int8, "s16": np.int16}
 
@@ -112,7 +111,7 @@ def test_pooling_rejects_invalid_windows_and_shapes(lib) -> None:
 
 
 def mean_prepare_model(in_scale: float, out_scale: float, count: int):
-    m, s = calculate_multiplier_shift(float(np.float32(in_scale)) / float(np.float32(out_scale)))
+    m, s = quantize_multiplier(float(np.float32(in_scale)) / float(np.float32(out_scale)))
     fold = min(count.bit_length() - 1, 32, 31 + s)
     return int(m * 2**fold // count), s - fold
 

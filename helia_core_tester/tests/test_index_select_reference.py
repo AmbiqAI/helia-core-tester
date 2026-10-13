@@ -90,7 +90,6 @@ def _numpy_model(call) -> dict[str, np.ndarray]:
 
 def _generate(desc: dict, tmp_path: Path, seed: int = 1234):
     op = OPS[desc["operator"]](desc, seed=seed, target_cpu="cortex-m55")
-    assert op.needs_keras_model() is False and op.allow_no_tflite()
     op.generate_c_files(tmp_path)
     return op
 

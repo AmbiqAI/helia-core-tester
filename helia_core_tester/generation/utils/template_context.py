@@ -91,7 +91,7 @@ class TemplateContextBuilder:
     
     @staticmethod
     def _quant_param_scalar(quant_params: Dict[str, Any] | None, key: str, default: float | int) -> float | int:
-        """Extract a scalar quantization value from LiteRT metadata."""
+        """Extract a scalar from a quantization dict (the first element of a per-channel value)."""
         if not quant_params:
             return default
 
@@ -760,49 +760,6 @@ class TemplateContextBuilder:
             'activation_max': int(activation_max) if act_dtype not in {'FP32', 'FP16'} else activation_max,
         }
 
-    
-    @staticmethod
-    def build_quant_params(quant_params: Dict[str, Any], per_channel: bool = False) -> Dict[str, Any]:
-        """
-        Build quantization parameters for CMSIS-NN.
-        
-        Args:
-            quant_params: Quantization parameters dictionary
-            per_channel: Whether quantization is per-channel
-            
-        Returns:
-            Dictionary with multiplier and shift arrays
-        """
-        # Import here to avoid circular dependency
-        from .tflite_utils import calculate_multiplier_shift, calculate_per_channel_multiplier_shift
-        
-        if per_channel and isinstance(quant_params.get('scale'), np.ndarray):
-            scales = quant_params['scale']
-            multipliers, shifts = calculate_per_channel_multiplier_shift(scales)
-            
-            return {
-                'multiplier_array': TemplateContextBuilder.format_array_as_c_literal(multipliers),
-                'shift_array': TemplateContextBuilder.format_array_as_c_literal(shifts),
-                'per_channel': True
-            }
-        else:
-            scale = quant_params.get('scale', 1.0)
-            # Handle numpy scalars (numpy.float32, numpy.float64, etc.)
-            if isinstance(scale, np.ndarray):
-                scale = float(scale.item() if scale.size == 1 else scale[0])
-            elif isinstance(scale, (list, tuple)):
-                scale = float(scale[0] if len(scale) > 0 else 1.0)
-            else:
-                # Convert numpy scalars to Python float
-                scale = float(scale)
-            
-            multiplier, shift = calculate_multiplier_shift(scale)
-            
-            return {
-                'multiplier': multiplier,
-                'shift': shift,
-                'per_channel': False
-            }
     
     @staticmethod
     def calculate_depthwise_buffer_size_max(input_dims: Dict[str, int], 

@@ -148,7 +148,7 @@ def generate(
     plan: bool = typer.Option(False, "--plan", help="Print execution plan and exit"),
     project_root: Optional[Path] = typer.Option(None, "--repo-root", help="Repository root directory"),
 ):
-    """Generate TFLite models and template C/H files."""
+    """Generate the test cases (C/H files with reference goldens)."""
     config = get_config(
         cpu=cpu,
         verbosity=verbosity,
@@ -313,7 +313,7 @@ def full(
     coverage_mve_float: bool = typer.Option(False, "--coverage-mve-float", help="Enable Cortex-M55 float MVE paths during coverage builds"),
     coverage_mve_int: bool = typer.Option(False, "--coverage-mve-int", help="Enable Cortex-M55 integer MVE paths (no ARM_MATH_AUTOVECTORIZE) during coverage builds"),
     force_generate: bool = typer.Option(False, "--force-generate", help="Regenerate every case even when its reuse stamp still matches"),
-    skip_generation: bool = typer.Option(False, "--skip-generation", help="Skip TFLite generation"),
+    skip_generation: bool = typer.Option(False, "--skip-generation", help="Skip test-case generation"),
     skip_host_check: bool = typer.Option(False, "--skip-host-check", help="Skip the host check of the generated int cases (runs after generation, before the FVP build, and blocks it on failure)"),
     host_kernels: str = typer.Option("m0", "--host-kernels", help="Host check kernel builds, comma-separated: m0 and/or dsp"),
     skip_build: bool = typer.Option(False, "--skip-build", help="Skip FVP build"),

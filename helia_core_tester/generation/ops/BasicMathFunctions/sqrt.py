@@ -26,10 +26,6 @@ SQRT_S16_SLOT_HALF_STEP = 1 << (SQRT_S16_SLOT_SHIFT - 1)
 SQRT_S16_ACCURATE_FROM = 2048
 
 
-def clamp_f32(x, min_val, max_val):
-    '''Clamp a float32 value to the specified range.'''
-    return max(min(x, max_val), min_val)
-
 def _quant_param_to_scalar(value, name: str, cast):
     """Normalize a quantization value to a scalar."""
     arr = np.asarray(value)

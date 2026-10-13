@@ -15,7 +15,7 @@ _KINDS: Dict[str, Tuple[str, str]] = {
 }
 
 # Per-tensor (scale, zero point) of the operators whose quantization is a fixed preset
-# rather than a policy over the draw: the values the LiteRT builder used to assign.
+# rather than a policy over the draw.
 PRESET_QUANT: Dict[str, Tuple[float, int]] = {"S8": (0.125, 0), "S16": (1.0 / 32768.0, 0)}
 
 
@@ -40,3 +40,11 @@ def preset_quant(descriptor_dtype: str) -> Tuple[float, int]:
     if key not in PRESET_QUANT:
         raise ValueError(f"no preset quantization for {descriptor_dtype!r}")
     return PRESET_QUANT[key]
+
+
+def quantize_multiplier(real: float) -> Tuple[int, int]:
+    """TFLite's QuantizeMultiplier on the C reference: (Q31 multiplier, shift) of a real scale."""
+    from helia_core_tester.generation.reference.bindings import get_bindings
+
+    out = get_bindings().prepare("quantize_multiplier", {"real_multiplier": float(real)})
+    return int(out["multiplier"]), int(out["shift"])

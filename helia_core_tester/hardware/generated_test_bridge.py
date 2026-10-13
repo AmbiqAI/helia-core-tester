@@ -4165,7 +4165,7 @@ def _build_fully_connected_case(
     # descriptors named "batchN") and its `test_case_run()` only ever validates the first
     # `FULLY_CONNECTED_..._OUTPUT_SIZE` (= output_required) elements against
     # `_expected_output` -- the full `_input`/`_expected_output` header arrays retain the
-    # complete original (possibly multi-row) LiteRT tensor for documentation/traceability,
+    # complete original (possibly multi-row) tensor for documentation/traceability,
     # but only their leading slice is ever fed to/compared against the real single-invocation
     # kernel call. Slice to match that same ground-truth single-invocation behavior rather
     # than rejecting these descriptors outright.

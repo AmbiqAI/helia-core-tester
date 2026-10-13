@@ -147,9 +147,9 @@ class OpBatchMatMul(OperationBase):
         Select appropriate CMSIS-NN kernel function for BatchMatMul based on actual tensor dtypes.
         
         Args:
-            input_lhs_dtype: numpy dtype of LHS tensor from TFLite
-            input_rhs_dtype: numpy dtype of RHS tensor from TFLite
-            output_dtype: numpy dtype of output tensor from TFLite
+            input_lhs_dtype: numpy dtype of LHS tensor from the descriptor
+            input_rhs_dtype: numpy dtype of RHS tensor from the descriptor
+            output_dtype: numpy dtype of output tensor from the descriptor
         
         Returns:
             Dictionary with kernel_fn, kernel_get_buffer_size_fn, 

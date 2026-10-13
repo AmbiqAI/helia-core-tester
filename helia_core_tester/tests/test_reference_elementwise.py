@@ -11,8 +11,7 @@ import pytest
 from helia_core_tester.generation.reference import quant as ref_quant
 from helia_core_tester.generation.reference.abi import comparison_code
 from helia_core_tester.generation.reference.bindings import ReferenceKernelError, get_bindings, output_shape_for
-from helia_core_tester.generation.utils.tflite_utils import calculate_multiplier_shift
-from helia_core_tester.tests.reference_models import broadcast_pairs, mbqm
+from helia_core_tester.tests.reference_models import broadcast_pairs, mbqm, quantize_multiplier
 
 SHAPES = [((2, 3, 4), (2, 3, 4)), ((2, 3, 4), (4,)), ((1, 3, 1), (2, 1, 5)), ((), (6,)), ((3, 1), ())]
 KINDS = {"s8": np.int8, "s16": np.int16}
@@ -112,7 +111,7 @@ def test_mul_matches_the_model(lib, kind, seed) -> None:
     for sa, sb in SHAPES:
         scales, zps = _scales(rng, kind, 3), _zps(rng, kind, 3)
         p = lib.prepare("mul_prepare", _quant(kind, scales, zps))
-        m, s = calculate_multiplier_shift(scales[0] * scales[1] / scales[2])
+        m, s = quantize_multiplier(scales[0] * scales[1] / scales[2])
         assert (p["output_multiplier"], p["output_shift"]) == (m, s)
         a, b = _ints(rng, dtype, sa), _ints(rng, dtype, sb)
         xs, ys, shape = broadcast_pairs(a, b)
@@ -258,7 +257,7 @@ def test_abs_matches_tflite(lib, kind) -> None:
         p = lib.prepare("abs_prepare", {"dtype": ref_quant.hct_dtype(kind.upper()), "input_scale": si,
                                         "input_zero_point": zi, "output_scale": so, "output_zero_point": zo})
         assert p["needs_rescale"] == (0 if same_scale else 1)
-        m, s = calculate_multiplier_shift(float(np.float32(si) / np.float32(so)))
+        m, s = quantize_multiplier(float(np.float32(si) / np.float32(so)))
         assert (p["multiplier"], p["shift"]) == (m, s)
         x = _ints(rng, dtype, (3, 7))
         values = [abs(v - zi) for v in x.ravel().tolist()]

@@ -108,7 +108,7 @@ def check_close_to_exact(name: str, call: ReferenceCall, exact: ReferenceCall, a
     a = call.output().astype(np.float64)
     b = exact.output().astype(np.float64)
     finite = np.isfinite(a) & np.isfinite(b)
-    worst = float(np.max(np.abs(a - b)[finite], initial=0.0))
+    worst = float(np.max(np.abs(a[finite] - b[finite]), initial=0.0))
     if worst > atol:
         raise KernelDeviationError(f"{name}: {call.entry} is {worst:.3e} from {exact.entry}, beyond {atol:.1e}")
 

@@ -128,7 +128,7 @@ def _padding(rng: np.random.Generator) -> str:
 
 
 def _maybe_dilate(rng: np.random.Generator, layer: Layer, p: float = 0.5) -> Layer:
-    """Keras needs stride 1 to dilate."""
+    """Dilate at stride 1 (the dilated draws never combine the two)."""
     if rng.random() < p:
         layer.sh = layer.sw = 1
         layer.dh = int(rng.integers(1, 4))

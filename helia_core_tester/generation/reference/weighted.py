@@ -1,5 +1,5 @@
 """Weights, biases and their quantization for the weighted operators (Conv, DepthwiseConv,
-TransposeConv, FullyConnected, BatchMatMul), replacing Keras initializers and the converter.
+TransposeConv, FullyConnected, BatchMatMul).
 
 Float weights are drawn Glorot-uniform from the case seed; integer filters are quantized the
 way TFLite's converter does it: symmetric, per output channel, scale = max|w_c| / qmax with
