@@ -15,6 +15,10 @@
 {% endif %}
 #define LSTM_BUFFER_SIZE ({{ macro_prefix }}HIDDEN_SIZE * {{ macro_prefix }}BATCH_SIZE * {{ macro_prefix }}TIME_STEPS)
 #define LSTM_OUTPUT_SIZE ({{ macro_prefix }}BATCH_SIZE * {{ macro_prefix }}TIME_STEPS * {{ macro_prefix }}HIDDEN_SIZE)
+/* cmsis_nn_lstm_context.cell_state is batch_size * hidden_size int16_t
+ * elements for both s8 and s16 layers (arm_nn_types.h); ns-cmsis-nn ships no
+ * sizer for it, so the documented formula is the contract. Refs #91. */
+#define LSTM_CELL_STATE_SIZE ({{ macro_prefix }}BATCH_SIZE * {{ macro_prefix }}HIDDEN_SIZE)
 
 {% if temp_sizers_available %}
 /* Expected sizer results, derived at generation time from this case's shape:
@@ -35,7 +39,9 @@
 {# buffer3 is the LSTM cell_state: a static array starts zero-initialized,
    which *is* the recurrent initial cell state this kernel expects, so it
    must not be poisoned like buffer1/buffer2 (pure temp scratch). #}
-{{ helia_guard_declare(output_dtype, "buffer3", "LSTM_BUFFER_SIZE") }}
+{{ helia_guard_declare("int16_t", "buffer3", "LSTM_CELL_STATE_SIZE") }}
+_Static_assert(sizeof(buffer3_guard.body) == LSTM_CELL_STATE_SIZE * sizeof(int16_t),
+               "LSTM cell_state must hold batch_size * hidden_size int16_t elements");
 {{ helia_guard_declare(output_dtype, name ~ "_output", "LSTM_OUTPUT_SIZE") }}
 {# Per-gate kernel sums are written by arm_vector_sum_s8*() ahead of the
    kernel call (the ns-cmsis-nn#325 bug class), so they are guarded write

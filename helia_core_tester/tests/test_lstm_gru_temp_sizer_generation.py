@@ -392,15 +392,60 @@ def test_detected_int_lstm_sizes_buffers_from_expected_constant() -> None:
         "} buffer1_guard;\n"
         "#define buffer1 (buffer1_guard.body)"
     ) not in rendered
-    # cell_state (buffer3) stays on the legacy allocation: out of the sizers' scope.
-    assert (
-        "int8_t body[LSTM_BUFFER_SIZE];\n"
-        "    uint8_t tail[HELIA_GUARD_BYTES];\n"
-        "} buffer3_guard;\n"
-        "#define buffer3 (buffer3_guard.body)"
-    ) in rendered
+    # cell_state (buffer3) is sized by its own documented contract (#91).
+    assert _BUFFER3_INT16_DECL in rendered
     assert "temp1_bytes_flipped_time_major" in rendered
     assert "temp1_capacity_bytes" in rendered
+
+
+_BUFFER3_INT16_DECL = (
+    "int16_t body[LSTM_CELL_STATE_SIZE];\n"
+    "    uint8_t tail[HELIA_GUARD_BYTES];\n"
+    "} buffer3_guard;\n"
+    "#define buffer3 (buffer3_guard.body)"
+)
+
+
+def _buffer3_block(rendered: str) -> str:
+    end = rendered.index("} buffer3_guard;")
+    start = rendered.rindex("static struct", 0, end)
+    return rendered[start:end]
+
+
+@pytest.mark.parametrize("sizers", [False, True], ids=["fallback", "detected"])
+@pytest.mark.parametrize(
+    ("dtype", "output_dtype"), [("s8", "int8_t"), ("s16", "int16_t")], ids=["s8", "s16"]
+)
+def test_int_lstm_cell_state_is_int16_batch_by_hidden(sizers, dtype, output_dtype) -> None:
+    # Issue #91: cmsis_nn_lstm_context.cell_state is batch_size * hidden_size
+    # int16_t for both integer datatypes. It used to be output_dtype[LSTM_BUFFER_SIZE]
+    # (B*H*T), which on s8 held B*H*T bytes against a B*H*2-byte need and only
+    # survived on time-step slack -- TIME_STEPS == 1 would overflow it.
+    extras = (
+        {"temp_sizers_available": True, "lstm_temp_expected_bytes": 16, "lstm_temp_expected_bytes_flipped": 32}
+        if sizers
+        else {}
+    )
+    rendered = _render(
+        "LSTMFunctions/lstm_unidirectional/lstm_unidirectional.c.j2",
+        _int_lstm_context(dtype=dtype, output_dtype=output_dtype, **extras),
+    )
+    assert (
+        "#define LSTM_CELL_STATE_SIZE (LSTM_X_BATCH_SIZE * LSTM_X_HIDDEN_SIZE)"
+    ) in rendered
+    assert _BUFFER3_INT16_DECL in rendered
+    block = _buffer3_block(rendered)
+    # Independent of TIME_STEPS and never typed from the output.
+    assert "LSTM_BUFFER_SIZE" not in block
+    assert "TIME_STEPS" not in block
+    assert "int8_t body" not in block
+    assert (
+        "_Static_assert(sizeof(buffer3_guard.body) == LSTM_CELL_STATE_SIZE * sizeof(int16_t),"
+    ) in rendered
+    # Still the zero-init recurrent state: armed unpoisoned and passed through.
+    assert "HELIA_GUARD_ARM(buffer3, false" in rendered
+    assert "buffers.cell_state = buffer3;" in rendered
+    assert rendered.count("buffer3_guard;") == 1
 
 
 def test_detected_float_lstm_passes_null_temp_buffers() -> None:
