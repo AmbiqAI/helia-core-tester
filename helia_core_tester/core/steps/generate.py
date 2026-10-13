@@ -33,6 +33,9 @@ class GenerateStep(StepBase):
         """Validate prerequisites for generation."""
         if not self.config.generation_dir.exists():
             return f"Generation directory not found: {self.config.generation_dir}"
+        root_error = self.config.cmsis_nn_root_error()
+        if root_error:
+            return root_error
         if self.config.hidden_dir is not None:
             try:
                 self._hidden_env()

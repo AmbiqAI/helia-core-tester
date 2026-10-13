@@ -533,6 +533,18 @@ class Config:
         suite_name = normalize_suite(suite or self.default_suite())
         return generation_report_dir(self.project_root, cpu, suite=suite_name)
 
+    def cmsis_nn_root_error(self) -> Optional[str]:
+        """Why an explicit cmsis_nn_root is unusable, or None when it is unset or valid."""
+        if self.cmsis_nn_root is None:
+            return None
+        root = Path(self.cmsis_nn_root)
+        if not (root / "CMakeLists.txt").is_file():
+            return (
+                f"ns-cmsis-nn checkout not found: {root} has no CMakeLists.txt. Set it with "
+                f"--cmsis-nn-root or {ENV_PREFIX}CMSIS_NN_ROOT (a bare CMSIS_NN_ROOT is not read)."
+            )
+        return None
+
     def tests_report_dir_for(self, cpu: str, suite: Optional[str] = None) -> Path:
         suite_name = normalize_suite(suite or self.default_suite())
         return tests_report_dir(self.project_root, cpu, suite=suite_name)

@@ -47,7 +47,7 @@ class BuildStep(StepBase):
         script_path = find_fvp_script_path(self.config.project_root)
         if not script_path.exists():
             return f"FVP script not found: {script_path}"
-        return None
+        return self.config.cmsis_nn_root_error()
 
     def _build_commands(self) -> list[list[str]]:
         commands: list[list[str]] = []
