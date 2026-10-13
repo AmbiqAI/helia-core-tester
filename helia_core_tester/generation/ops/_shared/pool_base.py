@@ -3,6 +3,7 @@
 from typing import Dict
 from pathlib import Path
 import numpy as np
+from helia_core_tester.generation.ops._shared import kernel_faithful as kf
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.harness import ArgumentPool, ArrayLiteral, Declaration
 from helia_core_tester.generation.harness.faults import common_fault, struct_copy, with_fault
@@ -205,14 +206,33 @@ class PoolFamilyBase(OperationBase):
             # non-finite image to narrow.
             input_q = self._maybe_apply_input_mode(self.generate_input_data().astype(float_dtype))
             lo, hi = float_bounds(self)
-            output_data = self.reference_golden(ReferenceCall(
-                f"{entry_stem}_{'f16' if float_dtype == np.float16 else 'f32'}",
-                {**window, "activation_min": lo, "activation_max": hi},
-                {"input": np.ascontiguousarray(input_q)}, {"output": output_shape}))
+            faithful = float_dtype == np.float16 and kf.mve_float16_route(self)
+            if faithful and pooling_type == "AVERAGE":
+                # The kernel's own float16 arithmetic (arm_avg_pool_f16 on Helium), bit for bit.
+                call = kf.avg_pool_f16_mve_call(input_q, window, output_shape, (lo, hi))
+                output_data = self.reference_golden(call)
+                taps, weights = kf.avg_pool_windows(input_q, window, output_shape)
+                kf.check_within_bound(name, kf.unclamped_output(call), taps, weights, None, float_dtype)
+                comparison = kf.comparison_context(self, float_dtype)
+            else:
+                # The exact golden. Max pooling selects an input, so it is every build's value; an average
+                # sums up to filter_h * filter_w taps in an order the build picks, then scales by 1 / count.
+                exact = ReferenceCall(
+                    f"{entry_stem}_{'f16' if float_dtype == np.float16 else 'f32'}",
+                    {**window, "activation_min": lo, "activation_max": hi},
+                    {"input": np.ascontiguousarray(input_q)}, {"output": output_shape})
+                output_data = self.reference_golden(exact)
+                comparison = {}
+                if pooling_type == "AVERAGE":
+                    bound = kf.linear_bound(kf.abs_magnitude(exact), pool_h * pool_w, float_dtype)
+                    comparison = kf.comparison_context(self, float_dtype, *bound)
+                elif faithful:
+                    comparison = kf.comparison_context(self, float_dtype)
             output_data, nonfinite_context = self.apply_nonfinite_policy(
                 output_data, reference=self.reference_probe, inputs=[input_q]
             )
             pool_params = {**geometry, 'activation_min': lo, 'activation_max': hi}
+            nonfinite_context = {**comparison, **nonfinite_context}
         else:
             kind = "s16" if kernel_info["input_c_type"] == "int16_t" else "s8"
             # Pooling keeps the input quantization on its output; the [-1, 1] calibration range.

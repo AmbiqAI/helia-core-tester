@@ -72,7 +72,7 @@ int32_t split_float_channels_pairs_f16_test_case_run(void)
         split_float_channels_pairs_f16_out_0_expected_output,
         SPLIT_FLOAT_CHANNELS_PAIRS_F16_OUT_0_OUTPUT_SIZE,
         1,
-        0.001f,
+        1e-05f,
         0.001f,
         20,
         failures
@@ -83,7 +83,7 @@ int32_t split_float_channels_pairs_f16_test_case_run(void)
         split_float_channels_pairs_f16_out_1_expected_output,
         SPLIT_FLOAT_CHANNELS_PAIRS_F16_OUT_1_OUTPUT_SIZE,
         1,
-        0.001f,
+        1e-05f,
         0.001f,
         20,
         failures

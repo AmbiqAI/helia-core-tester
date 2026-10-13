@@ -31,6 +31,9 @@ def pytest_addoption(parser):
                     help="The --seed was drawn by the pipeline, not chosen: cases are not reused")
     parser.addoption("--cpu", action="store", default="cortex-m55",
                     help="Target CPU for code generation")
+    parser.addoption("--kernel-numerics", action="store", default="shipped", choices=("shipped", "bounded"),
+                    help="shipped: the kernels are built as shipped (-Ofast, no coverage) and float goldens "
+                         "reproduce their arithmetic; bounded: any other build, exact goldens with derived bounds")
     parser.addoption("--generated-tests-dir", action="store", default=None,
                     help="Override generated tests output directory")
     parser.addoption("--suite", action="store", default="int",
@@ -155,6 +158,7 @@ def test_filters(request):
         'seed': request.config.getoption("--seed"),
         'fresh_seed': request.config.getoption("--fresh-seed"),
         'cpu': request.config.getoption("--cpu"),
+        'kernel_numerics': request.config.getoption("--kernel-numerics"),
         'suite': request.config.getoption("--suite"),
         'float_precision': request.config.getoption("--float-precision"),
         'generated_tests_dir': _generated_override(request.config),

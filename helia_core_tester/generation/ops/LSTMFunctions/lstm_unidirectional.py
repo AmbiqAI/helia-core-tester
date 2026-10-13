@@ -4,6 +4,7 @@ from pathlib import Path
 
 import numpy as np
 
+from helia_core_tester.generation.ops._shared import kernel_faithful as kf
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.ops._shared.recurrent_pool import recurrent_argument_pool
 from helia_core_tester.generation.reference.call import ReferenceCall
@@ -101,9 +102,33 @@ class OpLSTMUnidirectional(OperationBase):
                          else np.zeros((0,), dtype=float_dtype)),
             }
             shape_io = (time_steps, batch_size) if time_major else (batch_size, time_steps)
-            call = ReferenceCall(entry, {"time_major": int(time_major), "cell_clip": cell_clip},
-                                 {"input": np.ascontiguousarray(input_tensor.reshape(*shape_io, input_size)), **stacked},
-                                 {"output": (*shape_io, hidden_size)})
+            operands = {"input": np.ascontiguousarray(input_tensor.reshape(*shape_io, input_size)), **stacked}
+            exact = ReferenceCall(entry, {"time_major": int(time_major), "cell_clip": cell_clip}, operands,
+                                  {"output": (*shape_io, hidden_size)})
+            budget = kf.LSTM_F32_ATOL if activation_dtype == "FP32" else kf.RNN_F16_ATOL
+            target = kf.float_route(self) if activation_dtype == "FP32" else None
+            comparison = {}
+            if activation_dtype == "FP16" and not self.status_only() and kf.mve_float16_route(self):
+                # arm_nn_lstm_step_f16 on Helium: float16 lane dots, the kernel's float16 tables.
+                call = kf.rnn_f16_mve_call(exact)
+                kf.check_close_to_exact(name, call, exact, atol=budget)
+                comparison = kf.comparison_context(self, float_dtype)
+            elif target is not None:
+                # The kernel's own activation tables and operation order on this target.
+                call = ReferenceCall("lstm_f32_cmsis", {"time_major": int(time_major), "cell_clip": cell_clip,
+                                                        "target": target},
+                                     operands, {"output": (*shape_io, hidden_size)})
+                kf.check_close_to_exact(name, call, exact, atol=budget)
+                comparison = kf.comparison_context(self, float_dtype)
+            else:
+                call = exact
+            if call is exact and not self.status_only():
+                # The exact LSTM: the kernel's activation tables stay within the guard budget of it, and its gate
+                # dot products within recurrent_dot_bound; |c| grows by at most 1 a step, or is clipped.
+                cell_bound = float(time_steps) if cell_clip <= 0 else min(float(time_steps), cell_clip)
+                dots = kf.recurrent_dot_bound(input_tensor, stacked["input_weights"], stacked["recurrent_weights"],
+                                              (stacked["bias"],), float_dtype, state_bound=cell_bound)
+                comparison = kf.comparison_context(self, float_dtype, budget + dots)
             output_ref = self._status_aware_golden(call).reshape(-1)
             output_ref, nonfinite_context = self.apply_nonfinite_policy(
                 output_ref,
@@ -144,6 +169,7 @@ class OpLSTMUnidirectional(OperationBase):
                 "dst_size": batch_size * time_steps * hidden_size,
                 "use_bias": use_bias,
             }
+            context.update(comparison)
             context.update(nonfinite_context)
 
             # ns-cmsis-nn#377 / tester#71: generation-time feature probe for

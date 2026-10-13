@@ -1,4 +1,4 @@
-# FP16 comparisons follow the rule stated at the top of ConvolutionFunctions/convolve_float.yaml.
+# Float comparisons follow the rule stated at the top of ConvolutionFunctions/convolve_float.yaml.
 operator: FullyConnected
 name: fully_connected_float_default_f32
 suite: float
@@ -96,7 +96,6 @@ filter_shape:
 - 6
 - 24
 use_bias: true
-comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: FullyConnected
 name: fully_connected_float_vector8_f32
@@ -139,7 +138,6 @@ tensor_dtypes:
 input_shape: [2, 16]
 filter_shape: [8, 16]
 use_bias: true
-comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: FullyConnected
 name: fully_connected_float_tail9_f16
@@ -302,7 +300,6 @@ tensor_dtypes:
 input_shape: [1, 1024]
 filter_shape: [5, 1024]
 use_bias: true
-comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: FullyConnected
 name: fully_connected_float_k24_n17_f16
@@ -317,7 +314,6 @@ tensor_dtypes:
 input_shape: [1, 24]
 filter_shape: [17, 24]
 use_bias: true
-comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: FullyConnected
 name: fully_connected_float_k20_n20_f16
@@ -427,7 +423,6 @@ tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
 input_shape: [1, 24]
 filter_shape: [17, 24]
 use_bias: true
-comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: FullyConnected
 name: fully_connected_float_entry_nhwc_k24_n17_f16
@@ -440,7 +435,6 @@ tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
 input_shape: [1, 24]
 filter_shape: [17, 24]
 use_bias: true
-comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: FullyConnected
 name: fully_connected_float_entry_nhwc_acc16_k24_n17_f16
@@ -453,7 +447,6 @@ tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
 input_shape: [1, 24]
 filter_shape: [17, 24]
 use_bias: true
-comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: FullyConnected
 name: fully_connected_fault_entry_acc16_invalid_layout_f16

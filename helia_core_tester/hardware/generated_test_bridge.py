@@ -34,7 +34,12 @@ from .kernel_registry import AmbiguousKernelError, UnknownKernelError, lookup_en
 from .pathutil import display_path
 from helia_core_tester.generation.io.descriptors import descriptor_matches_op
 from helia_core_tester.generation.kernel_dispatch import depthwise_3x3_scratch_bytes
-from helia_core_tester.generation.io.dtypes import descriptor_matches_dtype_filter, normalize_dtype, resolve_comparison
+from helia_core_tester.generation.io.dtypes import (
+    default_comparison_for_dtype,
+    descriptor_matches_dtype_filter,
+    normalize_dtype,
+    resolve_comparison,
+)
 from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
 
@@ -319,6 +324,30 @@ def _comparison_from_generated_source(source_text: str) -> dict[str, int | float
         if mode == "NONE":
             return {"mode": "none"}
     raise UnsupportedGeneratedTestError("Could not find a concrete HELIA_VALIDATE_OUTPUTS(...) call in generated source")
+
+
+def _emitted_float_comparison(directory: Path, resolved: dict) -> dict:
+    """A float case's comparison as its generated source states it: the generator may tighten the
+    descriptor's comparison to the kernel-faithful tolerance or widen it by a derived bound, and the
+    hardware leg must judge the case the way the FVP leg does. Non-float cases keep `resolved`."""
+    if resolved.get("mode") != "float":
+        return resolved
+    try:
+        source = _find_source_file(directory).read_text(encoding="utf-8")
+    except (UnsupportedGeneratedTestError, OSError):
+        return resolved
+    try:
+        emitted = _comparison_from_generated_source(source)
+        if emitted.get("mode") == "float":
+            return emitted
+    except (UnsupportedGeneratedTestError, ValueError):
+        pass
+    try:
+        masked = _extract_all_call_args(source, "HELIA_VALIDATE_FLOATS_MASKED", expected_count=8)
+        atol, rtol = (float(str(masked[0][i]).strip().rstrip("fF")) for i in (4, 5))
+    except (UnsupportedGeneratedTestError, ValueError, IndexError):
+        return resolved
+    return {**resolved, "mode": "float", "atol": atol, "rtol": rtol}
 
 
 def _extract_expected_status_from_source(source_text: str) -> str | None:
@@ -638,8 +667,9 @@ def discover_generated_tests(
         descriptor = yaml.safe_load(descriptor_path.read_text(encoding="utf-8"))
         if select is not None and not select.matches(name, descriptor):
             continue
-        descriptor["resolved_comparison"] = resolve_comparison(
-            descriptor, descriptor.get("resolved_tensor_dtypes")
+        descriptor["resolved_comparison"] = _emitted_float_comparison(
+            directory,
+            resolve_comparison(descriptor, descriptor.get("resolved_tensor_dtypes")),
         )
         results.append(GeneratedTestCase(name=name, cpu=cpu, family=family, directory=directory, descriptor=descriptor, suite=suite))
         if limit is not None and len(results) >= limit:
@@ -1078,7 +1108,7 @@ def _build_convolve_case(
     # legitimately diverges between MVE and scalar accumulation and must use a float
     # atol/rtol default instead (matches the DepthwiseConv builder's same policy).
     comparison = dict(
-        descriptor.get("resolved_comparison", {"mode": "exact_int"} if activation_dtype not in ("FP32", "FP16") else {"mode": "float", "atol": 0.001, "rtol": 0.001})
+        descriptor.get("resolved_comparison", {"mode": "exact_int"} if activation_dtype not in ("FP32", "FP16") else default_comparison_for_dtype(activation_dtype))
     )
     manifest_header = _generated_manifest_header(
         project_root, generated_test, case_id, descriptor_path, descriptor_text
@@ -1607,7 +1637,7 @@ def _build_depthwise_conv_case(
     # activations legitimately diverge between MVE and scalar accumulation and must use
     # the descriptor's resolved float tolerance instead, matching the Convolve builder.
     comparison = (
-        dict(descriptor.get("resolved_comparison", {"mode": "float", "atol": 0.001, "rtol": 0.001}))
+        dict(descriptor.get("resolved_comparison", default_comparison_for_dtype(activation_dtype)))
         if activation_dtype in ("FP32", "FP16")
         else {"mode": "exact_int"}
     )
@@ -3228,7 +3258,7 @@ def _build_abs_case(
         blob_roles=[_manifest_blob_entry(blob) for blob in blobs],
         expected_output={"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
         comparison=dict(
-            descriptor.get("resolved_comparison", {"mode": "exact_int"} if activation_dtype not in ("FP32", "FP16") else {"mode": "float", "atol": 0.001, "rtol": 0.001})
+            descriptor.get("resolved_comparison", {"mode": "exact_int"} if activation_dtype not in ("FP32", "FP16") else default_comparison_for_dtype(activation_dtype))
         ),
         scratch_bytes=0,
         capabilities=[cmsis_function],
@@ -3663,7 +3693,7 @@ def _write_elementwise_binary_bundle(
         blob_roles=[_manifest_blob_entry(blob) for blob in blobs],
         expected_output={"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
         comparison=dict(
-            descriptor.get("resolved_comparison", {"mode": "exact_int"} if activation_dtype not in ("FP32", "FP16") else {"mode": "float", "atol": 0.001, "rtol": 0.001})
+            descriptor.get("resolved_comparison", {"mode": "exact_int"} if activation_dtype not in ("FP32", "FP16") else default_comparison_for_dtype(activation_dtype))
         ),
         scratch_bytes=0,
         capabilities=[f"{cmsis_function}"],

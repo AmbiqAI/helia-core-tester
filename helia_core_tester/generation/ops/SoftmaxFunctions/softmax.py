@@ -2,7 +2,10 @@
 Softmax operation implementation for Helia-Core Tester.
 
 Goldens come from the C reference: TFLite's Softmax<int8> (gemmlowp fixed point) for s8 input,
-SoftmaxInt16 with TFLM's LUTs for s16, and exp in binary64 rounded once for f32/f16.
+SoftmaxInt16 with TFLM's LUTs for s16, and for f32/f16 on the shipped build the kernel's own arithmetic
+(kernel_faithful: arm_softmax_f32 per float target, softmax_f32_cmsis_call; arm_softmax_f16 on Helium,
+softmax_f16_mve_call), with exp in binary64 rounded once as the oracle. Every other float case's golden is that
+exact softmax, widened by the guard budget (softmax_f32_atol / softmax_f16_atol).
 """
 
 from typing import Any, Dict, Tuple
@@ -10,6 +13,7 @@ import numpy as np
 from pathlib import Path
 from helia_core_tester.generation.harness import ArgumentPool, ArrayLiteral, Declaration
 from helia_core_tester.generation.harness.simple import dims_count, tensor_case_pool
+from helia_core_tester.generation.ops._shared import kernel_faithful as kf
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.ops.SoftmaxFunctions.softmax_luts import EXP_LUT, ONE_BY_ONE_LUT
 
@@ -125,13 +129,34 @@ class OpSoftmax(OperationBase):
         if float_kernel:
             float_dtype = np.float16 if kernel_info["input_c_type"] == "float16_t" else np.float32
             input_q = self._sample_uniform(input_shape, dtype=float_dtype)
-            output_data = self.reference_golden(ReferenceCall(
+            exact = ReferenceCall(
                 "softmax_f16" if float_dtype == np.float16 else "softmax_f32", {"unused": 0},
                 {"input": np.ascontiguousarray(input_q)}, {"output": input_shape},
-            ))
+            )
+            budget = (kf.softmax_f32_atol(input_q) if float_dtype == np.float32
+                      else kf.softmax_f16_atol(input_q))
+            target = kf.float_route(self) if float_dtype == np.float32 else None
+            if target is not None:
+                # arm_softmax_f32's own arithmetic on this float target (Helium polynomial exp, scalar LUT exp).
+                call = kf.softmax_f32_cmsis_call(input_q, target)
+                output_data = self.reference_golden(call)
+                kf.check_close_to_exact(name, call, exact, budget)
+                comparison = kf.comparison_context(self, float_dtype)
+            elif float_dtype == np.float16 and kf.mve_float16_route(self):
+                # The kernel's own float16 arithmetic (arm_softmax_f16 on Helium), bit for bit; the exact
+                # softmax stays the oracle within the rounding the kernel's operation order allows.
+                call = kf.softmax_f16_mve_call(input_q)
+                output_data = self.reference_golden(call)
+                kf.check_close_to_exact(name, call, exact, budget)
+                comparison = kf.comparison_context(self, float_dtype)
+            else:
+                # The exact softmax: every route's exp, sum, reciprocal and product stay within the budget.
+                output_data = self.reference_golden(exact)
+                comparison = kf.comparison_context(self, float_dtype, budget)
             output_data, nonfinite_context = self.apply_nonfinite_policy(
                 output_data, reference=self.reference_probe, inputs=[input_q]
             )
+            nonfinite_context = {**comparison, **nonfinite_context}
             mult = shift = diff_min = 0
             kernel_fn, output_c_type, uses_lut = kernel_info["kernel_fn"], kernel_info["output_c_type"], False
         else:

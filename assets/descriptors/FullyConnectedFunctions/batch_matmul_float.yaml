@@ -392,17 +392,14 @@ input_1_shape: [1, 3, 40]
 input_2_shape: [1, 40, 12]
 adj_x: false
 adj_y: false
-# Measured on the FVP at the shipped flags: the K 40 row groups accumulate in fp16 lanes and
-# reach 2.27x the FP16 default (worst diff 2.4e-3 at |exp|=0.08). 4e-3/4e-3 gives ~1.8x margin.
-comparison:
-  atol: 0.004
-  rtol: 0.004
+# The K 40 row groups accumulate in fp16 lanes: the shipped Helium golden reproduces that
+# order, other builds bound its 40-term rounding against the exact golden.
 ---
 # Non-finite cover for the float batch matmul kernels. arm_batch_matmul_f32 and
 # arm_batch_matmul_f16 (Include/arm_nnfunctions_flt.h:918 and :1952, the f16 entry a
 # @copydoc of the f32 one) say nothing about NaN or Inf, so nonfinite_policy is mask:
 # the output row that consumed the token is don't-care, and the case asserts SUCCESS,
-# no fault, no hang and exact values everywhere else.
+# no fault, no hang and the case comparison everywhere else.
 #
 # The sweep applies to the LHS only, so the RHS stays finite and every poisoned element
 # is a single-token propagation rather than a mix. The token sits in row 0 of the first

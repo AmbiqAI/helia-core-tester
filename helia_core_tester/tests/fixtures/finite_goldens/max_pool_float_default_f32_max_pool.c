@@ -66,8 +66,8 @@ int32_t max_pool_float_default_f32_test_case_run(void)
         max_pool_float_default_f32_expected_output,
         MAX_POOL_FLOAT_DEFAULT_F32_OUTPUT_SIZE,
         1,
-        5e-05f,
-        2e-05f,
+        1e-05f,
+        1.3e-06f,
         20,
         failures
     );

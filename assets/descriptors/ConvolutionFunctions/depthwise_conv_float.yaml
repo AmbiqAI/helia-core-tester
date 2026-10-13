@@ -1,4 +1,4 @@
-# FP16 comparisons follow the rule stated at the top of ConvolutionFunctions/convolve_float.yaml.
+# Float comparisons follow the rule stated at the top of ConvolutionFunctions/convolve_float.yaml.
 operator: DepthwiseConv
 name: depthwise_conv_float_default_f32
 suite: float
@@ -128,7 +128,6 @@ strides:
 padding: SAME
 use_bias: true
 depth_multiplier: 1
-comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_float_stride2_valid_f16
@@ -183,7 +182,6 @@ strides:
 padding: SAME
 use_bias: true
 depth_multiplier: 2
-comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_float_1d_chmult1_f16
@@ -268,7 +266,6 @@ strides:
 padding: VALID
 use_bias: true
 depth_multiplier: 2
-comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_float_1d_k3_no_bias_f32
@@ -341,7 +338,6 @@ use_bias: true
 depth_multiplier: 1
 hint:
   kernel_variant: wrapper
-comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_float_fast_nt_t_f32
@@ -376,7 +372,6 @@ strides: [1, 1]
 padding: VALID
 use_bias: true
 depth_multiplier: 1
-comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_float_fast_kc_no_scratch_f32
@@ -415,7 +410,6 @@ use_bias: true
 depth_multiplier: 1
 hint:
   force_no_scratch: true
-comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_float_3x3_valid_stride1_f32
@@ -450,7 +444,6 @@ strides: [1, 1]
 padding: VALID
 use_bias: true
 depth_multiplier: 1
-comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_float_1d_k3_no_bias_f16
@@ -485,7 +478,6 @@ strides: [1, 1]
 padding: VALID
 use_bias: true
 depth_multiplier: 2
-comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_float_single_input_channel_out8_f16
@@ -503,7 +495,6 @@ strides: [1, 1]
 padding: VALID
 use_bias: true
 depth_multiplier: 8
-comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_float_fast_nt_t_no_bias_f32
@@ -629,16 +620,9 @@ strides: [1, 1]
 padding: SAME
 use_bias: true
 depth_multiplier: 1
-# The unmasked lanes here are a 9-tap f16 multiply-accumulate chain compared against a
-# float32 reference model, so the rounding floor of the accumulation alone consumes the
-# FP16 default budget; the tokens play no part, and a token-free case of this shape
-# fails at the same lane with the same numbers. The override is sized off the worst
-# fraction seen across several generation seeds, not off one run.
-# Whether the f16 depthwise family should carry a tolerance of this shape at family
-# level, rather than case by case, is a Lane C policy call.
-comparison:
-  atol: 0.002
-  rtol: 0.002
+# The unmasked lanes are a 9-tap float16 multiply-accumulate chain: the shipped Helium
+# build compares them with the route's own golden, any other build with the exact golden
+# widened by the chain's rounding bound; the tokens play no part in either.
 input_mode: nonfinite_sweep
 nonfinite_tokens: [nan]
 nonfinite_policy: mask
@@ -659,16 +643,9 @@ strides: [1, 1]
 padding: SAME
 use_bias: true
 depth_multiplier: 1
-# The unmasked lanes here are a 9-tap f16 multiply-accumulate chain compared against a
-# float32 reference model, so the rounding floor of the accumulation alone consumes the
-# FP16 default budget; the tokens play no part, and a token-free case of this shape
-# fails at the same lane with the same numbers. The override is sized off the worst
-# fraction seen across several generation seeds, not off one run.
-# Whether the f16 depthwise family should carry a tolerance of this shape at family
-# level, rather than case by case, is a Lane C policy call.
-comparison:
-  atol: 0.002
-  rtol: 0.002
+# The unmasked lanes are a 9-tap float16 multiply-accumulate chain: the shipped Helium
+# build compares them with the route's own golden, any other build with the exact golden
+# widened by the chain's rounding bound; the tokens play no part in either.
 input_mode: nonfinite_sweep
 nonfinite_tokens: [inf]
 nonfinite_policy: mask
@@ -689,16 +666,9 @@ strides: [1, 1]
 padding: SAME
 use_bias: true
 depth_multiplier: 1
-# The unmasked lanes here are a 9-tap f16 multiply-accumulate chain compared against a
-# float32 reference model, so the rounding floor of the accumulation alone consumes the
-# FP16 default budget; the tokens play no part, and a token-free case of this shape
-# fails at the same lane with the same numbers. The override is sized off the worst
-# fraction seen across several generation seeds, not off one run.
-# Whether the f16 depthwise family should carry a tolerance of this shape at family
-# level, rather than case by case, is a Lane C policy call.
-comparison:
-  atol: 0.002
-  rtol: 0.002
+# The unmasked lanes are a 9-tap float16 multiply-accumulate chain: the shipped Helium
+# build compares them with the route's own golden, any other build with the exact golden
+# widened by the chain's rounding bound; the tokens play no part in either.
 input_mode: nonfinite_sweep
 nonfinite_tokens: [-inf]
 nonfinite_policy: mask
@@ -834,7 +804,6 @@ strides: [1, 1]
 padding: VALID
 use_bias: true
 depth_multiplier: 1
-comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_float_entry_acc16_chmult2_f16
@@ -850,7 +819,6 @@ strides: [1, 1]
 padding: SAME
 use_bias: true
 depth_multiplier: 2
-comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_float_entry_nhwc_5x5_c4_f16
@@ -866,7 +834,6 @@ strides: [1, 1]
 padding: VALID
 use_bias: true
 depth_multiplier: 1
-comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_float_entry_nhwc_acc16_5x5_c4_f16
@@ -882,7 +849,6 @@ strides: [1, 1]
 padding: VALID
 use_bias: true
 depth_multiplier: 1
-comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_float_entry_nhwc_acc16_chmult2_f16
@@ -898,7 +864,6 @@ strides: [1, 1]
 padding: SAME
 use_bias: true
 depth_multiplier: 2
-comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_float_entry_wrapper_acc16_6x6_c3_f16
@@ -914,7 +879,6 @@ strides: [1, 1]
 padding: SAME
 use_bias: true
 depth_multiplier: 1
-comparison: {atol: 0.002, rtol: 0.002}
 ---
 # Long reductions: more than 32 taps per float16 lane, so the kernels fold each block of 32 into
 # float32 (the direct and generic depthwise kernels).
@@ -930,7 +894,6 @@ strides: [1, 1]
 padding: SAME
 use_bias: true
 depth_multiplier: 1
-comparison: {atol: 0.004, rtol: 0.004}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_float_direct_fold_6x6_c24_no_bias_f16
@@ -957,7 +920,6 @@ strides: [1, 1]
 padding: SAME
 use_bias: true
 depth_multiplier: 2
-comparison: {atol: 0.003, rtol: 0.003}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_fault_entry_acc16_invalid_layout_f16
@@ -1024,7 +986,6 @@ strides: [1, 1]
 padding: SAME
 use_bias: true
 depth_multiplier: 1
-comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_float_route_direct_acc16_f16
@@ -1040,7 +1001,6 @@ strides: [1, 1]
 padding: SAME
 use_bias: true
 depth_multiplier: 1
-comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_float_route_cin1_f16
@@ -1057,7 +1017,6 @@ padding: SAME
 use_bias: true
 depth_multiplier: 8
 autovectorize_declines: true
-comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_float_route_cin1_acc16_f16
@@ -1074,7 +1033,6 @@ padding: SAME
 use_bias: true
 depth_multiplier: 8
 autovectorize_declines: true
-comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_float_route_generic_f16
@@ -1090,7 +1048,6 @@ strides: [1, 1]
 padding: SAME
 use_bias: true
 depth_multiplier: 2
-comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_float_route_generic_acc16_f16
@@ -1106,7 +1063,6 @@ strides: [1, 1]
 padding: SAME
 use_bias: true
 depth_multiplier: 2
-comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_float_route_1d_k3_declines_3x3_f16

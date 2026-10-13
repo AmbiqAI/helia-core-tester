@@ -6,6 +6,7 @@ import numpy as np
 
 from helia_core_tester.generation.harness import ArgumentPool, ArrayLiteral, Declaration
 from helia_core_tester.generation.harness.simple import dims_count, tensor_case_pool
+from helia_core_tester.generation.ops._shared import kernel_faithful as kf
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.reference.call import ReferenceCall
 
@@ -48,12 +49,17 @@ class OpBatchNorm(OperationBase):
         input_data = self._sample_uniform(input_shape, dtype=float_dtype)
         scale = np.linspace(0.5, 1.5, num=channels, dtype=float_dtype)
         bias = np.linspace(-0.25, 0.25, num=channels, dtype=float_dtype)
-        output_data = self.reference_golden(ReferenceCall(
+        exact = ReferenceCall(
             "batch_norm_f16" if activation_dtype == "FP16" else "batch_norm_f32", {"unused": 0},
-            {"input": input_data, "scale": scale, "bias": bias}, {"output": input_shape}))
+            {"input": input_data, "scale": scale, "bias": bias}, {"output": input_shape})
+        output_data = self.reference_golden(exact)
         output_data, nonfinite_context = self.apply_nonfinite_policy(
             output_data, reference=lambda ops: self.reference_probe([ops[0], scale, bias]), inputs=[input_data]
         )
+        # The golden is x * scale + bias rounded once, which the fused (vfmaq, contracted) routes return; a build
+        # that rounds the product first (-O0, soft float, the float16 scalar loop) is a two-term sum.
+        bound = kf.linear_bound(kf.abs_magnitude(exact), 2, float_dtype)
+        nonfinite_context = {**kf.comparison_context(self, float_dtype, *bound), **nonfinite_context}
 
         builder = TemplateContextBuilder()
         context = {

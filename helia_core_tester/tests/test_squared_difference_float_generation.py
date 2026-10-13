@@ -290,14 +290,14 @@ def test_float_case_renders_flat_call_and_float_validation(tmp_path: Path, monke
     assert args == ["input1", "input2", "output", "9"]
     assert "input1_offset" not in c_text
     assert "HELIA_VALIDATE_OUTPUTS(\n        FLOAT," in c_text
-    assert "0.001f,\n        0.001f," in c_text  # FP16 suite default tolerance
+    assert "1e-05f,\n        0.001f," in c_text  # FP16 suite default tolerance (assert_close)
     assert "HELIA_VALIDATE_FLOAT_BITS(" not in c_text and "_expected_bits" not in h_text
     assert sidecar["scalars"]["bit_exact"] is False
     assert "HELIA_GUARD_CHECK(" in c_text
     assert "#include <math.h>" in h_text
     assert "static const float16_t squared_difference_float_tail_f16_input1[]" in h_text
     assert sidecar["kernel_fn"] == KERNEL
-    assert sidecar["comparison"] == {"mode": "float", "atol": 0.001, "rtol": 0.001}
+    assert sidecar["comparison"] == {"mode": "float", "atol": 1e-05, "rtol": 0.001}
     assert sidecar["scalars"]["block_size"] == 9
     assert sidecar["scalars"]["float_kernel"] is True
 

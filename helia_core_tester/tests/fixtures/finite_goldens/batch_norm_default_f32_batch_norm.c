@@ -59,8 +59,8 @@ int32_t batch_norm_default_f32_test_case_run(void)
         batch_norm_default_f32_expected_output,
         BATCH_NORM_DEFAULT_F32_OUTPUT_SIZE,
         1,
-        5e-05f,
-        2e-05f,
+        1.0403999024456426e-05f,
+        1.4192092895507813e-06f,
         20,
         failures
     );

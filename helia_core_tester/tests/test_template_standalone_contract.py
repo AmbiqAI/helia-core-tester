@@ -772,14 +772,14 @@ def test_build_validation_context_derives_dtype_specific_float_defaults() -> Non
         },
     )
 
-    assert fp32_context["validation_atol"] == 5.0e-5
-    assert fp32_context["validation_rtol"] == 2.0e-5
-    assert fp32_context["comparison_atol"] == 5.0e-5
-    assert fp32_context["comparison_rtol"] == 2.0e-5
+    assert fp32_context["validation_atol"] == 1.0e-5
+    assert fp32_context["validation_rtol"] == 1.3e-6
+    assert fp32_context["comparison_atol"] == 1.0e-5
+    assert fp32_context["comparison_rtol"] == 1.3e-6
 
-    assert fp16_context["validation_atol"] == 1.0e-3
+    assert fp16_context["validation_atol"] == 1.0e-5
     assert fp16_context["validation_rtol"] == 1.0e-3
-    assert fp16_context["comparison_atol"] == 1.0e-3
+    assert fp16_context["comparison_atol"] == 1.0e-5
     assert fp16_context["comparison_rtol"] == 1.0e-3
 
 

@@ -49,7 +49,7 @@ def test_generation_emits_canonical_report_files(tmp_path: Path, monkeypatch: py
         ],
     )
 
-    def _fake_generate_test(desc, out_dir, seed=None, cpu="cortex-m55", conversion_failures=None, generation_failures=None, run_seed=0):
+    def _fake_generate_test(desc, out_dir, seed=None, cpu="cortex-m55", conversion_failures=None, generation_failures=None, run_seed=0, kernel_numerics="shipped"):
         test_dir = Path(out_dir) / desc["_family"] / desc["name"]
         test_dir.mkdir(parents=True, exist_ok=True)
         (test_dir / f"{desc['name']}.tflite").write_bytes(b"\x01")
@@ -238,7 +238,7 @@ def test_second_generation_reuses_every_case(tmp_path: Path, monkeypatch: pytest
 
     generate_calls: list[str] = []
 
-    def _fake_generate_test(desc, out_dir, seed=None, cpu="cortex-m55", conversion_failures=None, generation_failures=None, run_seed=0):
+    def _fake_generate_test(desc, out_dir, seed=None, cpu="cortex-m55", conversion_failures=None, generation_failures=None, run_seed=0, kernel_numerics="shipped"):
         generate_calls.append(desc["name"])
         test_dir = Path(out_dir) / desc["_family"] / desc["name"]
         test_dir.mkdir(parents=True, exist_ok=True)

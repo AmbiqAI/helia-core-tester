@@ -349,6 +349,7 @@ def generate_test(
     conversion_failures: Optional[List[Dict[str, Any]]] = None,
     generation_failures: Optional[List[Dict[str, Any]]] = None,
     run_seed: int = 0,
+    kernel_numerics: str = "shipped",
 ) -> None:
     """
     Generate TFLite model for a descriptor.
@@ -382,8 +383,11 @@ def generate_test(
         
     op_class = op_map[operator]
     
+    if kernel_numerics not in ("shipped", "bounded"):
+        raise ValueError(f"kernel_numerics must be 'shipped' or 'bounded', got {kernel_numerics!r}")
     op = op_class(desc, seed, target_cpu=cpu)
     op.run_seed = int(run_seed)
+    op.kernel_numerics = kernel_numerics
     
     uses_reference = op.uses_reference()
     # A reference-backed case needs no model: its golden is a ReferenceCall on the C library.
@@ -536,6 +540,7 @@ def test_generation(test_filters):
 
     start_time = datetime.now(timezone.utc)
     target_cpu = normalize_cpu(test_filters.get('cpu') or "cortex-m55")
+    kernel_numerics = test_filters.get("kernel_numerics") or "shipped"
     suite_mode = _suite_mode(test_filters)
         
     # Generate TFLite models for each descriptor.
@@ -642,6 +647,7 @@ def test_generation(test_filters):
             suite=suite_mode,
             seed=case_seed,
             version_hash=version_hash,
+            kernel_numerics=kernel_numerics,
         )
         # A fresh seed never matches a stamp: skip the hashing, the run redraws every case.
         if not force_generate and seed_chosen and case_reusable(test_dir, stamp):
@@ -667,6 +673,7 @@ def test_generation(test_filters):
                         str(top_generated),
                         seed=drawn_seed,
                         cpu=target_cpu,
+                        kernel_numerics=kernel_numerics,
                         conversion_failures=conversion_failures,
                         generation_failures=generation_failures,
                         run_seed=run_seed,

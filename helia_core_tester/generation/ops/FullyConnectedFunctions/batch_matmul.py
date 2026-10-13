@@ -3,6 +3,7 @@
 from typing import Dict, Any
 import numpy as np
 from pathlib import Path
+from helia_core_tester.generation.ops._shared import kernel_faithful as kf
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.harness import ArgumentPool, ArrayLiteral, Declaration, HarnessInput
 from helia_core_tester.generation.harness.faults import common_fault, struct_copy, with_fault
@@ -199,7 +200,7 @@ class OpBatchMatMul(OperationBase):
         Generate C and H files for BatchMatMul, with the golden from the C reference (TFLite's
         BatchMatMul; float exact then rounded once).
         """
-        from helia_core_tester.generation.ops._shared.conv_reference import FLOAT_UNBOUNDED
+        from helia_core_tester.generation.ops._shared.conv_reference import FLOAT_UNBOUNDED, exact_comparison
         from helia_core_tester.generation.reference import policy
         from helia_core_tester.generation.reference.bindings import get_bindings
         from helia_core_tester.generation.reference.call import ReferenceCall
@@ -266,13 +267,47 @@ class OpBatchMatMul(OperationBase):
         if float_kernel:
             lo = float(np.float32(self.desc.get("activation_min", -FLOAT_UNBOUNDED)))
             hi = float(np.float32(self.desc.get("activation_max", FLOAT_UNBOUNDED)))
-            output_data = self.reference_golden(ReferenceCall(
-                "batch_matmul_f16" if float_dtype == np.float16 else "batch_matmul_f32",
-                {"adj_x": int(adj_x), "adj_y": int(adj_y), "activation_min": lo, "activation_max": hi},
-                {"lhs": np.ascontiguousarray(input_lhs_data), "rhs": np.ascontiguousarray(input_rhs_data)},
-                {"output": output_shape}))
+            faithful = float_dtype == np.float16 and kf.mve_float16_route(self)
+            if faithful:
+                # The kernel's own float16 arithmetic: CMSIS non-adjoint (descriptor adj_y) runs
+                # arm_nn_mat_mult_nt_t_f16; the adjoint paths dot in float16 lanes while every strided
+                # operand's row count fits the gather offsets, else run the fused scalar loop.
+                m_rows, n_cols = int(output_shape[-2]), int(output_shape[-1])
+                lhs_fits, rhs_fits = m_rows <= kf.MVE_F16_GATHER_ROWS, n_cols <= kf.MVE_F16_GATHER_ROWS
+                cmsis_adj_y = not adj_y
+                if not adj_x and not cmsis_adj_y:
+                    route = 0
+                else:
+                    fits = (rhs_fits if not adj_x else lhs_fits if not cmsis_adj_y else lhs_fits and rhs_fits)
+                    route = 1 if fits else 2
+                batch = tuple(output_shape[:-2])
+
+                def faithful_call(lhs_d, rhs_d):
+                    a = np.swapaxes(lhs_d, -1, -2) if adj_x else lhs_d
+                    bm = np.swapaxes(rhs_d, -1, -2) if adj_y else rhs_d
+                    a = np.broadcast_to(a, batch + a.shape[-2:]).reshape(-1, *a.shape[-2:])
+                    bt = np.swapaxes(np.broadcast_to(bm, batch + bm.shape[-2:]), -1, -2).reshape(
+                        -1, bm.shape[-1], bm.shape[-2])
+                    return kf.matmul_f16_mve_call(a, bt, None, route=route, acc16=False, activation=(lo, hi))
+
+                call = faithful_call(input_lhs_data, input_rhs_data)
+                output_data = self.reference_golden(call).reshape(output_shape)
+                kf.check_within_bound(name, output_data, call.inputs["lhs"], call.inputs["rhs"], None, float_dtype)
+                probe = lambda ops: faithful_call(ops[0], ops[1]).output().reshape(output_shape)  # noqa: E731
+                comparison = kf.comparison_context(self, float_dtype)
+            else:
+                call = ReferenceCall(
+                    "batch_matmul_f16" if float_dtype == np.float16 else "batch_matmul_f32",
+                    {"adj_x": int(adj_x), "adj_y": int(adj_y), "activation_min": lo, "activation_max": hi},
+                    {"lhs": np.ascontiguousarray(input_lhs_data), "rhs": np.ascontiguousarray(input_rhs_data)},
+                    {"output": output_shape})
+                output_data = self.reference_golden(call)
+                probe = self.reference_probe
+                # Each output is a K-term dot product (K = the LHS inner dimension), no bias.
+                inner = int(input_lhs_shape[-2] if adj_x else input_lhs_shape[-1])
+                comparison = exact_comparison(self, call, inner, float_dtype)
             output_data, nonfinite_context = self.apply_nonfinite_policy(
-                output_data, reference=self.reference_probe, inputs=[input_lhs_data, input_rhs_data]
+                output_data, reference=probe, inputs=[input_lhs_data, input_rhs_data]
             )
             bmm_params = {'adj_x': adj_x, 'adj_y': not adj_y, 'activation_min': lo, 'activation_max': hi}
             element_size = np.dtype(float_dtype).itemsize
@@ -305,6 +340,7 @@ class OpBatchMatMul(OperationBase):
                 'bmm_activation_max_literal': builder.format_float_literal(hi),
                 'validation_mode': 'float',
             }
+            context.update(comparison)
             context.update(nonfinite_context)
             self._render_batch_matmul(output_dir, context)
             self._write_cmake(output_dir)

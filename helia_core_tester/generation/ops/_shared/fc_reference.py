@@ -10,6 +10,7 @@ import numpy as np
 from helia_core_tester.generation.ops._shared.conv_reference import (
     _extras,
     _uniform_input,
+    exact_comparison,
     float_bounds,
     per_channel_multipliers,
     quantized_bounds,
@@ -51,14 +52,32 @@ def fc_reference_case(op, kernel_info: Dict[str, Any], float_kernel: bool, float
         weights = draw().astype(float_dtype)
         bias = (wrng.uniform(-0.25, 0.25, out_units) if use_bias else np.zeros(0)).astype(float_dtype)
         lo, hi = float_bounds(op)
+        from helia_core_tester.generation.ops._shared import kernel_faithful as kf
+
+        if float_dtype == np.float16 and kf.mve_float16_route(op):
+            # arm_nn_mat_mult_nt_t_f16 (standard weights): batch rows against output-unit rows.
+            acc16 = str(kernel_info.get("kernel_fn", "")).endswith("_acc16")
+            lhs = np.ascontiguousarray(x).reshape(1, output_shape[0], features)
+            call = kf.matmul_f16_mve_call(lhs, weights.reshape(1, out_units, features), bias if use_bias else None,
+                                          route=0, acc16=acc16, activation=(lo, hi))
+            output = op.reference_golden(call).reshape(output_shape)
+            kf.check_within_bound(name, output, call.inputs["lhs"], call.inputs["rhs"],
+                                  bias if use_bias else None, float_dtype)
+            return {**sh, "input": x, "weights": weights, "biases": bias if use_bias else None, "output": output,
+                    "params": {"input_offset": 0, "filter_offset": 0, "output_offset": 0, "activation_min": lo,
+                               "activation_max": hi},
+                    "multiplier": None, "shift": None, "per_channel": False, "filter_operand": weights,
+                    "bias_operand": bias, "emulated": True, "comparison": kf.comparison_context(op, float_dtype)}
         entry = "fully_connected_f16" if float_dtype == np.float16 else "fully_connected_f32"
-        output = op.reference_golden(ReferenceCall(
-            entry, {"activation_min": lo, "activation_max": hi},
-            {"input": np.ascontiguousarray(x), "filter": weights, "bias": bias}, {"output": output_shape}))
+        call = ReferenceCall(entry, {"activation_min": lo, "activation_max": hi},
+                             {"input": np.ascontiguousarray(x), "filter": weights, "bias": bias},
+                             {"output": output_shape})
+        output = op.reference_golden(call)
         params = {"input_offset": 0, "filter_offset": 0, "output_offset": 0, "activation_min": lo, "activation_max": hi}
         return {**sh, "input": x, "weights": weights, "biases": bias if use_bias else None, "output": output,
                 "params": params, "multiplier": None, "shift": None, "per_channel": False,
-                "filter_operand": weights, "bias_operand": bias}
+                "filter_operand": weights, "bias_operand": bias,
+                "comparison": exact_comparison(op, call, features + int(use_bias), float_dtype)}
 
     kind = "s16" if kernel_info["input_c_type"] == "int16_t" else "s8"
     weight_dtype = str(desc.get("weight_dtype", "S8")).upper()

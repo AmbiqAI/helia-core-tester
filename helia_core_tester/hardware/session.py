@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import sys
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -272,6 +273,18 @@ def session_plan_for_bundles(case_bundles: Sequence[CaseBundle], counter_passes:
     )
 
 
+def tolerance_q16(value: Any) -> int:
+    """A float tolerance in Q16, rounded up: a requested tolerance never encodes tighter than asked
+    (assert_close's float32 rtol, 1.3e-6, is below one Q16 step)."""
+    v = float(value)
+    if not math.isfinite(v) or v < 0:
+        raise ValueError(f"tolerance must be finite and non-negative, got {value!r}")
+    q = math.ceil(v * 65536)
+    if q > 0xFFFFFFFF:
+        raise ValueError(f"tolerance {value!r} does not fit a u32 Q16")
+    return q
+
+
 def case_meta_for_bundle(case_bundle: CaseBundle) -> CaseMeta:
     comparison = case_bundle.comparison
     scalar_parameters = dict(case_bundle.manifest.get("serialized_scalar_parameters", {}))
@@ -282,8 +295,8 @@ def case_meta_for_bundle(case_bundle: CaseBundle) -> CaseMeta:
         schema_version=int(case_bundle.manifest["adapter_metadata_schema"]),
         comparison_mode=COMPARISON_MODE_CODES[str(comparison["mode"])],
         tolerance=int(comparison.get("tolerance", 0)),
-        atol_q16=int(round(float(comparison.get("atol", 0.0)) * 65536)),
-        rtol_q16=int(round(float(comparison.get("rtol", 0.0)) * 65536)),
+        atol_q16=tolerance_q16(comparison.get("atol", 0.0)),
+        rtol_q16=tolerance_q16(comparison.get("rtol", 0.0)),
         scalar_parameters=tuple((str(key), _encode_scalar(value)) for key, value in scalar_parameters.items()),
         blobs=tuple(
             BlobDescriptor(

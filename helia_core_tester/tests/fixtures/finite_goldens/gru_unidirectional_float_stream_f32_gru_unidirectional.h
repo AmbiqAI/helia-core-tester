@@ -13,7 +13,7 @@ static const float32_t gru_unidirectional_float_stream_f32_input_tensor[] = {
 };
 
 static const float32_t gru_unidirectional_float_stream_f32_expected_output[] = {
-    -0.115517467f, 0.095142797f, 0.074682564f, -0.202843547f, 0.013375819f, 0.161503315f, 0.01629303f, -0.251079768f, -0.107977256f, 0.219803914f, 0.146138877f, -0.335386336f, -0.319535255f, 0.079132512f, 0.421752572f, -0.310964793f,
+    -0.115513958f, 0.09513738f, 0.074678771f, -0.202843487f, 0.013373456f, 0.161500335f, 0.016290838f, -0.25107348f, -0.107977673f, 0.219795346f, 0.146131411f, -0.33537963f, -0.319533527f, 0.079127938f, 0.4217408f, -0.310958505f,
 };
 
 static const float32_t gru_unidirectional_float_stream_f32_update_gate_input_weights[] = {

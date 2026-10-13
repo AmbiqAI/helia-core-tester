@@ -377,8 +377,19 @@ class OpFullyConnected(OperationBase):
         if float_kernel:
             has_biases = biases is not None and biases.size > 0
             input_data = case["input"]
+            if case.get("emulated"):
+                recorded = self.reference
+
+                def probe(ops):
+                    return recorded.with_inputs(
+                        lhs=np.ascontiguousarray(ops[0], dtype=np.float16).reshape(recorded.inputs["lhs"].shape),
+                        rhs=np.ascontiguousarray(ops[1], dtype=np.float16).reshape(recorded.inputs["rhs"].shape),
+                        bias=np.ascontiguousarray(ops[2], dtype=np.float16).reshape(recorded.inputs["bias"].shape),
+                    ).output().reshape(np.shape(output_data))
+            else:
+                probe = self.reference_probe
             output_data, nonfinite_context = self.apply_nonfinite_policy(
-                output_data, reference=self.reference_probe,
+                output_data, reference=probe,
                 inputs=[input_data, case["filter_operand"], case["bias_operand"]]
             )
             element_size = np.dtype(float_dtype).itemsize
@@ -423,6 +434,7 @@ class OpFullyConnected(OperationBase):
                 'fc_activation_max_literal': builder.format_float_literal(fc_params['activation_max']),
                 'validation_mode': 'float',
             }
+            context.update(case.get("comparison") or {})
             context.update(nonfinite_context)
             self._render_fully_connected(output_dir, context)
             self._write_cmake(output_dir)

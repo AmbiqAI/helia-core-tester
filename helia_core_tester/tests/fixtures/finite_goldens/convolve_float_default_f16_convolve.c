@@ -234,7 +234,7 @@ int32_t convolve_float_default_f16_test_case_run(void)
         convolve_float_default_f16_expected_output,
         CONVOLVE_FLOAT_DEFAULT_F16_OUTPUT_SIZE,
         1,
-        0.001f,
+        1e-05f,
         0.001f,
         20,
         failures

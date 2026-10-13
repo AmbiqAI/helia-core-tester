@@ -1,4 +1,4 @@
-# FP16 comparisons follow the rule stated at the top of ConvolutionFunctions/convolve_float.yaml.
+# Float comparisons follow the rule stated at the top of ConvolutionFunctions/convolve_float.yaml.
 operator: TransposeConv
 name: transpose_conv_float_default_f32
 suite: float
@@ -166,7 +166,6 @@ strides:
 - 1
 padding: SAME
 use_bias: true
-comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: TransposeConv
 name: transpose_conv_float_wrapper_f32
@@ -208,7 +207,7 @@ hint:
 # and arm_transpose_conv_f16 (Include/arm_nnfunctions_flt.h:998 and :2010, the f16 entry
 # a @copydoc of the f32 one) say nothing about NaN or Inf, so nonfinite_policy is mask:
 # the output patch the token scatters into is don't-care, and the case asserts SUCCESS,
-# no fault, no hang and exact values everywhere else.
+# no fault, no hang and the case comparison everywhere else.
 #
 # Transpose convolution scatters one input element over a kernel-sized output patch
 # instead of gathering, so the token at input element 0 lands on a 3x3 corner patch

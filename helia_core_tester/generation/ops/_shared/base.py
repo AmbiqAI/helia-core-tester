@@ -115,6 +115,9 @@ class OperationBase(ABC):
         self.desc = desc
         self.seed = seed
         self.target_cpu = target_cpu
+        # "shipped": the kernels run as shipped (-Ofast, no coverage), so float goldens may reproduce their
+        # arithmetic; "bounded": any other build, exact goldens with derived bounds (kernel_faithful.py).
+        self.kernel_numerics = "shipped"
         self.rng = np.random.default_rng(seed)
         self._litert_interpreter = None
         self._tflite_path = None

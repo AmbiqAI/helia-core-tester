@@ -187,8 +187,8 @@ int32_t lstm_unidirectional_float_stream_f32_test_case_run(void)
         lstm_unidirectional_float_stream_f32_expected_output,
         16,
         1,
-        5e-05f,
-        2e-05f,
+        1e-05f,
+        1.3e-06f,
         20,
         failures
     );

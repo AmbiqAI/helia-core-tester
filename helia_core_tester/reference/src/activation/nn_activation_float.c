@@ -7,14 +7,25 @@
  *   tanh_lut_f16, tanh_lut_mve_f16: CMSIS-NN's float16 tanh, a 257-entry table over [0, 4] with
  *   linear interpolation; named variants, as the table's error is the kernel's contract. The
  *   scalar form rounds each binary16 step; the MVE form fuses the interpolation (one rounding).
+ *   nn_activation_f32_cmsis: arm_nn_activation_f32 on one target (0 Helium, 1 scalar with an FPU as GCC -Ofast
+ *   contracts it, 2 soft float). Helium runs tanh, hardswish, relu and relu6 as vectors (tanh flushes a
+ *   subnormal input to a signed zero, maxnm/minnm give +0 for -0) and sigmoid, leaky relu and none as the
+ *   scalar loop; the scalar targets run arm_nn_apply_activation_type_f32. Sigmoid and tanh are the shared
+ *   hct_cmsis_sigmoid_f32 / hct_cmsis_tanh_f32; hardswish is x * clamp(x / 6 + 1/2, 0, 1) with the x / 6 + 1/2
+ *   fused except on soft float.
+ *   nn_activation_f16_mve: arm_nn_activation_f16 on Helium. Tanh is tanh_lut_mve_f16; hardswish one float16
+ *   fused multiply-add x * h(1/6) + 1/2, maxnm 0, minnm 1, times x; sigmoid the scalar float16 leg: exp from
+ *   the float16 exp2 table with float32 intermediates (the index from t rounded to float16, the interpolation
+ *   fused), rounded to float16, then 1 / (1 + e) or e / (1 + e) in float32 rounded to float16.
  */
 #include <math.h>
 #include <string.h>
 
+#include "hct_cmsis_act_f32.h"
 #include "hct_ref_internal.h"
 
 /* binary16 of tanh(4 i / 256) for i = 0..256 (arm_nn_tanh_lut_f16's values). */
-static const uint16_t tanh_lut_f16[257] = {
+const uint16_t hct_cmsis_tanh_lut_f16[257] = {
     0x0000u, 0x2400u, 0x27FFu, 0x29FFu, 0x2BFDu, 0x2CFDu, 0x2DFCu, 0x2EF9u, 0x2FF5u, 0x3078u, 0x30F6u, 0x3172u,
     0x31EEu, 0x3269u, 0x32E4u, 0x335Eu, 0x33D6u, 0x3427u, 0x3463u, 0x349Du, 0x34D8u, 0x3512u, 0x354Bu, 0x3584u,
     0x35BCu, 0x35F3u, 0x362Au, 0x3660u, 0x3696u, 0x36CBu, 0x36FFu, 0x3732u, 0x3765u, 0x3797u, 0x37C8u, 0x37F9u,
@@ -110,7 +121,35 @@ int32_t hct_ref_nn_activation_f16(const HctFloatActivationTypeParams *params, co
 
 static float lut(int32_t i)
 {
-    return hct_f16_to_f32(tanh_lut_f16[i]);
+    return hct_f16_to_f32(hct_cmsis_tanh_lut_f16[i]);
+}
+
+static uint16_t tanh_lut_one(uint16_t bits, int fused)
+{
+    if ((bits & 0x7FFFu) > 0x7C00u)
+    {
+        /* NaN: the scalar kernel passes it through; the vector one yields a quiet NaN. */
+        return fused ? (uint16_t)((bits & 0x7FFFu) | 0x0200u) : bits;
+    }
+    const float x = hct_f16_to_f32(bits);
+    const float ax = fabsf(x);
+    float magnitude = 1.0f;
+    if (!(ax > 4.0f))
+    {
+        /* Scaling by 64 and splitting off the integer part are exact in binary16. */
+        const float t = ax * 64.0f;
+        const int32_t idx = (int32_t)t < 255 ? (int32_t)t : 255;
+        const float frac = t - (float)idx;
+        const float y0 = lut(idx);
+        const float diff = hct_round_f16(lut(idx + 1) - y0);
+        magnitude = fused ? hct_f16_to_f32(hct_f64_to_f16((double)y0 + (double)diff * (double)frac))
+                          : hct_round_f16(y0 + hct_round_f16(diff * frac));
+    }
+    if (fused)
+    {
+        return hct_f32_to_f16(x < 0.0f ? -magnitude : magnitude);
+    }
+    return (uint16_t)((hct_f32_to_f16(magnitude) & 0x7FFFu) | (bits & 0x8000u));
 }
 
 static int32_t tanh_lut(const HctNoParams *p, const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs,
@@ -124,39 +163,7 @@ static int32_t tanh_lut(const HctNoParams *p, const HctTensor *inputs, int32_t n
     HCT_TRY(hct_unary_setup(inputs, num_inputs, outputs, num_outputs, HCT_FLOAT16, HCT_FLOAT16, &count));
     for (int64_t i = 0; i < count; ++i)
     {
-        const uint16_t bits = ((const uint16_t *)inputs[0].data)[i];
-        uint16_t out = 0;
-        if ((bits & 0x7FFFu) > 0x7C00u)
-        {
-            /* NaN: the scalar kernel passes it through; the vector one yields a quiet NaN. */
-            out = fused ? (uint16_t)((bits & 0x7FFFu) | 0x0200u) : bits;
-        }
-        else
-        {
-            const float x = hct_f16_to_f32(bits);
-            const float ax = fabsf(x);
-            float magnitude = 1.0f;
-            if (!(ax > 4.0f))
-            {
-                /* Scaling by 64 and splitting off the integer part are exact in binary16. */
-                const float t = ax * 64.0f;
-                const int32_t idx = (int32_t)t < 255 ? (int32_t)t : 255;
-                const float frac = t - (float)idx;
-                const float y0 = lut(idx);
-                const float diff = hct_round_f16(lut(idx + 1) - y0);
-                magnitude = fused ? hct_f16_to_f32(hct_f64_to_f16((double)y0 + (double)diff * (double)frac))
-                                  : hct_round_f16(y0 + hct_round_f16(diff * frac));
-            }
-            if (fused)
-            {
-                out = hct_f32_to_f16(x < 0.0f ? -magnitude : magnitude);
-            }
-            else
-            {
-                out = (uint16_t)((hct_f32_to_f16(magnitude) & 0x7FFFu) | (bits & 0x8000u));
-            }
-        }
-        ((uint16_t *)outputs[0].data)[i] = out;
+        ((uint16_t *)outputs[0].data)[i] = tanh_lut_one(((const uint16_t *)inputs[0].data)[i], fused);
     }
     return HCT_OK;
 }
@@ -171,4 +178,207 @@ int32_t hct_ref_tanh_lut_mve_f16(const HctNoParams *params, const HctTensor *inp
                                  HctTensor *outputs, int32_t num_outputs)
 {
     return tanh_lut(params, inputs, num_inputs, outputs, num_outputs, 1);
+}
+
+/* ------------------------------------------- kernel-faithful (ns-cmsis-nn arithmetic per target) */
+
+static float bits_f32(uint32_t u)
+{
+    float f;
+    memcpy(&f, &u, sizeof f);
+    return f;
+}
+
+/* VMAXNM / VMINNM on numbers: +0 beats -0. NaN operands are handled by the callers. */
+static float maxnm(float a, float b)
+{
+    if (a == b)
+    {
+        return signbit(a) ? b : a;
+    }
+    return a > b ? a : b;
+}
+
+static float minnm(float a, float b)
+{
+    if (a == b)
+    {
+        return signbit(a) ? a : b;
+    }
+    return a < b ? a : b;
+}
+
+static int32_t check_activation(const HctFloatActivationTypeParams *p)
+{
+    if (p->activation_type < HCT_FACT_NONE || p->activation_type > HCT_FACT_HARDSWISH ||
+        (p->activation_type == HCT_FACT_LEAKY_RELU && !isfinite(p->act_param)))
+    {
+        return HCT_E_PARAM;
+    }
+    return HCT_OK;
+}
+
+static float cmsis_f32(float x, int32_t type, float act_param, int32_t target)
+{
+    float y = x;
+    switch (type)
+    {
+    case HCT_FACT_SIGMOID:
+        (void)hct_cmsis_sigmoid_f32(x, target, &y);
+        return y;
+    case HCT_FACT_TANH:
+        if (target == 0 && x != 0.0f && fabsf(x) < 0x1p-126f)
+        {
+            return copysignf(0.0f, x);
+        }
+        (void)hct_cmsis_tanh_f32(x, target, &y);
+        if (target == 2 && isnan(x))
+        {
+            uint32_t b;
+            memcpy(&b, &x, sizeof b);
+            return bits_f32(b | 0x00400000u);
+        }
+        return y;
+    case HCT_FACT_HARDSWISH:
+    {
+        float t = target == 2 ? (float)(x * (1.0f / 6.0f)) + 0.5f : fmaf(x, 1.0f / 6.0f, 0.5f);
+        if (target == 0)
+        {
+            t = isnan(t) ? 0.0f : minnm(maxnm(t, 0.0f), 1.0f);
+        }
+        else
+        {
+            t = t < 1.0f ? t : 1.0f;
+            t = t > 0.0f ? t : 0.0f;
+        }
+        return x * t;
+    }
+    case HCT_FACT_RELU:
+        if (isnan(x))
+        {
+            return x;
+        }
+        return target == 0 ? maxnm(x, 0.0f) : (x < 0.0f ? 0.0f : x);
+    case HCT_FACT_RELU6:
+        if (isnan(x))
+        {
+            return x;
+        }
+        if (target == 0)
+        {
+            return minnm(maxnm(x, 0.0f), 6.0f);
+        }
+        y = x < 0.0f ? 0.0f : x;
+        return y > 6.0f ? 6.0f : y;
+    case HCT_FACT_LEAKY_RELU:
+        return isnan(x) ? x : (x >= 0.0f ? x : act_param * x);
+    default:
+        return x;
+    }
+}
+
+int32_t hct_ref_nn_activation_f32_cmsis(const HctFloatActivationTargetParams *params, const HctTensor *inputs,
+                                        int32_t num_inputs, HctTensor *outputs, int32_t num_outputs)
+{
+    if (params == NULL)
+    {
+        return HCT_E_NULL;
+    }
+    int64_t count = 0;
+    HCT_TRY(hct_unary_setup(inputs, num_inputs, outputs, num_outputs, HCT_FLOAT32, HCT_FLOAT32, &count));
+    const HctFloatActivationTypeParams type = {params->activation_type, params->act_param};
+    HCT_TRY(check_activation(&type));
+    if (params->target < 0 || params->target > 2)
+    {
+        return HCT_E_PARAM;
+    }
+    for (int64_t i = 0; i < count; ++i)
+    {
+        ((float *)outputs[0].data)[i] = cmsis_f32(((const float *)inputs[0].data)[i], params->activation_type,
+                                                  params->act_param, params->target);
+    }
+    return HCT_OK;
+}
+
+static float h16(float v)
+{
+    return hct_round_f16(v);
+}
+
+/* arm_nn_softmax_exp_lut_f16 on a float16 value, as GCC builds it (the interpolation fused). */
+static float exp_lut_f16(float x16)
+{
+    float x = x16 < 80.0f ? x16 : 80.0f;
+    x = x > -80.0f ? x : -80.0f;
+    const float t = x * 1.44269504088896341f;
+    const float tq = h16(t);
+    int32_t n = (int32_t)tq;
+    n = tq < (float)n ? n - 1 : n;
+    const float idx_f = (t - (float)n) * 256.0f;
+    int32_t idx = (int32_t)idx_f;
+    idx = idx < 0 ? 0 : (idx > 255 ? 255 : idx);
+    const float frac = idx_f - (float)idx;
+    const float y0 = hct_f16_to_f32(hct_cmsis_exp2_lut_f16[idx]);
+    const float y1 = hct_f16_to_f32(hct_cmsis_exp2_lut_f16[idx + 1]);
+    n = n > 15 ? 15 : (n < -14 ? -14 : n);
+    return h16(fmaf(frac, y1 - y0, y0) * hct_f16_to_f32((uint16_t)((n + 15) << 10)));
+}
+
+static uint16_t mve_f16(uint16_t bits, int32_t type, float act_param)
+{
+    const float x = hct_f16_to_f32(bits);
+    switch (type)
+    {
+    case HCT_FACT_TANH:
+        return tanh_lut_one(bits, 1);
+    case HCT_FACT_HARDSWISH:
+    {
+        /* x * h(1/6) + 1/2 is exact in binary64 (at most 37 significant bits), so one narrowing is the fused
+         * float16 result. */
+        float t = hct_f16_to_f32(hct_f64_to_f16((double)x * (double)h16(1.0f / 6.0f) + 0.5));
+        t = isnan(t) ? 0.0f : minnm(maxnm(t, 0.0f), 1.0f);
+        return hct_f32_to_f16(x * t);
+    }
+    case HCT_FACT_SIGMOID:
+    {
+        if (isnan(x))
+        {
+            return bits;
+        }
+        if (x >= 0.0f)
+        {
+            const float e = exp_lut_f16(-x);
+            return hct_f32_to_f16(1.0f / (1.0f + e));
+        }
+        const float e = exp_lut_f16(x);
+        return hct_f32_to_f16(e / (1.0f + e));
+    }
+    case HCT_FACT_RELU:
+        return isnan(x) ? bits : hct_f32_to_f16(maxnm(x, 0.0f));
+    case HCT_FACT_RELU6:
+        return isnan(x) ? bits : hct_f32_to_f16(minnm(maxnm(x, 0.0f), 6.0f));
+    case HCT_FACT_LEAKY_RELU:
+        /* max(x, 0) + h(a) * min(x, 0): one of the two terms is zero, so the sum is the product rounded once. */
+        return isnan(x) ? bits : (x >= 0.0f ? bits : hct_f32_to_f16(h16(act_param) * x));
+    default:
+        return bits;
+    }
+}
+
+int32_t hct_ref_nn_activation_f16_mve(const HctFloatActivationTypeParams *params, const HctTensor *inputs,
+                                      int32_t num_inputs, HctTensor *outputs, int32_t num_outputs)
+{
+    if (params == NULL)
+    {
+        return HCT_E_NULL;
+    }
+    int64_t count = 0;
+    HCT_TRY(hct_unary_setup(inputs, num_inputs, outputs, num_outputs, HCT_FLOAT16, HCT_FLOAT16, &count));
+    HCT_TRY(check_activation(params));
+    for (int64_t i = 0; i < count; ++i)
+    {
+        ((uint16_t *)outputs[0].data)[i] =
+            mve_f16(((const uint16_t *)inputs[0].data)[i], params->activation_type, params->act_param);
+    }
+    return HCT_OK;
 }

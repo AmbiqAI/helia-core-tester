@@ -346,6 +346,7 @@ class OpTransposeConv(OperationBase):
                 'transpose_activation_min_literal': builder.format_float_literal(transpose_conv_params['activation_min']),
                 'transpose_activation_max_literal': builder.format_float_literal(transpose_conv_params['activation_max']),
             }
+            context.update(case.get("comparison") or {})
             context.update(nonfinite_context)
             self._render_transpose_conv(output_dir, context)
 
