@@ -1,10 +1,12 @@
 """Shared implementation for CMSIS-NN hard-swish operators."""
 
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 import numpy as np
 import tensorflow as tf
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.base import OperationBase
+
+PRESCALE_MAX = 31
 
 
 class HardSwishFamilyBase(OperationBase):
@@ -126,6 +128,32 @@ class HardSwishFamilyBase(OperationBase):
             }
         else:
             raise NotImplementedError(f"Unsupported HardSwish dtype: {activation_dtype}")
+
+    @classmethod
+    def _prescale_override(cls, extras: Dict, variant: str) -> Optional[int]:
+        """Explicit hint.extras.prescale for the precise kernels, or None to derive it."""
+        if not isinstance(extras, dict) or "prescale" not in extras:
+            return None
+        name = cls.OPERATOR_NAME
+        if variant != "precise":
+            raise ValueError(f"{name}: hint.extras.prescale applies only to HardSwishPrecise")
+        value = extras["prescale"]
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"{name}: hint.extras.prescale must be an integer, got {value!r}")
+        if not 0 <= value <= PRESCALE_MAX:
+            raise ValueError(f"{name}: hint.extras.prescale must be in [0, {PRESCALE_MAX}], got {value}")
+        return value
+
+    @classmethod
+    def _check_prescale_fits(cls, prescale: int, relu_q6: int, input_zp: int, qmin: int, qmax: int) -> None:
+        """Reject a prescale that lets the kernel's int32 x * xr overflow."""
+        x_max = max(qmax - int(input_zp), int(input_zp) - qmin)
+        xr_max = cls._nonneg_divide_by_pot_s32(max(int(relu_q6), 0), prescale)
+        if x_max * xr_max > np.iinfo(np.int32).max:
+            raise ValueError(
+                f"{cls.OPERATOR_NAME}: hint.extras.prescale {prescale} overflows int32 "
+                f"(|x| <= {x_max}, relu6 term <= {xr_max})"
+            )
 
     @staticmethod
     def _clamp(val: int, vmin: int, vmax: int) -> int:
@@ -406,6 +434,10 @@ class HardSwishFamilyBase(OperationBase):
         while prod_max > np.iinfo(np.int32).max:
             prescale += 1
             prod_max >>= 1
+        prescale_override = self._prescale_override(extras, variant)
+        if prescale_override is not None:
+            self._check_prescale_fits(prescale_override, relu_q6, input_zp, qmin, qmax)
+            prescale = prescale_override
         
         # Calculate effective scale
         # Formula: real_multiplier = (input_scale^2) / (6.0 * output_scale)

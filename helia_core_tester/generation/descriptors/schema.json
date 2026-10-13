@@ -382,6 +382,12 @@
             },
             "output_scale": {
               "type": "number"
+            },
+            "prescale": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 31,
+              "description": "HardSwishPrecise: explicit prescale instead of the one derived from the scales; output_multiplier/output_shift follow from it. Generation rejects a value that lets the kernel's int32 x * relu6 product overflow."
             }
           }
         }
