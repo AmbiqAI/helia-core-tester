@@ -446,33 +446,3 @@ def test_detected_gru_pre_reset_sizes_temp1_from_sizer_contract() -> None:
     ) in rendered
     assert ".temp1 = case_x_temp1," in rendered
     assert "temp1_capacity_bytes" in rendered
-
-
-def _fake_checkout(root: Path, table_entries: int = 256) -> Path:
-    (root / "Include").mkdir(parents=True)
-    (root / "Source" / "NNSupportFunctions").mkdir(parents=True)
-    body = ", ".join(str(i) for i in range(table_entries))
-    (root / "Source" / "NNSupportFunctions" / "arm_nntables.c").write_text(
-        "const uint16_t sigmoid_table_uint16[256] = {\n" + body + "\n};\n"
-    )
-    return root
-
-
-def test_lstm_schema_path_follows_the_resolved_checkout(tmp_path: Path, monkeypatch) -> None:
-    from helia_core_tester.generation.ops.LSTMFunctions.lstm_unidirectional import lstm_schema_path
-
-    root = _fake_checkout(tmp_path / "ns-cmsis-nn")
-    monkeypatch.setenv("CMSIS_NN_ROOT", str(root))
-    assert lstm_schema_path() == root / "Tests" / "UnitTest" / "RefactoredTestGen" / "schema.fbs"
-
-
-def test_lstm_schema_path_nested_fallback_is_the_tester_repo_grandparent(monkeypatch) -> None:
-    """Without a resolvable checkout the schema comes from the nested layout,
-    <ns-cmsis-nn>/Tests/helia-core-tester: two levels above the tester repo root."""
-    import helia_core_tester
-    from helia_core_tester.generation.ops.LSTMFunctions import lstm_unidirectional
-
-    monkeypatch.setattr(lstm_unidirectional, "resolve_cmsis_nn_root", lambda: None)
-    tester_root = Path(helia_core_tester.__file__).resolve().parents[1]
-    expected = tester_root.parents[1] / "Tests" / "UnitTest" / "RefactoredTestGen" / "schema.fbs"
-    assert lstm_unidirectional.lstm_schema_path() == expected

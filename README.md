@@ -931,7 +931,9 @@ TransposeConv, FullyConnected, BatchMatMul), pooling, Mean, ReduceSum/Max/Min, A
 BatchNorm; and the data-movement operators (Concatenation, Pack/Unpack, Split, Gather/GatherND,
 Pad/MirrorPad, Reshape/Squeeze, BatchToSpaceND/SpaceToBatchND, DepthToSpace/SpaceToDepth,
 ResizeNearestNeighbor, Transpose, StridedSlice, Tile, BroadcastTo, ScatterNd, SelectV2, Where,
-ReverseSequence, DynamicUpdateSlice, Fill); the recurrent families follow. A case that asserts only a
+ReverseSequence, DynamicUpdateSlice, Fill); and the recurrent operators (LSTM s8/s16/f32/f16, GRU
+f32/f16, SVDF with int8 or int16 state and float). Nothing is read from the ns-cmsis-nn checkout's
+UnitTest data any more. A case that asserts only a
 returned status (an `ARG_ERROR` case) answers `status_only()` and has no golden at all.
 
 - `helia_core_tester/reference/` holds the library: plain scalar C11 written from each operator's
@@ -983,6 +985,14 @@ returned status (an `ARG_ERROR` case) answers `status_only()` and has no golden 
   FullyConnected follows TFLM's double rounding (TFLite core since 2.20 rounds once; ns-cmsis-nn
   rounds twice), s16 FullyConnected TFLite's reduced-multiplier int64 path, and Mean TFLM's folding
   of 1/count into the multiplier.
+- Integer LSTM is TFLM's lstm_eval (int8x8_16 and int16x8_64): gate matmuls to int16 at 2^-12,
+  int16 sigmoid/tanh LUTs, int16 Mul/Add cell update with optional clip, hidden = output gate times
+  tanh(cell) in the cell's power-of-two scale. It reproduces the TFLM-generated goldens in
+  ns-cmsis-nn's UnitTest TestData bit for bit (tests/test_reference_lstm.py). The generator draws
+  its own weights and derives the multipliers as TFLM's prepare does; descriptor zero points apply.
+  SVDF runs a step sequence in one call (TFLM EvalIntegerSvdfReference / EvalFloatSvdfReference);
+  float LSTM/GRU round every matmul-plus-bias once, every activation once, and every other
+  elementwise step per IEEE operation in the element type.
 - float goldens are the exact result rounded once to the output type. float16 computes in binary32
   on the half operands (or binary64 where a step is not exact in binary32) and rounds once; an
   operator made of several binary16 steps (SquaredDifference) rounds each step, as IEEE binary16

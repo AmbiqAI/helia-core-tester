@@ -475,6 +475,73 @@ structs:
       - [seq_dim, int32]
       - [batch_dim, int32]
 
+  HctLstmParams:
+    doc: >-
+      TFLM integer LSTM (8x8_16 / 16x8_64). Gate tensors stack forget, input, cell, output. input_offset is
+      -input_zero_point, output_offset the hidden-state zero point (the recurrent matmuls take -output_offset);
+      each gate's input/hidden matmul requantizes to the gate scale 2^-12; *_to_cell and hidden rescale the
+      int16 products; cell_clip is the quantized clip (0 = none); cell_scale_power = log2(cell scale).
+    fields:
+      - [time_major, int32]
+      - [input_offset, int32]
+      - [output_offset, int32]
+      - [forget_input_multiplier, int32]
+      - [forget_input_shift, int32]
+      - [forget_hidden_multiplier, int32]
+      - [forget_hidden_shift, int32]
+      - [input_input_multiplier, int32]
+      - [input_input_shift, int32]
+      - [input_hidden_multiplier, int32]
+      - [input_hidden_shift, int32]
+      - [cell_input_multiplier, int32]
+      - [cell_input_shift, int32]
+      - [cell_hidden_multiplier, int32]
+      - [cell_hidden_shift, int32]
+      - [output_input_multiplier, int32]
+      - [output_input_shift, int32]
+      - [output_hidden_multiplier, int32]
+      - [output_hidden_shift, int32]
+      - [forget_to_cell_multiplier, int32]
+      - [forget_to_cell_shift, int32]
+      - [input_to_cell_multiplier, int32]
+      - [input_to_cell_shift, int32]
+      - [hidden_multiplier, int32]
+      - [hidden_shift, int32]
+      - [cell_clip, int32]
+      - [cell_scale_power, int32]
+  HctLstmFloatParams:
+    doc: Gate tensors stack forget, input, cell, output; cell_clip 0 = none.
+    fields:
+      - [time_major, int32]
+      - [cell_clip, float32]
+  HctGruParams:
+    doc: Keras GRU, gates stacked update (z), reset (r), candidate (n); h = z*h + (1-z)*n.
+    fields:
+      - [time_major, int32]
+      - [reset_after, int32]
+  HctSvdfParams:
+    doc: >-
+      One SVDF step (TFLM EvalIntegerSvdfReference): input_offset is added to the input, the feature
+      projection is rescaled by input_multiplier/shift into the state range, the output by
+      output_multiplier/shift plus output_offset.
+    fields:
+      - [rank, int32]
+      - [input_offset, int32]
+      - [output_offset, int32]
+      - [input_multiplier, int32]
+      - [input_shift, int32]
+      - [output_multiplier, int32]
+      - [output_shift, int32]
+      - [input_activation_min, int32]
+      - [input_activation_max, int32]
+      - [output_activation_min, int32]
+      - [output_activation_max, int32]
+  HctSvdfFloatParams:
+    fields:
+      - [rank, int32]
+      - [activation_min, float32]
+      - [activation_max, float32]
+
 prepare:
   quantize_multiplier:
     in: HctQuantizeMultiplierIn
@@ -1102,3 +1169,44 @@ kernels:
     params: HctNoParams
     inputs: {value: any}
     outputs: {output: any}
+  # Recurrent: LSTM and GRU (stacked gates), SVDF over a step sequence [S, B, I] (state in, final state out).
+  lstm_s8:
+    params: HctLstmParams
+    inputs: {input: int8, input_weights: int8, recurrent_weights: int8, bias: int32}
+    outputs: {output: int8}
+  lstm_s16:
+    params: HctLstmParams
+    inputs: {input: int16, input_weights: int8, recurrent_weights: int8, bias: int64}
+    outputs: {output: int16}
+  lstm_f32:
+    params: HctLstmFloatParams
+    inputs: {input: float32, input_weights: float32, recurrent_weights: float32, bias: float32}
+    outputs: {output: float32}
+  lstm_f16:
+    params: HctLstmFloatParams
+    inputs: {input: float16, input_weights: float16, recurrent_weights: float16, bias: float16}
+    outputs: {output: float16}
+  gru_f32:
+    params: HctGruParams
+    inputs: {input: float32, input_weights: float32, recurrent_weights: float32, input_bias: float32, recurrent_bias: float32}
+    outputs: {output: float32}
+  gru_f16:
+    params: HctGruParams
+    inputs: {input: float16, input_weights: float16, recurrent_weights: float16, input_bias: float16, recurrent_bias: float16}
+    outputs: {output: float16}
+  svdf_s8:
+    params: HctSvdfParams
+    inputs: {input: int8, weights_feature: int8, weights_time: int8, bias: int32, state: int8}
+    outputs: {output: int8, state_out: int8}
+  svdf_state_s16_s8:
+    params: HctSvdfParams
+    inputs: {input: int8, weights_feature: int8, weights_time: int16, bias: int32, state: int16}
+    outputs: {output: int8, state_out: int16}
+  svdf_f32:
+    params: HctSvdfFloatParams
+    inputs: {input: float32, weights_feature: float32, weights_time: float32, bias: float32, state: float32}
+    outputs: {output: float32, state_out: float32}
+  svdf_f16:
+    params: HctSvdfFloatParams
+    inputs: {input: float16, weights_feature: float16, weights_time: float16, bias: float16, state: float16}
+    outputs: {output: float16, state_out: float16}

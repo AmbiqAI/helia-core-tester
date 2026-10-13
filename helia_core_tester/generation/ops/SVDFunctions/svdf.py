@@ -2,12 +2,12 @@
 SVDF operation implementation.
 """
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from pathlib import Path
 import numpy as np
-import tensorflow as tf
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.harness import ArgumentPool, HarnessInput, fragment
+from helia_core_tester.generation.reference.call import ReferenceCall
 
 SVDF_VARIANTS = ("svdf", "svdf_fault", "svdf_f32", "svdf_f32_fault")
 
@@ -81,193 +81,19 @@ class OpSVDF(OperationBase):
                     kind, "arm_svdf_s8 only checks ctx->buf under ARM_MATH_MVEI; add required_capabilities: [mve]"
                 )
 
-    def build_keras_model(self) -> tf.keras.Model:
-        """Build Keras model for SVDF operation."""
-        input_shape = self.desc['input_shape']
-        inputs = tf.keras.Input(shape=input_shape[1:], dtype=tf.float32, name='input')
-        x = tf.keras.layers.Dense(units=64)(inputs)
-        model = tf.keras.Model(inputs=inputs, outputs=x)
-        return model
+    def uses_reference(self) -> bool:
+        return not self.status_only()
 
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        """Convert Keras model to TFLite with quantization."""
-        # Create converter
-        converter = tf.lite.TFLiteConverter.from_keras_model(model)
-        
-        # Apply quantization based on activation_dtype
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
-        
-        if activation_dtype == 'S8':
-            converter.optimizations = [tf.lite.Optimize.DEFAULT]
-            converter.target_spec.supported_types = [tf.int8]
-            converter.inference_input_type = tf.int8
-            converter.inference_output_type = tf.int8
-        elif activation_dtype == 'S16':
-            converter.optimizations = [tf.lite.Optimize.DEFAULT]
-            converter.target_spec.supported_types = [tf.int16]
-            # For int16 quantization, keep input/output as float32
-            # For int16 quantization, keep input/output as float32
-        
-        # Generate representative dataset
-        def representative_data_gen():
-            for _ in range(100):
-                if 'input_shape' in self.desc:
-                    inputs = self.rng.uniform(-1.0, 1.0, size=self.desc['input_shape']).astype(np.float32)
-                    yield [inputs]
-                elif 'input_1_shape' in self.desc and 'input_2_shape' in self.desc:
-                    inputs1 = self.rng.uniform(-1.0, 1.0, size=self.desc['input_1_shape']).astype(np.float32)
-                    inputs2 = self.rng.uniform(-1.0, 1.0, size=self.desc['input_2_shape']).astype(np.float32)
-                    yield [inputs1, inputs2]
-        
-        converter.representative_dataset = representative_data_gen
-        
-        # Convert and save
-        tflite_model = converter.convert()
-        with open(out_path, 'wb') as f:
-            f.write(tflite_model)
+    def status_only(self) -> bool:
+        # A fault case asserts the kernel's ARG_ERROR status, never an output.
+        return str(self.desc.get("expected_status", "ARM_CMSIS_NN_SUCCESS")).strip() != "ARM_CMSIS_NN_SUCCESS"
 
-    def needs_keras_model(self) -> bool:
-        if self.desc.get("hint", {}).get("force_cmsis", False):
-            return False
-        return True
+    def _svdf_outputs(self, call: ReferenceCall) -> Dict[str, np.ndarray]:
+        """The reference outputs of `call`; recorded as the golden unless the case is status-only.
 
-    def allow_no_tflite(self) -> bool:
-        if self.desc.get("hint", {}).get("force_cmsis", False):
-            return True
-        return False
-
-    @staticmethod
-    def _requantize_np(values: np.ndarray, multiplier: int, shift: int) -> np.ndarray:
-        left_shift = shift if shift > 0 else 0
-        right_shift = -shift if shift < 0 else 0
-        prod = values.astype(np.int64) * (1 << left_shift)
-        mult = (1 << 30) + (prod * int(multiplier))
-        res = (mult >> 31).astype(np.int64)
-        if right_shift == 0:
-            return res.astype(np.int32)
-        remainder_mask = (1 << right_shift) - 1
-        remainder = res & remainder_mask
-        result = res >> right_shift
-        threshold = remainder_mask >> 1
-        threshold = threshold + (result < 0)
-        result = result + (remainder > threshold)
-        return result.astype(np.int32)
-
-    def _generate_svdf_expected(
-        self,
-        input_data: np.ndarray,
-        state_init: np.ndarray,
-        weights_feature: np.ndarray,
-        weights_time: np.ndarray,
-        bias: Optional[np.ndarray],
-        params: Dict[str, int],
-        state_dtype: np.dtype,
-    ) -> np.ndarray:
-        input_batches = int(params["input_batches"])
-        input_height = int(params["input_height"])
-        feature_batches = int(params["feature_batches"])
-        time_batches = int(params["time_batches"])
-        rank = int(params["rank"])
-        unit_count = feature_batches // rank
-
-        in_mult = int(params["input_multiplier"])
-        in_shift = int(params["input_shift"])
-        out_mult = int(params["output_multiplier"])
-        out_shift = int(params["output_shift"])
-        in_act_min = int(params["input_activation_min"])
-        in_act_max = int(params["input_activation_max"])
-        out_act_min = int(params["output_activation_min"])
-        out_act_max = int(params["output_activation_max"])
-        input_offset = int(params["input_offset"])
-        output_offset = int(params["output_offset"])
-
-        state = state_init.reshape(input_batches, feature_batches, time_batches).copy()
-        if time_batches > 1:
-            state[:, :, : time_batches - 1] = state[:, :, 1:]
-
-        # Update last time step with input * weights_feature
-        lhs_offset = -input_offset
-        for b in range(input_batches):
-            lhs = input_data[b].astype(np.int32) + lhs_offset
-            for f in range(feature_batches):
-                acc = int(np.sum(lhs * weights_feature[f].astype(np.int32)))
-                acc_q = self._requantize_np(np.array([acc], dtype=np.int32), in_mult, in_shift)[0]
-                acc_q = int(np.clip(acc_q, in_act_min, in_act_max))
-                if state_dtype == np.int8:
-                    state[b, f, time_batches - 1] = np.int8(acc_q)
-                else:
-                    state[b, f, time_batches - 1] = np.int16(acc_q)
-
-        # Time weights * state
-        buffer_a = np.zeros((input_batches, feature_batches), dtype=np.int32)
-        for b in range(input_batches):
-            for f in range(feature_batches):
-                buffer_a[b, f] = int(np.sum(weights_time[f].astype(np.int32) * state[b, f].astype(np.int32)))
-
-        # Reduce over rank and add bias if provided
-        if bias is not None:
-            if unit_count == feature_batches:
-                buffer_b = buffer_a + bias.reshape(1, feature_batches)
-            else:
-                buffer_b = np.zeros((input_batches, unit_count), dtype=np.int32)
-                for b in range(input_batches):
-                    for u in range(unit_count):
-                        acc = int(bias[u])
-                        for r in range(rank):
-                            acc += int(buffer_a[b, u * rank + r])
-                        buffer_b[b, u] = acc
-        else:
-            buffer_b = np.zeros((input_batches, unit_count), dtype=np.int32)
-            for b in range(input_batches):
-                for u in range(unit_count):
-                    acc = 0
-                    for r in range(rank):
-                        acc += int(buffer_a[b, u * rank + r])
-                    buffer_b[b, u] = acc
-
-        out = self._requantize_np(buffer_b.flatten(), out_mult, out_shift)
-        out = out + output_offset
-        out = np.clip(out, out_act_min, out_act_max).astype(np.int8)
-        return out
-
-    def _generate_svdf_expected_f32(
-        self,
-        input_sequence: np.ndarray,
-        state_init: np.ndarray,
-        weights_feature: np.ndarray,
-        weights_time: np.ndarray,
-        bias: Optional[np.ndarray],
-        params: Dict[str, Any],
-    ) -> np.ndarray:
-        input_batches = int(params["input_batches"])
-        input_height = int(params["input_height"])
-        feature_batches = int(params["feature_batches"])
-        time_batches = int(params["time_batches"])
-        rank = int(params["rank"])
-        unit_count = feature_batches // rank
-        input_act_min = float(params["input_activation_min"])
-        input_act_max = float(params["input_activation_max"])
-        output_act_min = float(params["output_activation_min"])
-        output_act_max = float(params["output_activation_max"])
-
-        state = np.asarray(state_init, dtype=np.float32).reshape(input_batches, feature_batches, time_batches).copy()
-        output = np.zeros((input_batches, unit_count), dtype=np.float32)
-
-        for step_input in np.asarray(input_sequence, dtype=np.float32):
-            if time_batches > 1:
-                state[:, :, : time_batches - 1] = state[:, :, 1:]
-
-            projected = np.einsum("bi,fi->bf", step_input.reshape(input_batches, input_height), weights_feature)
-            projected = np.clip(projected, input_act_min, input_act_max)
-            state[:, :, time_batches - 1] = projected
-
-            buffer_a = np.einsum("bft,ft->bf", state, weights_time)
-            reduced = buffer_a.reshape(input_batches, unit_count, rank).sum(axis=2)
-            if bias is not None:
-                reduced = reduced + bias.reshape(1, unit_count)
-            output = np.clip(reduced, output_act_min, output_act_max).astype(np.float32)
-
-        return output.flatten()
+        A status-only case still emits a golden array in its header (shared with the
+        passing variant), so it is filled from an unrecorded run to keep the harness unchanged."""
+        return call.run() if self.status_only() else self.reference_golden(call)
 
     def _ctx_sizer_context(self, sizer_prefix: str) -> Dict[str, Any]:
         # Issue #71: the harness sizes input_ctx/output_ctx with the kernel's own
@@ -288,10 +114,6 @@ class OpSVDF(OperationBase):
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
         name = self.desc["name"]
-        force_cmsis = self.desc.get("hint", {}).get("force_cmsis", False)
-        if not force_cmsis:
-            # TFLite-based SVDF not supported for C test generation
-            return
 
         activation_dtype = str(self.desc.get("activation_dtype", "S8")).upper()
         if activation_dtype in {"FP32", "FP16"}:
@@ -326,30 +148,26 @@ class OpSVDF(OperationBase):
             bias = self.rng.uniform(-0.5, 0.5, size=(unit_count,)).astype(float_dtype) if use_bias else None
             self.rng.__setstate__(rng_state)
 
-            params = {
-                "input_batches": input_batches,
-                "input_height": input_height,
-                "feature_batches": feature_batches,
-                "time_batches": time_batches,
-                "rank": rank,
-                "input_activation_min": input_activation_min,
-                "input_activation_max": input_activation_max,
-                "output_activation_min": output_activation_min,
-                "output_activation_max": output_activation_max,
-            }
-            def float_reference(operands):
-                return self._generate_svdf_expected_f32(
-                    input_sequence=operands[0],
-                    state_init=state_init,
-                    weights_feature=weights_feature,
-                    weights_time=weights_time,
-                    bias=bias,
-                    params=params,
-                )
+            if input_activation_min > -1.0e30 or input_activation_max < 1.0e30:
+                # svdf_f32/f16 clamp only the output; a projection clamp would go unmodelled.
+                raise ValueError(f"{name}: SVDF float input_activation_min/max are not supported by the reference")
+            call = ReferenceCall(
+                "svdf_f16" if activation_dtype == "FP16" else "svdf_f32",
+                {"rank": rank, "activation_min": output_activation_min, "activation_max": output_activation_max},
+                {"input": input_sequence, "weights_feature": weights_feature, "weights_time": weights_time,
+                 "bias": bias if bias is not None else np.zeros((0,), dtype=float_dtype), "state": state_init},
+                {"output": (sequence_steps, input_batches, unit_count),
+                 "state_out": (input_batches, feature_batches, time_batches)},
+            )
+            # The harness runs sequence_steps kernel calls and compares the last step's output.
+            expected_output = self._svdf_outputs(call)["output"][-1].reshape(-1)
 
-            expected_output = float_reference([input_sequence])
+            def final_step(operands):
+                probe = np.ascontiguousarray(np.asarray(operands[0]).reshape(input_sequence.shape), dtype=float_dtype)
+                return call.with_inputs(input=probe).run()["output"][-1].reshape(-1)
+
             expected_output, nonfinite_context = self.apply_nonfinite_policy(
-                expected_output, reference=float_reference, inputs=[input_sequence]
+                expected_output, reference=final_step, inputs=[input_sequence]
             )
 
             builder = TemplateContextBuilder()
@@ -441,40 +259,34 @@ class OpSVDF(OperationBase):
         state_init = self.rng.integers(-5, 6, size=(input_batches, feature_batches, time_batches), dtype=state_dtype)
 
         if use_bias:
-            bias_size = feature_batches if unit_count == feature_batches else unit_count
-            bias = self.rng.integers(-25, 26, size=(bias_size,), dtype=np.int32)
+            bias = self.rng.integers(-25, 26, size=(unit_count,), dtype=np.int32)
         else:
             bias = None
 
         self.rng.__setstate__(rng_state)
 
-        params = {
-            "input_batches": input_batches,
-            "input_height": input_height,
-            "feature_batches": feature_batches,
-            "time_batches": time_batches,
-            "rank": rank,
-            "input_multiplier": input_multiplier,
-            "input_shift": input_shift,
-            "output_multiplier": output_multiplier,
-            "output_shift": output_shift,
-            "input_activation_min": input_activation_min,
-            "input_activation_max": input_activation_max,
-            "output_activation_min": output_activation_min,
-            "output_activation_max": output_activation_max,
-            "input_offset": input_offset,
-            "output_offset": output_offset,
-        }
-
-        expected_output = self._generate_svdf_expected(
-            input_data=input_data,
-            state_init=state_init,
-            weights_feature=weights_feature,
-            weights_time=weights_time,
-            bias=bias,
-            params=params,
-            state_dtype=state_dtype,
+        call = ReferenceCall(
+            "svdf_s8" if state_dtype_str == "S8" else "svdf_state_s16_s8",
+            {
+                "rank": rank,
+                # cmsis_nn_svdf_params.input_offset is subtracted by the kernel; the entry adds it.
+                "input_offset": -input_offset,
+                "output_offset": output_offset,
+                "input_multiplier": input_multiplier,
+                "input_shift": input_shift,
+                "output_multiplier": output_multiplier,
+                "output_shift": output_shift,
+                "input_activation_min": input_activation_min,
+                "input_activation_max": input_activation_max,
+                "output_activation_min": output_activation_min,
+                "output_activation_max": output_activation_max,
+            },
+            {"input": input_data.reshape(1, input_batches, input_height), "weights_feature": weights_feature,
+             "weights_time": weights_time, "bias": bias if bias is not None else np.zeros((0,), dtype=np.int32),
+             "state": state_init},
+            {"output": (1, input_batches, unit_count), "state_out": (input_batches, feature_batches, time_batches)},
         )
+        expected_output = self._svdf_outputs(call)["output"].reshape(-1)
 
         builder = TemplateContextBuilder()
         context = {

@@ -97,6 +97,38 @@ int32_t hct_ref_logistic_prepare(const HctTanhLogisticQuant *in, HctTanhLogistic
 }
 
 /* The multiplier 0 form becomes 3 << shift with no shift, as the kernels do. */
+int32_t hct_tanh_logistic_s16_value(int32_t value, int32_t multiplier, int32_t shift, int is_tanh)
+{
+    const int32_t round = shift > 0 ? (int32_t)(1u << (shift - 1)) : 0;
+    /* tanh(x) = 2 sigmoid(2x) - 1: tanh reads the table at twice logistic's rate. */
+    const uint32_t frac_bits = is_tanh ? 8u : 9u;
+    /* |x * multiplier| + round < 2^31 for int16 x and multiplier <= 32767. */
+    const int32_t x = (value * multiplier + round) >> shift;
+    const uint32_t ax = (uint32_t)abs(x);
+    const uint32_t uh = ax >> frac_bits;
+    if (is_tanh)
+    {
+        int32_t result = 0xFFFF << 8;
+        if (uh < 255)
+        {
+            const uint32_t ua = sigmoid_table[uh];
+            const uint32_t ub = sigmoid_table[uh + 1];
+            result = (int32_t)((ua << 8) + (ax & 0xFFu) * (ub - ua));
+        }
+        result = x >= 0 ? result - (1 << 23) + (1 << 7) : -result + (1 << 23) + (1 << 7) - 1;
+        return result >> 8;
+    }
+    uint32_t result = 0x7FFFu << 10;
+    if (uh < 255)
+    {
+        const uint32_t ua = sigmoid_table[uh];
+        const uint32_t ub = sigmoid_table[uh + 1];
+        result = (ua << 9) + (ax & 0x1FFu) * (ub - ua);
+    }
+    result = x >= 0 ? result + (1u << 9) : (1u << 25) - result + (1u << 9) - 1u;
+    return (int32_t)(result >> 10);
+}
+
 static int32_t effective(const HctTanhLogisticParams *p, int32_t *multiplier, int32_t *shift)
 {
     if (p->input_multiplier < 0 || p->input_multiplier > INT16_MAX || p->input_left_shift < 0 ||
@@ -133,40 +165,9 @@ static int32_t run(const HctTanhLogisticParams *p, const HctTensor *inputs, int3
     int32_t multiplier = 0;
     int32_t shift = 0;
     HCT_TRY(effective(p, &multiplier, &shift));
-    const int32_t round = shift > 0 ? (int32_t)(1u << (shift - 1)) : 0;
-    /* tanh(x) = 2 sigmoid(2x) - 1: tanh reads the table at twice logistic's rate. */
-    const uint32_t frac_bits = is_tanh ? 8u : 9u;
     for (int64_t i = 0; i < count; ++i)
     {
-        /* |x * multiplier| + round < 2^31 for int16 x and multiplier <= 32767. */
-        const int32_t x = (hct_load_i32(&inputs[0], i) * multiplier + round) >> shift;
-        const uint32_t ax = (uint32_t)abs(x);
-        const uint32_t uh = ax >> frac_bits;
-        int32_t v = 0;
-        if (is_tanh)
-        {
-            int32_t result = 0xFFFF << 8;
-            if (uh < 255)
-            {
-                const uint32_t ua = sigmoid_table[uh];
-                const uint32_t ub = sigmoid_table[uh + 1];
-                result = (int32_t)((ua << 8) + (ax & 0xFFu) * (ub - ua));
-            }
-            result = x >= 0 ? result - (1 << 23) + (1 << 7) : -result + (1 << 23) + (1 << 7) - 1;
-            v = result >> 8;
-        }
-        else
-        {
-            uint32_t result = 0x7FFFu << 10;
-            if (uh < 255)
-            {
-                const uint32_t ua = sigmoid_table[uh];
-                const uint32_t ub = sigmoid_table[uh + 1];
-                result = (ua << 9) + (ax & 0x1FFu) * (ub - ua);
-            }
-            result = x >= 0 ? result + (1u << 9) : (1u << 25) - result + (1u << 9) - 1u;
-            v = (int32_t)(result >> 10);
-        }
+        const int32_t v = hct_tanh_logistic_s16_value(hct_load_i32(&inputs[0], i), multiplier, shift, is_tanh);
         hct_store_i32(&outputs[0], i, v);
     }
     return HCT_OK;

@@ -1,17 +1,14 @@
 """GRUUnidirectional operation implementation.
 
 CMSIS-only (force_cmsis) float test generation for arm_gru_unidirectional_f16
-and arm_gru_unidirectional_f32. Mirrors the OpLSTMUnidirectional force_cmsis
-code path: no Keras/TFLite model is built; a pure-numpy reference (matching the
-arm_nn_gru_step_*.c math for both the reset-after and pre-reset formulations)
-produces the golden output directly.
+and arm_gru_unidirectional_f32. The golden is the C reference's gru_f32/gru_f16
+entry (gates update z, reset r, candidate n; reset-after and pre-reset forms).
 """
 
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
-import tensorflow as tf
 
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.ops._shared.recurrent_pool import recurrent_argument_pool
@@ -35,90 +32,51 @@ class OpGRUUnidirectional(OperationBase):
         "negative_time_steps",
     )
 
-    def build_keras_model(self) -> tf.keras.Model:
-        raise RuntimeError("GRUUnidirectional is CMSIS-only; no Keras model is built.")
+    def status_only(self) -> bool:
+        # An ARG_ERROR case asserts the returned status alone; null_buffers expects SUCCESS and keeps its golden.
+        return self.expected_status() != "ARM_CMSIS_NN_SUCCESS"
 
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        raise RuntimeError("GRUUnidirectional CMSIS-only test; skip TFLite generation.")
-
-    def needs_keras_model(self) -> bool:
-        return False
-
-    def allow_no_tflite(self) -> bool:
-        return True
+    def uses_reference(self) -> bool:
+        return not self.status_only()
 
     @staticmethod
-    def _sigmoid(x: np.ndarray) -> np.ndarray:
-        return 1.0 / (1.0 + np.exp(-x))
-
-    def _generate_gru_expected(
-        self,
+    def gru_call(
         input_tensor: np.ndarray,
-        update_w_in: np.ndarray,
-        update_w_hidden: np.ndarray,
-        update_b_in: np.ndarray,
-        update_b_hidden: np.ndarray,
-        reset_w_in: np.ndarray,
-        reset_w_hidden: np.ndarray,
-        reset_b_in: np.ndarray,
-        reset_b_hidden: np.ndarray,
-        cand_w_in: np.ndarray,
-        cand_w_hidden: np.ndarray,
-        cand_b_in: np.ndarray,
-        cand_b_hidden: np.ndarray,
+        gates: Dict[str, Tuple[np.ndarray, np.ndarray, Optional[np.ndarray], Optional[np.ndarray]]],
         *,
-        batch_size: int,
-        time_steps: int,
-        input_size: int,
-        hidden_size: int,
         time_major: bool,
         reset_after: bool,
-    ) -> np.ndarray:
-        """
-        Reference GRU forward pass matching arm_nn_gru_step_f16.c /
-        arm_nn_gru_step_f32.c exactly
-        (same gate order, same reset-after / pre-reset branch, same
-        batch-major/time-major addressing), computed in float32 for
-        simplicity and cast to float16 only for the returned output.
-        """
-        hidden = np.zeros((batch_size, hidden_size), dtype=np.float32)
-        output = np.zeros((time_steps, batch_size, hidden_size), dtype=np.float32)
+    ):
+        """The gru_f32/gru_f16 ReferenceCall: per-gate (w_in, w_hidden, b_in, b_hidden) stacked in z, r, n order.
 
-        if time_major:
-            sequence = np.asarray(input_tensor, dtype=np.float32).reshape(time_steps, batch_size, input_size)
-        else:
-            sequence = np.transpose(
-                np.asarray(input_tensor, dtype=np.float32).reshape(batch_size, time_steps, input_size),
-                (1, 0, 2),
-            )
+        Absent biases (None) are passed as shape (0,) tensors."""
+        from helia_core_tester.generation.reference.call import ReferenceCall
 
-        for t in range(time_steps):
-            x = sequence[t]  # [batch, input_size]
+        dtype = np.asarray(input_tensor).dtype
+        if dtype not in (np.float32, np.float16):
+            raise ValueError(f"GRU reference takes float32 or float16, got {dtype}")
+        order = [gates[g] for g in ("update", "reset", "candidate")]
 
-            z_pre = x @ update_w_in.T + hidden @ update_w_hidden.T + update_b_in + update_b_hidden
-            z = self._sigmoid(z_pre)
+        def stack(index: int) -> np.ndarray:
+            parts = [g[index] for g in order]
+            if any(p is None for p in parts):
+                if not all(p is None for p in parts):
+                    raise ValueError("GRU biases must be present on every gate or on none")
+                return np.zeros((0,), dtype=dtype)
+            return np.ascontiguousarray(np.stack([np.asarray(p, dtype=dtype) for p in parts]))
 
-            r_pre = x @ reset_w_in.T + hidden @ reset_w_hidden.T + reset_b_in + reset_b_hidden
-            r = self._sigmoid(r_pre)
-
-            if reset_after:
-                # n = tanh( Wn.x + b_in + r * (Un.h_prev + b_hn) )
-                xh = x @ cand_w_in.T + cand_b_in
-                hh = hidden @ cand_w_hidden.T + cand_b_hidden
-                cand_pre = xh + r * hh
-            else:
-                # n = tanh( Wn.x + b_in + Un.(r . h_prev) + b_hn )
-                xh = x @ cand_w_in.T + cand_b_in
-                hh = (r * hidden) @ cand_w_hidden.T + cand_b_hidden
-                cand_pre = xh + hh
-
-            cand = np.tanh(cand_pre)
-            hidden = z * hidden + (1.0 - z) * cand
-            output[t] = hidden
-
-        if time_major:
-            return output.astype(np.float32).flatten()
-        return np.transpose(output, (1, 0, 2)).astype(np.float32).flatten()
+        x = np.ascontiguousarray(input_tensor, dtype=dtype)
+        if x.ndim != 3:
+            raise ValueError(f"GRU input must be rank 3, got shape {x.shape}")
+        w = stack(0)
+        hidden_size = int(w.shape[1])
+        return ReferenceCall(
+            f"gru_{'f16' if dtype == np.float16 else 'f32'}",
+            {"time_major": int(bool(time_major)), "reset_after": int(bool(reset_after))},
+            {"input": x, "input_weights": w, "recurrent_weights": stack(1), "input_bias": stack(2),
+             "recurrent_bias": stack(3)},
+            {"output": (x.shape[0], x.shape[1], hidden_size)},
+        )
 
     def generate_c_files(self, output_dir) -> None:
         if not self.desc.get("hint", {}).get("force_cmsis", False):
@@ -135,12 +93,11 @@ class OpGRUUnidirectional(OperationBase):
         reset_after = bool(self.desc.get("reset_after", True))
         # Issue #56: use_bias: false exercises the NULL-safe bias branches in
         # arm_nn_gru_step_*.c (`gate->input_bias ? gate->input_bias[h] : 0.0f`,
-        # same for hidden_bias, all three gates) -- a real Keras GRU config
+        # same for hidden_bias, all three gates) -- a real GRU layer config
         # (use_bias=False), previously untested. Zero-valued bias is
-        # mathematically identical to omitting it, so the golden computation
-        # below needs no other change; only the C side needs to actually pass
-        # NULL to exercise the guarded branch (done via the `use_bias`
-        # template flag, not by zeroing the pointer).
+        # mathematically identical to omitting it; the reference call passes
+        # the biases as absent and the C side passes NULL through the
+        # `use_bias` template flag.
         use_bias = bool(self.desc.get("use_bias", True))
 
         activation_dtype = self.tensor_dtype("input", default="FP32")
@@ -193,33 +150,28 @@ class OpGRUUnidirectional(OperationBase):
 
         self.rng.__setstate__(rng_state)
 
-        def float_reference(operands):
-            return self._generate_gru_expected(
-                operands[0],
-                update_w_in.astype(np.float32),
-                update_w_hidden.astype(np.float32),
-                update_b_in.astype(np.float32),
-                update_b_hidden.astype(np.float32),
-                reset_w_in.astype(np.float32),
-                reset_w_hidden.astype(np.float32),
-                reset_b_in.astype(np.float32),
-                reset_b_hidden.astype(np.float32),
-                cand_w_in.astype(np.float32),
-                cand_w_hidden.astype(np.float32),
-                cand_b_in.astype(np.float32),
-                cand_b_hidden.astype(np.float32),
-                batch_size=batch_size,
-                time_steps=time_steps,
-                input_size=input_size,
-                hidden_size=hidden_size,
-                time_major=time_major,
-                reset_after=reset_after,
+        gates = {
+            "update": (update_w_in, update_w_hidden, update_b_in if use_bias else None,
+                       update_b_hidden if use_bias else None),
+            "reset": (reset_w_in, reset_w_hidden, reset_b_in if use_bias else None,
+                      reset_b_hidden if use_bias else None),
+            "candidate": (cand_w_in, cand_w_hidden, cand_b_in if use_bias else None,
+                          cand_b_hidden if use_bias else None),
+        }
+        call = self.gru_call(input_tensor, gates, time_major=time_major, reset_after=reset_after)
+        if self.status_only():
+            # The kernel rejects the call before writing; the header still declares an expected
+            # array, filled from the same reference but not recorded as a golden.
+            output_ref = call.output()
+            nonfinite_context = {}
+        else:
+            output_ref = self.reference_golden(call)
+            output_ref, nonfinite_context = self.apply_nonfinite_policy(
+                output_ref,
+                reference=lambda operands: self.reference_probe([operands[0], *list(call.inputs.values())[1:]]),
+                inputs=[input_tensor],
             )
-
-        output_ref = float_reference([input_tensor])
-        output_ref, nonfinite_context = self.apply_nonfinite_policy(
-            output_ref, reference=float_reference, inputs=[input_tensor]
-        )
+        output_ref = np.asarray(output_ref).reshape(-1)
 
         fault = self.fault_kind()
         stream = bool(self.desc.get("hint", {}).get("stream", False))

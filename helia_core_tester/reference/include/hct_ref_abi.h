@@ -566,6 +566,75 @@ typedef struct
     int32_t batch_dim;
 } HctReverseSequenceParams;
 
+/* TFLM integer LSTM (8x8_16 / 16x8_64). Gate tensors stack forget, input, cell, output. input_offset is -input_zero_point, output_offset the hidden-state zero point (the recurrent matmuls take -output_offset); each gate's input/hidden matmul requantizes to the gate scale 2^-12; *_to_cell and hidden rescale the int16 products; cell_clip is the quantized clip (0 = none); cell_scale_power = log2(cell scale). */
+typedef struct
+{
+    int32_t time_major;
+    int32_t input_offset;
+    int32_t output_offset;
+    int32_t forget_input_multiplier;
+    int32_t forget_input_shift;
+    int32_t forget_hidden_multiplier;
+    int32_t forget_hidden_shift;
+    int32_t input_input_multiplier;
+    int32_t input_input_shift;
+    int32_t input_hidden_multiplier;
+    int32_t input_hidden_shift;
+    int32_t cell_input_multiplier;
+    int32_t cell_input_shift;
+    int32_t cell_hidden_multiplier;
+    int32_t cell_hidden_shift;
+    int32_t output_input_multiplier;
+    int32_t output_input_shift;
+    int32_t output_hidden_multiplier;
+    int32_t output_hidden_shift;
+    int32_t forget_to_cell_multiplier;
+    int32_t forget_to_cell_shift;
+    int32_t input_to_cell_multiplier;
+    int32_t input_to_cell_shift;
+    int32_t hidden_multiplier;
+    int32_t hidden_shift;
+    int32_t cell_clip;
+    int32_t cell_scale_power;
+} HctLstmParams;
+
+/* Gate tensors stack forget, input, cell, output; cell_clip 0 = none. */
+typedef struct
+{
+    int32_t time_major;
+    float cell_clip;
+} HctLstmFloatParams;
+
+/* Keras GRU, gates stacked update (z), reset (r), candidate (n); h = z*h + (1-z)*n. */
+typedef struct
+{
+    int32_t time_major;
+    int32_t reset_after;
+} HctGruParams;
+
+/* One SVDF step (TFLM EvalIntegerSvdfReference): input_offset is added to the input, the feature projection is rescaled by input_multiplier/shift into the state range, the output by output_multiplier/shift plus output_offset. */
+typedef struct
+{
+    int32_t rank;
+    int32_t input_offset;
+    int32_t output_offset;
+    int32_t input_multiplier;
+    int32_t input_shift;
+    int32_t output_multiplier;
+    int32_t output_shift;
+    int32_t input_activation_min;
+    int32_t input_activation_max;
+    int32_t output_activation_min;
+    int32_t output_activation_max;
+} HctSvdfParams;
+
+typedef struct
+{
+    int32_t rank;
+    float activation_min;
+    float activation_max;
+} HctSvdfFloatParams;
+
 int32_t hct_ref_abi_version(void);
 
 int32_t hct_ref_quantize_multiplier(const HctQuantizeMultiplierIn *in, HctQuantizeMultiplierOut *out);
@@ -1014,6 +1083,36 @@ int32_t hct_ref_dynamic_update_slice(const HctNoParams *params,
     const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
 /* inputs [value:any] -> outputs [output:any] */
 int32_t hct_ref_fill(const HctNoParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:int8, input_weights:int8, recurrent_weights:int8, bias:int32] -> outputs [output:int8] */
+int32_t hct_ref_lstm_s8(const HctLstmParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:int16, input_weights:int8, recurrent_weights:int8, bias:int64] -> outputs [output:int16] */
+int32_t hct_ref_lstm_s16(const HctLstmParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float32, input_weights:float32, recurrent_weights:float32, bias:float32] -> outputs [output:float32] */
+int32_t hct_ref_lstm_f32(const HctLstmFloatParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float16, input_weights:float16, recurrent_weights:float16, bias:float16] -> outputs [output:float16] */
+int32_t hct_ref_lstm_f16(const HctLstmFloatParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float32, input_weights:float32, recurrent_weights:float32, input_bias:float32, recurrent_bias:float32] -> outputs [output:float32] */
+int32_t hct_ref_gru_f32(const HctGruParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float16, input_weights:float16, recurrent_weights:float16, input_bias:float16, recurrent_bias:float16] -> outputs [output:float16] */
+int32_t hct_ref_gru_f16(const HctGruParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:int8, weights_feature:int8, weights_time:int8, bias:int32, state:int8] -> outputs [output:int8, state_out:int8] */
+int32_t hct_ref_svdf_s8(const HctSvdfParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:int8, weights_feature:int8, weights_time:int16, bias:int32, state:int16] -> outputs [output:int8, state_out:int16] */
+int32_t hct_ref_svdf_state_s16_s8(const HctSvdfParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float32, weights_feature:float32, weights_time:float32, bias:float32, state:float32] -> outputs [output:float32, state_out:float32] */
+int32_t hct_ref_svdf_f32(const HctSvdfFloatParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float16, weights_feature:float16, weights_time:float16, bias:float16, state:float16] -> outputs [output:float16, state_out:float16] */
+int32_t hct_ref_svdf_f16(const HctSvdfFloatParams *params,
     const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
 
 #if defined(__GNUC__)
