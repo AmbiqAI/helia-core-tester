@@ -47,6 +47,21 @@ def default_seed_for_case(name: str, run_seed: int = 0) -> int:
     return int.from_bytes(hashlib.sha256(payload).digest()[:4], "little")
 
 
+# Draws a fresh seed can make degenerate (a flat golden) are redrawn this many times in all.
+DEGENERATE_DRAW_ATTEMPTS = 3
+
+
+def redraw_seed(case_seed: int, attempt: int) -> int:
+    """The seed of a case's draw `attempt`: the case seed itself first, then seeds derived from it,
+    so `--seed N --name X` reproduces whichever draw a run kept."""
+    if attempt < 0 or attempt >= DEGENERATE_DRAW_ATTEMPTS:
+        raise ValueError(f"redraw attempt must be in [0, {DEGENERATE_DRAW_ATTEMPTS}), got {attempt}")
+    if attempt == 0:
+        return int(case_seed)
+    payload = f"{int(case_seed)}\0redraw\0{attempt}".encode("utf-8")
+    return int.from_bytes(hashlib.sha256(payload).digest()[:4], "little")
+
+
 def resolve_run_seed(filters: Dict[str, Any]) -> tuple[int, bool]:
     """The run seed and whether the caller chose it.
 
@@ -446,10 +461,12 @@ def generate_test(
         print(f"INFO: {name} - C file generation not implemented")
     except Exception as e:
         import traceback
-        print(f"ERROR: Failed to generate C/H files for {name}: {e}")
-        print(f"ERROR: Reproduce with --seed {int(run_seed)} --name {name}")
-        print(f"ERROR: Traceback:")
-        traceback.print_exc()
+        # A degenerate draw may be redrawn by the caller, which reports the one it gives up on.
+        if not isinstance(e, DegenerateGoldenError):
+            print(f"ERROR: Failed to generate C/H files for {name}: {e}")
+            print(f"ERROR: Reproduce with --seed {int(run_seed)} --name {name}")
+            print(f"ERROR: Traceback:")
+            traceback.print_exc()
         if generation_failures is not None:
             generation_failures.append({
                 "name": name,
@@ -634,24 +651,38 @@ def test_generation(test_filters):
                 reused_count += 1
                 continue
         try:
-            # The directory, stamp included, goes away before any file is
-            # touched and the stamp comes back only once the case is whole, so
-            # an interrupted run can never leave a stamp standing over
-            # half-written output nor a file from the previous shape of this
-            # case beside the new ones.
-            reset_case_dir(test_dir)
-            generate_test(
-                desc,
-                str(top_generated),
-                seed=case_seed,
-                cpu=target_cpu,
-                conversion_failures=conversion_failures,
-                generation_failures=generation_failures,
-                run_seed=run_seed,
-            )
+            for attempt in range(DEGENERATE_DRAW_ATTEMPTS):
+                drawn_seed = redraw_seed(case_seed, attempt)
+                # The directory, stamp included, goes away before any file is
+                # touched and the stamp comes back only once the case is whole, so
+                # an interrupted run can never leave a stamp standing over
+                # half-written output nor a file from the previous shape of this
+                # case beside the new ones.
+                reset_case_dir(test_dir)
+                try:
+                    generate_test(
+                        desc,
+                        str(top_generated),
+                        seed=drawn_seed,
+                        cpu=target_cpu,
+                        conversion_failures=conversion_failures,
+                        generation_failures=generation_failures,
+                        run_seed=run_seed,
+                    )
+                    break
+                except DegenerateGoldenError as e:
+                    if random_shapes:
+                        raise
+                    if attempt + 1 == DEGENERATE_DRAW_ATTEMPTS:
+                        print(f"ERROR: Failed to generate C/H files for {case_name}: {e} "
+                              f"(after {DEGENERATE_DRAW_ATTEMPTS} draws)")
+                        print(f"ERROR: Reproduce with --seed {int(run_seed)} --name {case_name}")
+                        raise
+                    generation_failures[:] = [f for f in generation_failures if f.get("name") != case_name]
+                    print(f"Redrawing {case_name} (attempt {attempt + 2} of {DEGENERATE_DRAW_ATTEMPTS}): {e}")
             manifest_entries.append(
                 _manifest_entry(
-                    {**desc, "run_seed": run_seed, "case_seed": case_seed},
+                    {**desc, "run_seed": run_seed, "case_seed": drawn_seed},
                     test_dir=test_dir,
                     generated_tests_dir=Path(top_generated),
                     cpu=target_cpu,
