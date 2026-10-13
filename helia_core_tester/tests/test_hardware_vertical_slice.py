@@ -203,6 +203,29 @@ def test_next_plan_follows_session_complete(tmp_path: Path) -> None:
     assert first.cases[0].comparison.passed and second.cases[0].comparison.passed
 
 
+@pytest.mark.parametrize("enabled", [True, False], ids=["on", "off"])
+def test_board_blob_store_skips_known_blobs(tmp_path: Path, enabled: bool) -> None:
+    abs_bundle = load_case_bundle(build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="abs_store").manifest_path)
+    conv_bundle = load_case_bundle(build_convolve_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="conv_store").manifest_path)
+    passes = counter_passes_for_selection({"cpu": "default"})
+    store: dict = {}
+    blobs = len(abs_bundle.streamable_blobs) + len(conv_bundle.streamable_blobs)
+
+    # Store outlives a reset.
+    runs = [
+        HostSession(FakeTargetTransport(blob_store=store), counter_passes=passes, blob_store=enabled).run_many([abs_bundle, conv_bundle])
+        for _ in range(2)
+    ]
+
+    cold, warm = runs
+    assert len(store) == (blobs if enabled else 0)
+    assert (cold.store_blobs, cold.store_hits) == ((blobs, 0) if enabled else (0, 0))
+    assert (warm.store_blobs, warm.store_hits) == ((blobs, blobs) if enabled else (0, 0))
+    assert warm.protocol_trace.count("RX:REQUEST_BLOB") == (0 if enabled else cold.protocol_trace.count("RX:REQUEST_BLOB"))
+    for before, after in zip(cold.cases, warm.cases):
+        assert after.comparison.passed and before.output_bytes == after.output_bytes
+
+
 def test_persistent_fake_target_multi_operator_session_without_reflash(tmp_path: Path) -> None:
     abs_bundle = load_case_bundle(build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="abs_persistent").manifest_path)
     conv_bundle = load_case_bundle(build_convolve_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="conv_persistent").manifest_path)

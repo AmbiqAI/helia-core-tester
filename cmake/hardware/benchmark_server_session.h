@@ -72,6 +72,9 @@ typedef struct
     /* Second input copy, if twinned. */
     uint32_t twin_offset;
     uint8_t twinned;
+    /* CASE_META sent a store digest. */
+    uint8_t keyed;
+    uint64_t digest;
 } hct_server_blob_t;
 
 /* One PMU measurement pass from SESSION_PLAN: which event ids to program into the

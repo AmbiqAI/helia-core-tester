@@ -128,7 +128,7 @@ firmware byte for byte.
 | 3 | `KERNEL_CATALOG` | target -> host | one page of catalog entries; `HCTP_FLAG_MORE` on every non-final page |
 | 4 | `SESSION_PLAN` | host -> target | timing plan, PMU passes, case list (below) |
 | 5 | `REQUEST_CASE` | target -> host | `u16 case_index` |
-| 6 | `CASE_META` | host -> target | case id, kernel id, comparison config, scalars, blob descriptors, scratch bytes |
+| 6 | `CASE_META` | host -> target | case id, kernel id, comparison config, scalars, blob descriptors, scratch bytes, optional store keys (below) |
 | 7 | `REQUEST_BLOB` | target -> host | `u32 blob_id, u32 offset, u16 max_length` |
 | 8 | `BLOB_CHUNK` | host -> target | `u32 blob_id, u32 offset, raw data` |
 | 9 | `CASE_READY` | target -> host | `u32 blob_id, u32 bytes_received` |
@@ -189,6 +189,22 @@ and `arm_reduce_sum_f32` takes its MVE path only when FZ=1. The host stamps both
 values and the decoded control bits (`fp_mode`) in the manifest `boot` record; the
 board matrix shows the pinned `fpscr`. Batches must report the same pinned `fpscr`.
 A build without an FPU reports 0 for both.
+`capability_flags` bit 8 is `HCT_CAP_BLOB_STORE`: the firmware keeps an on-board
+cache of case blobs at the top of MRAM (`blob_store_bytes` in the board row; 2 MiB
+at 0x600000-0x800000 on apollo510_evb, off elsewhere). When the bit is set, the host
+appends a tail to `CASE_META`: `u8 kind` (1), then a `u64` digest per blob (the first
+8 bytes of the blob's SHA-256, little-endian). The firmware looks each blob up by
+`(length, crc32, digest)`, checks the stored copy's CRC32, and copies it into the
+workspace instead of sending `REQUEST_BLOB`; the host counts the blobs it was never
+asked for as hits. After a streamed blob passes its CRC, the firmware programs it into
+the store (data, read back, then a header that commits it). A head record (magic,
+version, region, generation, CRC) guards the region: a foreign or stale head starts a
+new generation, and a full store starts a new generation (a wipe). The host sends
+the tail only to firmware with the bit, and the firmware reads nothing past it, so old
+hosts and old firmware keep working. The store sits past the image and the 512 KiB
+weights pool; a build whose pool would reach it leaves it unused. `HCT_BLOB_STORE=0`
+on the host turns it off (no keys, so the board neither reads nor writes the store).
+All store reads and writes happen while blobs stream, never in a timed window.
 `capability_flags` bit 6 is `HCT_CAP_PMU_ARMV8M`, set only when the firmware was
 built for a core whose device header declares `__PMU_PRESENT == 1`;
 `pmu_counter_slots` is `__PMU_NUM_EVENTCNT` (8 on Cortex-M55, 0 without a PMU).

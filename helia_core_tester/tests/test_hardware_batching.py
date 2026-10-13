@@ -603,3 +603,12 @@ def test_open_passes_reset(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(session_runner, "JLinkRttTransport", lambda **kw: made.update(kw) or object())
     session_runner.open_rtt_session(resolve_board("apollo510_evb"), 1, build_dir=tmp_path, counter_passes=(), reset=False)
     assert made["reset_on_open"] is False
+
+
+@pytest.mark.parametrize(("value", "enabled"), [(None, True), ("1", True), ("0", False), ("off", False), (" OFF ", False)])
+def test_blob_store_env_switch(monkeypatch: pytest.MonkeyPatch, value: str | None, enabled: bool) -> None:
+    if value is None:
+        monkeypatch.delenv(session_runner.BLOB_STORE_ENV, raising=False)
+    else:
+        monkeypatch.setenv(session_runner.BLOB_STORE_ENV, value)
+    assert session_runner.blob_store_enabled() is enabled

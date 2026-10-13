@@ -17,6 +17,7 @@ from helia_core_tester.hardware.candidate_check import _git as check_git
 from helia_core_tester.hardware.candidate_eval import read_baseline
 from helia_core_tester.hardware.harness_lock import tester_state
 from helia_core_tester.hardware.run_summary import bundle_toolchain
+from helia_core_tester.hardware.session_runner import store_env_args
 from helia_core_tester.hardware.toolchain import DEFAULT_TOOLCHAIN, toolchain_spec
 
 from .agent import WRAPPERS, agent_settings, write_wrappers
@@ -180,7 +181,7 @@ def make_baseline(ws: Workspace, campaign: Campaign, leg: Leg, echo: Echo = prin
     shutil.rmtree(out, ignore_errors=True)
     out.parent.mkdir(parents=True, exist_ok=True)
     cmd = ["bench-agent", "run", campaign.bench_id, "--reason", f"agent-loop {campaign.name} baseline {leg.name}",
-           "--timeout", str(campaign.lock_timeout_s), "--", *ws.tester_cmd(), "candidate", "baseline",
+           "--timeout", str(campaign.lock_timeout_s), "--", *store_env_args(), *ws.tester_cmd(), "candidate", "baseline",
            "--kernels", str(ws.base), "--board", campaign.board, "--out", str(out), "--repeats", str(campaign.repeats),
            "--placement", leg.placement, *toolchain_args(leg.toolchain), "--op", campaign.op, "--dtype", campaign.dtype]
     for case_id in campaign.case_ids:

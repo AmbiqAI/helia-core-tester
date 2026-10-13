@@ -15,6 +15,7 @@ from typing import Any, Optional
 from helia_core_tester.hardware.candidate_check import _git
 from helia_core_tester.hardware.candidate_eval import SNAPSHOT_TREES, VERDICT_EXITS, CopyBudget, TooLarge, copy_tree
 from helia_core_tester.hardware.candidate_scan import run_binutil
+from helia_core_tester.hardware.session_runner import store_env_args
 
 from helia_core_tester.hardware.toolchain import toolchain_spec
 
@@ -228,7 +229,7 @@ def toolchain_drift(campaign: Campaign, facts: dict) -> bool:
 def leg_command(ws: Workspace, campaign: Campaign, eid: str, leg: str, lock_s: int, eval_s: int) -> list[str]:
     """bench-agent wrapped `candidate eval`."""
     cmd = ["bench-agent", "run", campaign.bench_id, "--reason", f"agent-loop {campaign.name} {eid} {leg}",
-           "--timeout", str(lock_s), "--", "timeout", str(eval_s), *ws.tester_cmd(), "candidate", "eval",
+           "--timeout", str(lock_s), "--", *store_env_args(), "timeout", str(eval_s), *ws.tester_cmd(), "candidate", "eval",
            "--kernels", str(ws.submit_dir / "tree"), "--baseline", str(ws.baseline(leg))]
     if campaign.min_score is not None:
         cmd += ["--min-score", str(campaign.min_score)]

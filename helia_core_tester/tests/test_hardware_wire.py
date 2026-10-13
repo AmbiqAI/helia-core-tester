@@ -170,6 +170,22 @@ def test_case_meta_round_trip_and_layout() -> None:
         wire.encode_case_meta(wire.CaseMeta("c", 1, 1, 1, 0, 0, 0, (), (wire.BlobDescriptor(1, "r", "S8", (1,) * 7, 1, 1, 0),), 0))
 
 
+def test_case_meta_store_keys_tail() -> None:
+    blobs = (wire.BlobDescriptor(1, "input_0", "S8", (4,), 4, 1, 7), wire.BlobDescriptor(2, "bias", "S32", (1,), 4, 4, 9))
+    bare = wire.CaseMeta("c", 1, 1, 1, 0, 0, 0, (), blobs, 16)
+    keyed = wire.CaseMeta("c", 1, 1, 1, 0, 0, 0, (), blobs, 16, store_keys=(2**64 - 1, 5))
+    payload = wire.encode_case_meta(keyed)
+    # Old firmware stops at scratch_bytes.
+    assert payload.startswith(wire.encode_case_meta(bare))
+    assert payload[len(wire.encode_case_meta(bare)):] == b"\x01" + b"\xff" * 8 + (5).to_bytes(8, "little")
+    assert wire.decode_case_meta(payload) == keyed
+    assert wire.decode_case_meta(wire.encode_case_meta(bare)).store_keys is None
+    with pytest.raises(ValueError, match="store key"):
+        wire.encode_case_meta(wire.CaseMeta("c", 1, 1, 1, 0, 0, 0, (), blobs, 16, store_keys=(1,)))
+    with pytest.raises(ValueError, match="kind"):
+        wire.decode_case_meta(wire.encode_case_meta(bare) + b"\x02")
+
+
 def test_blob_request_chunk_and_case_ready_round_trip() -> None:
     request = wire.RequestBlob(blob_id=3, offset=128, max_length=64)
     assert wire.decode_request_blob(wire.encode_request_blob(request)) == request

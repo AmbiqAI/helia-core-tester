@@ -206,6 +206,14 @@ def _submit(ws: Workspace, board: FakeBoard, capsys, checker=_ok_check) -> tuple
     return rc, json.loads(capsys.readouterr().out)
 
 
+def test_submit_carries_the_store_switch(ws: Workspace, capsys, monkeypatch: pytest.MonkeyPatch) -> None:
+    # bench-agent run scrubs the environment.
+    monkeypatch.setenv("HCT_BLOB_STORE", "0")
+    board = FakeBoard([_leg("pass"), _leg("pass")])
+    _submit(ws, board, capsys)
+    assert all(c[c.index("--") + 1 : c.index("--") + 3] == ["env", "HCT_BLOB_STORE=0"] for c in board.calls)
+
+
 def test_submit_pass_charges_and_records(ws: Workspace, capsys) -> None:
     board = FakeBoard([_leg("pass"), _leg("pass")])
     rc, view = _submit(ws, board, capsys)

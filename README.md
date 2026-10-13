@@ -171,6 +171,11 @@ hpx places a TCM-sized arena. Neither programming nor eviction counts toward
 the timed cycles or `prepare_cycles`. Give each placement its own `--build-dir`. The
 bundle records it in `session_manifest.json` `target.placement`.
 
+On boards with `blob_store_bytes` in `assets/hardware_boards.yaml` (apollo510_evb),
+the firmware caches every streamed blob in MRAM and skips blobs it already holds,
+across runs, placements and reflashes; the timing line reports `store hits`.
+`HCT_BLOB_STORE=0` turns it off. See `docs/performance-streaming-design.md`.
+
 PMU counters are selected with `--pmu-counters GROUP:SELECTION` (repeatable, on
 `hardware run` and `hardware stream`; hpx syntax). `GROUP` is `cpu`, `memory` or
 `mve`; `SELECTION` is `all`, `default`, or a comma-separated list of `ARM_PMU_*`

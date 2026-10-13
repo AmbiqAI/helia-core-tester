@@ -57,6 +57,7 @@ def test_c_firmware_session_loop_executes_abs_correctness_flow(tmp_path: Path, p
             str(PROJECT_ROOT / "cmake" / "hardware" / "benchmark_server_messages.c"),
             str(PROJECT_ROOT / "cmake" / "hardware" / "benchmark_server_adapter.c"),
             str(PROJECT_ROOT / "cmake" / "hardware" / "benchmark_server_session.c"),
+            str(PROJECT_ROOT / "cmake" / "hardware" / "benchmark_server_mram.c"),
             str(PROJECT_ROOT / "cmake" / "hardware" / "benchmark_server_session_host_main.c"),
             str(CMSIS_NN_ROOT / "Source" / "BasicMathFunctions" / "arm_abs_s8.c"),
             "-o",
@@ -131,7 +132,8 @@ int main(void) {
 MRAM_STUB_DIR = PROJECT_ROOT / "helia_core_tester" / "tests" / "fixtures" / "mram_stub"
 
 
-def test_c_mram_placement(tmp_path: Path) -> None:
+def _build_mram_harness(tmp_path: Path, *defines: str) -> Path:
+    """Compile the MRAM stub harness."""
     cc = shutil.which("cc")
     if cc is None:
         pytest.skip("host C compiler not available")
@@ -141,12 +143,11 @@ def test_c_mram_placement(tmp_path: Path) -> None:
     binary = tmp_path / "mram_harness"
     subprocess.run(
         [
-            cc, "-std=c99", "-Wall", "-Wextra", "-Werror",
-            "-DHCT_HOST_ABS_ONLY", "-DHCT_PLACEMENT_MRAM",
+            cc, "-std=c99", "-Wall", "-Wextra", "-Werror", "-DHCT_HOST_ABS_ONLY", *defines,
             "-I", str(MRAM_STUB_DIR), "-I", str(hardware), "-I", str(CMSIS_NN_ROOT / "Include"),
             *(str(hardware / name) for name in (
                 "hctp_protocol.c", "benchmark_server_catalog.c", "benchmark_server_messages.c",
-                "benchmark_server_adapter.c", "benchmark_server_session.c",
+                "benchmark_server_adapter.c", "benchmark_server_session.c", "benchmark_server_mram.c",
             )),
             str(MRAM_STUB_DIR / "mram_stub.c"),
             str(MRAM_STUB_DIR / "mram_harness.c"),
@@ -156,7 +157,35 @@ def test_c_mram_placement(tmp_path: Path) -> None:
         check=True,
         cwd=PROJECT_ROOT,
     )
+    return binary
 
+
+@pytest.mark.parametrize("placement", [[], ["-DHCT_PLACEMENT_MRAM"]], ids=["tcm", "mram"])
+def test_c_blob_store(tmp_path: Path, placement: list[str]) -> None:
+    binary = _build_mram_harness(tmp_path, "-DHCT_BLOB_STORE_BYTES=16384u", *placement)
+    result = subprocess.run([str(binary)], capture_output=True, text=True)
+    # Exit codes name the failed check.
+    assert result.returncode == 0, f"harness exit {result.returncode}"
+    for line in ("store hits", "store wiped", "store exact fill", "store overlap refused"):
+        assert line in result.stdout
+
+
+@pytest.mark.parametrize("size", ["64u", "48u"], ids=["below-minimum", "misaligned"])
+def test_c_blob_store_rejects_bad_size(tmp_path: Path, size: str) -> None:
+    cc = shutil.which("cc")
+    if cc is None:
+        pytest.skip("host C compiler not available")
+    hardware = PROJECT_ROOT / "cmake" / "hardware"
+    result = subprocess.run(
+        [cc, "-std=c99", "-c", "-DHCT_HOST_ABS_ONLY", f"-DHCT_BLOB_STORE_BYTES={size}", "-I", str(MRAM_STUB_DIR),
+         "-I", str(hardware), str(hardware / "benchmark_server_mram.c"), "-o", str(tmp_path / "mram.o")],
+        capture_output=True, text=True,
+    )
+    assert result.returncode != 0 and "store" in result.stderr
+
+
+def test_c_mram_placement(tmp_path: Path) -> None:
+    binary = _build_mram_harness(tmp_path, "-DHCT_PLACEMENT_MRAM")
     result = subprocess.run([str(binary)], capture_output=True, text=True)
     # Exit codes name the failed check.
     assert result.returncode == 0, f"harness exit {result.returncode}"
