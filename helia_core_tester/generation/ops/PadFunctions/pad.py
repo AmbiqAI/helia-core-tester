@@ -13,39 +13,9 @@ class OpPad(OperationBase):
     Pad operation.
     """
 
-    def needs_keras_model(self) -> bool:
-        return False
+    def uses_reference(self) -> bool:
+        return True
 
-    def build_keras_model(self):
-        raise NotImplementedError("Pad uses LiteRT-only model generation.")
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        """Convert model to LiteRT (single-op)."""
-        from helia_core_tester.generation.utils.litert_builder import build_pad_op
-
-        activation_dtype = self.tensor_dtype("input")
-        if activation_dtype == "S16":
-            dtype = "int16"
-        elif activation_dtype == "FP32":
-            dtype = "float32"
-        elif activation_dtype == "FP16":
-            dtype = "float16"
-        else:
-            dtype = "int8"
-
-        input_shape = tuple(self.desc['input_shape'])
-        paddings = self.desc.get('paddings')
-        if paddings is None:
-            raise ValueError("Pad requires paddings")
-
-        model_bytes = build_pad_op(
-            input_shape=input_shape,
-            paddings=paddings,
-            dtype=dtype,
-        )
-        with open(out_path, "wb") as f:
-            f.write(model_bytes)
-    
     def _select_cmsis_pad_kernel(self) -> Dict[str, str]:
         """
         Select appropriate CMSIS-NN kernel function for Pad operation.
@@ -86,12 +56,10 @@ class OpPad(OperationBase):
         """
         Generate C and H files from templates for Pad operation.
         """
+        from helia_core_tester.generation.reference.call import ReferenceCall
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
-        
+
         name = self.desc['name']
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
         
         # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_pad_kernel()
@@ -100,6 +68,8 @@ class OpPad(OperationBase):
         paddings = self.desc.get('paddings')
         if paddings is None:
             raise ValueError("Pad requires paddings")
+        if len(input_shape) != 4 or len(paddings) != 4 or any(len(p) != 2 for p in paddings):
+            raise ValueError(f"Pad is rank 4 only: input_shape {input_shape}, paddings {paddings}")
         pre_pad = [int(p[0]) for p in paddings]
         post_pad = [int(p[1]) for p in paddings]
         output_shape = tuple(
@@ -137,15 +107,12 @@ class OpPad(OperationBase):
         else:
             raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
 
-        output_data = np.pad(
-            input_q,
-            ((pre_pad[0], post_pad[0]),
-             (pre_pad[1], post_pad[1]),
-             (pre_pad[2], post_pad[2]),
-             (pre_pad[3], post_pad[3])),
-            mode="constant",
-            constant_values=pad_value,
-        )
+        output_data = self.reference_golden(ReferenceCall(
+            "pad", {"mode": 0},
+            {"input": input_q,
+             "paddings": np.array([pre_pad, post_pad], dtype=np.int32).T.copy(),
+             "pad_value": np.array([pad_value], dtype=input_q.dtype)},
+            {"output": output_shape}))
 
         self.rng.__setstate__(rng_state)
         

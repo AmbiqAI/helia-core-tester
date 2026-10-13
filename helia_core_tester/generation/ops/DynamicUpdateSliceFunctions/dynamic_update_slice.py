@@ -14,14 +14,12 @@ class OpDynamicUpdateSlice(OperationBase):
     _ARG_ERROR = "ARM_CMSIS_NN_ARG_ERROR"
     _ARG_ERROR_CASES = {"operand", "update", "start_indices", "params", "output"}
 
-    def needs_keras_model(self) -> bool:
-        return False
+    def uses_reference(self) -> bool:
+        return not self.status_only()
 
-    def allow_no_tflite(self) -> bool:
+    def status_only(self) -> bool:
+        # An ARG_ERROR case checks the kernel's status, not an output.
         return self._expected_status() != self._SUCCESS
-
-    def build_keras_model(self):
-        raise NotImplementedError("DynamicUpdateSlice uses LiteRT-only model generation.")
 
     def _expected_status(self) -> str:
         expected_status = str(self.desc.get("expected_status", self._SUCCESS))
@@ -46,43 +44,6 @@ class OpDynamicUpdateSlice(OperationBase):
     def _params_rank(self, default_rank: int) -> int:
         return int(self._extras().get("params_rank", default_rank))
 
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        if self._expected_status() != self._SUCCESS:
-            raise RuntimeError("DynamicUpdateSlice expected error; skip LiteRT generation.")
-
-        from helia_core_tester.generation.utils.litert_builder import (
-            LiteRtSingleOpBuilder, TensorSpec, _default_quant,
-        )
-        import ai_edge_litert.schema_py_generated as litert
-
-        activation_dtype = self.desc.get("activation_dtype", "S8")
-        tensor_type = litert.TensorType.INT16 if activation_dtype == "S16" else litert.TensorType.INT8
-        operand_shape = tuple(self.desc["operand_shape"])
-        update_shape = tuple(self.desc["update_shape"])
-        rank = len(operand_shape)
-
-        builder = LiteRtSingleOpBuilder(op_name="DYNAMIC_UPDATE_SLICE")
-        operand_idx = builder.add_tensor(TensorSpec(
-            name="operand", shape=operand_shape, tensor_type=tensor_type, is_input=True,
-            quantization=_default_quant(tensor_type),
-        ))
-        update_idx = builder.add_tensor(TensorSpec(
-            name="update", shape=update_shape, tensor_type=tensor_type, is_input=True,
-            quantization=_default_quant(tensor_type),
-        ))
-        start_idx = builder.add_tensor(TensorSpec(
-            name="start_indices", shape=(rank,), tensor_type=litert.TensorType.INT32, is_input=True,
-        ))
-        output_idx = builder.add_tensor(TensorSpec(
-            name="output", shape=operand_shape, tensor_type=tensor_type, is_output=True,
-            quantization=_default_quant(tensor_type),
-        ))
-
-        opts = litert.DynamicUpdateSliceOptionsT()
-        builder.add_operator("DYNAMIC_UPDATE_SLICE", inputs=[operand_idx, update_idx, start_idx],
-            outputs=[output_idx], options=opts, options_type=litert.BuiltinOptions.DynamicUpdateSliceOptions)
-        self._write_tflite_bytes(out_path, builder.build())
-
     def _select_kernel(self) -> Dict[str, str]:
         activation_dtype = self.desc.get("activation_dtype", "S8")
         if activation_dtype == "S16":
@@ -90,6 +51,7 @@ class OpDynamicUpdateSlice(OperationBase):
         return {"kernel_fn": "arm_dynamic_update_slice_s8", "c_type": "int8_t", "np_dtype": "int8", "qmin": -128, "qmax": 127}
 
     def generate_c_files(self, output_dir: _Path) -> None:
+        from helia_core_tester.generation.reference.call import ReferenceCall
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
         name = self.desc["name"]
@@ -107,34 +69,18 @@ class OpDynamicUpdateSlice(OperationBase):
         operand_data = rng.integers(ki["qmin"], ki["qmax"] + 1, size=operand_shape, dtype=np_dtype)
         update_data = rng.integers(ki["qmin"], ki["qmax"] + 1, size=update_shape, dtype=np_dtype)
 
-        if expected_status == self._SUCCESS:
-            # Use TFLite interpreter for reference output (fallback to numpy if unsupported).
-            tflite_path = str(output_dir / f"{name}.tflite")
-            try:
-                interpreter = self.load_litert_interpreter(tflite_path)
-                input_details = interpreter.get_input_details()
-                output_details = interpreter.get_output_details()
-                interpreter.set_tensor(input_details[0]["index"], operand_data)
-                interpreter.set_tensor(input_details[1]["index"], update_data)
-                interpreter.set_tensor(input_details[2]["index"], np.array(start_indices, dtype=np.int32))
-                interpreter.invoke()
-                output_data = np.array(interpreter.get_tensor(output_details[0]["index"]))
-            except (ValueError, RuntimeError):
-                clamped_starts = [
-                    min(max(0, start_indices[i]), operand_shape[i] - update_shape[i])
-                    for i in range(data_rank)
-                ]
-                output_data = operand_data.copy()
-                slices = tuple(slice(s, s + u) for s, u in zip(clamped_starts, update_shape))
-                output_data[slices] = update_data
-        else:
-            clamped_starts = [
-                min(max(0, start_indices[i]), operand_shape[i] - update_shape[i])
-                for i in range(data_rank)
-            ]
+        if self.status_only():
+            # The kernel rejects the call before writing. The array only sizes the output buffer; it keeps
+            # the update written at the TFLite-clamped start, as these cases always emitted.
+            clamped_starts = [min(max(0, start_indices[i]), operand_shape[i] - update_shape[i])
+                              for i in range(data_rank)]
             output_data = operand_data.copy()
-            slices = tuple(slice(s, s + u) for s, u in zip(clamped_starts, update_shape))
-            output_data[slices] = update_data
+            output_data[tuple(slice(s, s + u) for s, u in zip(clamped_starts, update_shape))] = update_data
+        else:
+            output_data = self.reference_golden(ReferenceCall(
+                "dynamic_update_slice", {"unused": 0},
+                {"operand": operand_data, "update": update_data, "start": np.array(start_indices, dtype=np.int32)},
+                {"output": tuple(operand_shape)}))
 
         # Compute operand strides
         operand_strides = []

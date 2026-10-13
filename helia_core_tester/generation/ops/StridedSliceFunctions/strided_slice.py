@@ -2,11 +2,31 @@
 StridedSlice operation implementation.
 """
 
-from typing import Dict
+from typing import Dict, List, Tuple
 import numpy as np
-import tensorflow as tf
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.reference import policy
+
+_INT_DTYPES = {"int8_t": (np.int8, -128, 127), "int16_t": (np.int16, -32768, 32767)}
+
+
+def strided_slice_output_shape(input_shape, begin, end, strides, shrink_axis_mask) -> Tuple[List[int], List[int]]:
+    """TFLite StridedSlice extents (no begin/end masks): the per-axis counts with shrunk axes as 1,
+    and the output shape without them."""
+    counts, shape = [], []
+    for d, size in enumerate(input_shape):
+        b, e, s = int(begin[d]), int(end[d]), int(strides[d])
+        lo, hi = (0, size) if s > 0 else (-1, size - 1)
+        b = min(max(b + size if b < 0 else b, lo), hi)
+        if shrink_axis_mask & (1 << d):
+            counts.append(1)
+            continue
+        e = min(max(e + size if e < 0 else e, lo), hi)
+        n = len(range(b, e, s))
+        counts.append(n)
+        shape.append(n)
+    return counts, shape
 
 
 class OpStridedSlice(OperationBase):
@@ -14,119 +34,9 @@ class OpStridedSlice(OperationBase):
     StridedSlice operation.
     """
 
-    def needs_keras_model(self) -> bool:
-        # Float dtypes use a LiteRT-only single-op model (Keras/TFLiteConverter
-        # has no reliable float activation path for single-op slices);
-        # quantized dtypes keep the existing Keras-based pipeline.
-        activation_dtype = str(self.desc.get('activation_dtype', 'S8')).upper()
-        return activation_dtype not in ('FP16', 'FP32')
+    def uses_reference(self) -> bool:
+        return True
 
-    def build_keras_model(self) -> tf.keras.Model:
-        """Build Keras model for StridedSlice operation."""
-        input_shape = self.desc['input_shape']
-        activation_dtype = str(self.desc.get('activation_dtype', 'S8')).upper()
-        input_dtype = tf.int32 if activation_dtype == 'S32' else tf.float32
-        inputs = tf.keras.Input(
-            shape=input_shape[1:],
-            batch_size=input_shape[0],
-            dtype=input_dtype,
-            name='input',
-        )
-        
-        # Get begin, end, and strides from descriptor
-        begin = self.desc.get('begin', [0, 0, 0, 0])
-        end = self.desc.get('end', None)
-        strides = self.desc.get('strides', [1, 1, 1, 1])
-        shrink_axis_mask = self.desc.get('shrink_axis_mask', 0)
-        
-        # If end is not provided, use default (all dimensions)
-        if end is None:
-            end = [-1] * len(begin)
-        
-        # StridedSlice operation
-        def strided_slice_op(x):
-            return tf.strided_slice(
-                x,
-                begin=begin,
-                end=end,
-                strides=strides,
-                shrink_axis_mask=shrink_axis_mask
-            )
-        
-        x = tf.keras.layers.Lambda(strided_slice_op, name='strided_slice')(inputs)
-        
-        model = tf.keras.Model(inputs=inputs, outputs=x)
-        return model
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        """Convert Keras model to TFLite with quantization."""
-        activation_dtype = str(self.desc.get('activation_dtype', 'S8')).upper()
-
-        if activation_dtype in ('FP16', 'FP32'):
-            from helia_core_tester.generation.utils.litert_builder import build_strided_slice_op
-
-            input_shape = tuple(self.desc['input_shape'])
-            begin = self.desc.get('begin', [0, 0, 0, 0])
-            end = self.desc.get('end', None)
-            strides = self.desc.get('strides', [1, 1, 1, 1])
-            shrink_axis_mask = int(self.desc.get('shrink_axis_mask', 0))
-            if end is None:
-                end = list(input_shape)
-
-            model_bytes = build_strided_slice_op(
-                input_shape=input_shape,
-                begin=begin,
-                end=end,
-                strides=strides,
-                shrink_axis_mask=shrink_axis_mask,
-                dtype="float16" if activation_dtype == 'FP16' else "float32",
-            )
-            with open(out_path, "wb") as f:
-                f.write(model_bytes)
-            return
-
-        # Create converter
-        converter = tf.lite.TFLiteConverter.from_keras_model(model)
-        
-        # Apply quantization based on activation_dtype
-        if activation_dtype == 'S8':
-            converter.optimizations = [tf.lite.Optimize.DEFAULT]
-            converter.target_spec.supported_types = [tf.int8]
-            converter.inference_input_type = tf.int8
-            converter.inference_output_type = tf.int8
-            # Ensure all operations use int8 (including StridedSlice)
-            converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS]
-        elif activation_dtype == 'S16':
-            converter.optimizations = [tf.lite.Optimize.DEFAULT]
-            converter.target_spec.supported_ops = [
-                tf.lite.OpsSet.EXPERIMENTAL_TFLITE_BUILTINS_ACTIVATIONS_INT16_WEIGHTS_INT8
-            ]
-            converter.inference_input_type = tf.int16
-            converter.inference_output_type = tf.int16
-        elif activation_dtype == 'S32':
-            converter.optimizations = []
-        else:
-            raise NotImplementedError(f"Unsupported StridedSlice dtype: {activation_dtype}")
-        
-        # Generate representative dataset
-        def representative_data_gen():
-            for _ in range(100):
-                if 'input_shape' in self.desc:
-                    inputs = self.rng.uniform(-1.0, 1.0, size=self.desc['input_shape']).astype(np.float32)
-                    yield [inputs]
-                elif 'input_1_shape' in self.desc and 'input_2_shape' in self.desc:
-                    inputs1 = self.rng.uniform(-1.0, 1.0, size=self.desc['input_1_shape']).astype(np.float32)
-                    inputs2 = self.rng.uniform(-1.0, 1.0, size=self.desc['input_2_shape']).astype(np.float32)
-                    yield [inputs1, inputs2]
-        
-        if activation_dtype in {'S8', 'S16'}:
-            converter.representative_dataset = representative_data_gen
-        
-        # Convert and save
-        tflite_model = converter.convert()
-        with open(out_path, 'wb') as f:
-            f.write(tflite_model)
-    
     def _select_cmsis_strided_slice_kernel(self) -> Dict[str, str]:
         """
         Select appropriate CMSIS-NN kernel function for StridedSlice operation.
@@ -173,256 +83,75 @@ class OpStridedSlice(OperationBase):
         """
         Generate C and H files from templates for StridedSlice operation.
         """
+        from helia_core_tester.generation.reference.call import ReferenceCall
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
-        
+
         name = self.desc['name']
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
-        
-        # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_strided_slice_kernel()
-        
-        # Load LiteRT model for shape extraction
-        from helia_core_tester.generation.utils.litert_utils import get_operator_tensors_from_litert
-        model, subgraph = self.load_litert_model(str(tflite_path))
-        op_tensors = get_operator_tensors_from_litert(model, subgraph, 0)
-        
-        # Extract shapes from LiteRT
-        input_shape = op_tensors['inputs'][0]['shape']
-        output_shape = op_tensors['outputs'][0]['shape']
-        
-        # Ensure shapes are tuples
-        if input_shape is not None:
-            input_shape = tuple(input_shape)
-        if output_shape is not None:
-            output_shape = tuple(output_shape)
-        
-        # The TFLiteConverter's full-integer-quantization path silently concretizes
-        # any batch dimension > 1 down to 1 (confirmed: a Keras model built with
-        # batch_size=2 still reports interpreter input/output shape batch=1 after
-        # int8 conversion), so op_tensors' LiteRT-reported shape cannot be trusted
-        # whenever the descriptor's own declared input_shape asked for a bigger
-        # leading (batch) dimension than what actually survived conversion. This
-        # previously caused strided_slice_case1_whole_slab_s8's golden generation
-        # (input_shape=[2,3,4,2], begin=[1,0,0,0] targeting the "2nd of 2" batch
-        # row) to run against a collapsed 1-row array where index 1 no longer
-        # existed, producing an internally-inconsistent empty expected_output
-        # array despite a non-empty declared output_dims. Detect that mismatch and
-        # fall back to computing golden data directly via numpy on the descriptor's
-        # true full-size input (bypassing the TFLite interpreter/converter
-        # entirely for those cases only); every other case's behavior is
-        # byte-for-byte unchanged. Found while bridging strided_slice_case1_whole_slab_s8
-        # to hardware, where the collapsed golden could never match the kernel's output.
-        descriptor_input_shape = tuple(self.desc.get('input_shape', input_shape))
-        batch_collapsed = (
-            input_shape is not None
-            and len(descriptor_input_shape) == len(input_shape)
-            and descriptor_input_shape[0] > input_shape[0]
-        )
-        if batch_collapsed:
-            input_shape = descriptor_input_shape
-        
-        builder = TemplateContextBuilder()
-        
-        # Convert shapes to CMSIS dims
-        input_dims = builder.nhwc_to_cmsis_dims(input_shape)
-        
-        shrink_axis_mask = self.desc.get('shrink_axis_mask', 0)
-        
-        # Extract begin, end, and strides from descriptor
-        begin = self.desc.get('begin', [0, 0, 0, 0])
+        input_shape = tuple(int(d) for d in self.desc['input_shape'])
+        rank = len(input_shape)
+        shrink_axis_mask = int(self.desc.get('shrink_axis_mask', 0))
+        begin = list(self.desc.get('begin', [0, 0, 0, 0]))
         end = self.desc.get('end', None)
-        strides = self.desc.get('strides', [1, 1, 1, 1])
-        
-        # Ensure begin and strides are 4D (NHWC)
-        if len(begin) < 4:
-            begin = list(begin) + [0] * (4 - len(begin))
-        if len(strides) < 4:
-            strides = list(strides) + [1] * (4 - len(strides))
-        
-        # Normalize negative begin indices (e.g., -1 means last element)
-        begin_normalized = []
-        for i, b in enumerate(begin[:len(input_shape)]):
-            if b < 0:
-                # Negative index: count from the end
-                begin_normalized.append(input_shape[i] + b)
-            else:
-                begin_normalized.append(b)
-        # Pad to 4D if needed
-        while len(begin_normalized) < 4:
-            begin_normalized.append(0)
-        
-        # Convert to CMSIS dims format (NHWC -> N, H, W, C)
-        begin_dims = builder.nhwc_to_cmsis_dims(begin_normalized[:4])
-        stride_dims = builder.nhwc_to_cmsis_dims(strides[:4])
-        
-        if batch_collapsed:
-            # The TFLite-reported output_shape is equally untrustworthy here (it
-            # was computed against the collapsed 1-row input) -- derive the true
-            # full-rank output shape directly from begin/end/strides against the
-            # descriptor's real input_shape instead. shrink_axis_mask is not
-            # combined with batch-collapse in any current descriptor; if that
-            # combination is ever added, this will need extending.
-            end_for_shape = list(end) if end is not None else list(input_shape)
-            while len(end_for_shape) < len(input_shape):
-                end_for_shape.append(input_shape[len(end_for_shape)])
-            output_shape_4d = tuple(
-                len(range(begin_normalized[i], end_for_shape[i], strides[i]))
-                for i in range(len(input_shape))
-            )
-            output_dims = builder.nhwc_to_cmsis_dims(output_shape_4d)
-        elif shrink_axis_mask != 0:
-            # Handle shrink_axis_mask: when dimensions are shrunk, TFLite reduces the rank
-            # but CMSIS-NN still expects 4D, so we need to reconstruct the 4D shape
-            # Reconstruct 4D output shape from reduced-rank TFLite output
-            # by inserting size-1 dimensions where axes were shrunk
-            output_shape_4d = list(input_shape)  # Start with input shape
-            output_rank = len(output_shape)
-            input_rank = len(input_shape)
-            
-            # Determine which dimensions were shrunk
-            shrunk_dims = []
-            for i in range(min(4, input_rank)):
-                if shrink_axis_mask & (1 << i):
-                    shrunk_dims.append(i)
-                    output_shape_4d[i] = 1  # Shrunk dimension becomes size 1
-            
-            # Now map the TFLite output shape back to 4D
-            # TFLite output has reduced rank, we need to map it correctly
-            output_idx = 0
-            for i in range(4):
-                if i not in shrunk_dims:
-                    if output_idx < output_rank:
-                        output_shape_4d[i] = output_shape[output_idx]
-                        output_idx += 1
-                # else: already set to 1 above
-            
-            output_dims = builder.nhwc_to_cmsis_dims(tuple(output_shape_4d))
-        else:
-            output_dims = builder.nhwc_to_cmsis_dims(output_shape)
-        
-        # Generate input data and quantize when required.
-        if kernel_info["input_c_type"] in ("float16_t", "float"):
-            # StridedSlice is pure data movement, so the golden output can be
-            # computed directly via numpy slicing without invoking a TFLite
-            # interpreter (which has no reliable float activation path).
-            float_dtype = np.float16 if kernel_info["input_c_type"] == "float16_t" else np.float32
+        strides = list(self.desc.get('strides', [1, 1, 1, 1]))
+        end = list(end) if end is not None else list(input_shape)
+        if not (len(begin) == len(end) == len(strides) == rank):
+            raise ValueError(f"{name}: begin/end/strides must each have {rank} entries")
+
+        counts, output_shape = strided_slice_output_shape(input_shape, begin, end, strides, shrink_axis_mask)
+
+        builder = TemplateContextBuilder()
+        input_dims = builder.nhwc_to_cmsis_dims(input_shape)
+        # The kernel keeps every axis, shrunk ones at extent 1.
+        output_dims = builder.nhwc_to_cmsis_dims(tuple(counts))
+
+        # The kernel takes begin with negative indices resolved, and NHWC-padded begin and strides.
+        begin_normalized = [input_shape[i] + b if b < 0 else b for i, b in enumerate(begin)]
+        begin_dims = builder.nhwc_to_cmsis_dims((begin_normalized + [0] * 4)[:4])
+        stride_dims = builder.nhwc_to_cmsis_dims((strides + [1] * 4)[:4])
+
+        c_type = kernel_info["input_c_type"]
+        if c_type in ("float16_t", "float"):
+            float_dtype = np.float16 if c_type == "float16_t" else np.float32
             input_q = self._sample_uniform(input_shape, dtype=float_dtype)
+        elif c_type == "int32_t":
+            input_q = self._seeded_rng().integers(-1000, 1001, size=input_shape, dtype=np.int32)
+        elif c_type in _INT_DTYPES:
+            kind = "s16" if c_type == "int16_t" else "s8"
+            input_data = self._seeded_rng().uniform(-1.0, 1.0, size=input_shape).astype(np.float32)
+            input_q = policy.quantize(input_data, self.activation_quant("input", (-1.0, 1.0), kind))
         else:
-            rng_state = self.rng.__getstate__()
-            self.rng = np.random.default_rng(self.seed)
+            raise ValueError(f"Unsupported input_c_type: {c_type}")
 
-            if kernel_info["input_c_type"] == "int32_t":
-                input_q = self.rng.integers(-1000, 1001, size=input_shape, dtype=np.int32)
-            else:
-                input_data = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(np.float32)
+        output_data = self.reference_golden(ReferenceCall(
+            "strided_slice",
+            {"begin_mask": 0, "end_mask": 0, "ellipsis_mask": 0, "new_axis_mask": 0,
+             "shrink_axis_mask": shrink_axis_mask},
+            {"input": input_q, "begin": np.array(begin, dtype=np.int32), "end": np.array(end, dtype=np.int32),
+             "strides": np.array(strides, dtype=np.int32)},
+            {"output": tuple(output_shape)},
+        ))
 
-                # Extract quantization from LiteRT
-                input_quant = op_tensors['inputs'][0]['quantization']
-                input_scale = input_quant.get('scale', 1.0)
-                input_zp = input_quant.get('zero_point', 0)
-
-                # Handle per-channel quantization (convert to scalar)
-                if isinstance(input_scale, (list, np.ndarray)):
-                    input_scale = float(input_scale[0]) if len(input_scale) > 0 else 1.0
-                if isinstance(input_zp, (list, np.ndarray)):
-                    input_zp = int(input_zp[0]) if len(input_zp) > 0 else 0
-
-                input_scale = float(input_scale)
-                input_zp = int(input_zp)
-
-                # Quantize inputs
-                if kernel_info["input_c_type"] == "int8_t":
-                    np_in_dtype = np.int8
-                    qmin, qmax = -128, 127
-                elif kernel_info["input_c_type"] == "int16_t":
-                    np_in_dtype = np.int16
-                    qmin, qmax = -32768, 32767
-                else:
-                    raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
-
-                input_q = np.round(input_data / float(input_scale) + float(input_zp)).astype(np.int32)
-                input_q = np.clip(input_q, qmin, qmax).astype(np_in_dtype)
-
-            self.rng.__setstate__(rng_state)
-
-        if kernel_info["input_c_type"] in ("float16_t", "float") or batch_collapsed:
-            # StridedSlice is pure data movement (no rescale -- output shares the
-            # input's quantization scale/zero-point), so the golden output can be
-            # computed directly via numpy slicing without invoking a TFLite
-            # interpreter. Used for FP16/FP32 always (no reliable float activation
-            # path in the interpreter), and for batch_collapsed cases where the
-            # interpreter's own compiled model no longer has the real batch size
-            # to slice against (see the batch_collapsed comment above).
-            end_resolved = list(end) if end is not None else list(input_shape)
-            while len(end_resolved) < len(input_shape):
-                end_resolved.append(input_shape[len(end_resolved)])
-            slices = tuple(
-                slice(begin_normalized[i], end_resolved[i], strides[i])
-                for i in range(len(input_shape))
-            )
-            output_data = input_q[slices]
-            if shrink_axis_mask:
-                squeeze_axes = tuple(
-                    i for i in range(len(input_shape)) if shrink_axis_mask & (1 << i)
-                )
-                output_data = np.squeeze(output_data, axis=squeeze_axes)
-            if kernel_info["output_c_type"] == "float16_t":
-                output_data = np.array(output_data).astype(np.float16)
-            elif kernel_info["output_c_type"] == "float":
-                output_data = np.array(output_data).astype(np.float32)
-            elif kernel_info["output_c_type"] == "int32_t":
-                output_data = np.array(output_data).astype(np.int32)
-            elif kernel_info["output_c_type"] == "int16_t":
-                output_data = np.array(output_data).astype(np.int16)
-            else:  # int8_t
-                output_data = np.array(output_data).astype(np.int8)
-        else:
-            # Run inference using LiteRT interpreter
-            interpreter = self.load_litert_interpreter(str(tflite_path))
-            input_details = interpreter.get_input_details()
-            output_details = interpreter.get_output_details()
-
-            interpreter.set_tensor(input_details[0]['index'], input_q)
-            interpreter.invoke()
-            output_data = interpreter.get_tensor(output_details[0]['index'])
-            output_data = np.array(output_data)
-
-            # Convert output_data to the expected dtype before formatting.
-            if kernel_info["output_c_type"] == "int32_t":
-                output_data = output_data.astype(np.int32)
-            elif kernel_info["output_c_type"] == "int16_t":
-                output_data = output_data.astype(np.int16)
-            else:  # int8_t
-                output_data = output_data.astype(np.int8)
-        
-        # Format arrays
-        input_array_str = builder.format_array_as_c_literal(input_q)
-        expected_output_array_str = builder.format_array_as_c_literal(output_data)
-        
-        # Build template context
         context = {
             'name': name,
             'input_dims': input_dims,
             'output_dims': output_dims,
             'begin_dims': begin_dims,
             'stride_dims': stride_dims,
-            'input_data_array': input_array_str,
-            'expected_output_array': expected_output_array_str,
+            'input_data_array': builder.format_array_as_c_literal(input_q),
+            'expected_output_array': builder.format_array_as_c_literal(output_data),
             'input_dtype': kernel_info["input_c_type"],
             'output_dtype': kernel_info["output_c_type"],
             'kernel_fn': kernel_info["kernel_fn"],
         }
-        if kernel_info["input_c_type"] in ("float16_t", "float"):
+        if c_type in ("float16_t", "float"):
             context["validation_mode"] = "float"
-        
-        # Render templates
+
         self.render_harness_case(
             Path(output_dir), stem="strided_slice", context=context, pool=strided_slice_argument_pool(context),
             validation_key="StridedSliceFunctions/strided_slice/strided_slice.c.j2", label="StridedSlice", operator="StridedSlice",
         )
-        
+
         print(f"Generated C/H files and CMakeLists.txt for {name}")
 
 

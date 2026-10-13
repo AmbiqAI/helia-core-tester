@@ -29,6 +29,10 @@ FIELD_TYPES: Dict[str, Tuple[str, type]] = {
     "float64": ("double", ctypes.c_double),
 }
 
+# A kernel tensor declared `any` takes whichever dtype the caller passes; `any` outputs take
+# the dtype of the call's `any` inputs, which must all agree (data movement keeps the dtype).
+ANY_DTYPE = "any"
+
 TENSOR_NUMPY: Dict[str, np.dtype] = {
     "int8": np.dtype(np.int8),
     "int16": np.dtype(np.int16),
@@ -143,7 +147,7 @@ def parse_spec(raw: Mapping) -> Spec:
             raise SpecError(f"{what} must be a non-empty mapping")
         for tname, dtype in raw_t.items():
             _require_ident(tname, what)
-            if dtype not in TENSOR_NUMPY:
+            if dtype not in TENSOR_NUMPY and dtype != ANY_DTYPE:
                 raise SpecError(f"{what}: tensor {tname} has unknown dtype {dtype!r}")
         return tuple(raw_t.items())
 
@@ -155,6 +159,9 @@ def parse_spec(raw: Mapping) -> Spec:
             raise SpecError(f"kernel {name}: unknown params struct {params!r}")
         kernels[name] = KernelSpec(name, params, tensors(body.get("inputs"), f"{name} inputs"),
                                    tensors(body.get("outputs"), f"{name} outputs"))
+        if any(d == ANY_DTYPE for _, d in kernels[name].outputs) and not any(
+                d == ANY_DTYPE for _, d in kernels[name].inputs):
+            raise SpecError(f"kernel {name}: an `any` output needs an `any` input to take its dtype from")
 
     prepare: Dict[str, PrepareSpec] = {}
     for name, body in (raw.get("prepare") or {}).items():
@@ -173,6 +180,32 @@ def parse_spec(raw: Mapping) -> Spec:
 @lru_cache(maxsize=None)
 def load_spec(path: Path = SPEC_PATH) -> Spec:
     return parse_spec(yaml.safe_load(Path(path).read_text()))
+
+
+def dtype_name_of(array: np.ndarray) -> str:
+    """The tensor dtype name of a numpy array (uint8 is `bool`, binary16 is `float16`)."""
+    for name, dt in TENSOR_NUMPY.items():
+        if np.asarray(array).dtype == dt:
+            return name
+    raise TypeError(f"no reference tensor dtype for numpy {np.asarray(array).dtype}")
+
+
+def resolve_any(kernel, inputs: Mapping[str, np.ndarray]) -> Dict[str, str]:
+    """Concrete dtype names for `kernel`'s tensors given its inputs: `any` inputs take their
+    array's dtype, `any` outputs the (common) dtype of the `any` inputs."""
+    resolved: Dict[str, str] = {}
+    any_dtypes = set()
+    for name, d in kernel.inputs:
+        if d == ANY_DTYPE:
+            resolved[name] = dtype_name_of(inputs[name])
+            any_dtypes.add(resolved[name])
+        else:
+            resolved[name] = d
+    if len(any_dtypes) > 1:
+        raise TypeError(f"{kernel.name}: `any` inputs disagree on dtype: {sorted(any_dtypes)}")
+    for name, d in kernel.outputs:
+        resolved[name] = next(iter(any_dtypes)) if d == ANY_DTYPE else d
+    return resolved
 
 
 def dtype_code(name: str) -> int:

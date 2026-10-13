@@ -32,6 +32,21 @@
  * zero-element tensor may have a NULL data pointer. */
 int32_t hct_check_tensor(const HctTensor *t, int32_t dtype, int64_t *count);
 
+/* Bytes per element of an HctDtype; 0 for an unknown dtype. */
+int32_t hct_dtype_size(int32_t dtype);
+
+/* hct_check_tensor for an entry declared `any`: the tensor's own dtype must be a known one. */
+int32_t hct_check_tensor_any(const HctTensor *t, int64_t *count);
+
+/* Equal rank and dims. */
+int32_t hct_check_same_shape(const HctTensor *a, const HctTensor *b);
+
+/* Element i of a tensor as raw bytes (dtype already checked). */
+static inline void *hct_elem(const HctTensor *t, int64_t i)
+{
+    return (char *)t->data + i * hct_dtype_size(t->dtype);
+}
+
 /* Checks the tensor-array pointers and counts of a kernel entry. */
 int32_t hct_check_io(
     const HctTensor *inputs, int32_t num_inputs, int32_t want_inputs, const HctTensor *outputs, int32_t num_outputs,

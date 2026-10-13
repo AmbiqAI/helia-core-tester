@@ -14,7 +14,8 @@ from typing import Dict, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
-from helia_core_tester.generation.reference.abi import TENSOR_NUMPY, Spec, ctypes_struct, load_spec, tensor_struct
+from helia_core_tester.generation.reference.abi import (TENSOR_NUMPY, Spec, ctypes_struct, load_spec, resolve_any,
+                                                         tensor_struct)
 from helia_core_tester.generation.reference.build import ReferenceLibrary, ensure_reference_library
 
 
@@ -135,12 +136,13 @@ class Bindings:
         if sorted(output_shapes) != sorted(want_out):
             raise KeyError(f"{entry}: outputs {sorted(output_shapes)}, expected {sorted(want_out)}")
         struct = struct_from_fields(self.spec, k.params, params)
+        dt = resolve_any(k, inputs)
         in_arrays = [inputs[n] for n, _ in k.inputs]
-        out_arrays = [np.zeros(tuple(int(d) for d in output_shapes[n]), dtype=TENSOR_NUMPY[d]) for n, d in k.outputs]
+        out_arrays = [np.zeros(tuple(int(d) for d in output_shapes[n]), dtype=TENSOR_NUMPY[dt[n]]) for n, _ in k.outputs]
         in_tensors = (self._tensor * len(in_arrays))(
-            *[self._tensor_for(a, d, f"{entry} input {n}") for a, (n, d) in zip(in_arrays, k.inputs)])
+            *[self._tensor_for(a, dt[n], f"{entry} input {n}") for a, (n, _) in zip(in_arrays, k.inputs)])
         out_tensors = (self._tensor * len(out_arrays))(
-            *[self._tensor_for(a, d, f"{entry} output {n}") for a, (n, d) in zip(out_arrays, k.outputs)])
+            *[self._tensor_for(a, dt[n], f"{entry} output {n}") for a, (n, _) in zip(out_arrays, k.outputs)])
         code = self._fns[entry](ctypes.byref(struct), in_tensors, len(in_arrays), out_tensors, len(out_arrays))
         self._check(entry, code)
         return dict(zip(want_out, out_arrays))

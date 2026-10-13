@@ -250,9 +250,12 @@ def test_f014_depthwise_conv_generation_has_no_debug_log_side_effect():
 # any future regression toward the incorrect "-0.5 offset" formula is caught.
 # ---------------------------------------------------------------------------
 
-from helia_core_tester.generation.ops.ReshapeFunctions.resize_nearest_neighbor import (
-    OpResizeNearestNeighbor,
-)
+from helia_core_tester.tests.test_resize_nearest_tie_rounding import nearest_indices  # noqa: E402
+
+
+def _nearest_index(out_idx, in_size, out_size, align_corners, half_pixel_centers):
+    """The source index the C reference golden (TFLite GetNearestNeighbor) picks."""
+    return int(nearest_indices(in_size, out_size, align_corners, half_pixel_centers)[out_idx])
 
 
 def test_f011_half_pixel_upsampling_known_indices():
@@ -261,7 +264,7 @@ def test_f011_half_pixel_upsampling_known_indices():
     # out_idx: 0 -> 0.25 -> 0 | 1 -> 0.75 -> 0 | 2 -> 1.25 -> 1 | 3 -> 1.75 -> 1
     expected = [0, 0, 1, 1]
     actual = [
-        OpResizeNearestNeighbor._nearest_index(i, in_size=2, out_size=4, align_corners=False, half_pixel_centers=True)
+        _nearest_index(i, in_size=2, out_size=4, align_corners=False, half_pixel_centers=True)
         for i in range(4)
     ]
     assert actual == expected
@@ -272,7 +275,7 @@ def test_f011_half_pixel_downsampling_known_indices():
     # out_idx: 0 -> (0+0.5)*2=1.0 -> floor 1 | 1 -> (1+0.5)*2=3.0 -> floor 3
     expected = [1, 3]
     actual = [
-        OpResizeNearestNeighbor._nearest_index(i, in_size=4, out_size=2, align_corners=False, half_pixel_centers=True)
+        _nearest_index(i, in_size=4, out_size=2, align_corners=False, half_pixel_centers=True)
         for i in range(2)
     ]
     assert actual == expected
@@ -283,7 +286,7 @@ def test_f011_align_corners_known_indices():
     # scaled = out_idx * 0.5, roundf (ties away from zero): 0, 0.5->1, 1, 1.5->2, 2
     expected = [0, 1, 1, 2, 2]
     actual = [
-        OpResizeNearestNeighbor._nearest_index(i, in_size=3, out_size=5, align_corners=True, half_pixel_centers=False)
+        _nearest_index(i, in_size=3, out_size=5, align_corners=True, half_pixel_centers=False)
         for i in range(5)
     ]
     assert actual == expected
@@ -294,7 +297,7 @@ def test_f011_no_half_pixel_no_align_corners_known_indices():
     # scaled = out_idx * 2.0 -> floor: 0 -> 0, 1 -> 2
     expected = [0, 2]
     actual = [
-        OpResizeNearestNeighbor._nearest_index(i, in_size=4, out_size=2, align_corners=False, half_pixel_centers=False)
+        _nearest_index(i, in_size=4, out_size=2, align_corners=False, half_pixel_centers=False)
         for i in range(2)
     ]
     assert actual == expected
@@ -310,7 +313,7 @@ def test_f011_half_pixel_formula_omits_bilinear_style_minus_half_offset():
     for out_idx in range(out_size):
         correct = int(np.floor((out_idx + 0.5) * scale))
         incorrect_with_minus_half = int(np.floor((out_idx + 0.5) * scale - 0.5))
-        actual = OpResizeNearestNeighbor._nearest_index(
+        actual = _nearest_index(
             out_idx, in_size=in_size, out_size=out_size, align_corners=False, half_pixel_centers=True
         )
         assert actual == correct

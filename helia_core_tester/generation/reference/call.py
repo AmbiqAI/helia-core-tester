@@ -18,7 +18,7 @@ from typing import Any, Dict, Mapping, Optional, Tuple
 
 import numpy as np
 
-from helia_core_tester.generation.reference.abi import TENSOR_NUMPY, load_spec
+from helia_core_tester.generation.reference.abi import ANY_DTYPE, TENSOR_NUMPY, load_spec, resolve_any
 
 SCHEMA = "helia-core-tester/reference-call/2"
 
@@ -40,8 +40,9 @@ class ReferenceCall:
             raise KeyError(f"{self.entry}: inputs {sorted(self.inputs)}, expected {sorted(n for n, _ in k.inputs)}")
         for name, dtype in k.inputs:
             array = self.inputs[name]
-            if not isinstance(array, np.ndarray) or array.dtype != TENSOR_NUMPY[dtype]:
+            if not isinstance(array, np.ndarray) or (dtype != ANY_DTYPE and array.dtype != TENSOR_NUMPY[dtype]):
                 raise TypeError(f"{self.entry}: input {name} must be a {dtype} numpy array")
+        resolve_any(k, self.inputs)
         shapes = {}
         for name, _ in k.outputs:
             if name not in self.output_shapes:

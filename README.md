@@ -928,7 +928,10 @@ through `OperationBase.reference_golden()`. On it so far: the elementwise and ac
 PReLU/PReLUScalar, HardSwish, Tanh, Logistic, NNActivationS16, NNActivationFloat), Softmax, Sqrt,
 Rsqrt, Quantize, Dequantize and Requantize; the weighted operators (Conv, DepthwiseConv,
 TransposeConv, FullyConnected, BatchMatMul), pooling, Mean, ReduceSum/Max/Min, ArgMax/ArgMin and
-BatchNorm; the rest follow per family. A case that asserts only a
+BatchNorm; and the data-movement operators (Concatenation, Pack/Unpack, Split, Gather/GatherND,
+Pad/MirrorPad, Reshape/Squeeze, BatchToSpaceND/SpaceToBatchND, DepthToSpace/SpaceToDepth,
+ResizeNearestNeighbor, Transpose, StridedSlice, Tile, BroadcastTo, ScatterNd, SelectV2, Where,
+ReverseSequence, DynamicUpdateSlice, Fill); the recurrent families follow. A case that asserts only a
 returned status (an `ARG_ERROR` case) answers `status_only()` and has no golden at all.
 
 - `helia_core_tester/reference/` holds the library: plain scalar C11 written from each operator's
@@ -941,6 +944,11 @@ returned status (an `ARG_ERROR` case) answers `status_only()` and has no golden 
   way TFLite's prepare computes them) `hct_ref_<entry>(in, out)`. `include/hct_ref_abi.h` is
   generated from it (`python -m helia_core_tester.generation.reference.abi --write`; a stale
   header fails the build and a test), and the ctypes structs are built from it at import.
+- Data-movement entries are dtype-generic: a tensor declared `any` in the spec takes the caller's
+  dtype (any of int8..int64, float16/32, bool) and an `any` output takes the `any` inputs' common
+  dtype, so one entry serves every element type. Operators with a variable number of operands pass
+  them back to back with their extents (Concatenation in, Split out); Pack and Unpack are those
+  plus a reshape, MirrorPad is Pad with a mode.
 - The library is built once per environment with the host C compiler (`HCT_HOST_CC`, else
   `cc`/`gcc`/`clang`) into `artifacts/host_ref/<key>/`, keyed by the spec, header, sources, flags
   and compiler identity. Flags are strict: `-O1 -fno-fast-math -ffp-contract=off -Werror`, and

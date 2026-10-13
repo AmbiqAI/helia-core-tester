@@ -7,7 +7,6 @@ import numpy as np
 from pathlib import Path
 from helia_core_tester.generation.io.dtypes import (
     descriptor_dtype_to_c_type,
-    descriptor_dtype_to_litert_dtype,
     get_resolved_tensor_dtype,
 )
 from helia_core_tester.generation.ops._shared.base import OperationBase
@@ -50,31 +49,8 @@ class OpGather(OperationBase):
             raise NotImplementedError(f"Unsupported Gather dtype: {dtype}")
         return dtype
 
-    def needs_keras_model(self) -> bool:
-        return False
-
-    def build_keras_model(self):
-        raise NotImplementedError("Gather uses LiteRT-only model generation.")
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        from helia_core_tester.generation.utils.litert_builder import build_gather_op
-
-        dtype = descriptor_dtype_to_litert_dtype(self._element_dtype())
-
-        input_shape = tuple(self.desc["input_shape"])
-        indices_shape = tuple(self.desc["indices_shape"])
-        axis = int(self.desc.get("axis", 0))
-        batch_dims = int(self.desc.get("batch_dims", 0))
-
-        model_bytes = build_gather_op(
-            input_shape=input_shape,
-            indices_shape=indices_shape,
-            axis=axis,
-            batch_dims=batch_dims,
-            dtype=dtype,
-        )
-        with open(out_path, "wb") as f:
-            f.write(model_bytes)
+    def uses_reference(self) -> bool:
+        return True
 
     def _select_cmsis_gather_kernel(self) -> Dict[str, str]:
         dtype = self._element_dtype()
@@ -118,12 +94,10 @@ class OpGather(OperationBase):
         raise ValueError(f"Unsupported shape length: {len(shape)}")
 
     def generate_c_files(self, output_dir: Path) -> None:
+        from helia_core_tester.generation.reference.call import ReferenceCall
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
         name = self.desc["name"]
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
 
         kernel_info = self._select_cmsis_gather_kernel()
         builder = TemplateContextBuilder()
@@ -169,7 +143,8 @@ class OpGather(OperationBase):
 
         self.rng.__setstate__(rng_state)
 
-        output_q = np.take(input_q, indices_q, axis=axis)
+        output_q = self.reference_golden(ReferenceCall(
+            "gather", {"axis": axis}, {"input": input_q, "indices": indices_q}, {"output": output_shape}))
 
         input_dims = self._shape_to_dims(input_shape)
         indices_dims = self._shape_to_dims(indices_shape)
