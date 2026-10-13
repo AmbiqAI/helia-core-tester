@@ -23,6 +23,12 @@ def _archive_bytes(top: str = "arm-gnu-toolchain-14.3.rel1-aarch64-arm-none-eabi
     return buf.getvalue()
 
 
+@pytest.fixture(autouse=True)
+def _no_gcc_env(monkeypatch):
+    monkeypatch.delenv(sd.GCC_VERSION_ENV, raising=False)
+    monkeypatch.delenv(sd.GCC_SHA256_ENV, raising=False)
+
+
 @pytest.fixture
 def fake_download(monkeypatch):
     """Serves an archive from memory; records each request."""
@@ -53,9 +59,9 @@ def test_pin_matches_heliaaot_and_has_a_digest_per_arch() -> None:
     for arch in ("x86_64", "aarch64"):
         url = sd.arm_gcc_url(arch)
         assert url.endswith(f"/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-{arch}-arm-none-eabi.tar.xz")
-        digest = sd.PINNED_SHA256[("arm_gcc", arch)]
+        digest = sd.PINNED_SHA256[("arm_gcc", sd.ARM_GCC_VERSION, arch)]
         assert len(digest) == 64 and int(digest, 16) >= 0
-    assert sd.PINNED_SHA256[("arm_gcc", "x86_64")] != sd.PINNED_SHA256[("arm_gcc", "aarch64")]
+    assert sd.PINNED_SHA256[("arm_gcc", sd.ARM_GCC_VERSION, "x86_64")] != sd.PINNED_SHA256[("arm_gcc", sd.ARM_GCC_VERSION, "aarch64")]
 
 
 @pytest.mark.parametrize("arch", ["armv7l", "", "x86"])
@@ -69,7 +75,7 @@ def test_fresh_install_downloads_the_pinned_archive_and_records_its_version(tmp_
     gcc = tmp_path / "arm_gcc_download"
     assert (gcc / "bin" / "arm-none-eabi-gcc").is_file()
     assert sd.installed_arm_gcc_version(gcc) == "14.3.rel1"
-    assert fake_download["calls"] == [(sd.arm_gcc_url("aarch64"), sd.PINNED_SHA256[("arm_gcc", "aarch64")])]
+    assert fake_download["calls"] == [(sd.arm_gcc_url("aarch64"), sd.PINNED_SHA256[("arm_gcc", sd.ARM_GCC_VERSION, "aarch64")])]
 
 
 def test_current_install_is_kept(tmp_path, fake_download) -> None:

@@ -49,7 +49,7 @@ def ensure_build_tools(repo_root: Path) -> None:
 
     downloads = repo_root / DOWNLOADS_DIR
     downloads.mkdir(parents=True, exist_ok=True)
-    # Returns early when the install matches the pin.
+    # Returns early when the install matches the selected release (ARM_GCC_VERSION unless HELIA_GCC_VERSION is set).
     setup_arm_gcc(downloads)
     # NSX's toolchain file finds GCC on PATH.
     add_toolchain_to_path(repo_root)

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 from helia_core_tester.core.discovery import find_repo_root, find_setup_dependencies_script
-from helia_core_tester.core.path_layout import artifacts_root
+from helia_core_tester.core.path_layout import artifacts_root, compiler_tag_for_toolchain
 
 from .errors import FvpScriptError
 
@@ -116,10 +116,10 @@ def detect_paths(args) -> dict:
 
     if args.use_arm_compiler:
         toolchain_file = ethos / "cmake" / "toolchain" / "armclang.cmake"
-        compiler_tag = "arm-compiler"
+        compiler_tag = compiler_tag_for_toolchain("armclang")
     else:
         toolchain_file = ethos / "cmake" / "toolchain" / "arm-none-eabi-gcc.cmake"
-        compiler_tag = "gcc"
+        compiler_tag = compiler_tag_for_toolchain("gcc")
         if not args.no_gcc_from_download:
             gcc_bin = dl / "arm_gcc_download" / "bin"
             if not gcc_bin.exists():
