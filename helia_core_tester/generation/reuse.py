@@ -1,10 +1,10 @@
 """Per-case reuse stamps for the generation step.
 
-TFLite conversion plus interpreter inference dominates generation wall time, and
-every input that can change a case's emitted bytes is knowable before that work
-starts: the descriptor document, the per-case generation inputs (cpu, suite,
-seed), the generator itself, the resolved dependency set and interpreter it runs
-under, and the ns-cmsis-nn checkout the generator reads. A stamp folds all of
+Every input that can change a case's emitted bytes is knowable before generating
+it: the descriptor document, the per-case generation inputs (cpu, suite, seed),
+the generator itself (the C reference sources included), the resolved dependency
+set and Python interpreter it runs under, and the ns-cmsis-nn checkout the
+generator reads. A stamp folds all of
 those into one digest; a case whose on-disk stamp still matches, and whose
 artifacts still hash to what that stamp recorded, is reused verbatim.
 See issue #107.
@@ -35,8 +35,7 @@ STAMP_FILENAME = ".stamp"
 _STAMP_SCHEMA = "helia-core-tester/generation-stamp/8"
 
 # The lock file is the whole resolved dependency set, so it covers every package
-# that can move emitted bytes -- the converter and runtime, but equally numpy's
-# RNG streams, keras, jinja2, flatbuffers and pyyaml -- without anyone having to
+# that can move emitted bytes -- numpy's RNG streams, jinja2 and pyyaml -- without anyone having to
 # keep a hand-maintained list of them in step.
 _LOCK_FILENAME = "uv.lock"
 
@@ -110,7 +109,7 @@ def _environment_identity() -> Dict[str, str]:
 
     Naming individual packages under-counts the inputs: numpy decides the RNG
     streams behind every generated tensor, jinja2 and pyyaml decide the emitted
-    text, flatbuffers and the converter decide the model bytes. Hashing the lock
+    text. Hashing the lock
     file covers the resolved set as a whole. The interpreter version and the
     machine are separate axes the lock file does not pin, and both reach the
     emitted bytes through platform-specific wheels and floating-point behaviour.
@@ -380,7 +379,7 @@ def _remove_entry(path: Path) -> None:
 def case_reusable(test_dir: Path, stamp: str) -> bool:
     """True iff this case was generated from ``stamp`` and is still intact.
 
-    Presence is not integrity: a truncated .c, a deleted .tflite, a missing
+    Presence is not integrity: a truncated .c, a deleted reference record, a missing
     header or a lost CMakeLists.txt each leave a case that still looks generated
     but no longer builds, or no longer tests what the stamp claims. Comparing
     the recorded artifact digest (generation/artifact_identity.py, the same

@@ -54,7 +54,7 @@ The proof artifact is the final ELF plus map/bin/size/nm/objdump reports and a m
 
 helia-core-tester will:
 
-- generate streamable case bundles directly from the same NumPy/TFLite data used for standalone tests
+- generate streamable case bundles directly from the same data and reference goldens used for standalone tests
 - build ordered execution plans
 - validate firmware TARGET_INFO/catalog compatibility
 - stream case metadata and blobs in bounded chunks

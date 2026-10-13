@@ -140,7 +140,7 @@ def test_sqrt_parity_descriptors_generate_from_the_reference(
     desc = _sqrt_descriptor_map()[name]
     assert desc["activation_dtype"] == dtype
     op = OpSqrt(desc, seed=1, target_cpu="cortex-m55")
-    assert op.uses_reference() and not op.needs_keras_model()
+    assert op.uses_reference()
 
     op.generate_c_files(tmp_path)
     call = op.reference

@@ -4,16 +4,9 @@ from pathlib import Path
 
 import numpy as np
 import yaml
-import pytest
 
 from helia_core_tester.generation.io.descriptors import load_descriptor
 from helia_core_tester.generation.io.dtypes import descriptor_matches_dtype_filter
-from helia_core_tester.generation.utils.litert_builder import (
-    LITERT_AVAILABLE,
-    build_unary_same_shape_op,
-    litert,
-)
-from helia_core_tester.generation.utils.litert_utils import load_litert_model
 from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
 
@@ -358,33 +351,3 @@ def test_float_param_builders_use_public_float_activation_defaults() -> None:
     for params in (conv, dw, fc, tconv):
         assert params["activation_min"] == -1.0e30
         assert params["activation_max"] == 1.0e30
-
-
-@pytest.mark.skipif(not LITERT_AVAILABLE, reason="ai_edge_litert is required for float LiteRT round-trips")
-@pytest.mark.parametrize(
-    ("dtype", "expected_tensor_type_name"),
-    [
-        ("FP32", "FLOAT32"),
-        ("FP16", "FLOAT16"),
-    ],
-)
-def test_future_fp_ops_can_use_shared_litert_builder_without_infra_changes(
-    tmp_path: Path,
-    dtype: str,
-    expected_tensor_type_name: str,
-) -> None:
-    model_bytes = build_unary_same_shape_op(
-        op_name="ABS",
-        input_shape=(1, 4),
-        dtype=dtype,
-        output_dtype=dtype,
-    )
-    model_path = tmp_path / f"abs_{dtype.lower()}.tflite"
-    model_path.write_bytes(model_bytes)
-
-    model, subgraph = load_litert_model(str(model_path))
-    input_tensor = subgraph.tensors[subgraph.inputs[0]]
-    output_tensor = subgraph.tensors[subgraph.outputs[0]]
-
-    assert getattr(litert.TensorType, expected_tensor_type_name) == input_tensor.type
-    assert input_tensor.type == output_tensor.type

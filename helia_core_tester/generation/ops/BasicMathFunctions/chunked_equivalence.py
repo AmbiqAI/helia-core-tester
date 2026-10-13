@@ -336,17 +336,9 @@ class OpChunkedEquivalence(OperationBase):
     calls over the same data.
     """
 
-    def needs_keras_model(self) -> bool:
-        return False
-
-    def allow_no_tflite(self) -> bool:
+    def self_checking(self) -> bool:
+        # The full-length call is the reference for the chunked calls: there is no golden.
         return True
-
-    def build_keras_model(self):
-        raise NotImplementedError("ChunkedEquivalence is a kernel-property case; it has no model.")
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        raise NotImplementedError("ChunkedEquivalence needs no TFLite model: the full-length call is the reference.")
 
     # ---------------------------------------------------------------- config
 

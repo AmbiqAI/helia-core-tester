@@ -13,7 +13,7 @@ def test_comparison_equal_generates(tmp_path):
         "input_2_shape": [1, 2, 2, 1],
     }
     op = OpComparison(desc, seed=1, target_cpu="cortex-m55")
-    assert op.uses_reference() and op.needs_keras_model() is False
+    assert op.uses_reference()
     op.generate_c_files(tmp_path)
     assert op.reference.entry == "comparison_s8"
 

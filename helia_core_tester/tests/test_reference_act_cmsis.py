@@ -458,7 +458,6 @@ def test_activation_guard_rejects_a_wrong_emulation(lib) -> None:
 
 def _generate(op_cls, desc, cpu, tmp_path):
     op = op_cls(desc, seed=7, target_cpu=cpu)
-    (tmp_path / f"{desc['name']}.tflite").write_bytes(b"\x01")
     op.generate_c_files(tmp_path)
     return op
 

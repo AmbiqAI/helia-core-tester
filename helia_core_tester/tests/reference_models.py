@@ -6,6 +6,7 @@ Written on unbounded Python ints with floor division, deliberately unlike the C
 
 from __future__ import annotations
 
+import math
 from typing import Iterable, Sequence
 
 import numpy as np
@@ -35,6 +36,19 @@ def mbqm(x: int, m: int, shift: int) -> int:
     """MultiplyByQuantizedMultiplier, double rounding; the left shift wraps as int32 math does."""
     left, right = max(shift, 0), max(-shift, 0)
     return rdbpot(srdhm(wrap32(x << left), m), right)
+
+
+def quantize_multiplier(real: float) -> tuple[int, int]:
+    """TFLite QuantizeMultiplier: real = m * 2^(shift - 31) with m in [2^30, 2^31), halves rounded up."""
+    if real == 0.0:
+        return 0, 0
+    fraction, exponent = math.frexp(real)
+    m = math.floor(fraction * (1 << 31) + 0.5)
+    if m == 1 << 31:
+        m, exponent = m // 2, exponent + 1
+    if exponent < -31:
+        return 0, 0
+    return m, exponent
 
 
 def broadcast_pairs(a: np.ndarray, b: np.ndarray):

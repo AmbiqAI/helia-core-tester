@@ -663,7 +663,7 @@ use_bias: true
 comparison: {tolerance: 0}
 expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 ---
-# BEGIN mlperf model shapes (scripts/extract_model_shapes.py)
+# BEGIN mlperf model shapes (layer shapes of the MLPerf Tiny int8 models)
 operator: FullyConnected
 name: fully_connected_mlperf_ad_l0_s8
 activation_dtype: S8

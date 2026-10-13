@@ -31,7 +31,7 @@ def test_minmax_generates_c_from_the_reference(operator: str, dtype: str, expect
         "input_2_shape": [1, 1, 3, 1],
     }
     op = OpMinMax(desc, seed=1, target_cpu="cortex-m55")
-    assert op.uses_reference() and not op.needs_keras_model()
+    assert op.uses_reference()
 
     op.generate_c_files(tmp_path)
     assert op.reference.entry == f"{operator.lower()}_{dtype.lower().replace('fp', 'f')}"

@@ -174,7 +174,7 @@ def test_rsqrt_parity_descriptors_generate_from_the_reference(
     assert desc["hint"]["call_style"] == call_style
 
     op = OpRsqrt(desc, seed=1, target_cpu="cortex-m55")
-    assert op.uses_reference() and not op.needs_keras_model() and not op.status_only()
+    assert op.uses_reference() and not op.status_only()
     op.generate_c_files(tmp_path)
     call = op.reference
     assert call.entry == "rsqrt_s16" and call.inputs["input"].shape == shape
@@ -217,7 +217,7 @@ def test_rsqrt_negative_input_case_generates_expected_status_contract(
         "hint": {"call_style": call_style, "force_negative_input_case": True},
     }
     op = OpRsqrt(desc, seed=1, target_cpu="cortex-m55")
-    assert op.status_only() and not op.uses_reference() and not op.needs_keras_model() and op.allow_no_tflite()
+    assert op.status_only() and not op.uses_reference()
     op.generate_c_files(tmp_path)
     assert op.reference is None
 

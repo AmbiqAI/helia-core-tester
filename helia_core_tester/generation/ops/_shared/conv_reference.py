@@ -679,7 +679,7 @@ def transpose_conv_reference_case(op, kernel_info: Dict[str, Any], float_kernel:
     if len(input_shape) != 4 or len(fs) != 4:
         raise ValueError(f"{name}: TransposeConv needs NHWC input_shape and [KH, KW, Out, In] filter_shape")
     n, h, w, in_c = input_shape
-    # Keras read only the kernel size and the filter count; the input depth comes from the input.
+    # Only the kernel size and the filter count are read from filter_shape; the input depth comes from the input.
     kh, kw, out_c = fs[0], fs[1], fs[2]
     if weighted.pair(desc, "dilation") != (1, 1):
         raise ValueError(f"{name}: TransposeConv has no dilation")

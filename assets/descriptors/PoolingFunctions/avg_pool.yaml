@@ -273,7 +273,7 @@ padding: VALID
 fault: negative_dim
 expected_status: ARM_CMSIS_NN_ARG_ERROR
 ---
-# BEGIN mlperf model shapes (scripts/extract_model_shapes.py)
+# BEGIN mlperf model shapes (layer shapes of the MLPerf Tiny int8 models)
 operator: AvgPool
 name: avg_pool_mlperf_ic_l12_s8
 activation_dtype: S8

@@ -26,9 +26,6 @@ class _Op(OperationBase):
 
     SIGN_SPAN_OPERANDS = ("input", "input_1", "input_2", "alpha")
 
-    def build_keras_model(self):  # pragma: no cover - never called
-        raise NotImplementedError
-
 
 def _op(**desc) -> _Op:
     desc.setdefault("name", "case")

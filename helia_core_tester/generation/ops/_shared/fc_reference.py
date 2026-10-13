@@ -25,7 +25,7 @@ def fc_shapes(desc) -> Dict[str, Any]:
         raise ValueError(f"{desc['name']}: FullyConnected needs a 2-D or 4-D input_shape and an [out, in] filter_shape")
     batch = input_shape[0]
     features = int(np.prod(input_shape[1:]))
-    # Keras read only the unit count; the feature count comes from the input.
+    # Only the unit count is read from filter_shape; the feature count comes from the input.
     out_units = fs[0]
     return {"input_shape": input_shape, "batch": batch, "features": features, "out_units": out_units,
             "output_shape": (batch, out_units)}

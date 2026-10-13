@@ -22,9 +22,6 @@ def batch_norm_argument_pool(context: dict) -> ArgumentPool:
 class OpBatchNorm(OperationBase):
     """Generate float batch normalization parity tests."""
 
-    def allow_no_tflite(self) -> bool:
-        return True
-
     def uses_reference(self) -> bool:
         return True
 

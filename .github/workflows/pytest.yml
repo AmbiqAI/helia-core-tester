@@ -86,3 +86,10 @@ jobs:
         env:
           CMSIS_NN_ROOT: ${{ github.workspace }}/ns-cmsis-nn-scratch
         run: uv run pytest helia_core_tester/tests -q -rs
+
+      # The reference library's C unit tests under ASan+UBSan. The suite above skips
+      # the ASan leg on a host where ASan cannot run; on Linux CI that skip is a failure.
+      - name: Reference C unit tests (ASan + UBSan)
+        env:
+          HCT_REQUIRE_ASAN: "1"
+        run: uv run pytest helia_core_tester/tests/test_reference_c.py -q -rs -p no:cacheprovider

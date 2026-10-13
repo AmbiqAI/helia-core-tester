@@ -37,7 +37,7 @@ def test_reference_case_writes_its_record_and_no_model(tmp_path: Path, name: str
 
 
 @pytest.mark.parametrize("name", ["prelu_arg_error_output_mismatch_s8", "prelu_arg_error_output_mismatch_s16"])
-def test_a_status_only_case_builds_no_model_and_records_no_reference(tmp_path: Path, name: str) -> None:
+def test_a_status_only_case_records_no_reference(tmp_path: Path, name: str) -> None:
     desc = _descriptor(name)
     generation_module.generate_test(desc, str(tmp_path), seed=11, run_seed=5)
     case = tmp_path / desc["_family"] / name
@@ -59,15 +59,56 @@ class _NotImplementedOp(_NoCallOp):
         raise NotImplementedError("not yet")
 
 
-@pytest.mark.parametrize("op_class, match", [(_NoCallOp, "no ReferenceCall was recorded"),
-                                             (_NotImplementedOp, "is not implemented: not yet")])
-def test_a_reference_op_without_a_golden_fails_generation(tmp_path, monkeypatch, op_class, match) -> None:
+class _UndeclaredOp(OperationBase):
+    """Neither reference-backed nor status-only nor self-checking, and records nothing."""
+
+    def generate_c_files(self, output_dir: Path) -> None:
+        (output_dir / "includes").mkdir(exist_ok=True)
+
+
+class _StatusOnlyOp(_UndeclaredOp):
+    def status_only(self) -> bool:
+        return True
+
+
+class _SelfCheckingOp(_UndeclaredOp):
+    def self_checking(self) -> bool:
+        return True
+
+
+@pytest.mark.parametrize("op_class, match", [(_NoCallOp, "recorded no ReferenceCall"),
+                                             (_UndeclaredOp, "recorded no ReferenceCall"),
+                                             (_NotImplementedOp, "not yet")])
+def test_a_case_without_a_golden_fails_generation(tmp_path, monkeypatch, op_class, match) -> None:
     desc = {**_descriptor("add_default_s8"), "name": "probe_case"}
     monkeypatch.setattr(generation_module, "get_op_map", lambda: {desc["operator"]: op_class})
     failures = []
     with pytest.raises(RuntimeError, match=match):
         generation_module.generate_test(desc, str(tmp_path), seed=1, generation_failures=failures)
     assert failures and failures[0]["stage"] == "c_files"
+    assert not list((tmp_path / desc["_family"] / "probe_case").glob("*.reference.json"))
+
+
+@pytest.mark.parametrize("op_class", [_StatusOnlyOp, _SelfCheckingOp])
+def test_only_a_status_only_or_self_checking_case_may_record_no_golden(tmp_path, monkeypatch, op_class) -> None:
+    desc = {**_descriptor("add_default_s8"), "name": "probe_case"}
+    monkeypatch.setattr(generation_module, "get_op_map", lambda: {desc["operator"]: op_class})
+    generation_module.generate_test(desc, str(tmp_path), seed=1)
+    assert not list((tmp_path / desc["_family"] / "probe_case").glob("*.reference.json"))
+
+
+def test_every_descriptor_is_reference_backed_status_only_or_self_checking() -> None:
+    """The driver refuses a case that recorded no golden, so every registered operator must say,
+    per descriptor, where its verdict comes from."""
+    from helia_core_tester.generation.ops import get_op_map
+
+    op_map = get_op_map()
+    undeclared = []
+    for desc in load_all_descriptors(str(find_descriptors_dir())):
+        op = op_map[desc["operator"]](desc, seed=1)
+        if not (op.uses_reference() or op.status_only() or op.self_checking()):
+            undeclared.append(desc["name"])
+    assert undeclared == []
 
 
 def test_a_golden_can_be_recorded_once_per_case() -> None:

@@ -133,11 +133,10 @@ class OpPReLU(OperationBase):
         """
         Generate a CMSIS-direct harness for a deliberately-mismatched-shape
         PReLU test case, expecting arm_prelu_s8 to return ARM_CMSIS_NN_ARG_ERROR
-        (input_dims != output_dims is rejected up front by the kernel, before
-        any TFLite model is needed).
+        (input_dims != output_dims is rejected up front by the kernel).
         """
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
-        from helia_core_tester.generation.utils.tflite_utils import calculate_multiplier_shift
+        from helia_core_tester.generation.reference.quant import quantize_multiplier
 
         name = self.desc['name']
         kernel_info = self._select_cmsis_prelu_kernel()
@@ -151,8 +150,8 @@ class OpPReLU(OperationBase):
         alpha_dims = builder.nhwc_to_cmsis_dims(alpha_shape)
         output_dims = builder.nhwc_to_cmsis_dims(output_shape)
 
-        mult_identity, shift_identity = calculate_multiplier_shift(1.0)
-        mult_alpha, shift_alpha = calculate_multiplier_shift(1.0)
+        mult_identity, shift_identity = quantize_multiplier(1.0)
+        mult_alpha, shift_alpha = quantize_multiplier(1.0)
 
         if kernel_info["input_c_type"] == "int16_t":
             np_dtype = np.int16

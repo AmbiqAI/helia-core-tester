@@ -1,5 +1,5 @@
 """Integer LSTM cases on the C reference: the draw, the quantization TFLM's prepare derives from it,
-and the golden, replacing the Keras/flatc models and the UnitTest TestData fallback.
+and the golden.
 
 Scales: the input and the hidden state (output) come from the policy (s8 asymmetric over the
 draw's real range, s16 symmetric); weights are symmetric int8 per gate; the cell state is a power
@@ -16,6 +16,7 @@ from typing import Any, Dict, Mapping, Optional
 import numpy as np
 
 from helia_core_tester.generation.reference import policy
+from helia_core_tester.generation.reference.quant import quantize_multiplier
 
 GATES = ("forget", "input", "cell", "output")
 DEFAULT_CELL_SCALE_POWER = -11
@@ -28,13 +29,6 @@ class LstmIntCase:
     inputs: Dict[str, np.ndarray]
     output_shape: tuple
     context: Dict[str, Any]
-
-
-def quantize_multiplier(real: float) -> tuple[int, int]:
-    from helia_core_tester.generation.reference.bindings import get_bindings
-
-    out = get_bindings().prepare("quantize_multiplier", {"real_multiplier": float(real)})
-    return int(out["multiplier"]), int(out["shift"])
 
 
 def _zero_point(extras: Mapping[str, Any], key: str) -> Optional[int]:

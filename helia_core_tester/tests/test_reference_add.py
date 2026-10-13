@@ -85,19 +85,19 @@ def test_prepare_matches_tflite_add_params(lib) -> None:
     assert _prepare(lib, "s16", 1 / 32768, 0, 1 / 32768, 0, 1 / 32768, 0)["left_shift"] == 15
 
 
-def test_prepare_agrees_with_the_python_multiplier_helper(lib) -> None:
-    from helia_core_tester.generation.utils.tflite_utils import elementwise_addsub_quant_params
+def test_prepare_agrees_with_the_python_multiplier_model(lib) -> None:
+    from helia_core_tester.tests.reference_models import quantize_multiplier
 
     rng = np.random.default_rng(3)
     for _ in range(200):
         s1, s2, so = (float(np.float32(x)) for x in rng.uniform(1e-3, 1.0, 3))
-        for kind, dt in (("s8", "S8"), ("s16", "S16")):
+        for kind, left_shift in (("s8", 20), ("s16", 15)):
             p = _prepare(lib, kind, s1, 0, s2, 0, so, 0)
-            q = elementwise_addsub_quant_params(input1_scale=s1, input2_scale=s2, output_scale=so, activation_dtype=dt)
+            twice_max = 2.0 * max(s1, s2)
+            want = (*quantize_multiplier(s1 / twice_max), *quantize_multiplier(s2 / twice_max),
+                    *quantize_multiplier(twice_max / ((1 << left_shift) * so)), left_shift)
             assert (p["input1_multiplier"], p["input1_shift"], p["input2_multiplier"], p["input2_shift"],
-                    p["output_multiplier"], p["output_shift"], p["left_shift"]) == (
-                q["input1_mult"], q["input1_shift"], q["input2_mult"], q["input2_shift"],
-                q["out_mult"], q["out_shift"], q["left_shift"])
+                    p["output_multiplier"], p["output_shift"], p["left_shift"]) == want
 
 
 @pytest.mark.parametrize(

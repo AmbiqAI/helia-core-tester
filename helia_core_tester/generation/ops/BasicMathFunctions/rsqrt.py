@@ -51,13 +51,6 @@ def _quant_param_to_scalar(value, name: str, cast):
     return cast(arr.reshape(-1)[0])
 
 
-def _requantize_like_cmsis(value: int, multiplier: int, shift: int) -> int:
-    if multiplier == 0 or value == 0:
-        return 0
-    result = int(round((value * multiplier) / float(1 << (31 - shift))))
-    return result
-
-
 def make_rsqrt_per_op_lut(input_scale, output_scale, output_zp) -> np.ndarray:
     input_scale = _quant_param_to_scalar(input_scale, "input_scale", float)
     output_scale = _quant_param_to_scalar(output_scale, "output_scale", float)
@@ -94,11 +87,11 @@ def make_rsqrt_universal_lut(input_scale) -> np.ndarray:
 
 
 def derive_rsqrt_universal_quant_params(output_scale: float) -> Dict[str, int]:
-    from helia_core_tester.generation.utils.tflite_utils import calculate_multiplier_shift
+    from helia_core_tester.generation.reference.quant import quantize_multiplier
 
     output_scale = float(output_scale)
     effective_scale = RSQRT_CANONICAL_OUTPUT_SCALE / output_scale
-    out_mult, out_shift = calculate_multiplier_shift(effective_scale)
+    out_mult, out_shift = quantize_multiplier(effective_scale)
     needs_rescale = 0 if abs(effective_scale - 1.0) < 1e-9 else 1
     return {
         "out_mult": int(out_mult),
@@ -171,7 +164,6 @@ class OpRsqrt(OperationBase):
         from helia_core_tester.generation.reference import policy
         from helia_core_tester.generation.reference.call import ReferenceCall
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
-        from helia_core_tester.generation.utils.tflite_utils import activation_bounds
 
         name = self.desc["name"]
         kernel_info = self._select_cmsis_rsqrt_kernel()
@@ -186,7 +178,7 @@ class OpRsqrt(OperationBase):
         builder = TemplateContextBuilder()
         input_dims = builder.nhwc_to_cmsis_dims(input_shape)
         output_dims = builder.nhwc_to_cmsis_dims(output_shape)
-        out_activation_min, out_activation_max = activation_bounds("S16")
+        out_activation_min, out_activation_max = -32768, 32767
 
         if self.status_only():
             input_q = self._generate_negative_domain_input(input_shape, input_zp)

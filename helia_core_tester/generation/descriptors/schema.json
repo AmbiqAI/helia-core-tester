@@ -82,7 +82,6 @@
         "Transpose",
         "Unpack",
         "TransposeConv",
-        "VariableUpdate",
         "Where"
       ]
     },
@@ -636,7 +635,6 @@
               "SpaceToBatchND",
               "BatchToSpaceND",
               "ResizeNearestNeighbor",
-              "VariableUpdate",
               "Clamp",
               "NNActivationS16",
               "Gather",

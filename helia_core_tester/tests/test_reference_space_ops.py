@@ -117,7 +117,7 @@ def _model(operator, desc, x):
 def test_emitted_golden_is_the_reference_and_matches_numpy(tmp_path, operator, desc) -> None:
     cls = SOURCES[operator][0]
     op = cls(dict(desc), seed=500, target_cpu="cortex-m55")
-    assert op.uses_reference() and not op.needs_keras_model() and op.allow_no_tflite()
+    assert op.uses_reference()
     op.generate_c_files(tmp_path)
     call = op.reference
     assert call is not None

@@ -1,4 +1,4 @@
-"""Deterministic quantization policy: replaces the TFLiteConverter's calibration.
+"""Deterministic quantization policy for the reference-backed operators.
 
 Every scale and zero point is a pure function of the drawn float data, an explicit
 range, or a descriptor `quantization.<role>` block, so a case reproduces from its

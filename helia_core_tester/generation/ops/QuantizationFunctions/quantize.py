@@ -19,19 +19,6 @@ class OpQuantize(QuantizationFamilyBase):
     def uses_reference(self) -> bool:
         return True
 
-    def primary_execution_dtype(self) -> str:
-        """Quantize converts an FP32 input to a quantized output, so the
-        conversion/quantization target dtype is the *output* dtype, not the
-        input. The shared base implementation defaults to the input dtype
-        (correct for unary/activation-like ops), which for Quantize is always
-        FP32 -- this previously caused the shared TFLite converter to skip
-        int8/int16 quantization entirely and emit a fully float32 model.
-        """
-        resolved = self.resolved_tensor_dtypes()
-        if "output" in resolved:
-            return resolved["output"]
-        return super().primary_execution_dtype()
-    
     def _select_cmsis_quantize_kernel(self) -> dict[str, str]:
         """
         Select appropriate CMSIS-NN kernel function for Quantize operation.

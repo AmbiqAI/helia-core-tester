@@ -649,7 +649,6 @@ Reports:
 Generation report files (always emitted):
 - `generation_summary.json`
 - `generation_failures.json`
-- `conversion_failures.json`
 - `manifest_pointer.json`
 - `capability_skips.json`
 
@@ -682,7 +681,6 @@ Reference ops for float infrastructure:
 Future ops should consume resolved tensor roles rather than raw legacy dtype fields:
 - `self.tensor_dtype("input")`
 - `self.tensor_c_type("output")`
-- `self.tensor_litert_dtype("input")`
 - `self.comparison_config()`
 
 ### Non-finite inputs
@@ -806,9 +804,10 @@ bit equality.
 `if`/`then` gate in `schema.json` is documentation until the descriptor loader validates the whole
 schema (#100).
 
-To scaffold a new tester op, start from `helia_core_tester/scripts/scaffold_operator.py`.
-
-Generated LiteRT-only ops should route through `build_<op>_op()` and resolve tensor roles from
+To scaffold a new tester op, start from `helia_core_tester/scripts/scaffold_operator.py`. It
+emits a reference-backed skeleton (`uses_reference()`, the `REFERENCE_ENTRY` it calls on the C
+reference) whose `generate_c_files()` records its golden through `reference_golden()`; see
+[Reference goldens](#reference-goldens-c-reference-library). Resolve tensor roles from
 `tensor_dtypes` or the normalized descriptor metadata instead of hand-parsing legacy dtype fields.
 
 ### Non-finite float comparison
@@ -867,7 +866,7 @@ Minimum, Maximum, PReLU) must feed each operand data that spans negative, near-z
 positive values **after** the input offset is applied, i.e. `value - zero_point`. A one-signed
 operand cannot discriminate the sign-dependent kernel paths: the packed DSP loop of
 ns-cmsis-nn#343 dropped the sign of `value + input_offset`, and abs, PReLU and min/max branch
-on it directly. Uniform `[-1, 1]` float data plus a TFLite zero point does not guarantee the
+on it directly. Uniform `[-1, 1]` float data plus a policy zero point does not guarantee the
 span, so generation enforces it (`OperationBase._enforce_int_operand_sign_span`, issue #81
 property 2).
 
@@ -894,9 +893,8 @@ cases are all one- or two-pixel and sit below this floor, which is why that oper
 wired to the rule.
 
 Two kinds of operand are check-only: the generator never steers them, so a failing one must be
-waived. An operand baked into the TFLite model (a PReLU alpha) cannot move, because the
-reference interpreter would keep using the model's copy and the golden would stop matching the
-emitted array. An operand the descriptor pins explicitly (`hint.extras.input_values`, or
+waived. A constant whose one-signedness is the point of the case (a PReLU alpha slope) is left as
+drawn. An operand the descriptor pins explicitly (`hint.extras.input_values`, or
 `input_1_values` / `input_2_values` for the float squared difference) must not
 move, because the pinned values are the case.
 
@@ -906,9 +904,8 @@ An operand that is intentionally one-signed opts out in its descriptor under
 ```yaml
 operand_sign_span_exempt:
   input: pinned uniformly negative input to hold the alpha branch on every lane (hct#81)
-  alpha: PReLU's alpha is the positive slope constant baked into the TFLite model; steering it
-    would leave the reference interpreter using the model's copy, and the kernel branches on
-    the sign of the input, not of alpha (hct#81)
+  alpha: PReLU's alpha is a positive slope constant, and the kernel branches on the sign of
+    the input, not of alpha (hct#81)
 ```
 
 The reason is required, and the key must name an operand the operator actually submits to the
@@ -919,11 +916,14 @@ not enforced at load time (#100), so the rule lives in code.
 
 ## Reference goldens (C reference library)
 
-Every golden is being moved onto one flow: descriptor -> seeded draw -> quantization ->
-`ReferenceCall` -> a C reference kernel maintained in this repo -> golden plus
-`<case>.reference.json`. Operators on it say so with `uses_reference()`; the driver then builds no
-Keras model, converts nothing, and fails the case unless `generate_c_files()` recorded its call
-through `OperationBase.reference_golden()`. On it so far: the elementwise and activation families
+Every golden comes from one flow: descriptor -> seeded draw -> quantization -> `ReferenceCall` ->
+a C reference kernel maintained in this repo -> golden plus `<case>.reference.json`. There is no
+TensorFlow, Keras, LiteRT or flatbuffers dependency and no model file; `tests/test_no_frameworks.py`
+fails on any import of them. Operators say so with `uses_reference()`, and the driver fails any
+case whose `generate_c_files()` recorded no call through `OperationBase.reference_golden()`,
+unless the case is `status_only()` (it asserts a returned status, an `ARG_ERROR` case) or
+`self_checking()` (ChunkedEquivalence: the full-length call is the reference for the chunked
+calls). This covers the elementwise and activation families
 (Add, Sub, Mul, Minimum/Maximum, SquaredDifference, comparisons, Abs, Clamp, Relu/Relu6, LeakyRelu,
 PReLU/PReLUScalar, HardSwish, Tanh, Logistic, NNActivationS16, NNActivationFloat), Softmax, Sqrt,
 Rsqrt, Quantize, Dequantize and Requantize; the weighted operators (Conv, DepthwiseConv,
@@ -933,8 +933,7 @@ Pad/MirrorPad, Reshape/Squeeze, BatchToSpaceND/SpaceToBatchND, DepthToSpace/Spac
 ResizeNearestNeighbor, Transpose, StridedSlice, Tile, BroadcastTo, ScatterNd, SelectV2, Where,
 ReverseSequence, DynamicUpdateSlice, Fill); and the recurrent operators (LSTM s8/s16/f32/f16, GRU
 f32/f16, SVDF with int8 or int16 state and float). Nothing is read from the ns-cmsis-nn checkout's
-UnitTest data any more. A case that asserts only a
-returned status (an `ARG_ERROR` case) answers `status_only()` and has no golden at all.
+UnitTest data.
 
 - `helia_core_tester/reference/` holds the library: plain scalar C11 written from each operator's
   definition (TFLite reference semantics for integer rounding), never from ns-cmsis-nn sources.
@@ -976,7 +975,7 @@ returned status (an `ARG_ERROR` case) answers `status_only()` and has no golden 
 
 - Weighted operators draw their own weights (Glorot-uniform, `weight_gain` scaling it, from a
   stream separate from the input draw) in `generation/reference/weighted.py`. Filters are
-  quantized symmetric per output channel (qmax 127 for int8, 7 for int4, as the converter did),
+  quantized symmetric per output channel (qmax 127 for int8, 7 for int4, as TFLite's converter does),
   biases at `input_scale * filter_scale[c]`, rounded half away from zero, int32 for s8 and int64
   for s16; integer biases are drawn with a magnitude that moves every channel's output by at least
   one step, so a dropped bias-add cannot pass. The output quantization is the policy over the
@@ -1081,7 +1080,7 @@ Seeds:
 
 Generation reuse:
 - each generated case carries a `.stamp` over its descriptor document, the case name, target CPU, suite, seed, the identity of the ns-cmsis-nn checkout (commit when the checkout is a clean git tree, a content digest of its `Include/`, UnitTest TestData and `Tests/KernelContracts` export otherwise), and a generator-version hash (the generation sources, `core/cpu_targets.py`, `core/path_layout.py`, the templates under `assets/templates`, the C reference library under `helia_core_tester/reference`, a SHA-256 of `uv.lock` for the resolved dependency set, the Python version and machine architecture, and the host C compiler identity). Float precision is not a stamp input: it selects which descriptors a run generates, not what any one of them emits.
-- a case whose stamp still matches is reused: no TFLite conversion, no inference, no file emission. Its manifest entry is rebuilt from the on-disk sidecar, so build and run see the same tree either way.
+- a case whose stamp still matches is reused: no reference call, no file emission. Its manifest entry is rebuilt from the on-disk sidecar, so build and run see the same tree either way.
 - a case whose stamp does not match has its directory removed before regeneration, so output a previous descriptor emitted under a different file name cannot survive into the new build.
 - capability and kernel-symbol skips are re-evaluated every run, because a different ns-cmsis-nn checkout can add or remove a symbol.
 - `generation_summary.json` and `manifest.json` record generated, reused and pruned counts.
@@ -1140,7 +1139,7 @@ Absent semantics: a checkout without the file (ns-cmsis-nn before the export lan
 
 Bumping the minimum ns-cmsis-nn: when the export schema changes, add the new string to `SUPPORTED_CONTRACT_SCHEMAS` in `contract/ir.py`, refresh `tests/fixtures/contract/` (the loader fixture and the twelve-function hardware pilot, which a real-tree test keeps equal to the export), and update the `#549` reference in `contract/render.py` if a newer export is required. Bumping the absent-leg pin means changing `v7.35.1` in `self-validate.yml` to the newest tag that still has no export.
 
-Deferred to later iterations: C references and `@hct` size, sizer and tolerance tags that would remove descriptors, op classes and tflite builders for new kernels; the host oracle and generic harness; on-target sizer validation for streamed cases; and the argument-pack streaming path (per-prototype trampolines replacing hand-written adapter bodies), which follows the NSX build conversion.
+Deferred to later iterations: C references and `@hct` size, sizer and tolerance tags that would remove descriptors and op classes for new kernels; the host oracle and generic harness; on-target sizer validation for streamed cases; and the argument-pack streaming path (per-prototype trampolines replacing hand-written adapter bodies), which follows the NSX build conversion.
 
 ## Clean Contract
 
