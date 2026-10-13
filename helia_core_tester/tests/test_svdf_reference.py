@@ -162,7 +162,8 @@ def test_float_golden_is_the_float64_model_within_rounding(name: str, tmp_path: 
     op, header = _generate(name, tmp_path)
     call = op.reference
     f16 = DESCRIPTORS[name]["activation_dtype"] == "FP16"
-    assert call.entry == ("svdf_f16" if f16 else "svdf_f32")
+    # cortex-m55 runs arm_svdf_f16 on Helium, so a float16 golden is that route's arithmetic (svdf_f16_mve).
+    assert call.entry == ("svdf_f16_mve" if f16 else "svdf_f32")
     assert call.inputs["input"].shape[0] == DESCRIPTORS[name]["hint"]["sequence_steps"]
     model, magnitude = _svdf_float_model(call)
     golden = _emitted_golden(header, name, np.float16 if f16 else np.float32).astype(np.float64)

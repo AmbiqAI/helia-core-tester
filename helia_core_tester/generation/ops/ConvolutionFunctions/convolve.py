@@ -356,7 +356,8 @@ class OpConvolve(OperationBase):
 
         if float_kernel:
             output_data, nonfinite_context = self.apply_nonfinite_policy(
-                output_data, reference=self.reference_probe, inputs=[input_q, case["filter_operand"], case["bias_operand"]]
+                output_data, reference=case.get("reference_probe") or self.reference_probe,
+                inputs=[input_q, case["filter_operand"], case["bias_operand"]]
             )
         else:
             nonfinite_context = {}

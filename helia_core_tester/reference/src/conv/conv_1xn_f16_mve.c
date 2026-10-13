@@ -24,17 +24,9 @@
  *            pair accumulator j; those sum (0+1)+(2+3); the bias is added in float32; one rounding.
  * The activation clamp is applied to non-NaN values (the generator masks nonfinite lanes).
  */
-#include <math.h>
 #include <stdlib.h>
 
-#include "hct_ref_internal.h"
-
-#define LANES 8
-#define ACC_BLOCK 32
-#define FOLD_SPAN (ACC_BLOCK * LANES)
-#define GATHER_MAX_8 (65535 / 7)
-#define GATHER_MAX_16 (65535 / 15)
-#define GATHER_MAX_4 (65535 / 3)
+#include "hct_f16_mve.h"
 
 enum
 {
@@ -42,123 +34,6 @@ enum
     ARITH_LANES16 = 1,
     ARITH_FOLD = 2
 };
-
-static float h(float v)
-{
-    return hct_round_f16(v);
-}
-
-static int32_t fma16(float a, float b, float c, float *out)
-{
-    HctXsum x;
-    hct_xsum_init(&x);
-    hct_xsum_add_product(&x, a, b);
-    hct_xsum_add(&x, (double)c);
-    double v = 0.0;
-    HCT_TRY(hct_xsum_round(&x, 1, HCT_FLOAT16, &v));
-    *out = (float)v;
-    return HCT_OK;
-}
-
-static int32_t chain_block(const float *lhs, const float *rhs, int32_t k0, int32_t n, float start, float *out)
-{
-    float acc = start;
-    for (int32_t k = k0; k < k0 + n; ++k)
-    {
-        HCT_TRY(fma16(rhs[k], lhs[k], acc, &acc));
-    }
-    *out = acc;
-    return HCT_OK;
-}
-
-static int32_t chain(const float *lhs, const float *rhs, int32_t K, int fold, float bias, float *out)
-{
-    const int32_t first_n = (fold && K > ACC_BLOCK) ? ACC_BLOCK : K;
-    float acc = 0.0f;
-    HCT_TRY(chain_block(lhs, rhs, 0, first_n, bias, &acc));
-    if (first_n == K)
-    {
-        *out = acc;
-        return HCT_OK;
-    }
-    float acc32 = acc;
-    for (int32_t k0 = first_n; k0 < K; k0 += ACC_BLOCK)
-    {
-        const int32_t n = K - k0 < ACC_BLOCK ? K - k0 : ACC_BLOCK;
-        float part = 0.0f;
-        HCT_TRY(chain_block(lhs, rhs, k0, n, 0.0f, &part));
-        acc32 = acc32 + part;
-    }
-    *out = h(acc32);
-    return HCT_OK;
-}
-
-static int32_t lanes_block(const float *lhs, const float *rhs, int32_t k0, int32_t n, float lane[LANES])
-{
-    for (int i = 0; i < LANES; ++i)
-    {
-        lane[i] = 0.0f;
-    }
-    for (int32_t k = 0; k < n; ++k)
-    {
-        HCT_TRY(fma16(lhs[k0 + k], rhs[k0 + k], lane[k % LANES], &lane[k % LANES]));
-    }
-    return HCT_OK;
-}
-
-static int32_t lanes16(const float *lhs, const float *rhs, int32_t K, float bias, float *out)
-{
-    float l[LANES];
-    HCT_TRY(lanes_block(lhs, rhs, 0, K, l));
-    const float a = h(h(l[0] + l[1]) + h(l[2] + l[3]));
-    const float b = h(h(l[4] + l[5]) + h(l[6] + l[7]));
-    *out = h(bias + h(a + b));
-    return HCT_OK;
-}
-
-static int32_t fold_lanes(const float *lhs, const float *rhs, int32_t K, float bias, float *out)
-{
-    float acc[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-    for (int32_t k0 = 0; k0 < K; k0 += FOLD_SPAN)
-    {
-        const int32_t n = K - k0 < FOLD_SPAN ? K - k0 : FOLD_SPAN;
-        float l[LANES];
-        HCT_TRY(lanes_block(lhs, rhs, k0, n, l));
-        for (int j = 0; j < 4; ++j)
-        {
-            const float pair = l[2 * j] + l[2 * j + 1];
-            acc[j] = k0 == 0 ? pair : acc[j] + pair;
-        }
-    }
-    const float total = (acc[0] + acc[1]) + (acc[2] + acc[3]);
-    *out = h(bias + total);
-    return HCT_OK;
-}
-
-/* Columns [0, result) the 16/8/4-lane gather kernels cover; 0 when K exceeds the eight-lane gather stride. */
-static int32_t gather_columns(int32_t K, int32_t N)
-{
-    if (K > GATHER_MAX_8)
-    {
-        return 0;
-    }
-    int32_t c = 0;
-    if (K <= GATHER_MAX_16)
-    {
-        c = N - N % 16;
-    }
-    c += (N - c) - (N - c) % 8;
-    if (K <= GATHER_MAX_4)
-    {
-        c += (N - c) - (N - c) % 4;
-    }
-    return c;
-}
-
-static float clamp_finite(float v, float lo, float hi)
-{
-    return isnan(v) ? v : (v < lo ? lo : (v > hi ? hi : v));
-}
 
 /* arm_convolve_1_x_n_find_regions: [first_valid, first_valid + no_pad) are the outputs with every tap in range. */
 static void find_regions(int32_t out_w, int32_t in_w, int32_t kw, int32_t stride, int32_t pad, int32_t *first,
@@ -233,18 +108,18 @@ int32_t hct_ref_conv_1xn_f16_mve(const HctConv1xNF16MveParams *p, const HctTenso
         return HCT_E_SIZE;
     }
     const int32_t K = KW * C;
-    const int fold = !p->acc16 && K > ACC_BLOCK;
-    const float lo = h(p->activation_min);
-    const float hi = h(p->activation_max);
+    const int fold = !p->acc16 && K > HCT_F16_ACC_BLOCK;
+    const float lo = hct_h16(p->activation_min);
+    const float hi = hct_h16(p->activation_max);
     int32_t first = 0;
     int32_t no_pad = 0;
     find_regions(OW, W, KW, p->stride_w, p->pad_w, &first, &no_pad);
     const int in_place = O >= 4 && ((O % 8 >= 4 && K >= 80) || K >= 224);
 
     /* Per route, the columns the gather kernels cover and the arithmetic of the rest. */
-    const int32_t matmul_gather = K < 32 ? gather_columns(K, O) : 0;
+    const int32_t matmul_gather = K < 32 ? hct_f16_gather_columns(K, O) : 0;
     const int matmul_rest = fold ? ARITH_FOLD : ARITH_LANES16;
-    const int32_t strided_gather = (fold && O < 4) ? 0 : gather_columns(K, O);
+    const int32_t strided_gather = (fold && O < 4) ? 0 : hct_f16_gather_columns(K, O);
 
     float *lhs = malloc((size_t)K * sizeof(float));
     float *rhs = malloc((size_t)K * sizeof(float));
@@ -291,17 +166,17 @@ int32_t hct_ref_conv_1xn_f16_mve(const HctConv1xNF16MveParams *p, const HctTenso
                 float acc = 0.0f;
                 if (arith == ARITH_CHAIN)
                 {
-                    status = chain(lhs, rhs, K, fold, bias, &acc);
+                    status = hct_f16_chain(lhs, rhs, K, fold, bias, &acc);
                 }
                 else if (arith == ARITH_FOLD)
                 {
-                    status = fold_lanes(lhs, rhs, K, bias, &acc);
+                    status = hct_f16_dot_fold(lhs, rhs, K, bias, &acc);
                 }
                 else
                 {
-                    status = lanes16(lhs, rhs, K, bias, &acc);
+                    status = hct_f16_dot_lanes16(lhs, rhs, K, bias, &acc);
                 }
-                hct_store_f32(ot, (((int64_t)b * OW) + x) * O + c, clamp_finite(acc, lo, hi));
+                hct_store_f32(ot, (((int64_t)b * OW) + x) * O + c, hct_f16_clamp_finite(acc, lo, hi));
             }
         }
     }

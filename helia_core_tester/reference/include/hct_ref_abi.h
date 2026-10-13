@@ -663,6 +663,50 @@ typedef struct
     float activation_max;
 } HctConv1xNF16MveParams;
 
+/* ns-cmsis-nn arm_nn_mat_mult_nt_n_packed_f16 arithmetic on Helium (named variant; FullyConnected, Convolve and DepthwiseConv reach it with NT_N_PACKED filters). The rhs operand is the unpacked [B, N, K] matrix. policy 0: the plain entry (from the bias, 32-tap blocks folded into float32 past ARM_NN_F16_ACC_BLOCK); 1: _acc16 (float16 throughout); 2: _precise (from zero, 4-tap blocks, bias added in float32). */
+typedef struct
+{
+    int32_t policy;
+    float activation_min;
+    float activation_max;
+} HctMatMulNtNPackedF16MveParams;
+
+/* ns-cmsis-nn float16 convolution routes on Helium (named variant) other than the 1xN kernel: route 0 patch GEMM or 1x1 through arm_nn_mat_mult_nt_t_f16; 1 the same through arm_nn_mat_mult_nt_n_packed_f16; 2 the direct kernel on OHWI rows; 3 the direct kernel on NT_N_PACKED filters; 4 the small-C kernel (float32 lanes); 5 conv1d k3/k5 on OHWI rows; 6 conv1d k3/k5 on NT_N_PACKED filters. acc16 selects the _acc16 entries (float16 lanes throughout, never folding). The filter operand is always the unpacked OHWI tensor. */
+typedef struct
+{
+    int32_t route;
+    int32_t stride_h;
+    int32_t stride_w;
+    int32_t pad_h;
+    int32_t pad_w;
+    int32_t dilation_h;
+    int32_t dilation_w;
+    int32_t acc16;
+    float activation_min;
+    float activation_max;
+} HctConvF16MveParams;
+
+/* ns-cmsis-nn float16 sum and mean on Helium (named variant): float32 accumulation of the widened halves. Bit d of axis_mask reduces input dim d. route 0: one running float32 sum in row-major order (generic, spatial and middle-block paths); route 1: the flatten path's eight lanes (element j in lane j % 8, adjacent lanes paired, pair sums added left to right). */
+typedef struct
+{
+    int32_t axis_mask;
+    int32_t route;
+} HctReduceF16AccParams;
+
+/* ns-cmsis-nn float16 depthwise convolution on Helium (named variant): the ch_mult 1 direct kernel, the generic kernel and the conv1d k3 / 2x5 specialisations, which all chain one float16 fused multiply-add per in-range tap from the bias. acc16 selects the _acc16 entries (never folding); otherwise more than 32 in-range taps fold into float32. */
+typedef struct
+{
+    int32_t stride_h;
+    int32_t stride_w;
+    int32_t dilation_h;
+    int32_t dilation_w;
+    int32_t pad_h;
+    int32_t pad_w;
+    int32_t acc16;
+    float activation_min;
+    float activation_max;
+} HctDepthwiseF16MveParams;
+
 int32_t hct_ref_abi_version(void);
 
 int32_t hct_ref_quantize_multiplier(const HctQuantizeMultiplierIn *in, HctQuantizeMultiplierOut *out);
@@ -1150,6 +1194,39 @@ int32_t hct_ref_lstm_f32_cmsis(const HctLstmF32CmsisParams *params,
     const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
 /* inputs [input:float16, filter:float16, bias:float16] -> outputs [output:float16] */
 int32_t hct_ref_conv_1xn_f16_mve(const HctConv1xNF16MveParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [lhs:float16, rhs:float16, bias:float16] -> outputs [output:float16] */
+int32_t hct_ref_matmul_nt_n_packed_f16_mve(const HctMatMulNtNPackedF16MveParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float16, filter:float16, bias:float16] -> outputs [output:float16] */
+int32_t hct_ref_conv_f16_mve(const HctConvF16MveParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float16, filter:float16, bias:float16] -> outputs [output:float16] */
+int32_t hct_ref_transpose_conv_f16_mve(const HctConvFloatParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float16] -> outputs [output:float16] */
+int32_t hct_ref_avg_pool_f16_mve(const HctPoolFloatParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float16] -> outputs [output:float16] */
+int32_t hct_ref_softmax_f16_mve(const HctNoParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float16] -> outputs [output:float16] */
+int32_t hct_ref_reduce_sum_f16_f32acc(const HctReduceF16AccParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float16] -> outputs [output:float16] */
+int32_t hct_ref_mean_f16_f32acc(const HctReduceF16AccParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float16, input_weights:float16, recurrent_weights:float16, bias:float16] -> outputs [output:float16] */
+int32_t hct_ref_lstm_f16_mve(const HctLstmFloatParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float16, input_weights:float16, recurrent_weights:float16, input_bias:float16, recurrent_bias:float16] -> outputs [output:float16] */
+int32_t hct_ref_gru_f16_mve(const HctGruParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float16, weights_feature:float16, weights_time:float16, bias:float16, state:float16] -> outputs [output:float16, state_out:float16] */
+int32_t hct_ref_svdf_f16_mve(const HctSvdfFloatParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float16, filter:float16, bias:float16] -> outputs [output:float16] */
+int32_t hct_ref_depthwise_f16_mve(const HctDepthwiseF16MveParams *params,
     const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
 
 #if defined(__GNUC__)

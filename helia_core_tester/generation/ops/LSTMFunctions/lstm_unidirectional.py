@@ -104,7 +104,15 @@ class OpLSTMUnidirectional(OperationBase):
             shape_io = (time_steps, batch_size) if time_major else (batch_size, time_steps)
             operands = {"input": np.ascontiguousarray(input_tensor.reshape(*shape_io, input_size)), **stacked}
             faithful = activation_dtype == "FP32"
-            if faithful:
+            mve16 = (activation_dtype == "FP16" and not self.status_only()
+                     and kf.mve_float16_target(self.target_cpu))
+            if mve16:
+                # arm_nn_lstm_step_f16 on Helium: float16 lane dots, the kernel's float16 tables.
+                exact = ReferenceCall(entry, {"time_major": int(time_major), "cell_clip": cell_clip}, operands,
+                                      {"output": (*shape_io, hidden_size)})
+                call = kf.rnn_f16_mve_call(exact)
+                kf.check_close_to_exact(name, call, exact, atol=kf.RNN_F16_ATOL)
+            elif faithful:
                 # The kernel's own activation tables and operation order on this target.
                 call = ReferenceCall("lstm_f32_cmsis", {"time_major": int(time_major), "cell_clip": cell_clip,
                                                         "target": kf.float_target(self.target_cpu)},
@@ -155,8 +163,8 @@ class OpLSTMUnidirectional(OperationBase):
                 "dst_size": batch_size * time_steps * hidden_size,
                 "use_bias": use_bias,
             }
-            if faithful:
-                context.update(kf.tolerance_context(np.float32))
+            if faithful or mve16:
+                context.update(kf.tolerance_context(float_dtype))
             context.update(nonfinite_context)
 
             # ns-cmsis-nn#377 / tester#71: generation-time feature probe for

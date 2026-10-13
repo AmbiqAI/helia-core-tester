@@ -5,6 +5,7 @@ SVDF operation implementation.
 from typing import Dict, Any
 from pathlib import Path
 import numpy as np
+from helia_core_tester.generation.ops._shared import kernel_faithful as kf
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.harness import ArgumentPool, HarnessInput, fragment
 from helia_core_tester.generation.reference.call import ReferenceCall
@@ -159,8 +160,18 @@ class OpSVDF(OperationBase):
                 {"output": (sequence_steps, input_batches, unit_count),
                  "state_out": (input_batches, feature_batches, time_batches)},
             )
+            if (activation_dtype == "FP16" and not self.status_only()
+                    and kf.mve_float16_target(self.target_cpu)):
+                # arm_svdf_f16 on Helium: float16 lane dots, the float32 rank sum, maxNum/minNum clamp.
+                call = kf.rnn_f16_mve_call(call)
+                faithful = True
+            else:
+                faithful = False
             # The harness runs sequence_steps kernel calls and compares the last step's output.
-            expected_output = self._svdf_outputs(call)["output"][-1].reshape(-1)
+            outputs = self._svdf_outputs(call)
+            if faithful:
+                kf.check_svdf_within_bound(name, outputs["output"], call)
+            expected_output = outputs["output"][-1].reshape(-1)
 
             def final_step(operands):
                 probe = np.ascontiguousarray(np.asarray(operands[0]).reshape(input_sequence.shape), dtype=float_dtype)
@@ -202,6 +213,8 @@ class OpSVDF(OperationBase):
                 "output_activation_max_literal": builder.format_float_literal(output_activation_max),
             }
             context.update(self._ctx_sizer_context(kernel_fn))
+            if faithful:
+                context.update(kf.tolerance_context(float_dtype))
             context.update(nonfinite_context)
             fault = self.fault_kind()
             variant = "svdf_f32"

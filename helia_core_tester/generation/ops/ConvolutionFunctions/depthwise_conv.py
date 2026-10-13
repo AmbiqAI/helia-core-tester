@@ -369,7 +369,7 @@ class OpDepthwiseConv(OperationBase):
         if float_kernel:
             input_data = case["input"]
             output_data, nonfinite_context = self.apply_nonfinite_policy(
-                output_data, reference=self.reference_probe,
+                output_data, reference=case.get("probe") or self.reference_probe,
                 inputs=[input_data, case["filter_operand"], case["bias_operand"]]
             )
             element_size = np.dtype(float_dtype).itemsize
@@ -423,6 +423,7 @@ class OpDepthwiseConv(OperationBase):
                 'dw_activation_min_literal': builder.format_float_literal(dw_conv_params['activation_min']),
                 'dw_activation_max_literal': builder.format_float_literal(dw_conv_params['activation_max']),
             }
+            context.update(case.get("kernel_faithful") or {})
             context.update(nonfinite_context)
             self._render_depthwise(output_dir, context)
             self._write_cmake(output_dir)

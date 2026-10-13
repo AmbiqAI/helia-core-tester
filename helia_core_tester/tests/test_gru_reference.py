@@ -20,7 +20,9 @@ import pytest
 
 from helia_core_tester.core.discovery import find_descriptors_dir
 from helia_core_tester.generation.io.descriptors import load_all_descriptors
+from helia_core_tester.generation.ops._shared import kernel_faithful as kf
 from helia_core_tester.generation.ops.LSTMFunctions.gru_unidirectional import OpGRUUnidirectional
+from helia_core_tester.generation.reference.call import ReferenceCall
 
 _OP_FILE = Path(__file__).resolve().parents[1] / "generation" / "ops" / "LSTMFunctions" / "gru_unidirectional.py"
 _GATES = ("update", "reset", "candidate")
@@ -151,7 +153,9 @@ def test_golden_matches_an_independent_model(desc: dict, tmp_path: Path) -> None
     call = op.reference
     assert call is not None and op.uses_reference()
     dtype = np.float16 if desc["name"].endswith("_f16") else np.float32
-    assert call.entry == ("gru_f16" if dtype == np.float16 else "gru_f32")
+    # cortex-m55 runs arm_nn_gru_step_f16 on Helium, so a float16 golden is that route's arithmetic (gru_f16_mve);
+    # the independent model below checks the exact entry on the same operands.
+    assert call.entry == ("gru_f16_mve" if dtype == np.float16 else "gru_f32")
     time_major = bool(desc.get("time_major", False))
     reset_after = bool(desc.get("reset_after", True))
     use_bias = bool(desc.get("use_bias", True))
@@ -186,7 +190,11 @@ def test_golden_matches_an_independent_model(desc: dict, tmp_path: Path) -> None
     assert golden.shape == (x.shape[0], x.shape[1], hidden)
     assert _same_bits(_parse_literal(emitted["expected_output"], dtype), golden)
     expected = _model(x, gates, time_major=time_major, reset_after=reset_after, dtype=dtype)
-    assert _same_bits(golden, expected)
+    exact = ReferenceCall("gru_f16", call.params, call.inputs, call.output_shapes) if dtype == np.float16 else call
+    assert _same_bits(exact.output(), expected)
+    if dtype == np.float16:
+        finite = np.isfinite(golden) & np.isfinite(expected)
+        assert np.all(np.abs(golden[finite].astype(np.float64) - expected[finite]) <= kf.RNN_F16_ATOL)
 
 
 @pytest.mark.parametrize("dtype", [np.float32, np.float16])

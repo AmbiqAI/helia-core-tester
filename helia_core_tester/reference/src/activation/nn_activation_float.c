@@ -14,7 +14,7 @@
 #include "hct_ref_internal.h"
 
 /* binary16 of tanh(4 i / 256) for i = 0..256 (arm_nn_tanh_lut_f16's values). */
-static const uint16_t tanh_lut_f16[257] = {
+const uint16_t hct_cmsis_tanh_lut_f16[257] = {
     0x0000u, 0x2400u, 0x27FFu, 0x29FFu, 0x2BFDu, 0x2CFDu, 0x2DFCu, 0x2EF9u, 0x2FF5u, 0x3078u, 0x30F6u, 0x3172u,
     0x31EEu, 0x3269u, 0x32E4u, 0x335Eu, 0x33D6u, 0x3427u, 0x3463u, 0x349Du, 0x34D8u, 0x3512u, 0x354Bu, 0x3584u,
     0x35BCu, 0x35F3u, 0x362Au, 0x3660u, 0x3696u, 0x36CBu, 0x36FFu, 0x3732u, 0x3765u, 0x3797u, 0x37C8u, 0x37F9u,
@@ -110,7 +110,7 @@ int32_t hct_ref_nn_activation_f16(const HctFloatActivationTypeParams *params, co
 
 static float lut(int32_t i)
 {
-    return hct_f16_to_f32(tanh_lut_f16[i]);
+    return hct_f16_to_f32(hct_cmsis_tanh_lut_f16[i]);
 }
 
 static int32_t tanh_lut(const HctNoParams *p, const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs,
