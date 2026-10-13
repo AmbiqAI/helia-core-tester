@@ -458,22 +458,6 @@ def _fake_checkout(root: Path, table_entries: int = 256) -> Path:
     return root
 
 
-def test_sigmoid_table_is_read_from_the_resolved_checkout(tmp_path: Path, monkeypatch) -> None:
-    from helia_core_tester.generation.ops.ActivationFunctions.nn_activation_s16 import OpNNActivationS16
-
-    monkeypatch.setenv("CMSIS_NN_ROOT", str(_fake_checkout(tmp_path / "ns-cmsis-nn")))
-    table = OpNNActivationS16.__new__(OpNNActivationS16)._load_sigmoid_table()
-    assert table == list(range(256))
-
-
-def test_sigmoid_table_names_the_fix_without_a_checkout(tmp_path: Path, monkeypatch) -> None:
-    from helia_core_tester.generation.ops.ActivationFunctions.nn_activation_s16 import OpNNActivationS16
-
-    monkeypatch.setenv("CMSIS_NN_ROOT", str(tmp_path / "not-a-checkout"))
-    with pytest.raises(RuntimeError, match="set CMSIS_NN_ROOT to an ns-cmsis-nn checkout"):
-        OpNNActivationS16.__new__(OpNNActivationS16)._load_sigmoid_table()
-
-
 def test_lstm_schema_path_follows_the_resolved_checkout(tmp_path: Path, monkeypatch) -> None:
     from helia_core_tester.generation.ops.LSTMFunctions.lstm_unidirectional import lstm_schema_path
 

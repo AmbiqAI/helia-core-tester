@@ -1,4 +1,4 @@
-"""Independent float sqrt/rsqrt goldens and bit-level contract checks (ns-cmsis-nn#295)."""
+"""Float sqrt/rsqrt cases: goldens from the C reference, bit-level contract checks (ns-cmsis-nn#295)."""
 
 from pathlib import Path
 from typing import Any, Dict
@@ -6,29 +6,6 @@ from typing import Any, Dict
 import numpy as np
 
 from helia_core_tester.generation.harness import ArgumentPool, ArrayLiteral, Declaration, GuardedBuffer, HarnessInput
-
-
-def sqrt_float_reference(bits: np.ndarray, reciprocal: bool) -> np.ndarray:
-    """Evaluate finite positives in float64; encode the public special-value contract."""
-    half = bits.dtype == np.uint16
-    dtype = np.float16 if half else np.float32
-    sign, inf, quiet = (
-        (0x8000, 0x7C00, 0x0200) if half else (0x80000000, 0x7F800000, 0x00400000)
-    )
-    magnitude = bits & (sign - 1)
-    with np.errstate(all="ignore"):
-        values = bits.view(dtype).astype(np.float64)
-        result = np.sqrt(values)
-        if reciprocal:
-            result = 1.0 / result
-        output = result.astype(dtype).view(bits.dtype).copy()
-    output[(bits & sign != 0) & (magnitude != 0)] = inf | quiet
-    nan = magnitude > inf
-    output[nan] = bits[nan] | quiet
-    zero = magnitude == 0
-    output[zero] = bits[zero] | (inf if reciprocal else 0)
-    output[bits == inf] = 0 if reciprocal else inf
-    return output
 
 
 def sqrt_float_inputs(dtype: str, count: int, pattern: str, seed: int) -> np.ndarray:
@@ -163,7 +140,14 @@ def generate_sqrt_float(op, output_dir: Path, reciprocal: bool) -> None:
         raise ValueError("Float sqrt descriptors need positive storage dimensions")
     pattern = hint.get("float_pattern", "positive")
     bits = sqrt_float_inputs(dtype, count, pattern, op.seed)
-    expected = sqrt_float_reference(bits, reciprocal)
+    from helia_core_tester.generation.reference.call import ReferenceCall
+
+    float_dtype = np.float16 if dtype == "FP16" else np.float32
+    entry = ("rsqrt_" if reciprocal else "sqrt_") + ("f16" if dtype == "FP16" else "f32")
+    golden = op.reference_golden(ReferenceCall(
+        entry, {"unused": 0}, {"input": np.ascontiguousarray(bits.view(float_dtype))}, {"output": bits.shape},
+    ))
+    expected = np.ascontiguousarray(golden).view(bits.dtype)
     error = hint.get("api_error", "")
     if error not in ("", "null_input", "null_output", "zero_block", "negative_block"):
         raise ValueError(f"Unknown float sqrt api_error: {error}")

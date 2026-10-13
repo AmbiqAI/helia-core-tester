@@ -397,6 +397,26 @@
       "type": "string",
       "description": "SquaredDifference: named quantization preset variant. 'default' (implied when absent) gives the s8 inputs a moderate asymmetric zero point; 'relu_range' keeps the -128 input zero point that pins every post-offset lane non-negative."
     },
+    "quantization": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "oneOf": [
+          {
+            "required": ["scale"],
+            "properties": { "scale": { "type": "number", "exclusiveMinimum": 0 }, "zero_point": { "type": "integer" } },
+            "additionalProperties": false
+          },
+          {
+            "required": ["range"],
+            "properties": { "range": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 } },
+            "additionalProperties": false
+          }
+        ]
+      },
+      "description": "Reference-backed ops: tensor role -> explicit quantization, either {scale, zero_point} or {range: [lo, hi]} for the policy (s8 asymmetric, s16 symmetric). Overrides the op's default policy range for that role."
+    },
     "degenerate_golden_reason": {
       "type": "string",
       "minLength": 1,

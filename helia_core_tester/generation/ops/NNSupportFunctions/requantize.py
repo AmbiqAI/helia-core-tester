@@ -1,5 +1,6 @@
 """
-Requantize operation implementation.
+Requantize operation implementation: CMSIS-NN's arm_requantize_* (arm_nn_requantize between the
+zero points) on the C reference, a named variant with no TFLite counterpart.
 """
 
 from typing import Dict
@@ -23,17 +24,8 @@ class OpRequantize(QuantizationFamilyBase):
     Requantize operation (int8->int8, int16->int16).
     """
 
-    def allow_no_tflite(self) -> bool:
+    def uses_reference(self) -> bool:
         return True
-
-    def needs_keras_model(self) -> bool:
-        return False
-
-    def build_keras_model(self):
-        raise NotImplementedError("Requantize uses CMSIS-NN kernel directly; no model required.")
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        raise NotImplementedError("Requantize does not produce a TFLite model.")
 
     def _select_cmsis_requantize_kernel(self) -> Dict[str, str]:
         activation_dtype = self.desc.get("activation_dtype", "S8")
@@ -72,19 +64,20 @@ class OpRequantize(QuantizationFamilyBase):
             np_in_dtype = np.int8
             qmin, qmax = -128, 127
             input_q = rng.integers(qmin, qmax + 1, size=input_shape, dtype=np_in_dtype)
-            out_dtype = np.int8
         elif kernel_info["input_c_type"] == "int16_t":
             np_in_dtype = np.int16
             qmin, qmax = -32768, 32767
             input_q = rng.integers(qmin, qmax + 1, size=input_shape, dtype=np_in_dtype)
-            out_dtype = np.int16
         else:
             raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
 
-        centered = input_q.astype(np.int32) - int(input_zp)
-        requant = self._requantize_np(centered, multiplier, shift)
-        requant = requant + int(output_zp)
-        requant = np.clip(requant, qmin, qmax).astype(out_dtype)
+        from helia_core_tester.generation.reference.call import ReferenceCall
+
+        requant = self.reference_golden(ReferenceCall(
+            "requantize_s8" if kernel_info["input_c_type"] == "int8_t" else "requantize_s16",
+            {"multiplier": multiplier, "shift": shift, "input_zero_point": input_zp, "output_zero_point": output_zp},
+            {"input": np.ascontiguousarray(input_q)}, {"output": input_shape},
+        ))
 
         context = {
             "name": name,

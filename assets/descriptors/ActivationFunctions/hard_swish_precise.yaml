@@ -29,16 +29,14 @@ weight_dtype: S8
 activation: NONE
 hint:
   call_style: per_tensor
-  extras:
-    input_scale: 0.0078125
-    output_scale: 0.0078125
-    input_zero_point: 0
-    output_zero_point: 0
 input_shape:
 - 1
 - 2
 - 2
 - 3
+quantization:
+  input: {scale: 0.0078125, zero_point: 0}
+  output: {scale: 0.0078125, zero_point: 0}
 ---
 operator: HardSwishPrecise
 name: hard_swish_precise_vector_s16
@@ -47,14 +45,12 @@ weight_dtype: S8
 activation: NONE
 hint:
   call_style: per_tensor
-  extras:
-    input_scale: 0.0078125
-    output_scale: 0.0078125
-    input_zero_point: 0
-    output_zero_point: 0
 input_shape:
 - 1
 - 8
+quantization:
+  input: {scale: 0.0078125, zero_point: 0}
+  output: {scale: 0.0078125, zero_point: 0}
 ---
 # ns-cmsis-nn#289: arm_hard_swish_precise_s8 takes a 256-entry table path on MVE
 # from 1760 elements (HARD_SWISH_PRECISE_S8_LUT_MIN_SIZE). 1759 / 1760 straddle it.

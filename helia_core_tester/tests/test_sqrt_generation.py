@@ -11,11 +11,6 @@ from helia_core_tester.generation.ops.BasicMathFunctions.sqrt import (
     make_sqrt_lut_s16,
     make_sqrt_lut_s8,
 )
-from helia_core_tester.generation.utils.litert_builder import LITERT_AVAILABLE
-from helia_core_tester.generation.utils.litert_utils import (
-    get_operator_tensors_from_litert,
-    load_litert_model,
-)
 
 TESTER_ROOT = Path(__file__).resolve().parents[2]
 SQRT_DESCRIPTOR_PATH = TESTER_ROOT / "assets" / "descriptors" / "BasicMathFunctions" / "sqrt.yaml"
@@ -50,8 +45,11 @@ def _simulate_arm_sqrt_s16(input_values: np.ndarray, lut: np.ndarray) -> np.ndar
 def test_sqrt_descriptors_match_unit_test_parity() -> None:
     descriptors = load_descriptor(str(SQRT_DESCRIPTOR_PATH))
 
-    assert [desc["name"] for desc in descriptors] == [name for name, *_ in SQRT_PARITY_CASES]
-    assert len(descriptors) == 6
+    assert [desc["name"] for desc in descriptors] == [name for name, *_ in SQRT_PARITY_CASES] + ["sqrt_small_input_s16"]
+    assert len(descriptors) == 7
+    small = descriptors[-1]
+    assert small["hint"]["input_q_range"] == [512, 2047]
+    assert small["resolved_comparison"] == {"mode": "tolerant_int", "tolerance": 7}
 
     for desc, (_, dtype, shape, _, _) in zip(descriptors, SQRT_PARITY_CASES):
         assert desc["operator"] == "Sqrt"
@@ -129,7 +127,7 @@ def test_make_sqrt_lut_dispatches_per_dtype(dtype: str, expected_dtype, expected
 
 
 @pytest.mark.parametrize(("name", "dtype", "shape", "expected_kernel", "output_dtype"), SQRT_PARITY_CASES)
-def test_sqrt_parity_descriptors_generate_litert_and_c(
+def test_sqrt_parity_descriptors_generate_from_the_reference(
     name: str,
     dtype: str,
     shape: tuple[int, ...],
@@ -138,35 +136,23 @@ def test_sqrt_parity_descriptors_generate_litert_and_c(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    if not LITERT_AVAILABLE:
-        pytest.skip("ai_edge_litert is required for sqrt LiteRT generation")
-
     monkeypatch.setenv("CMSIS_NN_REPO_ROOT", str(TESTER_ROOT))
     desc = _sqrt_descriptor_map()[name]
     assert desc["activation_dtype"] == dtype
     op = OpSqrt(desc, seed=1, target_cpu="cortex-m55")
-    tflite_path = tmp_path / f"{name}.tflite"
+    assert op.uses_reference() and not op.needs_keras_model()
 
-    assert op.needs_keras_model() is False
-    with pytest.raises(NotImplementedError, match="LiteRT-only"):
-        op.build_keras_model()
-
-    op.convert_to_tflite(None, str(tflite_path), 1)
-
-    model, subgraph = load_litert_model(str(tflite_path))
-    op_tensors = get_operator_tensors_from_litert(model, subgraph, 0)
-    assert tuple(op_tensors["inputs"][0]["shape"]) == shape
-    assert tuple(op_tensors["outputs"][0]["shape"]) == shape
-
-    fake_output = np.zeros(shape, dtype=output_dtype)
-    monkeypatch.setattr(op, "run_inference", lambda *_args, **_kwargs: fake_output)
     op.generate_c_files(tmp_path)
+    call = op.reference
+    assert call.entry == f"sqrt_{dtype.lower()}"
+    assert call.inputs["input"].shape == shape and call.inputs["input"].dtype == output_dtype
+    assert np.all(call.inputs["input"] >= 0)
+    expected = np.sqrt(call.inputs["input"].astype(np.float64) * call.params["input_scale"])
+    assert np.abs(call.output().astype(np.float64) * call.params["output_scale"] - expected).max() <= (
+        call.params["output_scale"] * 1.01)
 
     c_path = tmp_path / f"{name}_sqrt.c"
     h_path = tmp_path / "includes" / f"{name}_sqrt.h"
-    assert c_path.exists()
-    assert h_path.exists()
-
     content = c_path.read_text()
     header = h_path.read_text()
     assert expected_kernel in content
@@ -194,3 +180,27 @@ def test_sqrt_generator_rejects_unsupported_dtype() -> None:
 
     with pytest.raises(NotImplementedError, match="Unsupported Sqrt dtype"):
         op._select_cmsis_sqrt_kernel()
+
+
+def test_sqrt_s16_table_is_within_one_code_from_the_default_draw() -> None:
+    """The default s16 draw starts where the kernel's table is within the descriptors' tolerance of 1
+    of the reference, and the small-input range stays within its tolerance of 7."""
+    from helia_core_tester.generation.ops.BasicMathFunctions.sqrt import SQRT_S16_ACCURATE_FROM
+    from helia_core_tester.generation.reference.bindings import get_bindings
+
+    scale = 1.0 / 32768.0
+    lut = make_sqrt_lut_s16(scale, 0, scale, 0)
+    x = np.arange(512, 32768, dtype=np.int16)
+    kernel = _simulate_arm_sqrt_s16(x, lut).astype(np.int32)
+    golden = get_bindings().run("sqrt_s16", {"input_scale": scale, "input_zero_point": 0, "output_scale": scale,
+                                             "output_zero_point": 0}, {"input": x}, {"output": x.shape})["output"]
+    diff = np.abs(kernel - golden.astype(np.int32))
+    assert diff[x >= SQRT_S16_ACCURATE_FROM].max() <= 1
+    assert diff.max() <= 7
+
+
+def test_sqrt_input_q_range_is_validated(tmp_path) -> None:
+    op = OpSqrt({"name": "sqrt_bad_range_s16", "operator": "Sqrt", "activation_dtype": "S16", "weight_dtype": "S8",
+                 "input_shape": [1, 4], "hint": {"input_q_range": [-1, 10]}}, seed=1, target_cpu="cortex-m55")
+    with pytest.raises(ValueError, match="input_q_range"):
+        op.generate_c_files(tmp_path)

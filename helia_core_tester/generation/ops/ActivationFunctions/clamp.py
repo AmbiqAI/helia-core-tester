@@ -29,17 +29,8 @@ class OpClamp(OperationBase):
     Clamp operation.
     """
 
-    def build_keras_model(self):
-        raise NotImplementedError("Clamp does not use a Keras model.")
-
-    def needs_keras_model(self) -> bool:
-        return False
-
-    def allow_no_tflite(self) -> bool:
+    def uses_reference(self) -> bool:
         return True
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        raise NotImplementedError("Clamp does not generate TFLite models.")
 
     def _select_cmsis_clamp_kernel(self) -> Dict[str, str]:
         activation_dtype = self.desc.get('activation_dtype', 'S8')
@@ -92,10 +83,20 @@ class OpClamp(OperationBase):
             np_in_dtype = np.int16
             qmin, qmax = -32768, 32767
 
-        input_q = self.rng.integers(qmin, qmax + 1, size=input_shape, dtype=np_in_dtype)
+        # Straddle the bounds: about half the draw lands inside [act_min, act_max], the rest
+        # on either side, however narrow the window is next to the dtype range.
+        span = (act_max - act_min) // 2 + 1
+        lo, hi = max(qmin, act_min - span), min(qmax, act_max + span)
+        input_q = self.rng.integers(lo, hi + 1, size=input_shape).astype(np_in_dtype)
         self.rng.__setstate__(rng_state)
 
-        expected_output = np.clip(input_q, act_min, act_max).astype(np_in_dtype)
+        from helia_core_tester.generation.reference.call import ReferenceCall
+
+        expected_output = self.reference_golden(ReferenceCall(
+            f"clamp_{'s8' if np_in_dtype == np.int8 else 's16'}",
+            {"activation_min": act_min, "activation_max": act_max},
+            {"input": np.ascontiguousarray(input_q)}, {"output": tuple(input_q.shape)},
+        ))
 
         input_array_str = builder.format_array_as_c_literal(input_q)
         expected_output_array_str = builder.format_array_as_c_literal(expected_output)

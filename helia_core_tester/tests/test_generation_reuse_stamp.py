@@ -227,7 +227,7 @@ def test_host_compiler_identity_is_a_stamp_input(monkeypatch) -> None:
 def test_reference_sources_are_generator_inputs() -> None:
     # An edited reference kernel must regenerate its cases, not reuse a stale golden.
     names = {p.name for p in reuse._iter_generator_sources()}
-    assert {"entries.yaml", "hct_ref_abi.h", "fixed_point.c", "add.c"} <= names
+    assert {"entries.yaml", "hct_ref_abi.h", "fixed_point.c", "add_sub.c"} <= names
 
 
 def test_a_clean_git_checkout_is_identified_by_its_commit(monkeypatch, tmp_path: Path) -> None:

@@ -137,11 +137,8 @@ def test_ops_use_grouped_template_paths_directly() -> None:
 def test_selected_ops_define_local_litert_wrappers() -> None:
     ops_root = _repo_root() / "helia_core_tester" / "generation" / "ops" / "BasicMathFunctions"
     expected_wrappers = {
-        "abs.py": "build_abs_op",
         "argmax.py": "build_argmax_op",
         "argmin.py": "build_argmin_op",
-        "rsqrt.py": "build_rsqrt_op",
-        "sqrt.py": "build_sqrt_op",
     }
 
     for filename, wrapper_name in expected_wrappers.items():
@@ -150,14 +147,62 @@ def test_selected_ops_define_local_litert_wrappers() -> None:
         assert f"from helia_core_tester.generation.utils.litert_builder import {wrapper_name}" not in text
 
     litert_builder_text = (_repo_root() / "helia_core_tester" / "generation" / "utils" / "litert_builder.py").read_text()
-    assert "def build_abs_op(" not in litert_builder_text
-    assert "def build_add_op(" not in litert_builder_text
-    # Add takes its golden from the C reference library and builds no LiteRT model at all.
-    add_text = (ops_root / "add.py").read_text()
-    assert "litert" not in add_text.lower() and "def build_add_op(" not in add_text
-    assert "def build_arg_op(" not in litert_builder_text
-    assert "def build_rsqrt_op(" not in litert_builder_text
-    assert "def build_sqrt_op(" not in litert_builder_text
+    for removed in ("build_abs_op", "build_add_op", "build_arg_op", "build_rsqrt_op", "build_sqrt_op"):
+        assert f"def {removed}(" not in litert_builder_text
+
+
+REFERENCE_BACKED_SOURCES = (
+    "BasicMathFunctions/add.py",
+    "BasicMathFunctions/sub.py",
+    "BasicMathFunctions/mul.py",
+    "BasicMathFunctions/minmax.py",
+    "BasicMathFunctions/abs.py",
+    "BasicMathFunctions/squared_difference.py",
+    "BasicMathFunctions/sqrt.py",
+    "BasicMathFunctions/rsqrt.py",
+    "QuantizationFunctions/quantize.py",
+    "QuantizationFunctions/dequantize.py",
+    "NNSupportFunctions/requantize.py",
+    "ActivationFunctions/clamp.py",
+    "ActivationFunctions/leaky_relu.py",
+    "ActivationFunctions/prelu.py",
+    "ActivationFunctions/prelu_scalar.py",
+    "ActivationFunctions/nn_activation_s16.py",
+    "ActivationFunctions/nn_activation_float.py",
+    "SoftmaxFunctions/softmax.py",
+    "_shared/comparison_base.py",
+    "_shared/relu_base.py",
+    "_shared/hard_swish_base.py",
+    "_shared/tanh_logistic_base.py",
+)
+
+# Thin subclasses of a reference-backed base above.
+REFERENCE_BACKED_WRAPPERS = (
+    "ActivationFunctions/relu.py",
+    "ActivationFunctions/relu6.py",
+    "ActivationFunctions/hard_swish_compat.py",
+    "ActivationFunctions/hard_swish_precise.py",
+    "ActivationFunctions/tanh.py",
+    "ActivationFunctions/logistic.py",
+)
+
+
+@pytest.mark.parametrize("relative", REFERENCE_BACKED_SOURCES)
+def test_reference_backed_ops_build_no_litert_model(relative: str) -> None:
+    """Operators on the C reference take their golden from it and build no model at all."""
+    text = (_repo_root() / "helia_core_tester" / "generation" / "ops" / relative).read_text()
+    for marker in ("litert", "tflite_path", "tensorflow", "keras", "interpreter"):
+        assert marker not in text.lower(), (relative, marker)
+    # A file with status-only cases (a status, not a golden) answers per case.
+    assert "def uses_reference(self) -> bool:\n        return True" in text or "def status_only(self) -> bool:" in text
+    assert "def uses_reference(self) -> bool:" in text
+
+
+@pytest.mark.parametrize("relative", REFERENCE_BACKED_WRAPPERS)
+def test_reference_backed_wrappers_build_no_litert_model(relative: str) -> None:
+    text = (_repo_root() / "helia_core_tester" / "generation" / "ops" / relative).read_text()
+    for marker in ("litert", "tflite", "tensorflow", "keras", "interpreter"):
+        assert marker not in text.lower(), (relative, marker)
 
 
 def test_root_readme_documents_add_op_workflow() -> None:

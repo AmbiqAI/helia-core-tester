@@ -35,11 +35,29 @@ status:
   E_PARAM: 5     # a parameter out of its valid range
   E_SIZE: 6      # element count above HCT_MAX_ELEMENTS
 
+comparisons:
+  EQUAL: 0
+  NOT_EQUAL: 1
+  GREATER: 2
+  GREATER_EQUAL: 3
+  LESS: 4
+  LESS_EQUAL: 5
+
 activations:
   NONE: 0
   RELU: 1
   RELU6: 2
   RELU_N1_TO_1: 3
+
+# arm_nn_activation_f32/f16 types (ARM_NN_FLT_ACT_*).
+float_activations:
+  NONE: 0
+  RELU: 1
+  RELU6: 2
+  LEAKY_RELU: 3
+  SIGMOID: 4
+  TANH: 5
+  HARDSWISH: 6
 
 structs:
   HctQuantizeMultiplierIn:
@@ -94,6 +112,231 @@ structs:
     fields:
       - [activation_min, float32]
       - [activation_max, float32]
+  HctNoParams:
+    doc: Entries that take no parameters; the field is ignored.
+    fields:
+      - [unused, int32]
+  HctMulQuant:
+    fields:
+      - [dtype, int32]
+      - [activation, int32]
+      - [input1_scale, float32]
+      - [input1_zero_point, int32]
+      - [input2_scale, float32]
+      - [input2_zero_point, int32]
+      - [output_scale, float32]
+      - [output_zero_point, int32]
+  HctMulParams:
+    fields:
+      - [input1_offset, int32]
+      - [input2_offset, int32]
+      - [output_offset, int32]
+      - [output_multiplier, int32]
+      - [output_shift, int32]
+      - [activation_min, int32]
+      - [activation_max, int32]
+  HctSquaredDifferenceParams:
+    doc: As HctAddParams; left_shift is 7 (int8) or 0 (int16) and the output multiplier is general.
+    fields:
+      - [left_shift, int32]
+      - [input1_offset, int32]
+      - [input1_multiplier, int32]
+      - [input1_shift, int32]
+      - [input2_offset, int32]
+      - [input2_multiplier, int32]
+      - [input2_shift, int32]
+      - [output_offset, int32]
+      - [output_multiplier, int32]
+      - [output_shift, int32]
+      - [activation_min, int32]
+      - [activation_max, int32]
+  HctComparisonQuant:
+    doc: operation is an HctComparison value.
+    fields:
+      - [dtype, int32]
+      - [operation, int32]
+      - [input1_scale, float32]
+      - [input1_zero_point, int32]
+      - [input2_scale, float32]
+      - [input2_zero_point, int32]
+  HctComparisonParams:
+    fields:
+      - [operation, int32]
+      - [left_shift, int32]
+      - [input1_offset, int32]
+      - [input1_multiplier, int32]
+      - [input1_shift, int32]
+      - [input2_offset, int32]
+      - [input2_multiplier, int32]
+      - [input2_shift, int32]
+  HctAbsQuant:
+    fields:
+      - [dtype, int32]
+      - [input_scale, float32]
+      - [input_zero_point, int32]
+      - [output_scale, float32]
+      - [output_zero_point, int32]
+  HctAbsParams:
+    doc: TFLite's Abs; input_zero_point is subtracted, the result rescaled only when needs_rescale.
+    fields:
+      - [input_zero_point, int32]
+      - [output_zero_point, int32]
+      - [needs_rescale, int32]
+      - [multiplier, int32]
+      - [shift, int32]
+  HctClampParams:
+    fields:
+      - [activation_min, int32]
+      - [activation_max, int32]
+  HctReluQuant:
+    doc: Relu and Relu6 (TFLM CalculateReluOpData); act_max is +INFINITY for Relu, 6 for Relu6.
+    fields:
+      - [dtype, int32]
+      - [input_scale, float32]
+      - [input_zero_point, int32]
+      - [output_scale, float32]
+      - [output_zero_point, int32]
+      - [act_max, float32]
+  HctReluParams:
+    doc: input_offset/output_offset are the zero points, as TFLite's ReluQuantized takes them.
+    fields:
+      - [input_offset, int32]
+      - [output_offset, int32]
+      - [output_multiplier, int32]
+      - [output_shift, int32]
+      - [activation_min, int32]
+      - [activation_max, int32]
+  HctLeakyReluQuant:
+    fields:
+      - [dtype, int32]
+      - [alpha, float32]
+      - [input_scale, float32]
+      - [input_zero_point, int32]
+      - [output_scale, float32]
+      - [output_zero_point, int32]
+  HctPreluQuant:
+    fields:
+      - [dtype, int32]
+      - [input_scale, float32]
+      - [input_zero_point, int32]
+      - [alpha_scale, float32]
+      - [alpha_zero_point, int32]
+      - [output_scale, float32]
+      - [output_zero_point, int32]
+  HctPreluParams:
+    doc: TFLite's BroadcastPrelu4D; input/alpha offsets are -zero_point, output offset +zero_point.
+    fields:
+      - [input_offset, int32]
+      - [alpha_offset, int32]
+      - [output_offset, int32]
+      - [identity_multiplier, int32]
+      - [identity_shift, int32]
+      - [alpha_multiplier, int32]
+      - [alpha_shift, int32]
+  HctLeakyReluParams:
+    doc: TFLite's QuantizeLeakyRelu; offsets are the zero points.
+    fields:
+      - [input_offset, int32]
+      - [output_offset, int32]
+      - [alpha_multiplier, int32]
+      - [alpha_shift, int32]
+      - [identity_multiplier, int32]
+      - [identity_shift, int32]
+
+  HctHardSwishQuant:
+    fields:
+      - [dtype, int32]
+      - [input_scale, float32]
+      - [input_zero_point, int32]
+      - [output_scale, float32]
+      - [output_zero_point, int32]
+  HctHardSwishParams:
+    doc: TFLite's HardSwishParams (int8); Q15 multipliers with frexp exponents, offsets are the zero points.
+    fields:
+      - [input_zero_point, int32]
+      - [output_zero_point, int32]
+      - [output_multiplier_fixedpoint_int16, int32]
+      - [output_multiplier_exponent, int32]
+      - [reluish_multiplier_fixedpoint_int16, int32]
+      - [reluish_multiplier_exponent, int32]
+  HctHardSwishPreciseParams:
+    doc: >-
+      CMSIS-NN arm_hard_swish_precise_* (no TFLite counterpart): relu_q3/relu_q6 are round(3|6 / input_scale),
+      the output multiplier is input_scale^2 / (6 output_scale) * 2^prescale.
+    fields:
+      - [input_offset, int32]
+      - [output_offset, int32]
+      - [output_multiplier, int32]
+      - [output_shift, int32]
+      - [relu_q3, int32]
+      - [relu_q6, int32]
+      - [prescale, int32]
+
+  HctTanhLogisticQuant:
+    doc: int16 Tanh/Logistic (TFLM prepare); zero points must be 0 and the output scale 2^-15.
+    fields:
+      - [input_scale, float32]
+      - [input_zero_point, int32]
+      - [output_scale, float32]
+      - [output_zero_point, int32]
+  HctTanhLogisticParams:
+    doc: >-
+      reference_integer_ops::Tanh/Logistic(int16): x * input_multiplier, rounding right shift by
+      input_left_shift; input_multiplier 0 means 3 << input_left_shift and no shift.
+    fields:
+      - [input_multiplier, int32]
+      - [input_left_shift, int32]
+
+  HctSoftmaxQuant:
+    doc: >-
+      TFLM CalculateSoftmaxParams. int8 -> int8 needs output 1/256 at -128, int8 -> int16 1/65536 at -32768,
+      int16 -> int16 1/32768 at 0.
+    fields:
+      - [input_dtype, int32]
+      - [output_dtype, int32]
+      - [beta, float32]
+      - [input_scale, float32]
+      - [input_zero_point, int32]
+      - [output_scale, float32]
+      - [output_zero_point, int32]
+  HctSoftmaxParams:
+    doc: >-
+      SoftmaxParams: int8 rescales x - max by MultiplyByQuantizedMultiplierGreaterThanOne and drops
+      differences below diff_min; int16 by MultiplyByQuantizedMultiplier (diff_min unused, 0).
+    fields:
+      - [input_multiplier, int32]
+      - [input_left_shift, int32]
+      - [diff_min, int32]
+
+  HctUnaryQuantParams:
+    doc: Per-tensor input and output quantization, for entries that work in float on the dequantized value.
+    fields:
+      - [input_scale, float32]
+      - [input_zero_point, int32]
+      - [output_scale, float32]
+      - [output_zero_point, int32]
+  HctQuantizeParams:
+    doc: >-
+      AffineQuantize / Dequantize at (scale, zero_point); the float side is clamped to
+      [activation_min, activation_max] (before quantizing, after dequantizing).
+    fields:
+      - [scale, float32]
+      - [zero_point, int32]
+      - [activation_min, float32]
+      - [activation_max, float32]
+  HctRequantizeParams:
+    doc: CMSIS-NN arm_requantize_* - the zero points subtracted and added around arm_nn_requantize.
+    fields:
+      - [multiplier, int32]
+      - [shift, int32]
+      - [input_zero_point, int32]
+      - [output_zero_point, int32]
+
+  HctFloatActivationTypeParams:
+    doc: An HctFloatActivation and its parameter (the LeakyRelu slope; ignored otherwise).
+    fields:
+      - [activation_type, int32]
+      - [act_param, float32]
 
 prepare:
   quantize_multiplier:
@@ -105,6 +348,45 @@ prepare:
   add_prepare:
     in: HctAddQuant
     out: HctAddParams
+  sub_prepare:
+    in: HctAddQuant
+    out: HctAddParams
+  mul_prepare:
+    in: HctMulQuant
+    out: HctMulParams
+  squared_difference_prepare:
+    in: HctAddQuant
+    out: HctSquaredDifferenceParams
+  comparison_prepare:
+    in: HctComparisonQuant
+    out: HctComparisonParams
+  abs_prepare:
+    in: HctAbsQuant
+    out: HctAbsParams
+  relu_prepare:
+    in: HctReluQuant
+    out: HctReluParams
+  leaky_relu_prepare:
+    in: HctLeakyReluQuant
+    out: HctLeakyReluParams
+  prelu_prepare:
+    in: HctPreluQuant
+    out: HctPreluParams
+  hard_swish_prepare:
+    in: HctHardSwishQuant
+    out: HctHardSwishParams
+  hard_swish_precise_prepare:
+    in: HctHardSwishQuant
+    out: HctHardSwishPreciseParams
+  tanh_prepare:
+    in: HctTanhLogisticQuant
+    out: HctTanhLogisticParams
+  logistic_prepare:
+    in: HctTanhLogisticQuant
+    out: HctTanhLogisticParams
+  softmax_prepare:
+    in: HctSoftmaxQuant
+    out: HctSoftmaxParams
 
 kernels:
   add_s8:
@@ -122,4 +404,264 @@ kernels:
   add_f16:
     params: HctFloatActivationParams
     inputs: {input1: float16, input2: float16}
+    outputs: {output: float16}
+  sub_s8:
+    params: HctAddParams
+    inputs: {input1: int8, input2: int8}
+    outputs: {output: int8}
+  sub_s16:
+    params: HctAddParams
+    inputs: {input1: int16, input2: int16}
+    outputs: {output: int16}
+  mul_s8:
+    params: HctMulParams
+    inputs: {input1: int8, input2: int8}
+    outputs: {output: int8}
+  mul_s16:
+    params: HctMulParams
+    inputs: {input1: int16, input2: int16}
+    outputs: {output: int16}
+  sub_f32:
+    params: HctFloatActivationParams
+    inputs: {input1: float32, input2: float32}
+    outputs: {output: float32}
+  sub_f16:
+    params: HctFloatActivationParams
+    inputs: {input1: float16, input2: float16}
+    outputs: {output: float16}
+  mul_f32:
+    params: HctFloatActivationParams
+    inputs: {input1: float32, input2: float32}
+    outputs: {output: float32}
+  mul_f16:
+    params: HctFloatActivationParams
+    inputs: {input1: float16, input2: float16}
+    outputs: {output: float16}
+  maximum_s8:
+    params: HctNoParams
+    inputs: {input1: int8, input2: int8}
+    outputs: {output: int8}
+  maximum_s16:
+    params: HctNoParams
+    inputs: {input1: int16, input2: int16}
+    outputs: {output: int16}
+  maximum_f32:
+    params: HctNoParams
+    inputs: {input1: float32, input2: float32}
+    outputs: {output: float32}
+  maximum_f16:
+    params: HctNoParams
+    inputs: {input1: float16, input2: float16}
+    outputs: {output: float16}
+  minimum_s8:
+    params: HctNoParams
+    inputs: {input1: int8, input2: int8}
+    outputs: {output: int8}
+  minimum_s16:
+    params: HctNoParams
+    inputs: {input1: int16, input2: int16}
+    outputs: {output: int16}
+  minimum_f32:
+    params: HctNoParams
+    inputs: {input1: float32, input2: float32}
+    outputs: {output: float32}
+  minimum_f16:
+    params: HctNoParams
+    inputs: {input1: float16, input2: float16}
+    outputs: {output: float16}
+  squared_difference_s8:
+    params: HctSquaredDifferenceParams
+    inputs: {input1: int8, input2: int8}
+    outputs: {output: int8}
+  comparison_s8:
+    params: HctComparisonParams
+    inputs: {input1: int8, input2: int8}
+    outputs: {output: bool}
+  abs_s8:
+    params: HctAbsParams
+    inputs: {input: int8}
+    outputs: {output: int8}
+  clamp_s8:
+    params: HctClampParams
+    inputs: {input: int8}
+    outputs: {output: int8}
+  squared_difference_s16:
+    params: HctSquaredDifferenceParams
+    inputs: {input1: int16, input2: int16}
+    outputs: {output: int16}
+  comparison_s16:
+    params: HctComparisonParams
+    inputs: {input1: int16, input2: int16}
+    outputs: {output: bool}
+  abs_s16:
+    params: HctAbsParams
+    inputs: {input: int16}
+    outputs: {output: int16}
+  clamp_s16:
+    params: HctClampParams
+    inputs: {input: int16}
+    outputs: {output: int16}
+  squared_difference_f16:
+    params: HctNoParams
+    inputs: {input1: float16, input2: float16}
+    outputs: {output: float16}
+  abs_f32:
+    params: HctNoParams
+    inputs: {input: float32}
+    outputs: {output: float32}
+  abs_f16:
+    params: HctNoParams
+    inputs: {input: float16}
+    outputs: {output: float16}
+  relu_s8:
+    params: HctReluParams
+    inputs: {input: int8}
+    outputs: {output: int8}
+  relu_s16:
+    params: HctReluParams
+    inputs: {input: int16}
+    outputs: {output: int16}
+  leaky_relu_s8:
+    params: HctLeakyReluParams
+    inputs: {input: int8}
+    outputs: {output: int8}
+  leaky_relu_s16:
+    params: HctLeakyReluParams
+    inputs: {input: int16}
+    outputs: {output: int16}
+  prelu_s8:
+    params: HctPreluParams
+    inputs: {input: int8, alpha: int8}
+    outputs: {output: int8}
+  prelu_s16:
+    params: HctPreluParams
+    inputs: {input: int16, alpha: int16}
+    outputs: {output: int16}
+  prelu_f32:
+    params: HctNoParams
+    inputs: {input: float32, alpha: float32}
+    outputs: {output: float32}
+  prelu_f16:
+    params: HctNoParams
+    inputs: {input: float16, alpha: float16}
+    outputs: {output: float16}
+  hard_swish_s8:
+    params: HctHardSwishParams
+    inputs: {input: int8}
+    outputs: {output: int8}
+  hard_swish_precise_s8:
+    params: HctHardSwishPreciseParams
+    inputs: {input: int8}
+    outputs: {output: int8}
+  hard_swish_precise_s16:
+    params: HctHardSwishPreciseParams
+    inputs: {input: int16}
+    outputs: {output: int16}
+  hard_swish_f32:
+    params: HctNoParams
+    inputs: {input: float32}
+    outputs: {output: float32}
+  hard_swish_f16:
+    params: HctNoParams
+    inputs: {input: float16}
+    outputs: {output: float16}
+  tanh_s16:
+    params: HctTanhLogisticParams
+    inputs: {input: int16}
+    outputs: {output: int16}
+  logistic_s16:
+    params: HctTanhLogisticParams
+    inputs: {input: int16}
+    outputs: {output: int16}
+  softmax_s8:
+    params: HctSoftmaxParams
+    inputs: {input: int8}
+    outputs: {output: int8}
+  softmax_s8_s16:
+    params: HctSoftmaxParams
+    inputs: {input: int8}
+    outputs: {output: int16}
+  softmax_s16:
+    params: HctSoftmaxParams
+    inputs: {input: int16}
+    outputs: {output: int16}
+  softmax_f32:
+    params: HctNoParams
+    inputs: {input: float32}
+    outputs: {output: float32}
+  softmax_f16:
+    params: HctNoParams
+    inputs: {input: float16}
+    outputs: {output: float16}
+  sqrt_s8:
+    params: HctUnaryQuantParams
+    inputs: {input: int8}
+    outputs: {output: int8}
+  sqrt_s16:
+    params: HctUnaryQuantParams
+    inputs: {input: int16}
+    outputs: {output: int16}
+  rsqrt_s16:
+    params: HctUnaryQuantParams
+    inputs: {input: int16}
+    outputs: {output: int16}
+  sqrt_f32:
+    params: HctNoParams
+    inputs: {input: float32}
+    outputs: {output: float32}
+  sqrt_f16:
+    params: HctNoParams
+    inputs: {input: float16}
+    outputs: {output: float16}
+  rsqrt_f32:
+    params: HctNoParams
+    inputs: {input: float32}
+    outputs: {output: float32}
+  rsqrt_f16:
+    params: HctNoParams
+    inputs: {input: float16}
+    outputs: {output: float16}
+  quantize_f32_s8:
+    params: HctQuantizeParams
+    inputs: {input: float32}
+    outputs: {output: int8}
+  quantize_f32_s16:
+    params: HctQuantizeParams
+    inputs: {input: float32}
+    outputs: {output: int16}
+  dequantize_s8_f32:
+    params: HctQuantizeParams
+    inputs: {input: int8}
+    outputs: {output: float32}
+  dequantize_s16_f32:
+    params: HctQuantizeParams
+    inputs: {input: int16}
+    outputs: {output: float32}
+  dequantize_f16_f32:
+    params: HctFloatActivationParams
+    inputs: {input: float16}
+    outputs: {output: float32}
+  requantize_s8:
+    params: HctRequantizeParams
+    inputs: {input: int8}
+    outputs: {output: int8}
+  requantize_s16:
+    params: HctRequantizeParams
+    inputs: {input: int16}
+    outputs: {output: int16}
+  nn_activation_f32:
+    params: HctFloatActivationTypeParams
+    inputs: {input: float32}
+    outputs: {output: float32}
+  nn_activation_f16:
+    params: HctFloatActivationTypeParams
+    inputs: {input: float16}
+    outputs: {output: float16}
+  tanh_lut_f16:
+    params: HctNoParams
+    inputs: {input: float16}
+    outputs: {output: float16}
+  tanh_lut_mve_f16:
+    params: HctNoParams
+    inputs: {input: float16}
     outputs: {output: float16}

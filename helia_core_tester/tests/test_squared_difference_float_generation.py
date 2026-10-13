@@ -17,7 +17,7 @@ import pytest
 from helia_core_tester.generation.io.descriptors import load_descriptor
 from helia_core_tester.generation.ops.BasicMathFunctions.squared_difference import OpSquaredDifference
 from helia_core_tester.generation.ops.catalog import get_operator_spec
-from helia_core_tester.generation.utils.litert_builder import LITERT_AVAILABLE
+from helia_core_tester.generation.reference.bindings import get_bindings
 
 TESTER_ROOT = Path(__file__).resolve().parents[2]
 DESCRIPTOR_PATH = TESTER_ROOT / "assets" / "descriptors" / "BasicMathFunctions" / "squared_difference_float.yaml"
@@ -81,13 +81,9 @@ def _float_desc(
 
 
 def _generate(desc: dict, out_dir: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[str, str, dict]:
-    """Run convert + C generation; return (c source, header, sidecar)."""
-    if not LITERT_AVAILABLE:
-        pytest.skip("ai_edge_litert is required for squared difference LiteRT generation")
+    """Run C generation; return (c source, header, sidecar)."""
     monkeypatch.setenv("CMSIS_NN_REPO_ROOT", str(TESTER_ROOT))
     op = OpSquaredDifference(desc, seed=1, target_cpu=CPU)
-    tflite_path = out_dir / f"{desc['name']}.tflite"
-    op.convert_to_tflite(None, str(tflite_path), 1)
     op.generate_c_files(out_dir)
     op.assert_input_mode_consumed()
     name = desc["name"]
@@ -202,6 +198,43 @@ def test_int_kernel_selection_is_unchanged() -> None:
 # --- golden model --------------------------------------------------------------
 
 
+def _reference(operands) -> np.ndarray:
+    """The C reference entry the generator takes the f16 golden from."""
+    a, b = (np.ascontiguousarray(np.asarray(x, dtype=np.float16)) for x in operands)
+    shape = np.broadcast_shapes(a.shape, b.shape)
+    return get_bindings().run("squared_difference_f16", {"unused": 0}, {"input1": a, "input2": b},
+                              {"output": shape})["output"]
+
+
+def _float64_model(operands) -> np.ndarray:
+    """Independent model: the exact difference of two halves fits in 40 bits and the exact
+    square of a half in 22, so float64 intermediates with one narrowing per operation are
+    IEEE binary16 arithmetic bit for bit."""
+    a = np.asarray(operands[0], dtype=np.float64)
+    b = np.asarray(operands[1], dtype=np.float64)
+    with np.errstate(over="ignore", invalid="ignore"):
+        diff = (a - b).astype(np.float16).astype(np.float64)
+        return (diff * diff).astype(np.float16)
+
+
+def test_reference_matches_the_float64_model_bit_for_bit() -> None:
+    rng = np.random.default_rng(7)
+    bits = rng.integers(0, 0x10000, size=(2, 200_000), dtype=np.uint32).astype(np.uint16)
+    specials = np.array([0x0000, 0x8000, 0x0001, 0x8001, 0x03FF, 0x0400, 0x7BFF, 0xFBFF, 0x7C00, 0xFC00, 0x3C00],
+                        dtype=np.uint16)
+    grid = np.array(np.meshgrid(specials, specials)).reshape(2, -1)
+    pairs = np.concatenate([bits, grid], axis=1)
+    a, b = pairs[0].view(np.float16), pairs[1].view(np.float16)
+    finite = np.isfinite(a) & np.isfinite(b)
+    got, want = _reference([a[finite], b[finite]]), _float64_model([a[finite], b[finite]])
+    np.testing.assert_array_equal(got.view(np.uint16), want.view(np.uint16))
+    # Non-finite operands: inf - inf and NaN give NaN, a single infinity gives +inf.
+    nonfinite = _reference([a[~finite], b[~finite]])
+    model = _float64_model([a[~finite], b[~finite]])
+    np.testing.assert_array_equal(np.isnan(nonfinite), np.isnan(model))
+    np.testing.assert_array_equal(nonfinite[~np.isnan(model)], model[~np.isnan(model)])
+
+
 @pytest.mark.parametrize(
     ("a", "b", "expected"),
     [
@@ -222,8 +255,7 @@ def test_int_kernel_selection_is_unchanged() -> None:
     ],
 )
 def test_binary16_reference_rounds_once_per_operation(a: float, b: float, expected: float) -> None:
-    reference = OpSquaredDifference._float_reference()
-    result = reference([_f16(a), _f16(b)])
+    result = _reference([_f16(a), _f16(b)])
     assert result.dtype == np.float16
     if np.isinf(expected):
         assert np.isposinf(result[0])
@@ -239,9 +271,9 @@ def test_binary16_reference_is_exact_across_the_full_exponent_span() -> None:
     # float32, a second rounding the kernel never performs.
     a = _f16(65504.0)
     b = _f16(2.0 ** -24)
-    single = OpSquaredDifference._float_reference()([a, b])
+    single = _reference([a, b])
     assert np.isposinf(single[0])
-    small = OpSquaredDifference._float_reference()([_f16(2.0 ** -24), _f16(-(2.0 ** -24))])
+    small = _reference([_f16(2.0 ** -24), _f16(-(2.0 ** -24))])
     assert float(small[0]) == 0.0  # (2^-23)^2 = 2^-46 underflows to +0
 
 
@@ -273,16 +305,14 @@ def test_float_case_renders_flat_call_and_float_validation(tmp_path: Path, monke
 def test_random_golden_matches_the_binary16_model(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     desc = _descriptors()["squared_difference_float_odd_block_f16"]
     monkeypatch.setenv("CMSIS_NN_REPO_ROOT", str(TESTER_ROOT))
-    if not LITERT_AVAILABLE:
-        pytest.skip("ai_edge_litert is required")
     op = OpSquaredDifference(desc, seed=1, target_cpu=CPU)
     a, b = op._float_operands((1, 3, 5, 3), (1, 3, 5, 3))
     assert a.dtype == np.float16 and b.dtype == np.float16 and a.shape == (1, 3, 5, 3)
     # Both operands come from one RNG stream: a == b would make the golden zero.
     assert not np.array_equal(a, b)
-    golden = op._float_reference()([a, b])
+    golden = _reference([a, b])
     assert np.all(golden >= 0) and np.all(np.isfinite(golden))
-    assert np.array_equal(golden, op._float_reference()([b, a]))  # symmetric
+    assert np.array_equal(golden, _reference([b, a]))  # symmetric
 
 
 def test_pinned_operands_are_emitted_verbatim_with_exact_goldens(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -330,7 +360,7 @@ def test_equal_operands_case_is_all_positive_zero(tmp_path: Path, monkeypatch: p
 def test_negative_zero_result_would_fail_the_bit_comparison() -> None:
     # The model gives +0 for (-0) - 0 squared; a kernel returning -0 differs in
     # the sign bit only, which is exactly what the bit comparison sees.
-    result = OpSquaredDifference._float_reference()([_f16(-0.0), _f16(0.0)])
+    result = _reference([_f16(-0.0), _f16(0.0)])
     assert int(result.view(np.uint16)[0]) == 0x0000
     assert int(np.float16(-0.0).view(np.uint16)) == 0x8000
 
@@ -429,14 +459,11 @@ def test_fault_cases_render_a_status_only_harness(
 
 
 def test_fault_kinds_are_rejected_on_the_int_kernels(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    if not LITERT_AVAILABLE:
-        pytest.skip("ai_edge_litert is required")
     monkeypatch.setenv("CMSIS_NN_REPO_ROOT", str(TESTER_ROOT))
     desc = {"operator": "SquaredDifference", "name": "int_fault", "activation_dtype": "S8", "weight_dtype": "S8",
             "input_1_shape": [1, 2, 2, 3], "input_2_shape": [1, 2, 2, 3],
             "fault": "null_input_1", "expected_status": "ARM_CMSIS_NN_ARG_ERROR"}
     op = OpSquaredDifference(desc, seed=1, target_cpu=CPU)
-    op.convert_to_tflite(None, str(tmp_path / "int_fault.tflite"), 1)
     with pytest.raises(ValueError, match="not covered by the float fault edits"):
         op.generate_c_files(tmp_path)
 

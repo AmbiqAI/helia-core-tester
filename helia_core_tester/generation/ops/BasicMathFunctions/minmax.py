@@ -6,20 +6,6 @@ from typing import Dict
 import numpy as np
 
 from helia_core_tester.generation.ops._shared.binary_basic_math_base import BinaryBasicMathBase
-from helia_core_tester.generation.utils.litert_builder import build_binary_broadcast_op
-
-
-def build_minmax_op(*, operator: str, input_1_shape, input_2_shape, dtype: str) -> bytes:
-    """Build one LiteRT MINIMUM or MAXIMUM model."""
-    op_name = operator.upper()
-    if op_name not in {"MINIMUM", "MAXIMUM"}:
-        raise ValueError(f"Unsupported operator: {operator}")
-    return build_binary_broadcast_op(
-        op_name=op_name,
-        input_1_shape=input_1_shape,
-        input_2_shape=input_2_shape,
-        dtype=dtype,
-    )
 
 
 def _split_scalar(input1_q: np.ndarray, input2_q: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -36,33 +22,9 @@ class OpMinMax(BinaryBasicMathBase):
 
     SIGN_SPAN_OPERANDS = ("input_1", "input_2")
 
-    def needs_keras_model(self) -> bool:
-        return False
+    def uses_reference(self) -> bool:
+        return True
 
-    def build_keras_model(self):
-        raise NotImplementedError("MinMax uses LiteRT-only model generation.")
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        activation_dtype = self.tensor_dtype("input", default=self.desc.get("activation_dtype", "S8"))
-        dtype_map = {
-            "S8": "int8",
-            "S16": "int16",
-            "FP16": "float16",
-            "FP32": "float32",
-        }
-        try:
-            dtype = dtype_map[activation_dtype]
-        except KeyError as exc:
-            raise NotImplementedError(f"Unsupported MinMax dtype: {activation_dtype}") from exc
-
-        model_bytes = build_minmax_op(
-            operator=self.desc.get("operator", "Maximum"),
-            input_1_shape=tuple(self.desc["input_1_shape"]),
-            input_2_shape=tuple(self.desc["input_2_shape"]),
-            dtype=dtype,
-        )
-        self._write_tflite_bytes(out_path, model_bytes)
-    
     def _select_cmsis_minmax_kernel(self) -> Dict[str, str]:
         """
         Select appropriate CMSIS-NN kernel function for MinMax operation.
@@ -130,33 +92,18 @@ class OpMinMax(BinaryBasicMathBase):
         """
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
         
+        from helia_core_tester.generation.reference import quant as ref_quant
+        from helia_core_tester.generation.reference.bindings import output_shape_for
+        from helia_core_tester.generation.reference.call import ReferenceCall
+
         name = self.desc['name']
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
-        
-        # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_minmax_kernel()
         op_name = self.desc.get('operator', 'Maximum')
-        
-        # Load LiteRT model for shape and quantization extraction
-        from helia_core_tester.generation.utils.litert_utils import get_operator_tensors_from_litert
-        model, subgraph = self.load_litert_model(str(tflite_path))
-        op_tensors = get_operator_tensors_from_litert(model, subgraph, 0)
-        
-        # Extract shapes from LiteRT (multi-input operator)
-        input1_shape = op_tensors['inputs'][0]['shape']
-        input2_shape = op_tensors['inputs'][1]['shape'] if len(op_tensors['inputs']) > 1 else input1_shape
-        output_shape = op_tensors['outputs'][0]['shape']
-        
-        # Ensure shapes are tuples
-        if input1_shape is not None:
-            input1_shape = tuple(input1_shape)
-        if input2_shape is not None:
-            input2_shape = tuple(input2_shape)
-        if output_shape is not None:
-            output_shape = tuple(output_shape)
-        
+        input1_shape = tuple(int(d) for d in self.desc["input_1_shape"])
+        input2_shape = tuple(int(d) for d in self.desc["input_2_shape"])
+        output_shape = output_shape_for(op_name, input1_shape, input2_shape)
+        entry = f"{op_name.lower()}_{ref_quant.kind(self.tensor_dtype('input', default=self.desc.get('activation_dtype', 'S8')))}"
+
         builder = TemplateContextBuilder()
         
         # Convert shapes to CMSIS dims
@@ -174,29 +121,18 @@ class OpMinMax(BinaryBasicMathBase):
             input1_q = input1_data.astype(float_dtype)
             input2_q = input2_data.astype(float_dtype)
 
-            def float_reference(operands, _dtype=float_dtype, _op=op_name):
-                combine = np.maximum if _op == "Maximum" else np.minimum
-                return combine(operands[0], operands[1]).astype(_dtype)
-
-            output_data = float_reference([input1_q, input2_q])
+            output_data = self.reference_golden(ReferenceCall(
+                entry, {"unused": 0}, {"input1": input1_q, "input2": input2_q}, {"output": output_shape}))
         elif kernel_info["input_c_type"] == "int8_t":
             np_in_dtype = np.int8
             qmin, qmax = -128, 127
-            input1_quant = op_tensors['inputs'][0]['quantization']
-            input2_quant = op_tensors['inputs'][1]['quantization'] if len(op_tensors['inputs']) > 1 else input1_quant
-            input1_scale = self._quant_param_scalar(input1_quant, "scale", 1.0)
-            input1_zp = self._quant_param_scalar(input1_quant, "zero_point", 0)
-            input2_scale = self._quant_param_scalar(input2_quant, "scale", 1.0)
-            input2_zp = self._quant_param_scalar(input2_quant, "zero_point", 0)
+            input1_scale, input1_zp = ref_quant.preset_quant("S8" if np_in_dtype == np.int8 else "S16")
+            input2_scale, input2_zp = input1_scale, input1_zp
         elif kernel_info["input_c_type"] == "int16_t":
             np_in_dtype = np.int16
             qmin, qmax = -32768, 32767
-            input1_quant = op_tensors['inputs'][0]['quantization']
-            input2_quant = op_tensors['inputs'][1]['quantization'] if len(op_tensors['inputs']) > 1 else input1_quant
-            input1_scale = self._quant_param_scalar(input1_quant, "scale", 1.0)
-            input1_zp = self._quant_param_scalar(input1_quant, "zero_point", 0)
-            input2_scale = self._quant_param_scalar(input2_quant, "scale", 1.0)
-            input2_zp = self._quant_param_scalar(input2_quant, "zero_point", 0)
+            input1_scale, input1_zp = ref_quant.preset_quant("S8" if np_in_dtype == np.int8 else "S16")
+            input2_scale, input2_zp = input1_scale, input1_zp
         else:
             raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
         if not float_kernel:
@@ -213,37 +149,18 @@ class OpMinMax(BinaryBasicMathBase):
             )
             input1_q, input2_q = _split_scalar(input1_q, input2_q)
 
-            desc_input1_shape = tuple(self.desc.get("input_1_shape", input1_shape))
-            desc_input2_shape = tuple(self.desc.get("input_2_shape", input2_shape))
-            if input1_shape == input2_shape and desc_input1_shape == desc_input2_shape:
-                interpreter = self.load_litert_interpreter(str(tflite_path))
-                input_details = interpreter.get_input_details()
-                output_details = interpreter.get_output_details()
-                in0_shape = tuple(input_details[0].get('shape', input1_q.shape))
-                in1_shape = tuple(input_details[1].get('shape', input2_q.shape))
+            # Both operands share one quantization, so the reference compares the codes.
+            output_data = self.reference_golden(ReferenceCall(
+                entry, {"unused": 0},
+                {"input1": np.ascontiguousarray(input1_q), "input2": np.ascontiguousarray(input2_q)},
+                {"output": output_shape},
+                quant={role: {"scale": input1_scale, "zero_point": input1_zp} for role in ("input1", "input2", "output")},
+            ))
 
-                if in0_shape == input1_q.shape and in1_shape == input2_q.shape:
-                    try:
-                        interpreter.set_tensor(input_details[0]['index'], input1_q)
-                        interpreter.set_tensor(input_details[1]['index'], input2_q)
-                        interpreter.invoke()
-                        output_data = np.array(interpreter.get_tensor(output_details[0]['index']))
-                    except (ValueError, RuntimeError):
-                        if self.input_mode() == "nonfinite_sweep":
-                            # A mask is only meaningful if one reference produced it. Falling
-                            # back here would make the don't-care set depend on whether the
-                            # generation host's interpreter accepted the model.
-                            raise
-                        output_data = np.maximum(input1_q, input2_q) if op_name == "Maximum" else np.minimum(input1_q, input2_q)
-                else:
-                    output_data = np.maximum(input1_q, input2_q) if op_name == "Maximum" else np.minimum(input1_q, input2_q)
-            else:
-                output_data = np.maximum(input1_q, input2_q) if op_name == "Maximum" else np.minimum(input1_q, input2_q)
-        
         # Format arrays
         if float_kernel:
             output_data, nonfinite_context = self.apply_nonfinite_policy(
-                output_data, reference=float_reference, inputs=[input1_q, input2_q]
+                output_data, reference=self.reference_probe, inputs=[input1_q, input2_q]
             )
         else:
             nonfinite_context = {}

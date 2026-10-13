@@ -2,7 +2,7 @@
 PReLU operation implementation.
 """
 
-from typing import Dict, Any, Iterable
+from typing import Dict, Iterable
 import numpy as np
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.base import OperationBase
@@ -56,11 +56,12 @@ class OpPReLU(OperationBase):
                 )
         return data.reshape(alpha_shape)
     
-    def needs_keras_model(self) -> bool:
-        return False
+    def uses_reference(self) -> bool:
+        return not self.status_only()
 
-    def build_keras_model(self):
-        raise NotImplementedError("PReLU uses LiteRT-only model generation.")
+    def status_only(self) -> bool:
+        # An ARG_ERROR case checks the kernel's status, not an output.
+        return self._is_arg_error_case()
 
     def _expected_status(self) -> str:
         return self.desc.get("expected_status", "ARM_CMSIS_NN_SUCCESS")
@@ -76,64 +77,18 @@ class OpPReLU(OperationBase):
         return input_shape[1:]
 
     def _validate_broadcast_support(self, input_shape: tuple, alpha_shape: tuple) -> None:
-        """
-        Reject scalar-input + multi-element-alpha broadcasts at load/convert time.
+        """Reject a single-element input against a multi-element alpha.
 
-        LiteRT's PRELU op preparation cannot handle a scalar (single-element)
-        input broadcasting against a multi-element alpha (fails with
-        "HaveSameShapes input/output" during graph preparation). Rather than
-        letting that surface as an opaque LiteRT prepare failure, fail fast
-        with an actionable message pointing at the supported direct-kernel
-        path (operator: PReLUScalar) for this broadcast shape.
-        """
+        arm_prelu_s8/s16 require the output to have the input's shape, which that
+        broadcast cannot give; operator: PReLUScalar covers it via arm_prelu_scalar_s8."""
         if int(np.prod(input_shape)) == 1 and int(np.prod(alpha_shape)) > 1:
             raise ValueError(
                 "PReLU with a scalar (single-element) input and a multi-element alpha "
-                "broadcast is not supported via LiteRT (known PRELU prepare failure: "
-                "'HaveSameShapes input/output'). Use operator: PReLUScalar instead, which "
-                "implements this broadcast directly against arm_prelu_scalar_s8 without "
-                "requiring LiteRT model preparation."
+                "broadcast is not supported: arm_prelu_s8/s16 require the output to have the "
+                "input's shape. Use operator: PReLUScalar instead, which implements this "
+                "broadcast directly against arm_prelu_scalar_s8."
             )
 
-    def allow_no_tflite(self) -> bool:
-        return self._is_arg_error_case()
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        """Generate LiteRT model for PReLU."""
-        if self._is_arg_error_case():
-            raise RuntimeError(
-                "PReLU expected-error test case; skip TFLite generation and exercise "
-                "the CMSIS kernel directly with the descriptor's (deliberately "
-                "mismatched) shapes."
-            )
-
-        from helia_core_tester.generation.utils.litert_builder import build_prelu_op
-
-        activation_dtype = self.desc.get("activation_dtype", "S8")
-        dtype_map = {"S8": "int8", "S16": "int16", "FP32": "float32", "FP16": "float16"}
-        if activation_dtype not in dtype_map:
-            raise NotImplementedError(f"Unsupported PReLU dtype: {activation_dtype}")
-        litert_dtype = dtype_map[activation_dtype]
-
-        input_shape = tuple(self.desc["input_shape"])
-        alpha_shape = self._resolved_alpha_shape()
-        self._validate_broadcast_support(input_shape, alpha_shape)
-
-        # Get alpha values from descriptor
-        alpha_values = self._descriptor_alpha_values()
-
-        # Ensure alpha values match alpha_shape
-        _ = self._prepare_alpha_values(tuple(alpha_shape), alpha_values)
-
-        model_bytes = build_prelu_op(
-            input_shape=input_shape,
-            alpha_shape=alpha_shape,
-            alpha_values=alpha_values,
-            dtype=litert_dtype,
-        )
-        with open(out_path, "wb") as f:
-            f.write(model_bytes)
-    
     def _select_cmsis_prelu_kernel(self) -> Dict[str, str]:
         """
         Select appropriate CMSIS-NN kernel function for PReLU operation.
@@ -241,46 +196,18 @@ class OpPReLU(OperationBase):
             validation_key="ActivationFunctions/prelu/prelu.c.j2", label="PReLU", operator="PReLU",
         )
 
-    @staticmethod
-    def _reference_prelu_s16(
-        *,
-        input_q: np.ndarray,
-        alpha_q: np.ndarray,
-        input_dims: Dict[str, int],
-        alpha_dims: Dict[str, int],
-        input_offset: int,
-        alpha_offset: int,
-        output_offset: int,
-        mult_identity: int,
-        shift_identity: int,
-        mult_alpha: int,
-        shift_alpha: int,
-    ) -> np.ndarray:
-        """
-        Compute the golden output for arm_prelu_s16 using exact CMSIS-NN fixed-point math.
+    def _prelu_golden(self, entry: str, params, input_q, alpha_q, input_dims, alpha_dims, quant=None) -> np.ndarray:
+        """The reference PReLU on the kernel's own 4-D view of input and alpha."""
+        from helia_core_tester.generation.reference.call import ReferenceCall
 
-        Mirrors arm_elementwise_prelu_s16: for each element, the identity path is taken
-        when (input + input_offset) >= 0, otherwise the alpha path is used. Alpha is
-        broadcast across the input following the NHWC PReLU broadcast rules.
-        """
-        from helia_core_tester.generation.utils.tflite_utils import requantize_np
-
-        in_shape = (input_dims['n'], input_dims['h'], input_dims['w'], input_dims['c'])
-        a_shape = (alpha_dims['n'], alpha_dims['h'], alpha_dims['w'], alpha_dims['c'])
-
-        inp = input_q.reshape(in_shape).astype(np.int64)
-        alp = alpha_q.reshape(a_shape).astype(np.int64)
-        alp = np.broadcast_to(alp, in_shape)
-
-        input_value = inp + int(input_offset)
-        alpha_value = alp + int(alpha_offset)
-
-        identity = requantize_np(input_value, int(mult_identity), int(shift_identity))
-        alpha_path = requantize_np(input_value * alpha_value, int(mult_alpha), int(shift_alpha))
-
-        out = np.where(input_value >= 0, identity, alpha_path).astype(np.int64) + int(output_offset)
-        out = np.clip(out, -32768, 32767).astype(np.int16)
-        return out
+        in_4d = tuple(int(input_dims[k]) for k in "nhwc")
+        alpha_4d = tuple(int(alpha_dims[k]) for k in "nhwc")
+        output = self.reference_golden(ReferenceCall(
+            entry, params,
+            {"input": np.ascontiguousarray(input_q).reshape(in_4d), "alpha": np.ascontiguousarray(alpha_q).reshape(alpha_4d)},
+            {"output": in_4d}, quant=quant or {},
+        ))
+        return output.reshape(np.shape(input_q))
 
     def _descriptor_alpha_values(self):
         """Alpha values as authored in the descriptor, or None for the default ramp."""
@@ -309,7 +236,7 @@ class OpPReLU(OperationBase):
         arm_prelu_f32/f16 take (input_dims, input, alpha_dims, alpha,
         output_dims, output) with no quantization parameters; alpha and the
         golden output are derived from the descriptor with numpy (PReLU is
-        exact in the working precision, so no interpreter is needed).
+        exact in the working precision).
         """
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
@@ -335,10 +262,9 @@ class OpPReLU(OperationBase):
         )
         self.rng.__setstate__(rng_state)
 
-        alpha_bc = alpha.reshape(
-            (alpha_dims['n'], alpha_dims['h'], alpha_dims['w'], alpha_dims['c'])
-        )
-        output_data = np.where(input_q >= 0, input_q, input_q * alpha_bc).astype(float_dtype)
+        output_data = self._prelu_golden(
+            "prelu_f16" if float_dtype == np.float16 else "prelu_f32", {"unused": 0},
+            input_q, alpha, input_dims, alpha_dims)
 
         context = {
             'name': name,
@@ -380,101 +306,25 @@ class OpPReLU(OperationBase):
             self._generate_float_c_files(output_dir, float_kernel_info)
             return
 
+        from helia_core_tester.generation.reference import quant as ref_quant
+        from helia_core_tester.generation.reference.bindings import get_bindings
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
-        from helia_core_tester.generation.utils.tflite_utils import calculate_multiplier_shift
-        from helia_core_tester.generation.utils.litert_utils import (
-            load_litert_model, extract_weights_biases_from_litert, get_tensor_data_from_litert
-        )
-        
+
         name = self.desc['name']
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
-        
-        # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_prelu_kernel()
-        
-        # Load LiteRT model for tensor extraction
-        from helia_core_tester.generation.utils.litert_utils import get_operator_tensors_from_litert
-        
-        model, subgraph = load_litert_model(str(tflite_path))
-        if len(subgraph.operators) == 0:
-            raise ValueError("No operators found in model")
-        
-        op_tensors = get_operator_tensors_from_litert(model, subgraph, 0)
-        
-        # Extract shapes from LiteRT
-        if not op_tensors['inputs']:
-            raise ValueError("No input tensors found")
-        if not op_tensors['outputs']:
-            raise ValueError("No output tensors found")
-        
-        input_shape = op_tensors['inputs'][0]['shape']
-        output_shape = op_tensors['outputs'][0]['shape']
-        
-        # Extract quantization from LiteRT
-        input_quant = op_tensors['inputs'][0]['quantization']
-        output_quant = op_tensors['outputs'][0]['quantization']
-        
-        input_scale = input_quant.get('scale', 1.0) if isinstance(input_quant, dict) else 1.0
-        input_zp = input_quant.get('zero_point', 0) if isinstance(input_quant, dict) else 0
-        output_scale = output_quant.get('scale', 1.0) if isinstance(output_quant, dict) else 1.0
-        output_zp = output_quant.get('zero_point', 0) if isinstance(output_quant, dict) else 0
-        
-        # Get first element (per-tensor quantization)
-        input_scale = float(input_scale[0] if isinstance(input_scale, (list, np.ndarray)) else input_scale)
-        input_zp = int(input_zp[0] if isinstance(input_zp, (list, np.ndarray)) else input_zp)
-        output_scale = float(output_scale[0] if isinstance(output_scale, (list, np.ndarray)) else output_scale)
-        output_zp = int(output_zp[0] if isinstance(output_zp, (list, np.ndarray)) else output_zp)
-        
-        # Extract alpha weights using LiteRT
-        # For PReLU, alpha is typically the second input (index 1)
-        # Alpha can be 1D (vector), 2D, 3D, etc., so we need to check operator inputs directly
-        op = subgraph.operators[0]
-        alpha_weights = None
-        alpha_quant = input_quant  # Default to input quantization
-        
-        # Check if alpha is in operator inputs (typically at index 1)
-        if len(op.inputs) > 1:
-            alpha_tensor_idx = op.inputs[1]
-            if alpha_tensor_idx >= 0 and alpha_tensor_idx < len(subgraph.tensors):
-                alpha_tensor = subgraph.tensors[alpha_tensor_idx]
-                alpha_weights = get_tensor_data_from_litert(alpha_tensor, model)
-                if alpha_weights is not None:
-                    # Get alpha quantization from the tensor
-                    from helia_core_tester.generation.utils.litert_utils import get_tensor_quantization_from_litert
-                    alpha_quant = get_tensor_quantization_from_litert(alpha_tensor)
-        
-        # Fallback: try extract_weights_biases_from_litert
-        if alpha_weights is None:
-            weights_biases = extract_weights_biases_from_litert(model, subgraph, 0)
-            alpha_weights = weights_biases.get('weights')
-            if alpha_weights is None:
-                # Alpha might be 1D and classified as bias by generic extractor
-                alpha_weights = weights_biases.get('biases')
-        
-        if alpha_weights is None:
-            raise ValueError("PReLU requires alpha weights but none found in TFLite model")
-        
-        # Extract alpha quantization parameters (already extracted above)
-        if isinstance(alpha_quant, dict):
-            alpha_scale = alpha_quant.get('scale', input_scale)
-            alpha_zp = alpha_quant.get('zero_point', input_zp)
-        else:
-            alpha_scale = input_scale
-            alpha_zp = input_zp
-        
-        # Get first element (per-tensor quantization)
-        alpha_scale = float(alpha_scale[0] if isinstance(alpha_scale, (list, np.ndarray)) else alpha_scale)
-        alpha_zp = int(alpha_zp[0] if isinstance(alpha_zp, (list, np.ndarray)) else alpha_zp)
-        
+        input_shape = output_shape = tuple(int(d) for d in self.desc["input_shape"])
+        alpha_shape = tuple(int(d) for d in self._resolved_alpha_shape())
+        self._validate_broadcast_support(input_shape, alpha_shape)
+        activation_dtype = self.desc.get("activation_dtype", "S8")
+        # Input, alpha and output carry one preset quantization.
+        input_scale, input_zp = ref_quant.preset_quant(activation_dtype)
+        alpha_scale, alpha_zp = output_scale, output_zp = input_scale, input_zp
+        alpha_weights = self._prepare_alpha_values(alpha_shape, self._descriptor_alpha_values())
+
         builder = TemplateContextBuilder()
-        
-        # Convert shapes to CMSIS dims
         input_dims = builder.nhwc_to_cmsis_dims(input_shape)
         output_dims = builder.nhwc_to_cmsis_dims(output_shape)
-        alpha_shape = alpha_weights.shape
-        
+
         # For PReLU, alpha dimensions should match the input's non-singleton dimensions
         if len(alpha_shape) == 1 and len(input_shape) >= 2:
             # Alpha is 1D, input is 2D+: match alpha to input's layout
@@ -502,12 +352,14 @@ class OpPReLU(OperationBase):
             # Use standard conversion
             alpha_dims = builder.nhwc_to_cmsis_dims(alpha_shape)
         
-        output_multiplier_identity = float(input_scale) / float(output_scale)
-        output_multiplier_alpha = (float(alpha_scale) * float(input_scale)) / float(output_scale)
-        
-        # Calculate multipliers and shifts (equivalent to AirFixedPointScale.from_real_multiplier)
-        mult_identity, shift_identity = calculate_multiplier_shift(output_multiplier_identity)
-        mult_alpha, shift_alpha = calculate_multiplier_shift(output_multiplier_alpha)
+        params = get_bindings().prepare("prelu_prepare", {
+            "dtype": ref_quant.hct_dtype(activation_dtype),
+            "input_scale": input_scale, "input_zero_point": input_zp,
+            "alpha_scale": alpha_scale, "alpha_zero_point": alpha_zp,
+            "output_scale": output_scale, "output_zero_point": output_zp,
+        })
+        mult_identity, shift_identity = params["identity_multiplier"], params["identity_shift"]
+        mult_alpha, shift_alpha = params["alpha_multiplier"], params["alpha_shift"]
         
         # Quantize alpha weights
         # Check if alpha_weights are already quantized (int8/int16) or float
@@ -520,13 +372,8 @@ class OpPReLU(OperationBase):
             alpha_qmin, alpha_qmax = -128, 127
             alpha_c_type = "int8_t"
 
-        if alpha_weights.dtype in [np.int8, np.int16, np.uint8]:
-            # Alpha weights are already quantized, use them directly
-            alpha_q = alpha_weights.astype(np_alpha_dtype) if alpha_weights.dtype == np.uint8 else alpha_weights
-        else:
-            # Alpha weights are float, need to quantize them
-            alpha_q = np.round(alpha_weights / float(alpha_scale) + float(alpha_zp)).astype(np.int32)
-            alpha_q = np.clip(alpha_q, alpha_qmin, alpha_qmax).astype(np_alpha_dtype)
+        alpha_q = np.round(alpha_weights / float(alpha_scale) + float(alpha_zp)).astype(np.int32)
+        alpha_q = np.clip(alpha_q, alpha_qmin, alpha_qmax).astype(np_alpha_dtype)
         
         # Generate input data and quantize
         rng_state = self.rng.__getstate__()
@@ -561,9 +408,8 @@ class OpPReLU(OperationBase):
         
         input_q = np.round(input_data / float(input_scale) + float(input_zp)).astype(np.int32)
         input_q = np.clip(input_q, qmin, qmax).astype(np_in_dtype)
-        # alpha is a constant baked into the TFLite model, so it can only be
-        # waived, never steered: the reference interpreter would keep using the
-        # model's copy and the golden would stop matching the emitted array.
+        # alpha is the case's fixed slope constant, not drawn data, so it can only
+        # be waived, never steered.
         # A descriptor that pins input_values chose those exact operands, so
         # the input is check-only for the same reason the values exist.
         input_q, _ = self._enforce_int_operand_sign_span(
@@ -571,34 +417,13 @@ class OpPReLU(OperationBase):
             steerable=() if "input_values" in extras else ("input",),
         )
         
-        if kernel_info["input_c_type"] == "int16_t":
-            # The LiteRT reference interpreter does not support int16 PReLU, so the
-            # golden output is computed here using the exact arm_prelu_s16 fixed-point
-            # math (see arm_elementwise_prelu_s16 in CMSIS-NN).
-            output_data = self._reference_prelu_s16(
-                input_q=input_q,
-                alpha_q=alpha_q,
-                input_dims=input_dims,
-                alpha_dims=alpha_dims,
-                input_offset=-int(input_zp),
-                alpha_offset=-int(alpha_zp),
-                output_offset=int(output_zp),
-                mult_identity=int(mult_identity),
-                shift_identity=int(shift_identity),
-                mult_alpha=int(mult_alpha),
-                shift_alpha=int(shift_alpha),
-            )
-        else:
-            # Run inference using LiteRT interpreter (int8 reference)
-            interpreter = self.load_litert_interpreter(str(tflite_path))
-            input_details = interpreter.get_input_details()
-            output_details = interpreter.get_output_details()
+        output_data = self._prelu_golden(
+            f"prelu_{ref_quant.kind(activation_dtype)}", params, input_q, alpha_q, input_dims, alpha_dims,
+            quant={"input": {"scale": input_scale, "zero_point": input_zp},
+                   "alpha": {"scale": alpha_scale, "zero_point": alpha_zp},
+                   "output": {"scale": output_scale, "zero_point": output_zp}},
+        )
 
-            interpreter.set_tensor(input_details[0]['index'], input_q)
-            interpreter.invoke()
-            output_data = interpreter.get_tensor(output_details[0]['index'])
-            output_data = np.array(output_data)
-        
         # Format arrays
         input_array_str = builder.format_array_as_c_literal(input_q)
         alpha_array_str = builder.format_array_as_c_literal(alpha_q)

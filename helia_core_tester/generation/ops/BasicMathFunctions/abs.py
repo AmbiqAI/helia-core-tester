@@ -2,23 +2,10 @@
 Abs operation implementation.
 """
 
-from typing import Dict, Any
+from typing import Dict
 import numpy as np
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.base import OperationBase
-from helia_core_tester.generation.utils.litert_builder import build_unary_same_shape_op
-
-
-def build_abs_op(
-    *,
-    input_shape,
-    dtype: str = "int8",
-) -> bytes:
-    return build_unary_same_shape_op(
-        op_name="ABS",
-        input_shape=input_shape,
-        dtype=dtype,
-    )
 
 
 class OpAbs(OperationBase):
@@ -28,29 +15,8 @@ class OpAbs(OperationBase):
 
     SIGN_SPAN_OPERANDS = ("input",)
 
-    def needs_keras_model(self) -> bool:
-        return False
-
-    def build_keras_model(self):
-        raise NotImplementedError("Abs uses LiteRT-only model generation.")
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        activation_dtype = self.desc.get("activation_dtype", "S8")
-        if activation_dtype == "S8":
-            dtype = "int8"
-        elif activation_dtype == "S16":
-            dtype = "int16"
-        elif activation_dtype == "FP32":
-            dtype = "float32"
-        elif activation_dtype == "FP16":
-            dtype = "float16"
-        else:
-            raise NotImplementedError(f"Unsupported Abs dtype: {activation_dtype}")
-
-        input_shape = tuple(self.desc["input_shape"])
-        model_bytes = build_abs_op(input_shape=input_shape, dtype=dtype)
-        with open(out_path, "wb") as f:
-            f.write(model_bytes)
+    def uses_reference(self) -> bool:
+        return True
 
     def _select_cmsis_abs_kernel(self) -> Dict[str, str]:
         activation_dtype = self.desc.get("activation_dtype", "S8")
@@ -85,26 +51,14 @@ class OpAbs(OperationBase):
         raise NotImplementedError(f"Unsupported Abs dtype: {activation_dtype}")
 
     def generate_c_files(self, output_dir: Path) -> None:
+        from helia_core_tester.generation.reference import quant as ref_quant
+        from helia_core_tester.generation.reference.bindings import get_bindings
+        from helia_core_tester.generation.reference.call import ReferenceCall
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
-        from helia_core_tester.generation.utils.tflite_utils import (
-            calculate_multiplier_shift,
-            scalar_scale_zp,
-            activation_bounds,
-        )
-        from helia_core_tester.generation.utils.litert_utils import get_operator_tensors_from_litert
 
         name = self.desc["name"]
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
-
         kernel_info = self._select_cmsis_abs_kernel()
-
-        model, subgraph = self.load_litert_model(str(tflite_path))
-        op_tensors = get_operator_tensors_from_litert(model, subgraph, 0)
-
-        input_shape = self._ensure_shape_tuple(op_tensors["inputs"][0]["shape"])
-        output_shape = self._ensure_shape_tuple(op_tensors["outputs"][0]["shape"])
+        input_shape = output_shape = tuple(int(d) for d in self.desc["input_shape"])
 
         builder = TemplateContextBuilder()
         input_dims = builder.nhwc_to_cmsis_dims(input_shape)
@@ -118,33 +72,31 @@ class OpAbs(OperationBase):
             float_dtype = np.float16 if kernel_info["input_c_type"] == "float16_t" else np.float32
             input_q = self._sample_uniform(input_shape, dtype=float_dtype)
 
-            def float_reference(operands, _dtype=float_dtype):
-                return np.abs(operands[0]).astype(_dtype)
-
-            output_data = float_reference([input_q])
+            output_data = self.reference_golden(ReferenceCall(
+                f"abs_{ref_quant.kind(activation_dtype)}", {"unused": 0}, {"input": input_q}, {"output": output_shape}))
             input_zp = output_zp = output_mult = output_shift = needs_rescale = 0
             activation_min = activation_max = 0
         else:
-            input_quant = op_tensors["inputs"][0]["quantization"]
-            output_quant = op_tensors["outputs"][0]["quantization"]
-
-            input_scale, input_zp = scalar_scale_zp(input_quant)
-            output_scale, output_zp = scalar_scale_zp(output_quant)
-
-            activation_min, activation_max = activation_bounds(activation_dtype)
-
-            effective_scale = float(input_scale) / float(output_scale)
-            output_mult, output_shift = calculate_multiplier_shift(effective_scale)
-            needs_rescale = 0 if abs(effective_scale - 1.0) < 1e-6 else 1
+            input_scale, input_zp = ref_quant.preset_quant(activation_dtype)
+            output_scale, output_zp = input_scale, input_zp
+            params = get_bindings().prepare("abs_prepare", {
+                "dtype": ref_quant.hct_dtype(activation_dtype),
+                "input_scale": input_scale, "input_zero_point": input_zp,
+                "output_scale": output_scale, "output_zero_point": output_zp,
+            })
+            # force_rescale drives the kernel's rescale route even at equal scales,
+            # where the multiplier is exactly 1.0 and the golden cannot change.
             if bool(self.desc.get("hint", {}).get("force_rescale", False)):
-                needs_rescale = 1
+                params["needs_rescale"] = 1
+            output_mult, output_shift, needs_rescale = params["multiplier"], params["shift"], params["needs_rescale"]
+            qmin, qmax = (-32768, 32767) if activation_dtype == "S16" else (-128, 127)
+            activation_min, activation_max = qmin, qmax
 
             rng_state = self.rng.__getstate__()
             self.rng = np.random.default_rng(self.seed)
             input_data = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(np.float32)
             self.rng.__setstate__(rng_state)
 
-            qmin, qmax = activation_bounds(activation_dtype)
             np_in_dtype = np.int16 if activation_dtype == "S16" else np.int8
             input_q = np.round(input_data / float(input_scale) + float(input_zp)).astype(np.int32)
             input_q = np.clip(input_q, qmin, qmax).astype(np_in_dtype)
@@ -156,18 +108,16 @@ class OpAbs(OperationBase):
                 steerable=("input",),
             )
 
-            interpreter = self.load_litert_interpreter(str(tflite_path))
-            input_details = interpreter.get_input_details()
-            output_details = interpreter.get_output_details()
-
-            interpreter.set_tensor(input_details[0]["index"], input_q)
-            interpreter.invoke()
-            output_data = interpreter.get_tensor(output_details[0]["index"])
-            output_data = np.array(output_data)
+            output_data = self.reference_golden(ReferenceCall(
+                f"abs_{ref_quant.kind(activation_dtype)}", params, {"input": np.ascontiguousarray(input_q)},
+                {"output": output_shape},
+                quant={"input": {"scale": input_scale, "zero_point": input_zp},
+                       "output": {"scale": output_scale, "zero_point": output_zp}},
+            ))
 
         if kernel_info["float_kernel"]:
             output_data, nonfinite_context = self.apply_nonfinite_policy(
-                output_data, reference=float_reference, inputs=[input_q]
+                output_data, reference=self.reference_probe, inputs=[input_q]
             )
         else:
             nonfinite_context = {}

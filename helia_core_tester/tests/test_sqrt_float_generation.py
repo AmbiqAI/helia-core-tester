@@ -11,7 +11,7 @@ import pytest
 from helia_core_tester.generation.io.descriptors import load_descriptor
 from helia_core_tester.generation.ops.BasicMathFunctions.sqrt import OpSqrt
 from helia_core_tester.generation.ops.BasicMathFunctions.rsqrt import OpRsqrt
-from helia_core_tester.generation.ops._shared.sqrt_float import sqrt_float_reference
+from helia_core_tester.tests.reference_models import sqrt_float_reference
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -83,8 +83,9 @@ def test_generate_every_float_descriptor(tmp_path, operator, cls):
         out = tmp_path / desc["name"]
         out.mkdir()
         op = cls(desc, seed=500, target_cpu="cortex-m55")
-        op.convert_to_tflite(None, str(out / (desc["name"] + ".tflite")), 500)
+        assert op.uses_reference() and not op.needs_keras_model()
         op.generate_c_files(out)
+        assert op.reference.entry == ("rsqrt_" if operator == "rsqrt" else "sqrt_") + desc["name"][-3:]
         source = (out / (desc["name"] + "_" + operator + ".c")).read_text()
         assert desc["required_kernel_symbols"][0] in source
         assert "HELIA_VALIDATE_EXPECTED_STATUS" in source

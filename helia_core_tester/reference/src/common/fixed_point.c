@@ -42,6 +42,13 @@ int32_t hct_multiply_by_quantized_multiplier(int32_t x, int32_t multiplier, int3
     return hct_rounding_divide_by_pot(hct_saturating_rounding_doubling_high_mul(scaled, multiplier), right_shift);
 }
 
+int32_t hct_cmsis_requantize(int32_t x, int32_t multiplier, int32_t shift)
+{
+    const int32_t scaled = (int32_t)((uint32_t)x << (shift > 0 ? shift : 0));
+    const int64_t high = ((int64_t)scaled * multiplier + (1LL << 30)) >> 31;
+    return hct_rounding_divide_by_pot((int32_t)high, shift > 0 ? 0 : -shift);
+}
+
 int32_t hct_quantize_multiplier_impl(double real, int32_t *multiplier, int32_t *shift)
 {
     if (multiplier == NULL || shift == NULL)

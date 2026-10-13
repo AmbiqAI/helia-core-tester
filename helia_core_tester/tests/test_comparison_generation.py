@@ -1,13 +1,7 @@
-import pytest
-
 from helia_core_tester.generation.ops.ComparisonFunctions.comparison import OpComparison
-from helia_core_tester.generation.utils.litert_builder import LITERT_AVAILABLE
 
 
 def test_comparison_equal_generates(tmp_path):
-    if not LITERT_AVAILABLE:
-        pytest.skip("ai_edge_litert is required for comparison LiteRT generation")
-
     desc = {
         "operator": "Comparison",
         "name": "equal_test",
@@ -19,12 +13,9 @@ def test_comparison_equal_generates(tmp_path):
         "input_2_shape": [1, 2, 2, 1],
     }
     op = OpComparison(desc, seed=1, target_cpu="cortex-m55")
-    assert op.needs_keras_model() is False
-    with pytest.raises(NotImplementedError, match="LiteRT-only"):
-        op.build_keras_model()
-    tflite_path = tmp_path / "equal_test.tflite"
-    op.convert_to_tflite(None, str(tflite_path), 1)
+    assert op.uses_reference() and op.needs_keras_model() is False
     op.generate_c_files(tmp_path)
+    assert op.reference.entry == "comparison_s8"
 
     c_path = tmp_path / "equal_test_comparison.c"
     h_path = tmp_path / "includes" / "equal_test_comparison.h"

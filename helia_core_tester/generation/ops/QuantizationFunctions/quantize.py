@@ -1,11 +1,11 @@
 """
 Quantize operation implementation for Helia-Core Tester.
 
-Following the official CMSIS-NN test generator logic from RefactoredTestGen/Lib/op_quantize.py
+The golden is TFLite's AffineQuantize on the C reference, after the fused activation the harness
+applies in float.
 """
 
 import numpy as np
-import tensorflow as tf
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.quantization_base import QuantizationFamilyBase
 from helia_core_tester.generation.ops.QuantizationFunctions.pools import quantize_argument_pool
@@ -16,7 +16,7 @@ class OpQuantize(QuantizationFamilyBase):
     Quantize operation.
     """
 
-    def allow_no_tflite(self) -> bool:
+    def uses_reference(self) -> bool:
         return True
 
     def primary_execution_dtype(self) -> str:
@@ -31,53 +31,6 @@ class OpQuantize(QuantizationFamilyBase):
         if "output" in resolved:
             return resolved["output"]
         return super().primary_execution_dtype()
-    
-    def build_keras_model(self) -> tf.keras.Model:
-        """Build Keras model for Quantize operation.
-        
-        Creates a model that can be quantized by TFLite converter.
-        Uses an identity-weight Dense layer to preserve input values.
-        """
-        input_shape = self.desc['input_shape']
-        
-        # Build model with float32 inputs (will be quantized later)
-        inputs = tf.keras.Input(shape=input_shape[1:], dtype=tf.float32, name='input')
-
-        # A pure identity (Lambda) op has no real computation, so the TFLite
-        # converter fully constant-folds it away into a single float32
-        # passthrough tensor before quantization can be inserted -- even when
-        # inference_output_type=int8/int16 is explicitly requested. Following
-        # the reference CMSIS-NN test generator
-        # (RefactoredTestGen/Lib/op_quantize.py:generate_keras_model), use an
-        # identity-weight Dense layer instead: a real op the converter must
-        # actually quantize.
-        flat = tf.keras.layers.Flatten(name='flatten')(inputs)
-        num_features = int(flat.shape[-1])
-        dense = tf.keras.layers.Dense(units=num_features, use_bias=False, activation=None, name='identity')
-        x = dense(flat)
-        dense.set_weights([np.eye(num_features, dtype=np.float32)])
-        
-        # Apply activation if specified
-        activation_str = self.desc.get('activation', 'NONE')
-        if activation_str == 'RELU':
-            x = tf.keras.layers.ReLU()(x)
-        elif activation_str == 'RELU6':
-            x = tf.keras.layers.ReLU(max_value=6)(x)
-        elif activation_str != 'NONE':
-            raise ValueError(f"Unsupported activation: {activation_str}")
-        
-        model = tf.keras.Model(inputs=inputs, outputs=x)
-        return model
-        
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        """Convert Keras model to TFLite with quantization."""
-        self._convert_with_activation_quantization(
-            model,
-            out_path,
-            input_type=tf.float32,
-            rep_seed=rep_seed,
-        )
     
     def _select_cmsis_quantize_kernel(self) -> dict[str, str]:
         """
@@ -106,103 +59,38 @@ class OpQuantize(QuantizationFamilyBase):
             }
         raise NotImplementedError(f"Unsupported Quantize output dtype: {output_dtype}")
 
-    def _extract_per_tensor_output_quantization(self, output_qp: dict) -> tuple[float, int]:
-        """Return per-tensor output quantization from LiteRT metadata."""
-        scales = output_qp.get("scales", None) if output_qp else None
-        zero_points = output_qp.get("zero_points", None) if output_qp else None
-
-        # Some LiteRT paths emit empty quant metadata for identity-style models.
-        # Silently falling back to a default scale/zero-point would produce a
-        # golden vector quantized with parameters unrelated to what the
-        # converter actually chose. Fail loudly instead.
-        if isinstance(scales, (list, tuple, np.ndarray)):
-            if len(scales) == 0:
-                raise ValueError(
-                    "Quantize output quantization metadata is missing per-tensor "
-                    "scale (empty scales array); refusing to substitute a default "
-                    "output scale"
-                )
-            output_scale = float(scales[0])
-        elif scales is not None:
-            output_scale = float(scales)
-        else:
-            raise ValueError(
-                "Quantize output quantization metadata is missing per-tensor "
-                "scale; refusing to substitute a default output scale"
-            )
-
-        if isinstance(zero_points, (list, tuple, np.ndarray)):
-            if len(zero_points) == 0:
-                raise ValueError(
-                    "Quantize output quantization metadata is missing per-tensor "
-                    "zero point (empty zero_points array); refusing to substitute "
-                    "a default output zero point"
-                )
-            output_zp = int(zero_points[0])
-        elif zero_points is not None:
-            output_zp = int(zero_points)
-        else:
-            raise ValueError(
-                "Quantize output quantization metadata is missing per-tensor "
-                "zero point; refusing to substitute a default output zero point"
-            )
-
-        return output_scale, output_zp
-    
     def generate_c_files(self, output_dir: Path) -> None:
         """
         Generate C and H files from templates for Quantize operation.
         """
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
         
-        name = self.desc['name']
-        tflite_path = output_dir / f"{name}.tflite"
-        # Select CMSIS kernel + types
-        kernel_info = self._select_cmsis_quantize_kernel()
+        from helia_core_tester.generation.reference import quant as ref_quant
+        from helia_core_tester.generation.reference.call import ReferenceCall
 
+        name = self.desc['name']
+        kernel_info = self._select_cmsis_quantize_kernel()
         builder = TemplateContextBuilder()
 
-        # Check for activation in descriptor
         activation_str = self.desc.get('activation', 'NONE')
         has_activation = activation_str in ['RELU', 'RELU6']
         comparison_tolerance = 1
+        act_min, act_max = {"RELU": (0.0, float("inf")), "RELU6": (0.0, 6.0)}.get(
+            activation_str, (float("-inf"), float("inf")))
 
-        if tflite_path.exists():
-            # Load interpreter
-            interpreter = self.load_litert_interpreter(str(tflite_path))
-            
-            # Get input and output details
-            input_details = interpreter.get_input_details()
-            output_details = interpreter.get_output_details()
-            
-            input_shape = tuple(input_details[0]['shape'])
-            output_shape = tuple(output_details[0]['shape'])
-            
-            # Extract quantization from output (quantized tensor)
-            output_qp = output_details[0].get('quantization_parameters', {})
-            output_scale, output_zp = self._extract_per_tensor_output_quantization(output_qp)
-            
-            # Generate input data (float32)
-            input_data = self._sample_uniform(input_shape)
-            
-            # Run inference (input is float32, output is quantized)
-            interpreter.set_tensor(input_details[0]['index'], input_data)
-            interpreter.invoke()
-            output_data = interpreter.get_tensor(output_details[0]['index'])
-            output_data = np.array(output_data)
-        else:
-            # No converted TFLite model is available to source real quantization
-            # parameters from. Quantize is allow_no_tflite(), but silently
-            # substituting hardcoded default scale/zero-point (unrelated to the
-            # descriptor or converter) would produce a golden vector quantized
-            # with the wrong parameters. Fail loudly instead.
-            raise RuntimeError(
-                f"Quantize descriptor '{name}' has no converted TFLite model "
-                "(conversion unavailable or failed) and no explicit descriptor "
-                "quantization parameters; refusing to substitute hardcoded "
-                "default output scale/zero-point"
-            )
-        
+        input_shape = output_shape = tuple(int(d) for d in self.desc["input_shape"])
+        out_kind = ref_quant.kind(self.tensor_dtype("output"))
+        # The [-1, 1] draw after the activation: the range the converter used to calibrate.
+        out_quant = self.activation_quant("output", (max(-1.0, act_min), min(1.0, act_max)), out_kind)
+        output_scale, output_zp = out_quant.scale, out_quant.zero_point
+        input_data = self._sample_uniform(input_shape)
+        output_data = self.reference_golden(ReferenceCall(
+            f"quantize_f32_{out_kind}",
+            {"scale": output_scale, "zero_point": output_zp, "activation_min": act_min, "activation_max": act_max},
+            {"input": np.ascontiguousarray(input_data, dtype=np.float32)}, {"output": output_shape},
+            quant={"output": out_quant.to_json(), "activation": activation_str},
+        ))
+
         # Format arrays
         input_array_str = builder.format_array_as_c_literal(input_data)
         expected_output_array_str = builder.format_array_as_c_literal(output_data)

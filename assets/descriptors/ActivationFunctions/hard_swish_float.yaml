@@ -3,8 +3,9 @@
 # computing x * min(max(x + 3, 0), 6) / 6 elementwise as
 # x * clamp(fma(x, 1/6, 0.5), 0, 1), so x >= 3 returns x bit-exactly and
 # x <= -3 returns exact zero; the f16 kernel evaluates in float32 and
-# rounds once. Goldens use a float64 reference cast once to the output
-# dtype; both saturated regions agree bit-exactly with the kernel by
+# rounds once. Goldens come from the C reference (hard_swish_f32/f16): the
+# exact result rounded once to the output dtype; both saturated regions
+# agree bit-exactly with the kernel by
 # construction and the curved region sits well inside the repo's default
 # float tolerances (measured max error 1.24e-7 f32 / 3.4e-4 f16 in #413).
 #

@@ -36,6 +36,16 @@ def test_reference_case_writes_its_record_and_no_model(tmp_path: Path, name: str
     assert entry["reference"] == str(case / f"{name}.reference.json")
 
 
+@pytest.mark.parametrize("name", ["prelu_arg_error_output_mismatch_s8", "prelu_arg_error_output_mismatch_s16"])
+def test_a_status_only_case_builds_no_model_and_records_no_reference(tmp_path: Path, name: str) -> None:
+    desc = _descriptor(name)
+    generation_module.generate_test(desc, str(tmp_path), seed=11, run_seed=5)
+    case = tmp_path / desc["_family"] / name
+    assert not list(case.glob("*.tflite")) and not list(case.glob("*.reference.json"))
+    source = next(case.glob("*.c")).read_text()
+    assert "ARM_CMSIS_NN_ARG_ERROR" in source
+
+
 class _NoCallOp(OperationBase):
     def uses_reference(self) -> bool:
         return True

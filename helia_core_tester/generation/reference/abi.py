@@ -75,6 +75,8 @@ class Spec:
     dtypes: Mapping[str, int]
     status: Mapping[str, int]
     activations: Mapping[str, int]
+    comparisons: Mapping[str, int]
+    float_activations: Mapping[str, int]
     structs: Mapping[str, StructSpec]
     kernels: Mapping[str, KernelSpec]
     prepare: Mapping[str, PrepareSpec]
@@ -115,6 +117,8 @@ def parse_spec(raw: Mapping) -> Spec:
     if status.get("OK") != 0:
         raise SpecError("status OK must be 0")
     activations = _enum(raw.get("activations"), "activations")
+    comparisons = _enum(raw.get("comparisons"), "comparisons")
+    float_activations = _enum(raw.get("float_activations"), "float_activations")
 
     structs: Dict[str, StructSpec] = {}
     for name, body in (raw.get("structs") or {}).items():
@@ -162,7 +166,8 @@ def parse_spec(raw: Mapping) -> Spec:
                 raise SpecError(f"prepare {name}: unknown {key} struct {body.get(key)!r}")
         prepare[name] = PrepareSpec(name, body["in"], body["out"])
 
-    return Spec(version, max_rank, dtypes, status, activations, structs, kernels, prepare)
+    return Spec(version, max_rank, dtypes, status, activations, comparisons, float_activations, structs, kernels,
+                prepare)
 
 
 @lru_cache(maxsize=None)
@@ -187,6 +192,24 @@ def activation_code(name: str) -> int:
     return acts[key]
 
 
+def comparison_code(name: str) -> int:
+    """The HctComparison value of comparison `name` (EQUAL, NOT_EQUAL, GREATER, ...)."""
+    table = load_spec().comparisons
+    key = str(name).upper().removeprefix("ARM_COMPARE_")
+    if key not in table:
+        raise KeyError(f"unknown comparison {name!r}; known: {sorted(table)}")
+    return table[key]
+
+
+def float_activation_code(name: str) -> int:
+    """The HctFloatActivation value of arm_nn_activation_f32/f16 type `name` (SIGMOID, TANH, ...)."""
+    table = load_spec().float_activations
+    key = str(name).upper().removeprefix("ARM_NN_FLT_ACT_")
+    if key not in table:
+        raise KeyError(f"unknown float activation {name!r}; known: {sorted(table)}")
+    return table[key]
+
+
 def _comment(text: str) -> str:
     return f"/* {text} */\n" if text else ""
 
@@ -203,7 +226,9 @@ def render_header(spec: Spec) -> str:
         f"#define HCT_REF_ABI_VERSION {spec.abi_version}\n#define HCT_MAX_RANK {spec.max_rank}\n\n",
     ]
     for title, prefix, table in (("HctDtype", "HCT_", spec.dtypes), ("HctStatus", "HCT_", spec.status),
-                                 ("HctActivation", "HCT_ACT_", spec.activations)):
+                                 ("HctActivation", "HCT_ACT_", spec.activations),
+                                 ("HctComparison", "HCT_CMP_", spec.comparisons),
+                                 ("HctFloatActivation", "HCT_FACT_", spec.float_activations)):
         body = ",\n".join(f"    {prefix}{k.upper()} = {v}" for k, v in table.items())
         out.append(f"typedef enum\n{{\n{body}\n}} {title};\n\n")
     out.append(
