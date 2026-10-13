@@ -246,6 +246,28 @@ def validate_descriptor_schema(doc: Any, source_stem: str = "") -> None:
         raise ValueError(f"descriptor '{name}' violates schema.json: {details}")
 
 
+def _schema_cases(doc: Any) -> List[Any]:
+    """The documents the schema sees: the raw doc, or each raw base+variation merge.
+
+    A base with variations may leave out fields its variations supply, so it is
+    checked only through the merges, which mirror expand_descriptor_variations.
+    """
+    if not isinstance(doc, dict) or 'variations' not in doc:
+        return [doc]
+    variations = doc['variations']
+    if not isinstance(variations, list) or not variations:
+        raise ValueError("'variations' must be a non-empty list of mappings")
+    base = {k: v for k, v in doc.items() if k != 'variations'}
+    cases = []
+    for index, variation in enumerate(variations):
+        if not isinstance(variation, dict):
+            raise ValueError(f"variation {index} must be a mapping, got {type(variation).__name__}")
+        merged = {**base, **variation}
+        merged.setdefault('name', f"{base.get('name', '<unnamed>')}_var_{index}")
+        cases.append(merged)
+    return cases
+
+
 def _annotate_descriptor_source(
     desc: Dict[str, Any],
     desc_path: str,
@@ -407,7 +429,8 @@ def load_descriptor(desc_path: str) -> List[Dict[str, Any]]:
     descriptors = []
     for i, doc in enumerate(documents):
         try:
-            validate_descriptor_schema(doc, source_stem)
+            for case in _schema_cases(doc):
+                validate_descriptor_schema(case, source_stem)
             validated_desc = _validate_and_normalize_descriptor(doc)
             descriptors.append(validated_desc)
         except Exception as e:
@@ -501,10 +524,6 @@ def expand_descriptor_variations(desc: Dict[str, Any]) -> List[Dict[str, Any]]:
         # Store base descriptor name for filtering purposes
         variation_desc['_base_name'] = base_name
 
-        validate_descriptor_schema(
-            {k: v for k, v in variation_desc.items() if not k.startswith(('_', 'resolved_'))},
-            str(desc.get('_source_stem', '')),
-        )
         normalized_variation = _validate_and_normalize_descriptor(variation_desc)
         operator = normalized_variation['operator']
         _validate_profile_requirements(normalized_variation, operator, variation=True)

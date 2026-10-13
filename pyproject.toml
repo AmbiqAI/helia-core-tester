@@ -9,6 +9,7 @@ include = ["helia_core_tester*"]
 [tool.setuptools.package-data]
 "helia_core_tester.mutation" = ["host/*.h", "host/*.c"]
 "helia_core_tester.agent_loop" = ["prompt.md.j2"]
+"helia_core_tester.generation" = ["descriptors/schema.json"]
 
 [project]
 name = "helia_core_tester"

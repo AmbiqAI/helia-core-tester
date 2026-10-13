@@ -247,20 +247,73 @@ def test_prelu_scalar_without_an_input_source_is_rejected(tmp_path: Path, overri
 # --- variations -------------------------------------------------------------
 
 
-def test_invalid_field_in_a_variation_is_rejected() -> None:
-    base = _clamp(variations=[{"name": "clamp_case_ok_s8"}, {"name": "clamp_case_bad_s8", "act_min": 0.5}])
-    (normalized,) = [desc_io._validate_and_normalize_descriptor(base)]
-    normalized["_source_stem"] = "clamp"
-    with pytest.raises(ValueError, match=r"clamp_case_bad_s8.*\$\.act_min"):
-        desc_io.expand_descriptor_variations(normalized)
+def test_invalid_field_in_a_variation_is_rejected(tmp_path: Path) -> None:
+    doc = _clamp(variations=[{"name": "clamp_case_ok_s8"}, {"name": "clamp_case_bad_s8", "act_min": 0.5}])
+    message = _rejected(tmp_path, doc)
+    assert "descriptor 'clamp_case_bad_s8'" in message
+    assert "$.act_min:" in message
 
 
-def test_float_stem_carries_into_variations() -> None:
-    base = _clamp(variations=[{"name": "clamp_case_half_s8", "act_min": 0.5}])
-    normalized = desc_io._validate_and_normalize_descriptor(base)
-    normalized["_source_stem"] = "clamp_float"
-    (expanded,) = desc_io.expand_descriptor_variations(normalized)
+def test_float_stem_carries_into_variations(tmp_path: Path) -> None:
+    doc = _clamp(variations=[{"name": "clamp_case_half_s8", "act_min": 0.5}])
+    (loaded,) = _load(tmp_path, doc, "clamp_float")
+    (expanded,) = desc_io.expand_descriptor_variations(loaded)
     assert expanded["act_min"] == 0.5
+
+
+def test_variations_may_supply_profile_required_fields(tmp_path: Path) -> None:
+    doc = {
+        "operator": "FullyConnected",
+        "name": "fully_connected_case_s8",
+        "activation_dtype": "S8",
+        "weight_dtype": "S8",
+        "variations": [{"name": "fully_connected_case_v1_s8", "input_shape": [1, 4], "filter_shape": [4, 4]}],
+    }
+    (loaded,) = _load(tmp_path, doc)
+    (expanded,) = desc_io.expand_descriptor_variations(loaded)
+    assert expanded["filter_shape"] == [4, 4]
+
+
+def test_variation_missing_a_profile_field_is_rejected(tmp_path: Path) -> None:
+    doc = {
+        "operator": "FullyConnected",
+        "name": "fully_connected_case_s8",
+        "activation_dtype": "S8",
+        "weight_dtype": "S8",
+        "variations": [{"name": "fully_connected_case_v1_s8", "input_shape": [1, 4]}],
+    }
+    assert "'filter_shape' is a required property" in _rejected(tmp_path, doc)
+
+
+def test_tensor_dtypes_base_with_a_variation_expands(tmp_path: Path) -> None:
+    # The loader derives legacy dtypes from tensor_dtypes; the schema must see only the author's fields.
+    doc = {
+        "operator": "Relu",
+        "name": "relu_case_u16",
+        "tensor_dtypes": {"input": "U16", "output": "U16"},
+        "input_shape": [1, 4],
+        "variations": [{"name": "relu_case_v1_u16"}],
+    }
+    (loaded,) = _load(tmp_path, doc)
+    (expanded,) = desc_io.expand_descriptor_variations(loaded)
+    assert expanded["name"] == "relu_case_v1_u16"
+
+
+@pytest.mark.parametrize("variations", [[], {"name": "x"}, ["x"], None])
+def test_malformed_variations_are_rejected(tmp_path: Path, variations) -> None:
+    doc = _clamp()
+    doc["variations"] = variations
+    with pytest.raises(ValueError, match="variation"):
+        _load(tmp_path, doc)
+
+
+def test_schema_ships_as_package_data() -> None:
+    import tomllib
+
+    pyproject = tomllib.loads((_repo_root() / "pyproject.toml").read_text())
+    package_data = pyproject["tool"]["setuptools"]["package-data"]
+    rel = desc_io.SCHEMA_PATH.relative_to(_repo_root() / "helia_core_tester" / "generation")
+    assert str(rel) in package_data["helia_core_tester.generation"]
 
 
 # --- schema load faults fail closed -----------------------------------------
