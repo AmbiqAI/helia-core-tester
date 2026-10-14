@@ -13,7 +13,7 @@ from typing import Any, Callable, Iterator, Optional
 
 import typer
 
-from .comparison import finite_or_none, tolerance_fraction
+from .comparison import finite_or_none
 from .entry_coverage import coverage_line, coverage_totals
 from .wire import boot_line, boot_record
 
@@ -250,7 +250,7 @@ def build_json_summary(
                 "timing_status": case.statistics.timing_status,
                 "max_abs_diff": finite_or_none(case.comparison.max_abs_diff),
                 "diff_count": case.comparison.diff_count,
-                "tolerance_fraction": tolerance_fraction(case.comparison),
+                "tolerance_fraction": finite_or_none(case.comparison.tolerance_fraction),
                 "skipped_reason": None,
             }
         )

@@ -27,15 +27,9 @@ class ComparisonResult:
 FLOAT_HEADROOM = 0.8
 
 
-def finite_or_none(value: float) -> float | None:
+def finite_or_none(value: float | None) -> float | None:
     """The value, or None if not finite."""
-    return value if math.isfinite(value) else None
-
-
-def tolerance_fraction(result: ComparisonResult) -> float | None:
-    """Tolerance share used; None if unknown."""
-    fraction = result.tolerance_fraction
-    return None if fraction is None else finite_or_none(fraction)
+    return value if value is not None and math.isfinite(value) else None
 
 
 def strict_comparison(comparison: dict[str, Any]) -> dict[str, Any]:

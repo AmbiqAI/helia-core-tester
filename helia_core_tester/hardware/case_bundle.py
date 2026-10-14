@@ -198,7 +198,7 @@ def golden_bundle(bundle: CaseBundle, golden_dir: Path) -> CaseBundle:
         return bundle
     if source == "generator":
         comparison = {**bundle.comparison, "headroom": FLOAT_HEADROOM}
-        return replace(bundle, manifest={**bundle.manifest, "correctness_comparison": comparison, "golden": source})
+        return replace(bundle, manifest={**bundle.manifest, "correctness_comparison": comparison})
     path = golden_dir / "outputs" / f"{bundle.case_id}.bin"
     expected = bundle.expected_output
     try:
@@ -212,8 +212,7 @@ def golden_bundle(bundle: CaseBundle, golden_dir: Path) -> CaseBundle:
         expected, path=path, expected_crc32=zlib.crc32(payload) & 0xFFFFFFFF, sha256=_sha256_bytes(payload),
     )
     blobs = tuple(swapped if blob is expected else blob for blob in bundle.blobs)
-    strict = strict_bundle(bundle)
-    return replace(strict, manifest={**strict.manifest, "golden": source}, blobs=blobs)
+    return replace(strict_bundle(bundle), blobs=blobs)
 
 
 def _sha256_bytes(payload: bytes) -> str:

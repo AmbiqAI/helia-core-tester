@@ -121,7 +121,9 @@ Every bundle records a per-case `input_digest` in `cases.json` and
 everything streamed to the board except the expected output (input, weight,
 bias and quant blobs, scalar parameters, kernel id). Before flashing,
 `--golden-from` refuses a case that the baseline lacks, that the baseline run
-failed (unless `--golden-allow-failed`), whose baseline `input_digest` differs
+failed (unless `--golden-allow-failed`, which also skips the next check), that
+is a float case whose baseline `tolerance_fraction` is over 0.8 (no candidate
+could pass it), whose baseline `input_digest` differs
 or is absent (bundles from before this field must be rerun), or whose output is
 missing or wrong-sized. The session manifest's `compare` block records which
 mode ran, plus the baseline path (`golden_from`), `golden_session_id` and

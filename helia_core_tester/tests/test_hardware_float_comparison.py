@@ -418,6 +418,7 @@ def test_golden_from_splits_int_and_float(generated_abs, tmp_path):
     ({"passed": False}, "Golden run failed these cases"),
     ({"input_digest": "0" * 64}, "Golden run used other inputs for"),
     ({"input_digest": None}, "Golden run has no input digest for"),
+    ({"tolerance_fraction": 0.81}, "Golden run spends over 0.8 of tolerance for"),
 ])
 def test_golden_from_refusals_cover_float(generated_abs, tmp_path, record, message):
     from helia_core_tester.hardware.hardware_pipeline import golden_bundles
@@ -463,3 +464,14 @@ def test_gated_session_reports_fraction(generated_abs, tmp_path, spend, passed):
     assert correctness["comparison"]["headroom"] == 0.8
     with (reports / "case_summary.csv").open() as stream:
         assert float(next(csv.DictReader(stream))["tolerance_fraction"]) == fraction
+
+
+def test_spent_baseline_allowed_when_asked(generated_abs, tmp_path):
+    from helia_core_tester.hardware.hardware_pipeline import golden_bundles
+
+    bundle = _bridge(generated_abs, tmp_path)
+    golden_dir = tmp_path / "past"
+    _write_golden(golden_dir, bundle, blob_numpy(bundle.expected_output), tolerance_fraction=0.8)
+    assert golden_bundles([bundle], golden_dir, allow_failed=False)
+    _write_golden(golden_dir, bundle, blob_numpy(bundle.expected_output), tolerance_fraction=0.9)
+    assert golden_bundles([bundle], golden_dir, allow_failed=True)
