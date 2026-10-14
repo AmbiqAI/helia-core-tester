@@ -302,7 +302,8 @@ static void queue_error_frame(hct_server_session_t *session, uint16_t offending_
     uint8_t payload[64];
     size_t offset = 0u;
     char message[48];
-    (void)snprintf(message, sizeof(message), "message_type=%u status=%d", (unsigned)offending_message_type, (int)status);
+    (void)snprintf(message, sizeof(message), "message_type=%u status=%d%s", (unsigned)offending_message_type, (int)status,
+                   status == HCTP_STATUS_NO_SPACE ? " MRAM pool full" : "");
     (void)write_text(payload, sizeof(payload), &offset, message);
     (void)queue_frame(session, HCTP_MSG_ERROR, payload, offset);
 }
@@ -637,6 +638,7 @@ static void reset_case_buffers(hct_server_session_t *session)
     session->output_stream_checksum = 0u;
     session->output_stream_active = 0u;
     session->mram_cursor = 0u;
+    session->mram_case_bytes = 0u;
     session->checked_bytes = 0u;
     hct_window.cold_count = 0u;
     session->last_kernel_status = ARM_CMSIS_NN_SUCCESS;
@@ -1082,6 +1084,30 @@ static hctp_status_t handle_session_plan(hct_server_session_t *session, const ui
 /* Tail: u8 kind, u64 per blob. */
 #define HCT_STORE_KEYS_KIND 1u
 
+/* Size this case's MRAM footprint (row-padded, from cache lines); refuse one
+ * the placement pool cannot hold before any of it is programmed. */
+static hctp_status_t plan_mram(hct_server_session_t *session)
+{
+    uint32_t total = 0u;
+    uint16_t index;
+    for (index = 0u; index < session->blob_count; ++index)
+    {
+        const hct_server_blob_t *blob = &session->blobs[index];
+        uint32_t rows;
+        uint32_t lines;
+        if (!blob_in_mram(blob)) continue;
+        rows = (blob->byte_length + HCT_MRAM_ROW_BYTES - 1u) & ~(HCT_MRAM_ROW_BYTES - 1u);
+        lines = (rows + HCT_MRAM_LINE_BYTES - 1u) & ~(HCT_MRAM_LINE_BYTES - 1u);
+        if (rows < blob->byte_length || lines < rows || lines > HCT_MRAM_POOL_BYTES - total)
+        {
+            return HCTP_STATUS_NO_SPACE;
+        }
+        total += lines;
+    }
+    session->mram_case_bytes = total;
+    return HCTP_STATUS_OK;
+}
+
 static hctp_status_t parse_store_keys(hct_server_session_t *session, hct_cursor_t *cursor)
 {
     uint16_t index;
@@ -1231,6 +1257,9 @@ static hctp_status_t handle_case_meta(hct_server_session_t *session, const uint8
     status = parse_store_keys(session, &cursor);
     if (status != HCTP_STATUS_OK) return status;
 
+    status = plan_mram(session);
+    if (status != HCTP_STATUS_OK) return status;
+
     session->current_blob_index = 0u;
     session->state = HCT_SERVER_STATE_WAIT_BLOB_CHUNK;
     return next_blob(session);
@@ -1274,6 +1303,14 @@ static int program_changed_rows(const uint8_t *staged, uintptr_t address, uint32
     return 0;
 }
 
+/* Pool offset of a case's first blob: content-spread, leaving room for all of it. */
+static uint32_t mram_start_offset(uint32_t crc32, uint32_t case_bytes)
+{
+    const uint32_t room = HCT_MRAM_POOL_BYTES - case_bytes + HCT_MRAM_LINE_BYTES;
+    const uint32_t window = room < HCT_MRAM_POOL_BYTES / 2u ? room : HCT_MRAM_POOL_BYTES / 2u;
+    return (crc32 % window) & ~(HCT_MRAM_LINE_BYTES - 1u);
+}
+
 /* Program the staged copy into MRAM. */
 static hctp_status_t place_in_mram(hct_server_session_t *session, hct_server_blob_t *blob)
 {
@@ -1290,14 +1327,15 @@ static hctp_status_t place_in_mram(hct_server_session_t *session, hct_server_blo
     {
         return HCTP_STATUS_INVALID_ARGUMENT;
     }
-    /* Spread writes by content: wear leveling. */
+    /* Spread writes by content (wear leveling), but start where the whole case
+     * fits: blobs then never wrap onto this case's earlier ones (#377). */
     if (session->mram_cursor == 0u)
     {
-        session->mram_cursor = base + ((blob->crc32 % (HCT_MRAM_POOL_BYTES / 2u)) & ~(HCT_MRAM_LINE_BYTES - 1u));
+        session->mram_cursor = base + mram_start_offset(blob->crc32, session->mram_case_bytes);
     }
     if (session->mram_cursor + length > base + HCT_MRAM_POOL_BYTES)
     {
-        session->mram_cursor = base;
+        return HCTP_STATUS_NO_SPACE;
     }
     address = session->mram_cursor;
     /* Each blob starts on a cache line. */
