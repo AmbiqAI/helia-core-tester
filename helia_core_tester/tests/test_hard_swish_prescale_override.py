@@ -99,16 +99,20 @@ def test_golden_applies_the_prescale_shift(monkeypatch, tmp_path: Path, dtype: s
     assert plain["expected_output_array"] != ctx["expected_output_array"]
 
 
-# At s = 1/128, relu_q6 = 768: prescale 10 leaves xr in {0, 1}; 11 rounds it to 0 for every input.
-@pytest.mark.parametrize("prescale", [0, 10])
-def test_boundary_prescales_are_accepted(monkeypatch, tmp_path: Path, prescale: int) -> None:
-    assert _context(monkeypatch, _desc(prescale=prescale), tmp_path)["prescale"] == prescale
+# At s = 1/128 (relu_q3 384, relu_q6 768) xr follows x: s8 reaches x + 384 <= 511, so
+# prescale 9 still leaves xr = 1 and 10 rounds it to 0 for every code; s16 reaches the
+# full 768, so 10 leaves xr in {0, 1} and 11 zeroes it.
+@pytest.mark.parametrize(("dtype", "prescale"), [("S8", 0), ("S8", 9), ("S16", 0), ("S16", 10)])
+def test_boundary_prescales_are_accepted(monkeypatch, tmp_path: Path, dtype: str, prescale: int) -> None:
+    assert _context(monkeypatch, _desc(dtype, prescale=prescale), tmp_path)["prescale"] == prescale
 
 
-@pytest.mark.parametrize("prescale", [11, PRESCALE_MAX])
-def test_prescale_that_zeroes_the_relu6_term_is_rejected(monkeypatch, tmp_path: Path, prescale: int) -> None:
+@pytest.mark.parametrize(("dtype", "prescale"), [("S8", 10), ("S8", PRESCALE_MAX), ("S16", 11), ("S16", PRESCALE_MAX)])
+def test_prescale_that_zeroes_the_relu6_term_is_rejected(
+    monkeypatch, tmp_path: Path, dtype: str, prescale: int
+) -> None:
     with pytest.raises(ValueError, match="rounds the relu6 term .* to 0 for every input"):
-        _context(monkeypatch, _desc(prescale=prescale), tmp_path)
+        _context(monkeypatch, _desc(dtype, prescale=prescale), tmp_path)
 
 
 @pytest.mark.parametrize("prescale", [-1, PRESCALE_MAX + 1, 4.0, "4", True, None])
@@ -120,37 +124,42 @@ def test_invalid_prescales_are_rejected(monkeypatch, tmp_path: Path, prescale) -
 
 
 def test_prescale_that_overflows_int32_is_rejected(monkeypatch, tmp_path: Path) -> None:
-    # s16 with a tiny scale: relu6 = 6 / 2^-16 = 393216 and |x| <= 32768.
-    desc = _desc("S16", input_scale=2.0**-16, output_scale=2.0**-16, prescale=0)
-    with pytest.raises(ValueError, match="overflows int32"):
-        _context(monkeypatch, desc, tmp_path)
-    # The derived prescale for the same scales is safe, and so is the boundary override.
-    assert _context(monkeypatch, _desc("S16", input_scale=2.0**-16, output_scale=2.0**-16), tmp_path)["prescale"] == 3
-    assert _context(
-        monkeypatch, _desc("S16", input_scale=2.0**-16, output_scale=2.0**-16, prescale=3), tmp_path
-    )["prescale"] == 3
+    # s16 at 2^-16: relu_q3 = 196608, relu_q6 = 393216. x = 32767 reaches x + relu_q3 = 229375,
+    # so prescale 1 gives 32767 * 114688 (overflow) and 2 gives 32767 * 57344 (fits).
+    tiny = {"input_scale": 2.0**-16, "output_scale": 2.0**-16}
+    for prescale in (0, 1):
+        with pytest.raises(ValueError, match="overflows int32"):
+            _context(monkeypatch, _desc("S16", prescale=prescale, **tiny), tmp_path)
+    assert _context(monkeypatch, _desc("S16", **tiny), tmp_path)["prescale"] == 2
+    assert _context(monkeypatch, _desc("S16", prescale=2, **tiny), tmp_path)["prescale"] == 2
 
 
 S16 = (-32768, 32767)
 
 
 @pytest.mark.parametrize(
-    ("prescale", "relu_q6", "input_zp", "fits"),
+    ("prescale", "relu_q3", "relu_q6", "input_zp", "fits"),
     [
-        # |x| <= 32768 at zero point 0: 65535 * 32768 fits, 65536 * 32768 does not.
-        (0, 65535, 0, True),
-        (0, 65536, 0, False),
-        # The zero point moves the |x| bound: 32769 at zp 1 or -2 overflows, 32768 at zp -1 fits.
-        (0, 65535, 1, False),
-        (0, 65535, -2, False),
-        (0, 65535, -1, True),
-        # xr rounds half up: (131069 + 1) >> 1 = 65535 fits, (131071 + 1) >> 1 = 65536 does not.
-        (1, 131069, 0, True),
-        (1, 131071, 0, False),
+        # xr clamps to relu_q6 at x = 32767: 32767 * 65538 fits int32, 32767 * 65539 does not.
+        # (An independent |x| <= 32768 bound would reject the first: x = -32768 only
+        # reaches x + relu_q3 = 7232.)
+        (0, 40000, 65538, 0, True),
+        (0, 40000, 65539, 0, False),
+        # Negative side at zp 32767 (x in [-65535, 0]): min of x * (x + relu_q3) is at
+        # x = -relu_q3 / 2; 92681 gives -46340 * 46341 (fits), 92682 gives -46341^2 (overflow).
+        (0, 92681, 2 * 92681, 32767, True),
+        (0, 92682, 2 * 92682, 32767, False),
+        # xr rounds half up: (131075 + 1) >> 1 = 65538 fits, (131077 + 1) >> 1 = 65539 does not;
+        # flooring would give 65538 for both.
+        (1, 100000, 131075, 0, True),
+        (1, 100000, 131077, 0, False),
+        # x + relu_q3 itself must stay in int32 before the clamp.
+        (PRESCALE_MAX, 2**31 - 32768, 2**31 - 1, 0, True),
+        (PRESCALE_MAX, 2**31 - 32767, 2**31 - 1, 0, False),
     ],
 )
-def test_overflow_check_boundary(prescale: int, relu_q6: int, input_zp: int, fits: bool) -> None:
-    args = (prescale, relu_q6, input_zp, *S16)
+def test_overflow_check_boundary(prescale: int, relu_q3: int, relu_q6: int, input_zp: int, fits: bool) -> None:
+    args = (prescale, relu_q3, relu_q6, input_zp, *S16)
     assert HardSwishFamilyBase._prescale_overflows(*args) is (not fits)
     if fits:
         HardSwishFamilyBase._check_prescale_fits(*args)
@@ -159,24 +168,26 @@ def test_overflow_check_boundary(prescale: int, relu_q6: int, input_zp: int, fit
             HardSwishFamilyBase._check_prescale_fits(*args)
 
 
-def test_derived_prescale_uses_the_same_bound_as_the_override(monkeypatch, tmp_path: Path) -> None:
-    # relu_q6 = 65538: 32767 * 65538 fits int32 but 32768 * 65538 does not, so the
-    # smallest safe prescale is 1, and an explicit 0 is rejected for the same reason.
-    scale = 6.0 / 65538
-    assert HardSwishFamilyBase._derive_prescale(65538, 0, *S16) == 1
-    assert _context(monkeypatch, _desc("S16", input_scale=scale, output_scale=scale), tmp_path)["prescale"] == 1
-    with pytest.raises(ValueError, match="overflows int32"):
-        _context(monkeypatch, _desc("S16", input_scale=scale, output_scale=scale, prescale=0), tmp_path)
-    assert _context(monkeypatch, _desc("S16", input_scale=scale, output_scale=scale, prescale=1), tmp_path)["prescale"] == 1
+def _scalar_overflows(prescale: int, relu_q3: int, relu_q6: int, input_zp: int, qmin: int, qmax: int) -> bool:
+    """Reference: the golden simulation's own scalar steps over every input code."""
+    lo, hi = np.iinfo(np.int32).min, np.iinfo(np.int32).max
+    for q in range(qmin, qmax + 1):
+        x = q - input_zp
+        xr = HardSwishFamilyBase._clamp(x + relu_q3, 0, relu_q6)
+        xr = HardSwishFamilyBase._nonneg_divide_by_pot_s32(xr, prescale)
+        if not (lo <= x + relu_q3 <= hi and lo <= x * xr <= hi):
+            return True
+    return False
 
 
-@pytest.mark.parametrize("relu_q6", [0, 1, 6, 768, 65535, 393216, 2**31 - 1])
-@pytest.mark.parametrize("input_zp", [0, 127, -128])
-def test_derived_prescale_is_the_smallest_safe_one(relu_q6: int, input_zp: int) -> None:
-    prescale = HardSwishFamilyBase._derive_prescale(relu_q6, input_zp, *S16)
-    assert not HardSwishFamilyBase._prescale_overflows(prescale, relu_q6, input_zp, *S16)
+@pytest.mark.parametrize("relu_q6", [0, 6, 768, 65538, 131072, 393216])
+@pytest.mark.parametrize(("input_zp", "bounds"), [(0, S16), (32767, S16), (-128, (-128, 127)), (127, (-128, 127))])
+def test_derived_prescale_is_the_smallest_safe_one(relu_q6: int, input_zp: int, bounds) -> None:
+    relu_q3 = (relu_q6 + 1) // 2
+    prescale = HardSwishFamilyBase._derive_prescale(relu_q3, relu_q6, input_zp, *bounds)
+    assert not _scalar_overflows(prescale, relu_q3, relu_q6, input_zp, *bounds)
     if prescale:
-        assert HardSwishFamilyBase._prescale_overflows(prescale - 1, relu_q6, input_zp, *S16)
+        assert _scalar_overflows(prescale - 1, relu_q3, relu_q6, input_zp, *bounds)
 
 
 def test_compat_rejects_prescale(monkeypatch, tmp_path: Path) -> None:
@@ -272,8 +283,7 @@ def test_shipped_prescale_cases_have_live_goldens(tmp_path: Path, name: str) -> 
     # Every quantization parameter is pinned, so no calibrated model is shipped beside the case.
     assert list(case_dir.rglob("*.tflite")) == []
     c_text = next(case_dir.rglob("*_hard_swish.c")).read_text()
-    # Through the real pipeline (int8 builds a calibrated .tflite), the
-    # descriptor's scales and zero points must win, giving the Unity set.
+    # Through the real pipeline the parameters come from the descriptor alone, giving the Unity set.
     params = {
         key: int(value)
         for value, key in re.findall(r"^\s*(-?\d+),\s*// (\w+)", c_text, flags=re.M)

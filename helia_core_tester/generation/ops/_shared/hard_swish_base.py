@@ -161,34 +161,58 @@ class HardSwishFamilyBase(OperationBase):
         return value
 
     @classmethod
-    def _prescale_overflows(cls, prescale: int, relu_q6: int, input_zp: int, qmin: int, qmax: int) -> bool:
-        """True when the kernel's int32 x * xr can overflow at this prescale."""
-        x_max = max(qmax - int(input_zp), int(input_zp) - qmin)
-        xr_max = cls._nonneg_divide_by_pot_s32(max(int(relu_q6), 0), prescale)
-        return x_max * xr_max > np.iinfo(np.int32).max
+    def _relu6_terms(
+        cls, prescale: int, relu_q3: int, relu_q6: int, input_zp: int, qmin: int, qmax: int
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """For every input code: x = q - zp, x + relu_q3, and the prescaled xr, as int64.
+
+        xr is clamp(x + relu_q3, 0, relu_q6) rounded by the prescale, so it moves
+        with x; bounding x and relu_q6 separately over- and under-states x * xr.
+        """
+        x = np.arange(int(qmin), int(qmax) + 1, dtype=np.int64) - int(input_zp)
+        shifted = x + int(relu_q3)
+        xr = np.clip(shifted, 0, max(int(relu_q6), 0))
+        if prescale:
+            xr = (xr + (1 << (prescale - 1))) >> prescale
+        return x, shifted, xr
+
+    @staticmethod
+    def _leaves_int32(*values: np.ndarray) -> bool:
+        info = np.iinfo(np.int32)
+        return any(v.max() > info.max or v.min() < info.min for v in values)
 
     @classmethod
-    def _derive_prescale(cls, relu_q6: int, input_zp: int, qmin: int, qmax: int) -> int:
+    def _prescale_overflows(
+        cls, prescale: int, relu_q3: int, relu_q6: int, input_zp: int, qmin: int, qmax: int
+    ) -> bool:
+        """True when x + relu_q3 or x * xr leaves int32 for some input code at this prescale."""
+        x, shifted, xr = cls._relu6_terms(prescale, relu_q3, relu_q6, input_zp, qmin, qmax)
+        return cls._leaves_int32(shifted, x * xr)
+
+    @classmethod
+    def _derive_prescale(cls, relu_q3: int, relu_q6: int, input_zp: int, qmin: int, qmax: int) -> int:
         """Smallest prescale that keeps x * xr inside int32 (the arm_hard_swish_* contract)."""
         for prescale in range(PRESCALE_MAX + 1):
-            if not cls._prescale_overflows(prescale, relu_q6, input_zp, qmin, qmax):
+            if not cls._prescale_overflows(prescale, relu_q3, relu_q6, input_zp, qmin, qmax):
                 return prescale
         raise ValueError(f"{cls.OPERATOR_NAME}: no prescale in [0, {PRESCALE_MAX}] keeps x * relu6 in int32")
 
     @classmethod
-    def _check_prescale_fits(cls, prescale: int, relu_q6: int, input_zp: int, qmin: int, qmax: int) -> None:
+    def _check_prescale_fits(
+        cls, prescale: int, relu_q3: int, relu_q6: int, input_zp: int, qmin: int, qmax: int
+    ) -> None:
         """Reject a prescale that overflows int32 or rounds the relu6 term to zero for every input."""
-        x_max = max(qmax - int(input_zp), int(input_zp) - qmin)
-        xr_max = cls._nonneg_divide_by_pot_s32(max(int(relu_q6), 0), prescale)
-        if cls._prescale_overflows(prescale, relu_q6, input_zp, qmin, qmax):
+        x, shifted, xr = cls._relu6_terms(prescale, relu_q3, relu_q6, input_zp, qmin, qmax)
+        product = x * xr
+        if cls._leaves_int32(shifted, product):
             raise ValueError(
                 f"{cls.OPERATOR_NAME}: hint.extras.prescale {prescale} overflows int32 "
-                f"(|x| <= {x_max}, relu6 term <= {xr_max})"
+                f"(x * relu6 term spans [{int(product.min())}, {int(product.max())}])"
             )
-        if xr_max < 1:
+        if not xr.any():
             raise ValueError(
                 f"{cls.OPERATOR_NAME}: hint.extras.prescale {prescale} rounds the relu6 term "
-                f"(relu_q6 = {relu_q6}) to 0 for every input, so the golden is constant"
+                f"(relu_q3 = {relu_q3}, relu_q6 = {relu_q6}) to 0 for every input, so the golden is constant"
             )
 
     @staticmethod
@@ -465,10 +489,10 @@ class HardSwishFamilyBase(OperationBase):
         relu_q3 = tflite_round(3.0 / float(input_scale))
         relu_q6 = tflite_round(6.0 / float(input_scale))
         
-        prescale = self._derive_prescale(relu_q6, input_zp, qmin, qmax)
+        prescale = self._derive_prescale(relu_q3, relu_q6, input_zp, qmin, qmax)
         prescale_override = self._prescale_override(extras, variant)
         if prescale_override is not None:
-            self._check_prescale_fits(prescale_override, relu_q6, input_zp, qmin, qmax)
+            self._check_prescale_fits(prescale_override, relu_q3, relu_q6, input_zp, qmin, qmax)
             prescale = prescale_override
         
         # Calculate effective scale
