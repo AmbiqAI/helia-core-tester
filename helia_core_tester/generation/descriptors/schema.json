@@ -62,6 +62,7 @@
         "Relu6",
         "Requantize",
         "Reshape",
+        "ResizeBilinear",
         "ResizeNearestNeighbor",
         "ReverseSequence",
         "Rsqrt",
@@ -603,6 +604,7 @@
               "Concatenation",
               "SpaceToBatchND",
               "BatchToSpaceND",
+              "ResizeBilinear",
               "ResizeNearestNeighbor",
               "VariableUpdate",
               "Clamp",
@@ -700,6 +702,21 @@
           "effective_scale_shift",
           "input_zeropoint",
           "output_zeropoint"
+        ]
+      }
+    },
+    {
+      "$comment": "operator_required_fields:ResizeBilinear",
+      "if": {
+        "properties": {
+          "operator": {
+            "const": "ResizeBilinear"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "size"
         ]
       }
     },
