@@ -9,7 +9,7 @@ align_corners: false
 half_pixel_centers: false
 hint:
   kernel: arm_resize_bilinear_s8
-comparison: {mode: exact_int, tolerance: 0}
+comparison: {tolerance: 0}
 ---
 operator: ResizeBilinear
 name: resize_bilinear_halfpixel_s8
@@ -22,7 +22,7 @@ align_corners: false
 half_pixel_centers: true
 hint:
   kernel: arm_resize_bilinear_s8
-comparison: {mode: exact_int, tolerance: 0}
+comparison: {tolerance: 0}
 ---
 operator: ResizeBilinear
 name: resize_bilinear_aligned_s8
@@ -35,7 +35,7 @@ align_corners: true
 half_pixel_centers: false
 hint:
   kernel: arm_resize_bilinear_s8
-comparison: {mode: exact_int, tolerance: 0}
+comparison: {tolerance: 0}
 ---
 operator: ResizeBilinear
 name: resize_bilinear_singleton_s8
@@ -48,7 +48,7 @@ align_corners: false
 half_pixel_centers: true
 hint:
   kernel: arm_resize_bilinear_s8
-comparison: {mode: exact_int, tolerance: 0}
+comparison: {tolerance: 0}
 ---
 operator: ResizeBilinear
 name: resize_bilinear_aligned_one_s8
@@ -61,7 +61,7 @@ align_corners: true
 half_pixel_centers: false
 hint:
   kernel: arm_resize_bilinear_s8
-comparison: {mode: exact_int, tolerance: 0}
+comparison: {tolerance: 0}
 ---
 operator: ResizeBilinear
 name: resize_bilinear_downsample_s8
@@ -74,7 +74,7 @@ align_corners: false
 half_pixel_centers: true
 hint:
   kernel: arm_resize_bilinear_s8
-comparison: {mode: exact_int, tolerance: 0}
+comparison: {tolerance: 0}
 ---
 operator: ResizeBilinear
 name: resize_bilinear_batch_s8
@@ -87,7 +87,7 @@ align_corners: false
 half_pixel_centers: true
 hint:
   kernel: arm_resize_bilinear_s8
-comparison: {mode: exact_int, tolerance: 0}
+comparison: {tolerance: 0}
 ---
 operator: ResizeBilinear
 name: resize_bilinear_pow2_c1_s8
@@ -100,7 +100,7 @@ align_corners: false
 half_pixel_centers: true
 hint:
   kernel: arm_resize_bilinear_s8_pow2
-comparison: {mode: exact_int, tolerance: 0}
+comparison: {tolerance: 0}
 ---
 operator: ResizeBilinear
 name: resize_bilinear_pow2_c2_s8
@@ -113,7 +113,7 @@ align_corners: false
 half_pixel_centers: true
 hint:
   kernel: arm_resize_bilinear_s8_pow2
-comparison: {mode: exact_int, tolerance: 0}
+comparison: {tolerance: 0}
 ---
 operator: ResizeBilinear
 name: resize_bilinear_pow2_c3_s8
@@ -126,7 +126,7 @@ align_corners: false
 half_pixel_centers: true
 hint:
   kernel: arm_resize_bilinear_s8_pow2
-comparison: {mode: exact_int, tolerance: 0}
+comparison: {tolerance: 0}
 ---
 operator: ResizeBilinear
 name: resize_bilinear_pow2_c17_s8
@@ -139,7 +139,7 @@ align_corners: false
 half_pixel_centers: true
 hint:
   kernel: arm_resize_bilinear_s8_pow2
-comparison: {mode: exact_int, tolerance: 0}
+comparison: {tolerance: 0}
 ---
 operator: ResizeBilinear
 name: resize_bilinear_pow2_identity_s8
@@ -152,4 +152,4 @@ align_corners: false
 half_pixel_centers: true
 hint:
   kernel: arm_resize_bilinear_s8_pow2
-comparison: {mode: exact_int, tolerance: 0}
+comparison: {tolerance: 0}
