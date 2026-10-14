@@ -441,7 +441,7 @@ class HostSession:
             if mram > MRAM_POOL_BYTES:
                 # The firmware would refuse the CASE_META (status=-8 MRAM pool full).
                 raise RuntimeError(
-                    f"Case {bundle.case_id!r} needs {mram} bytes of MRAM for its weights and bias, "
+                    f"Case {bundle.case_id!r} needs {mram} bytes of MRAM for its weights, bias and packed operands, "
                     f"but the placement pool holds {MRAM_POOL_BYTES} bytes."
                 )
 

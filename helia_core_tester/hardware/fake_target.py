@@ -29,7 +29,7 @@ from .measurement import (
 )
 from .pmu_catalog import CPU_CYCLES_EVENT_ID, CPU_CYCLES_NAME, counter_by_event_id
 from . import transfer
-from .transfer import ArenaTracker, BlobAccumulator, BlobTransferSpec, CaseTooLargeError, mram_extent, staged_extent
+from .transfer import ArenaTracker, BlobAccumulator, BlobTransferSpec, CaseTooLargeError, derived_mram_extent, mram_extent, staged_extent
 from .wire import (
     CAP_ABS_S8,
     CAP_BLOB_STORE,
@@ -501,7 +501,9 @@ class FakeTargetTransport:
             self._arena.reserve_aligned(output_bytes, 16)
         # plan_mram() runs after the workspace allocation in handle_case_meta(), so a
         # workspace overflow is reported first; then an over-pool case is refused.
-        mram = sum(mram_extent(spec.role, spec.byte_length, self._placement) for spec in self._case_meta.blobs)
+        blobs = self._case_meta.blobs
+        mram = sum(mram_extent(spec.role, spec.byte_length, self._placement) for spec in blobs)
+        mram += derived_mram_extent(self._case_meta.kernel_id, blobs, self._placement)
         if mram > transfer.MRAM_POOL_BYTES:
             raise CaseTooLargeError(
                 f"message_type={int(MessageType.CASE_META)} status={HCTP_STATUS_NO_SPACE} MRAM pool full"
