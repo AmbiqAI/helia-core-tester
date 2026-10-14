@@ -70,8 +70,8 @@ def call_setup_dependencies(downloads_dir: Path) -> None:
         return
     print("Ensuring dependencies via setup_dependencies.py")
     rc = subprocess.call(
-        # Runs before every build/run: fetch what is missing, never move a checkout.
-        [sys.executable, str(setup), "--downloads-dir", str(downloads_dir), "--source-pins", "warn"],
+        # Runs before every build/run: fetch missing sources and enforce reviewed pins.
+        [sys.executable, str(setup), "--downloads-dir", str(downloads_dir)],
         cwd=str(REPO_ROOT),
     )
     if rc != 0:
