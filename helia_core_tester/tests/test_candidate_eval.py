@@ -187,6 +187,13 @@ def _cli_eval(kernels: Path, out: Path, *extra: str):
     return result, json.loads(result.stdout) if result.stdout.strip() else None
 
 
+@pytest.mark.parametrize("dtypes,suite", [((), None), (("S8",), None), (("FP32",), "float"), (("fp16", "FP32"), "float"),
+                                          (("S16", "FP16"), "both")])
+def test_run_args_pick_suite(tmp_path, dtypes, suite) -> None:
+    args = candidate_eval.run_args(candidate_eval.RunSpec("apollo510_evb", tmp_path, dtypes=dtypes), "s")
+    assert (args[args.index("--suite") + 1] if "--suite" in args else None) == suite
+
+
 def test_verdict_carries_worst_fraction(tmp_path) -> None:
     cases = [{"case_id": "a", "tolerance_fraction": 0.4}, {"case_id": "b", "tolerance_fraction": None},
              {"case_id": "h_1", "tolerance_fraction": 0.7}, {"case_id": "c", "tolerance_fraction": 0.6}]
