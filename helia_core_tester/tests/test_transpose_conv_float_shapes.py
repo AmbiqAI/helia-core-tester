@@ -158,3 +158,47 @@ def test_float_goldens_bridge(tmp_path: Path, key: tuple[str, str]) -> None:
         elif edge == "nonfinite":
             assert 0 < mask.sum() < mask.size
     assert seen == set(rs.TCF_EDGES)
+
+
+def _float_pass(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, **filters) -> Path:
+    """One float generation pass, faked."""
+    import helia_core_tester.generation.test_ops as generation_module
+
+    generated = tmp_path / "artifacts" / "generated_tests" / "float" / "cortex-m55"
+    desc = {"name": "rs1_tcf32_000", "operator": "TransposeConv", "activation_dtype": "FP32", "weight_dtype": "FP32",
+            "suite": "float", "_family": "ConvolutionFunctions", "_parity_kind": "cmsis"}
+    monkeypatch.setattr(generation_module, "find_repo_root", lambda: tmp_path)
+    for name in ("prepare_shapes", "prepare_hidden"):
+        monkeypatch.setattr(rs, name, lambda *_args: tmp_path)
+    monkeypatch.setattr(generation_module, "load_all_descriptors", lambda _path: [desc])
+
+    def _fake_generate_test(desc, out_dir, **_kwargs):
+        test_dir = Path(out_dir) / desc["_family"] / desc["name"]
+        test_dir.mkdir(parents=True, exist_ok=True)
+        (test_dir / f"{desc['name']}.tflite").write_bytes(b"\x01")
+
+    monkeypatch.setattr(generation_module, "generate_test", _fake_generate_test)
+    generation_module.test_generation({
+        "op": None, "dtype": None, "wtype": None, "name": None, "limit": None, "seed": 1, "cpu": "cortex-m55",
+        "suite": "float", "float_precision": "both", "generated_tests_dir": str(generated), "random_shapes": 2,
+        "shape_seed": 1, **filters,
+    })
+    return generated
+
+
+def test_mixed_op_draw_splits_by_suite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The float pass holds no Convolve.
+    _float_pass(tmp_path, monkeypatch, op="Convolve,TransposeConv")
+
+
+def test_hidden_reuse_drops_other_suites(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(rs.SECRET_ENV, SECRET)
+    hidden = tmp_path / "hidden"
+    old = hidden / "artifacts" / "generated_tests" / "int" / "cortex-m55" / "ConvolutionFunctions" / "h0123456789ab"
+    old.mkdir(parents=True)
+    _float_pass(tmp_path, monkeypatch, op="TransposeConv", dtype="FP32", hidden_dir=str(hidden), shape_seed=None)
+    assert not old.parent.parent.exists()
+    # A both-suite draw keeps int.
+    old.mkdir(parents=True)
+    _float_pass(tmp_path, monkeypatch, op="TransposeConv", hidden_dir=str(hidden), shape_seed=None)
+    assert old.is_dir()
