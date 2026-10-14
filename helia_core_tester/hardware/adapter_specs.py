@@ -1796,6 +1796,7 @@ static arm_cmsis_nn_status run_transpose_conv_once(hct_server_session_t *session
     uint32_t output_ctx_offset;
     int32_t required_ctx;
     int32_t required_output_ctx;
+    bool is_float;
 
     if (input == NULL || weights == NULL)
     {
@@ -1814,7 +1815,11 @@ static arm_cmsis_nn_status run_transpose_conv_once(hct_server_session_t *session
     output_dims.h = session->output_h;
     output_dims.w = session->output_w;
     output_dims.c = session->output_c;
-    if (input_dims.n != 1 || output_dims.n != 1 || output_dims.h <= 0 || output_dims.w <= 0 || output_dims.c <= 0)
+    is_float = (session->expected_kernel_id == HCT_KERNEL_ID_TRANSPOSE_CONV_F32 ||
+                session->expected_kernel_id == HCT_KERNEL_ID_TRANSPOSE_CONV_F16);
+    /* Float entries loop over batches. */
+    if ((is_float ? (input_dims.n < 1 || output_dims.n != input_dims.n) : (input_dims.n != 1 || output_dims.n != 1)) ||
+        output_dims.h <= 0 || output_dims.w <= 0 || output_dims.c <= 0)
     {
         return ARM_CMSIS_NN_ARG_ERROR;
     }
@@ -1828,8 +1833,7 @@ static arm_cmsis_nn_status run_transpose_conv_once(hct_server_session_t *session
         bias_dims.c = (int32_t)bias->dimensions[0];
     }
 
-    if (session->expected_kernel_id == HCT_KERNEL_ID_TRANSPOSE_CONV_F32 ||
-        session->expected_kernel_id == HCT_KERNEL_ID_TRANSPOSE_CONV_F16)
+    if (is_float)
     {
         const bool is_f16 = (session->expected_kernel_id == HCT_KERNEL_ID_TRANSPOSE_CONV_F16);
         const uint32_t element_size = is_f16 ? (uint32_t)sizeof(float16_t) : (uint32_t)sizeof(float);

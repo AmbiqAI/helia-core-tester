@@ -138,7 +138,7 @@ class OpTransposeConv(OperationBase):
         """Convert Keras model to TFLite with quantization."""
         self.round_float16_weights(model)
         # Create converter
-        if str(self.desc.get('activation_dtype', 'S8')).upper() == 'S16':
+        if str(self.desc.get('activation_dtype', 'S8')).upper() in ('S16', 'FP32', 'FP16'):
             from helia_core_tester.generation.ops._shared.fixed_batch import converter_for_batched_model
 
             # Keep the descriptor's batch in the model.
@@ -487,13 +487,14 @@ class OpTransposeConv(OperationBase):
             if has_biases and biases.dtype != float_dtype:
                 biases = biases.astype(float_dtype)
 
-            input_data = self._sample_uniform(input_shape, dtype=float_dtype)
+            low, high = value_range(self.desc, 'input_range', (-1.0, 1.0))
+            input_data = self._sample_uniform(input_shape, low=low, high=high, dtype=float_dtype)
             interpreter_input_dtype = interpreter.get_input_details()[0]['dtype']
 
             def float_reference(operands, _dtype=float_dtype, _in_dtype=interpreter_input_dtype):
-                return self.run_inference(
+                return clamp_golden(self.desc, self.run_inference(
                     str(tflite_path), operands[0].astype(_in_dtype)
-                ).astype(_dtype)
+                ).astype(_dtype))
 
             output_data = float_reference([input_data])
 
@@ -506,19 +507,8 @@ class OpTransposeConv(OperationBase):
             input_data_array_str = builder.format_array_as_c_literal(np.asarray(input_data, dtype=float_dtype))
             expected_output_array_str = builder.format_array_as_c_literal(np.asarray(output_data, dtype=float_dtype))
 
-            element_size = np.dtype(float_dtype).itemsize
-            buffer_size_max = max(
-                1024,
-                int(
-                    (input_dims['n'] * input_dims['h'] * input_dims['w'] * input_dims['c']
-                     + filter_dims['n'] * filter_dims['h'] * filter_dims['w'] * max(filter_dims['c'], 1)
-                     + output_dims['n'] * output_dims['h'] * output_dims['w'] * output_dims['c']) * element_size
-                ),
-            )
-            reverse_conv_ctx_size = max(
-                1024,
-                int(output_dims['w'] * output_dims['h'] * output_dims['c'] * element_size),
-            )
+            buffer_size_max, reverse_conv_ctx_size = builder.float_transpose_conv_scratch(
+                input_dims, filter_dims, output_dims)
 
             context = {
                 'name': name,

@@ -306,9 +306,10 @@ def hidden_summary(hidden_set: Path, cpu: str) -> dict[str, Any]:
 def hidden_record(hidden_set: Path, cpu: str) -> dict[str, Any]:
     """Seed commitment and case count."""
     from ..core.path_layout import generated_tests_dir
+    from .session_runner import normalize_suites
 
-    root = generated_tests_dir(hidden_set, normalize_cpu(cpu))
-    cases = sum(1 for case in root.glob("*/*") if (case / "descriptor.yaml").is_file())
+    roots = [generated_tests_dir(hidden_set, normalize_cpu(cpu), suite) for suite in normalize_suites("both")]
+    cases = sum(1 for root in roots for case in root.glob("*/*") if (case / "descriptor.yaml").is_file())
     return {"seed_commitment": hidden_summary(hidden_set, cpu)["seed_commitment"], "cases": cases}
 
 
@@ -321,7 +322,7 @@ def hidden_bundles(repo_root: Path, board: BoardSpec, options: "StreamOptions") 
     hidden_summary(options.hidden_set, board.cpu)
     # No FVP report names hidden cases.
     bundles, skipped = build_generated_test_case_bundles(
-        repo_root, cpu=normalize_cpu(board.cpu), family=None, suite="int", fvp_gate="off",
+        repo_root, cpu=normalize_cpu(board.cpu), family=None, suite="both", fvp_gate="off",
         board_id=board.id, tests_root=options.hidden_set,
     )
     # A partial set skews the score.

@@ -10,6 +10,9 @@ import numpy as np
 from pathlib import PurePosixPath
 from typing import Dict, Any, List, Tuple
 
+# Candidate kernels may ask for KBs.
+FLOAT_TCONV_MIN_CTX = 8192
+
 from helia_core_tester.generation.io.dtypes import (
     default_comparison_for_dtype,
     default_int_tolerance,
@@ -1075,6 +1078,18 @@ class TemplateContextBuilder:
             'activation_max': int(activation_max) if act_dtype not in {'FP32', 'FP16'} else activation_max,
         }
     
+    @staticmethod
+    def float_transpose_conv_scratch(
+        input_dims: Dict[str, int], filter_dims: Dict[str, int], output_dims: Dict[str, int]
+    ) -> Tuple[int, int]:
+        """Float ctx and reverse ctx caps."""
+        def count(dims: Dict[str, int]) -> int:
+            return dims['n'] * dims['h'] * dims['w'] * max(dims['c'], 1)
+
+        # Room for f32 copies of everything.
+        ctx = max(FLOAT_TCONV_MIN_CTX, 4 * (count(input_dims) + count(filter_dims) + count(output_dims)))
+        return ctx, max(1024, 4 * count(output_dims))
+
     @staticmethod
     def calculate_transpose_conv_buffer_size_max(input_dims: Dict[str, int], 
                                                  filter_dims: Dict[str, int],
