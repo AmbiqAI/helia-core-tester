@@ -637,6 +637,7 @@ static void reset_case_buffers(hct_server_session_t *session)
     session->output_stream_checksum = 0u;
     session->output_stream_active = 0u;
     session->mram_cursor = 0u;
+    session->mram_limit = 0u;
     session->checked_bytes = 0u;
     hct_window.cold_count = 0u;
     session->last_kernel_status = ARM_CMSIS_NN_SUCCESS;
@@ -1294,10 +1295,24 @@ static hctp_status_t place_in_mram(hct_server_session_t *session, hct_server_blo
     if (session->mram_cursor == 0u)
     {
         session->mram_cursor = base + ((blob->crc32 % (HCT_MRAM_POOL_BYTES / 2u)) & ~(HCT_MRAM_LINE_BYTES - 1u));
+        session->mram_limit = base + HCT_MRAM_POOL_BYTES;
     }
-    if (session->mram_cursor + length > base + HCT_MRAM_POOL_BYTES)
+    if (session->mram_cursor + length > session->mram_limit)
     {
+        /* Wrap once; the head ends where this case's first blob starts. */
+        if (session->mram_limit != base + HCT_MRAM_POOL_BYTES)
+        {
+            return HCTP_STATUS_INVALID_ARGUMENT;
+        }
+        if (hct_window.cold_count != 0u)
+        {
+            session->mram_limit = (uintptr_t)hct_window.cold_addr[0];
+        }
         session->mram_cursor = base;
+        if (base + length > session->mram_limit)
+        {
+            return HCTP_STATUS_INVALID_ARGUMENT;
+        }
     }
     address = session->mram_cursor;
     /* Each blob starts on a cache line. */
