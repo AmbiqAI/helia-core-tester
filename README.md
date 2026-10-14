@@ -672,6 +672,10 @@ uv run python -m helia_core_tester.scripts.setup_dependencies --gcc-version 13.2
 HELIA_GCC_VERSION=15.2.rel1 uv run helia_core_tester full --cpu cortex-m55
 ```
 
+### Source dependencies (CMSIS-5, Ethos-U core platform)
+
+`setup_dependencies.py` fetches CMSIS-5 and ethos-u-core-platform at the fixed commits listed in `SOURCE_PINS` in that script and checks `git rev-parse HEAD` after checkout. Run directly, it moves an existing clean checkout at another commit to the pin. It rejects a checkout with local changes (edits, untracked files, or assume-unchanged/skip-worktree entries) or a directory that is not a git checkout; `--force` replaces it, and the old checkout is restored if the replacement fails. The setup that `build`, `run` and `full` start enforces the pins the same way, so a run fails on a modified checkout until it is cleaned or replaced. Run directly with `--source-pins warn`, setup fetches missing sources at the pin but only reports an existing checkout that is off its pin. Bumping a pin means editing `SOURCE_PINS`.
+
 ### Compiler (`--toolchain`)
 
 `build`, `run` and `full` take `--toolchain gcc|armclang` (default `gcc`; also `toolchain` in `helia_core_tester.toml` and `HELIA_CORE_TESTER_TOOLCHAIN`). `armclang` selects ethos-u-core-platform's `armclang.cmake` and needs Arm Compiler 6 (`armclang`) on `PATH`; it is not fetched by `setup_dependencies.py`. Build output goes to `artifacts/build-<suite>-<cpu>-arm-compiler/`. `--toolchain armclang` is mutually exclusive with `--coverage` (gcov instrumentation is GCC-only). `doctor` reports which of `arm-none-eabi-gcc` / `armclang` it finds.
