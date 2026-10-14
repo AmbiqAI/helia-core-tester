@@ -316,18 +316,113 @@ def test_schema_ships_as_package_data() -> None:
     assert str(rel) in package_data["helia_core_tester.generation"]
 
 
+# --- naming ------------------------------------------------------------------
+
+
+def test_unnamed_base_and_variation_report_the_missing_name(tmp_path: Path) -> None:
+    doc = _clamp(name=None, variations=[{"act_min": -1}])
+    message = _rejected(tmp_path, doc)
+    assert "'name' is a required property" in message
+    assert "<unnamed>_var" not in message
+
+
+def test_unnamed_variation_takes_the_base_name(tmp_path: Path) -> None:
+    (loaded,) = _load(tmp_path, _clamp(variations=[{"act_min": -1}]))
+    (expanded,) = desc_io.expand_descriptor_variations(loaded)
+    assert expanded["name"] == "clamp_case_s8_var_0"
+
+
+def test_validator_requires_the_source_stem() -> None:
+    with pytest.raises(TypeError):
+        desc_io.validate_descriptor_schema(_clamp())  # type: ignore[call-arg]
+    desc_io.validate_descriptor_schema(_clamp(act_min=-0.5), "clamp_float")
+    with pytest.raises(ValueError, match=r"\$\.act_min"):
+        desc_io.validate_descriptor_schema(_clamp(act_min=-0.5), "clamp")
+
+
+# --- validator construction and caching -----------------------------------------
+
+
+def _schema_copy(tmp_path: Path, monkeypatch, mutate=None) -> Path:
+    schema = _schema()
+    if mutate is not None:
+        mutate(schema)
+    path = tmp_path / "schema.json"
+    path.write_text(json.dumps(schema))
+    monkeypatch.setattr(desc_io, "SCHEMA_PATH", path)
+    return path
+
+
+def test_code_enums_override_a_lagging_schema_copy(tmp_path: Path, monkeypatch) -> None:
+    def lag(schema: dict) -> None:
+        schema["properties"]["operator"]["enum"] = ["Conv"]
+        schema["properties"]["required_capabilities"]["items"]["enum"] = ["dsp"]
+
+    _schema_copy(tmp_path, monkeypatch, lag)
+    _load(tmp_path, _clamp(required_capabilities=["mve"]))
+
+
+def test_edited_schema_is_picked_up_in_process(tmp_path: Path, monkeypatch) -> None:
+    import os
+
+    path = _schema_copy(tmp_path, monkeypatch)
+    _load(tmp_path, _clamp())
+    schema = _schema()
+    schema["properties"]["act_min"] = {"type": "integer", "minimum": 0}
+    path.write_text(json.dumps(schema))
+    stat = path.stat()
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+    assert "$.act_min:" in _rejected(tmp_path, _clamp())
+
+
+def test_repeat_loads_reuse_the_schema_result(tmp_path: Path, monkeypatch) -> None:
+    path = _write(tmp_path, [_clamp()])
+    desc_io.load_descriptor(str(path))
+    calls = []
+    monkeypatch.setattr(desc_io, "validate_descriptor_schema", lambda *a: calls.append(a))
+    desc_io.load_descriptor(str(path))
+    assert calls == []
+
+
+def test_cached_failure_still_fails(tmp_path: Path) -> None:
+    path = _write(tmp_path, [_clamp(act_min=-0.5)])
+    for _ in range(2):
+        with pytest.raises(ValueError, match=r"\$\.act_min"):
+            desc_io.load_descriptor(str(path))
+
+
 # --- schema load faults fail closed -----------------------------------------
 
 
-@pytest.mark.parametrize(
+_UNUSABLE = pytest.mark.parametrize(
     "content",
-    [None, "{ not json", json.dumps({"type": "not-a-type"})],
-    ids=["missing", "corrupt-json", "invalid-schema"],
+    [None, "{ not json", json.dumps({"type": "not-a-type"}), json.dumps({"properties": {}})],
+    ids=["missing", "corrupt-json", "invalid-schema", "no-enum-slots"],
 )
-def test_unusable_schema_fails_closed(tmp_path: Path, monkeypatch, content) -> None:
+
+
+def _unusable_schema(tmp_path: Path, monkeypatch, content) -> None:
     schema_path = tmp_path / "schema.json"
     if content is not None:
         schema_path.write_text(content)
     monkeypatch.setattr(desc_io, "SCHEMA_PATH", schema_path)
-    with pytest.raises(ValueError, match="Descriptor schema .* is unusable"):
+
+
+@_UNUSABLE
+def test_unusable_schema_fails_closed(tmp_path: Path, monkeypatch, content) -> None:
+    _unusable_schema(tmp_path, monkeypatch, content)
+    with pytest.raises(desc_io.DescriptorSchemaError, match="Descriptor schema .* is unusable"):
         _load(tmp_path, _clamp())
+
+
+@_UNUSABLE
+@pytest.mark.parametrize("best_effort", [False, True])
+def test_unusable_schema_fails_the_corpus_once(tmp_path: Path, monkeypatch, capsys, content, best_effort) -> None:
+    corpus = tmp_path / "descriptors"
+    corpus.mkdir()
+    for index in range(3):
+        _write(corpus, [_clamp(name=f"clamp_case_{index}_s8")], stem=f"case_{index}")
+    _unusable_schema(tmp_path, monkeypatch, content)
+    with pytest.raises(desc_io.DescriptorSchemaError):
+        desc_io.load_all_descriptors(str(corpus), best_effort=best_effort)
+    assert "Failed to load descriptor" not in capsys.readouterr().out

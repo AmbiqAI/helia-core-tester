@@ -709,10 +709,15 @@ Use `tensor_dtypes` for new float-aware descriptors. Legacy `activation_dtype` a
 still work, but the loader now normalizes both styles into `resolved_tensor_dtypes` and
 `resolved_comparison`.
 
-Every descriptor document, and every expanded variation, is validated against
-`helia_core_tester/generation/descriptors/schema.json` when it is loaded; a violation fails the load
-with the descriptor name, file and JSON path. Integer-suite descriptors (no `suite: float` and no
-`_float` file stem) must give `act_min`/`act_max` as integers.
+Every descriptor document read from YAML (`load_descriptor` / `load_all_descriptors`), and every
+base+variation merge in it, is validated against
+`helia_core_tester/generation/descriptors/schema.json`; a violation fails the load with the
+descriptor name, file and JSON path. Descriptors built as dicts in code skip the schema and rely on
+the loader's and operators' own checks. Every document needs a `name`. An unusable schema raises
+`DescriptorSchemaError` once, even with `best_effort=True`. The operator and `required_capabilities`
+enums are taken from the op catalog and `known_capabilities()` when the validator is built.
+Integer-suite descriptors (no `suite: float` and no `_float` file stem) must give
+`act_min`/`act_max` as integers.
 
 Example:
 

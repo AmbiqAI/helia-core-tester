@@ -10,7 +10,8 @@ import os
 from typing import Dict, Any, List, Tuple
 from pathlib import Path
 
-from helia_core_tester.generation.ops.catalog import get_operator_spec
+from helia_core_tester.core.cpu_targets import known_capabilities
+from helia_core_tester.generation.ops.catalog import get_operator_spec, iter_operator_specs
 from helia_core_tester.generation.io.dtypes import (
     derive_legacy_activation_dtype,
     derive_legacy_weight_dtype,
@@ -207,37 +208,62 @@ def _validate_profile_requirements(
 SCHEMA_PATH = Path(__file__).resolve().parent.parent / "descriptors" / "schema.json"
 
 
+class DescriptorSchemaError(RuntimeError):
+    """schema.json itself cannot be used; no descriptor can be validated."""
+
+
 def _descriptor_suite(desc: Dict[str, Any], source_stem: str) -> str:
     return str(desc.get("suite") or ("float" if source_stem.endswith("_float") else "default"))
 
 
-@functools.lru_cache(maxsize=None)
-def _schema_validator(schema_path: str):
-    """Draft 2020-12 validator for schema.json; any problem loading it fails closed."""
+def _schema_key() -> Tuple[str, int, int]:
+    path = SCHEMA_PATH
+    try:
+        stat = path.stat()
+    except OSError as exc:
+        raise DescriptorSchemaError(f"Descriptor schema {path} is unusable: {exc}") from exc
+    return (str(path), stat.st_mtime_ns, stat.st_size)
+
+
+@functools.lru_cache(maxsize=4)
+def _build_schema_validator(schema_key: Tuple[str, int, int]):
+    """Draft 2020-12 validator for one version of schema.json; any problem fails closed.
+
+    The operator and capability enums come from the catalog and cpu_targets,
+    so a schema.json copy that lags them cannot reject a valid descriptor.
+    """
     from jsonschema import Draft202012Validator
     from jsonschema.exceptions import SchemaError
 
+    schema_path = schema_key[0]
     try:
         schema = json.loads(Path(schema_path).read_text())
+        schema["properties"]["operator"]["enum"] = sorted(spec.operator for spec in iter_operator_specs())
+        schema["properties"]["required_capabilities"]["items"]["enum"] = sorted(known_capabilities())
         Draft202012Validator.check_schema(schema)
-    except (OSError, ValueError, SchemaError) as exc:
-        raise RuntimeError(f"Descriptor schema {schema_path} is unusable: {exc}") from exc
+    except (OSError, ValueError, SchemaError, KeyError, TypeError) as exc:
+        raise DescriptorSchemaError(f"Descriptor schema {schema_path} is unusable: {exc!r}") from exc
     return Draft202012Validator(schema)
 
 
-def validate_descriptor_schema(doc: Any, source_stem: str = "") -> None:
+def _schema_validator():
+    return _build_schema_validator(_schema_key())
+
+
+def validate_descriptor_schema(doc: Any, source_stem: str) -> None:
     """Validate one raw descriptor document against schema.json.
 
-    The suite is defaulted from the source file stem first, as
-    _annotate_descriptor_source does, so suite-gated rules see the effective
-    suite. Raises ValueError listing every violation with its JSON path.
+    source_stem is the descriptor file's stem; the suite is defaulted from it
+    first, as _annotate_descriptor_source does, so suite-gated rules see the
+    effective suite. Raises ValueError listing every violation with its JSON
+    path, or DescriptorSchemaError when the schema itself is unusable.
     """
     if not isinstance(doc, dict):
         raise ValueError(f"descriptor must be a mapping, got {type(doc).__name__}")
     candidate = dict(doc)
     candidate.setdefault("suite", _descriptor_suite(doc, source_stem))
     errors = sorted(
-        _schema_validator(str(SCHEMA_PATH)).iter_errors(candidate),
+        _schema_validator().iter_errors(candidate),
         key=lambda err: (err.json_path, err.message),
     )
     if errors:
@@ -263,9 +289,29 @@ def _schema_cases(doc: Any) -> List[Any]:
         if not isinstance(variation, dict):
             raise ValueError(f"variation {index} must be a mapping, got {type(variation).__name__}")
         merged = {**base, **variation}
-        merged.setdefault('name', f"{base.get('name', '<unnamed>')}_var_{index}")
+        if 'name' in base:
+            merged.setdefault('name', f"{base['name']}_var_{index}")
         cases.append(merged)
     return cases
+
+
+@functools.lru_cache(maxsize=512)
+def _schema_errors(data: bytes, source_stem: str, schema_key: Tuple[str, int, int]) -> Tuple[Any, ...]:
+    """Schema error message (or None) per non-empty document, cached per content and schema version."""
+    results = []
+    for doc in _parse_yaml_docs(data):
+        if doc is None:
+            continue
+        try:
+            for case in _schema_cases(doc):
+                validate_descriptor_schema(case, source_stem)
+        except DescriptorSchemaError:
+            raise
+        except ValueError as exc:
+            results.append(str(exc))
+        else:
+            results.append(None)
+    return tuple(results)
 
 
 def _annotate_descriptor_source(
@@ -425,12 +471,12 @@ def load_descriptor(desc_path: str) -> List[Dict[str, Any]]:
         raise ValueError(f"No valid descriptors found in {desc_path}")
     
     # Validate and normalize each descriptor
-    source_stem = Path(desc_path).stem
+    schema_errors = _schema_errors(data, Path(desc_path).stem, _schema_key())
     descriptors = []
     for i, doc in enumerate(documents):
         try:
-            for case in _schema_cases(doc):
-                validate_descriptor_schema(case, source_stem)
+            if schema_errors[i] is not None:
+                raise ValueError(schema_errors[i])
             validated_desc = _validate_and_normalize_descriptor(doc)
             descriptors.append(validated_desc)
         except Exception as e:
@@ -554,9 +600,7 @@ def load_all_descriptors(descriptors_dir: str, best_effort: bool = False) -> Lis
     """
     Load and validate all descriptors in directory.
     Supports multiple descriptors per YAML file (separated by ---).
-    Preserves original names from YAML descriptors when present.
-    Falls back to numbered names (filename_1, filename_2, etc.) only when
-    no name is specified in the descriptor.
+    Every document must carry a name (schema.json requires it).
     
     Args:
         descriptors_dir: Directory containing YAML descriptors
@@ -568,47 +612,23 @@ def load_all_descriptors(descriptors_dir: str, best_effort: bool = False) -> Lis
         
     Returns:
         List of validated descriptor dictionaries (expanded from variations)
+
+    Raises:
+        DescriptorSchemaError: schema.json is unusable, regardless of best_effort.
     """
+    # A broken schema fails every file the same way; surface it once, even in best_effort mode.
+    _schema_validator()
     descriptors = []
     failures: List[Tuple[str, Exception]] = []
     desc_paths = discover_descriptors(descriptors_dir)
-    
+
     for desc_path in desc_paths:
         try:
-            # load_descriptor now returns a list (supports multiple docs per file)
-            descs = load_descriptor(desc_path)
-            
-            # Get base filename without extension for numbering (fallback only)
-            file_base = Path(desc_path).stem
-            
-            # If multiple descriptors from same file, preserve original names when available
-            if len(descs) > 1:
-                # Expand variations into individual descriptors for each descriptor
-                for idx, desc in enumerate(descs, start=1):
-                    # Create a copy
-                    desc_copy = _annotate_descriptor_source(desc, desc_path, descriptors_dir)
-                    
-                    # Preserve original name if it exists, otherwise use numbered name
-                    if 'name' not in desc_copy or not desc_copy['name']:
-                        # No name specified, use numbered name as fallback
-                        desc_copy['name'] = f"{file_base}_{idx}"
-                    # If name exists, keep it as-is (preserve original meaningful names)
-                    
-                    expanded_descs = expand_descriptor_variations(desc_copy)
-                    for expanded in expanded_descs:
-                        descriptors.append(expanded)
-            else:
-                # Single descriptor - preserve original name if present
-                for desc in descs:
-                    desc = _annotate_descriptor_source(desc, desc_path, descriptors_dir)
-                    # If no name specified, use file-based name as fallback
-                    if 'name' not in desc or not desc['name']:
-                        desc['name'] = file_base
-                    # Otherwise, keep the original name
-                    
-                    expanded_descs = expand_descriptor_variations(desc)
-                    for expanded in expanded_descs:
-                        descriptors.append(expanded)
+            for desc in load_descriptor(desc_path):
+                desc = _annotate_descriptor_source(desc, desc_path, descriptors_dir)
+                descriptors.extend(expand_descriptor_variations(desc))
+        except DescriptorSchemaError:
+            raise
         except Exception as e:
             failures.append((str(desc_path), e))
             print(f"Warning: Failed to load descriptor {desc_path}: {e}")
