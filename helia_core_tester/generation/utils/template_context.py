@@ -4,6 +4,7 @@ Handles dimension conversions, quantization parameters, and array formatting.
 """
 
 import math
+import numbers
 
 import numpy as np
 from pathlib import PurePosixPath
@@ -570,7 +571,9 @@ class TemplateContextBuilder:
             activation_min = float(desc.get('activation_min', lo))
             activation_max = float(desc.get('activation_max', hi))
         else:
-            qmin, qmax = TemplateContextBuilder._INT_ACTIVATION_RANGE.get(act_dtype, (-128, 127))
+            if act_dtype not in TemplateContextBuilder._INT_ACTIVATION_RANGE:
+                raise ValueError(f"No kernel activation range for activation dtype {act_dtype!r}")
+            qmin, qmax = TemplateContextBuilder._INT_ACTIVATION_RANGE[act_dtype]
             lo, hi = qmin, qmax
             if fused is not None and not ('activation_min' in desc and 'activation_max' in desc):
                 raw_scale = TemplateContextBuilder._quant_param_scalar(output_quant, 'scale', 0.0)
@@ -602,13 +605,36 @@ class TemplateContextBuilder:
                 lo = max(qmin, quantize(fused[0]))
                 if fused[1] is not None:
                     hi = min(qmax, quantize(fused[1]))
-            activation_min = int(desc.get('activation_min', lo))
-            activation_max = int(desc.get('activation_max', hi))
+            activation_min = TemplateContextBuilder._explicit_int_bound(desc, 'activation_min', lo, act_dtype, qmin, qmax)
+            activation_max = TemplateContextBuilder._explicit_int_bound(desc, 'activation_max', hi, act_dtype, qmin, qmax)
         if activation_min > activation_max:
             raise ValueError(
                 f"{activation} clamp is empty for {act_dtype}: activation_min {activation_min} > activation_max {activation_max}"
             )
         return activation_min, activation_max
+
+    @staticmethod
+    def _explicit_int_bound(desc: Dict[str, Any], key: str, default: int, act_dtype: str, qmin: int, qmax: int) -> int:
+        """An explicit integer clamp bound: integral and inside the dtype range, or the default."""
+        if key not in desc:
+            return default
+        value = desc[key]
+        if isinstance(value, bool) or not isinstance(value, numbers.Real) or not math.isfinite(value) or value != int(value):
+            raise ValueError(f"{key} must be an integer for {act_dtype}, got {value!r}")
+        value = int(value)
+        if not qmin <= value <= qmax:
+            raise ValueError(f"{key} {value} is outside the {act_dtype} range [{qmin}, {qmax}]")
+        return value
+
+    @staticmethod
+    def _zero_points(act_dtype: str, input_quant: Dict[str, Any] | None, output_quant: Dict[str, Any] | None) -> Tuple[int, int]:
+        """(input, output) zero points; float kernels have none."""
+        if act_dtype in {'FP32', 'FP16'}:
+            return 0, 0
+        return (
+            int(TemplateContextBuilder._quant_param_scalar(input_quant, 'zero_point', 0)),
+            int(TemplateContextBuilder._quant_param_scalar(output_quant, 'zero_point', 0)),
+        )
 
     @staticmethod
     def build_conv_params(
@@ -683,12 +709,7 @@ class TemplateContextBuilder:
             )
         ).upper()
         activation_min, activation_max = TemplateContextBuilder.activation_clamp(desc, act_dtype, output_quant)
-        if act_dtype in {'FP32', 'FP16'}:
-            in_zp = 0
-            out_zp = 0
-        else:
-            in_zp = int(TemplateContextBuilder._quant_param_scalar(input_quant, 'zero_point', 0))
-            out_zp = int(TemplateContextBuilder._quant_param_scalar(output_quant, 'zero_point', 0))
+        in_zp, out_zp = TemplateContextBuilder._zero_points(act_dtype, input_quant, output_quant)
 
         return {
             # CMSIS-NN convention: input_offset = -input_zero_point
@@ -782,12 +803,7 @@ class TemplateContextBuilder:
             )
         ).upper()
         activation_min, activation_max = TemplateContextBuilder.activation_clamp(desc, act_dtype, output_quant)
-        if act_dtype in {'FP32', 'FP16'}:
-            in_zp = 0
-            out_zp = 0
-        else:
-            in_zp = int(TemplateContextBuilder._quant_param_scalar(input_quant, 'zero_point', 0))
-            out_zp = int(TemplateContextBuilder._quant_param_scalar(output_quant, 'zero_point', 0))
+        in_zp, out_zp = TemplateContextBuilder._zero_points(act_dtype, input_quant, output_quant)
         
         # Calculate channel multiplier: output_channels / input_channels
         ch_mult = out_c // in_c if in_c > 0 else 1
@@ -1042,12 +1058,7 @@ class TemplateContextBuilder:
             )
         ).upper()
         activation_min, activation_max = TemplateContextBuilder.activation_clamp(desc, act_dtype, output_quant)
-        if act_dtype in {'FP32', 'FP16'}:
-            in_zp = 0
-            out_zp = 0
-        else:
-            in_zp = int(TemplateContextBuilder._quant_param_scalar(input_quant, 'zero_point', 0))
-            out_zp = int(TemplateContextBuilder._quant_param_scalar(output_quant, 'zero_point', 0))
+        in_zp, out_zp = TemplateContextBuilder._zero_points(act_dtype, input_quant, output_quant)
         
         return {
             'input_offset': int(-in_zp),
@@ -1159,23 +1170,8 @@ class TemplateContextBuilder:
         ).upper()
         activation_min, activation_max = TemplateContextBuilder.activation_clamp(desc, act_dtype, output_quant)
         
-        in_zp = input_quant.get('zero_point', 0)
-        if isinstance(in_zp, (list, np.ndarray)):
-            in_zp = int(in_zp[0])
-        else:
-            in_zp = int(in_zp)
-        
-        weight_zp = weight_quant.get('zero_point', 0)
-        if isinstance(weight_zp, (list, np.ndarray)):
-            weight_zp = int(weight_zp[0])
-        else:
-            weight_zp = int(weight_zp)
-        
-        out_zp = output_quant.get('zero_point', 0)
-        if isinstance(out_zp, (list, np.ndarray)):
-            out_zp = int(out_zp[0])
-        else:
-            out_zp = int(out_zp)
+        in_zp, out_zp = TemplateContextBuilder._zero_points(act_dtype, input_quant, output_quant)
+        weight_zp = int(TemplateContextBuilder._quant_param_scalar(weight_quant, 'zero_point', 0))
         
         # For S16 fully connected, CMSIS-NN requires offsets to be 0
         # (S16 quantization typically uses symmetric quantization with zero_point=0)

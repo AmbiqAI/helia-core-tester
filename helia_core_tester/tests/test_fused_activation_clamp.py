@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from helia_core_tester.core.discovery import find_descriptors_dir
-from helia_core_tester.generation.io.descriptors import load_all_descriptors
+from helia_core_tester.generation.io.descriptors import expand_descriptor_variations, load_descriptor
 from helia_core_tester.generation.ops.FullyConnectedFunctions.fully_connected import OpFullyConnected
 from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
@@ -174,12 +174,132 @@ def test_fully_connected_int_path_uses_the_shared_clamp() -> None:
     assert op._compute_activation_range(S16_OUT, np.dtype(np.int16)) == (0, 12000)
 
 
+CORPUS_FILES = (
+    "ConvolutionFunctions/convolve.yaml",
+    "ConvolutionFunctions/depthwise_conv.yaml",
+    "FullyConnectedFunctions/fully_connected.yaml",
+)
+
+
 def test_corpus_covers_fused_s16_activations() -> None:
+    root = find_descriptors_dir()
     present = {
         (d.get("operator"), d.get("activation"))
-        for d in load_all_descriptors(str(find_descriptors_dir()))
+        for rel in CORPUS_FILES
+        for doc in load_descriptor(str(root / rel))
+        for d in expand_descriptor_variations(doc)
         if d.get("activation_dtype") == "S16" and "activation_min" not in d
     }
     for operator in ("Convolve", "DepthwiseConv", "FullyConnected"):
         for activation in ("RELU", "RELU6"):
             assert (operator, activation) in present
+
+
+@pytest.mark.parametrize("dtype", ["S32", "U8", "U16", "S4", "", "int8"])
+def test_unknown_int_activation_dtype_is_rejected(dtype: str) -> None:
+    for activation in ("NONE", "RELU"):
+        with pytest.raises(ValueError, match=r"^No kernel activation range for activation dtype "):
+            clamp({"activation": activation}, dtype, {"scale": 0.1, "zero_point": 0})
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "message"),
+    [
+        ("activation_min", 0.5, "must be an integer"),
+        ("activation_max", True, "must be an integer"),
+        ("activation_min", math.nan, "must be an integer"),
+        ("activation_max", math.inf, "must be an integer"),
+        ("activation_min", "0", "must be an integer"),
+        ("activation_min", -129, r"outside the S8 range \[-128, 127\]"),
+        ("activation_max", 128, r"outside the S8 range \[-128, 127\]"),
+    ],
+)
+def test_explicit_int_bounds_are_validated(key: str, value, message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        clamp({"activation": "NONE", key: value}, "S8", None)
+
+
+@pytest.mark.parametrize(
+    ("desc", "expected"),
+    [
+        ({"activation_min": -128, "activation_max": 127}, (-128, 127)),
+        ({"activation_min": np.int16(-5), "activation_max": np.int64(7)}, (-5, 7)),
+        ({"activation_min": -5.0}, (-5, 32767)),
+        ({"activation_min": -32768, "activation_max": 32767}, (-32768, 32767)),
+    ],
+    ids=["s8-limits", "numpy-ints", "integral-float", "s16-limits"],
+)
+def test_explicit_int_bounds_at_the_limits_are_accepted(desc: dict, expected) -> None:
+    dtype = "S8" if expected[1] == 127 else "S16"
+    assert clamp({"activation": "NONE", **desc}, dtype, None) == expected
+
+
+def test_explicit_s16_bound_outside_the_range_is_rejected() -> None:
+    with pytest.raises(ValueError, match=r"outside the S16 range"):
+        clamp({"activation": "RELU", "activation_max": 40000}, "S16", S16_OUT)
+
+
+@BUILDERS
+def test_builders_read_zero_points_from_arrays_and_empty_lists(build) -> None:
+    desc = {"activation_dtype": "S8", "activation": "NONE", "padding": "same", "strides": [1, 1]}
+    params = build(desc, {"scale": 0.1, "zero_point": np.array([-3])})
+    assert params["output_offset"] == -3
+    assert build(desc, {"scale": 0.1, "zero_point": []})["output_offset"] == 0
+
+
+def test_zero_points_are_zero_for_float_kernels() -> None:
+    assert TemplateContextBuilder._zero_points("FP32", {"zero_point": 5}, {"zero_point": -7}) == (0, 0)
+    assert TemplateContextBuilder._zero_points("S8", {"zero_point": [5]}, {"zero_point": np.array([-7])}) == (5, -7)
+
+
+def _bmm(activation) -> "OpBatchMatMul":
+    from helia_core_tester.generation.ops.FullyConnectedFunctions.batch_matmul import OpBatchMatMul
+
+    desc = {
+        "operator": "BatchMatMul",
+        "name": "batch_matmul_case_s8",
+        "activation_dtype": "S8",
+        "weight_dtype": "S8",
+        "input_1_shape": [1, 2, 3],
+        "input_2_shape": [1, 3, 4],
+        "activation": activation,
+    }
+    return OpBatchMatMul(desc, 1)
+
+
+@pytest.mark.parametrize("activation", ["RELU", "RELU6", "relu", "TANH"])
+def test_batch_matmul_rejects_a_fused_activation(activation, tmp_path) -> None:
+    for call in (lambda op: op.build_keras_model(), lambda op: op.generate_c_files(tmp_path)):
+        with pytest.raises(ValueError, match="BatchMatMul has no fused activation"):
+            call(_bmm(activation))
+
+
+@pytest.mark.parametrize("activation", ["NONE", None])
+def test_batch_matmul_without_activation_builds(activation) -> None:
+    assert _bmm(activation).build_keras_model() is not None
+
+
+def _layer_kinds(model) -> list[str]:
+    return [type(layer).__name__ for layer in model.layers]
+
+
+@pytest.mark.parametrize(("activation", "relu_max"), [("relu", None), ("relu6", 6.0), ("Relu6", 6.0)])
+def test_model_builders_accept_the_names_the_clamp_accepts(activation: str, relu_max) -> None:
+    from helia_core_tester.generation.ops.ConvolutionFunctions.depthwise_conv import OpDepthwiseConv
+
+    base = {"activation_dtype": "S8", "weight_dtype": "S8", "padding": "SAME", "strides": [1, 1]}
+    dw = OpDepthwiseConv(
+        {**base, "operator": "DepthwiseConv", "name": "dw_case_s8", "input_shape": [1, 4, 4, 2],
+         "filter_shape": [3, 3, 2, 1], "depth_multiplier": 1, "activation": activation},
+        1,
+    ).build_keras_model()
+    relus = [layer for layer in dw.layers if type(layer).__name__ == "ReLU"]
+    assert len(relus) == 1
+    assert (None if relus[0].max_value is None else float(relus[0].max_value)) == relu_max
+
+    fc = OpFullyConnected(
+        {**base, "operator": "FullyConnected", "name": "fc_case_s8", "input_shape": [1, 8],
+         "filter_shape": [8, 4], "activation": activation},
+        1,
+    ).build_keras_model()
+    assert "ReLU" in _layer_kinds(fc)

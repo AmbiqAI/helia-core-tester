@@ -83,7 +83,7 @@ class OpFullyConnected(OperationBase):
             output_units = filter_shape[0]
         
         # Get activation and use_bias from descriptor
-        activation_str = self.desc.get('activation', 'NONE')
+        activation_str = self.activation_name()
         use_bias = self.desc.get('use_bias', True)
         
         # Build model with input layer matching descriptor shape

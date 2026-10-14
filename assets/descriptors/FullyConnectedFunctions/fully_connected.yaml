@@ -754,7 +754,7 @@ activation: RELU
 hint:
   call_style: per_tensor
 input_shape: [2, 3, 3, 7]
-filter_shape: [11, 7]
+filter_shape: [11, 63]
 use_bias: true
 ---
 operator: FullyConnected
