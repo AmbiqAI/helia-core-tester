@@ -46,8 +46,8 @@ def test_transpose_conv_s8_reverse_buffer_covers_rolling_buffer_after_ns_cmsis_n
 
     Dims below are read from the transpose_conv_reverse_valid_kernel1x1_stride2x2_no_bias_s8
     descriptor (input_c=17, kernel 1x1, stride 2x2, VALID, filter [1, 1, 5, 17]: 17 -> 5
-    channels). Generation uses all four declared filter dims (issue #144). The original
-    17 -> 17 shape PR#262 was found on stays covered by the parametrized test below.
+    channels). Generation uses all four declared filter dims (issue #144). The parametrized
+    test below still covers the original 17 -> 17 shape on which PR#262 was found.
     """
     desc = _load_transpose_conv_descriptor(
         "transpose_conv_reverse_valid_kernel1x1_stride2x2_no_bias_s8"
