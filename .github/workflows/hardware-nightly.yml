@@ -322,13 +322,23 @@ jobs:
     needs: [plan, run]
     if: always() && needs.plan.result == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
+    # actions: read lists and downloads the baseline run.
+    permissions:
+      contents: read
+      actions: read
     env:
       BOARDS: ${{ needs.plan.outputs.boards }}
       RUN_TAG: ${{ needs.plan.outputs.date }}-${{ github.run_id }}
       KERNEL_LEG: ${{ needs.plan.outputs.kernel_leg }}
       KERNEL_SHA: ${{ needs.plan.outputs.kernel_sha }}
     steps:
+      # Before the download: checkout cleans the workspace.
+      - name: Checkout the skip report
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts/nightly_skip_report.py
+          sparse-checkout-cone-mode: false
       # No artifacts: boards show "no result".
       - uses: actions/download-artifact@v4
         id: download
@@ -382,3 +392,33 @@ jobs:
               done
             done
           } >> "${GITHUB_STEP_SUMMARY}"
+      # Baseline: the latest earlier completed scheduled run on main.
+      - name: Download the baseline run
+        if: ${{ !cancelled() }}
+        id: baseline
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prev="$(gh run list -R "${GITHUB_REPOSITORY}" --workflow hardware-nightly.yml --event schedule \
+            --branch main --status completed --limit 20 --json databaseId \
+            --jq "map(select(.databaseId < ${GITHUB_RUN_ID})) | .[0].databaseId // empty")"
+          if [[ -z "${prev}" ]]; then
+            echo "note=no earlier scheduled run" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          gh run download "${prev}" -R "${GITHUB_REPOSITORY}" -p 'hct-hardware-*' -D baseline
+          echo "run=${prev}" >> "${GITHUB_OUTPUT}"
+      - name: Report skipped cases and untimed entry points
+        if: ${{ !cancelled() }}
+        env:
+          BASELINE_RUN: ${{ steps.baseline.outputs.run }}
+          BASELINE_NOTE: ${{ steps.baseline.outputs.note }}
+        run: |
+          args=(--current bundles --boards "${BOARDS}" --out "${GITHUB_STEP_SUMMARY}")
+          if [[ -n "${BASELINE_RUN}" ]]; then
+            args+=(--previous baseline --baseline-note "baseline run ${BASELINE_RUN} left no result for this board")
+          else
+            args+=(--baseline-note "${BASELINE_NOTE:-the baseline run could not be found or downloaded}")
+          fi
+          python3 scripts/nightly_skip_report.py "${args[@]}"
