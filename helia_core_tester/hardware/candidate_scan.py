@@ -22,7 +22,9 @@ args (board and SoC macros, include paths), and each kernel object
 from its compile_commands.json must hold code in .text only, standard
 sections only, and no SCS address (0xE0000000-0xE00FFFFF: DWT, PMU,
 SysTick, SCB) in a literal pool, mov/movw/movt or data word. Addresses
-built at run time stay out of reach.
+built at run time stay out of reach. Its disassembly must hold no
+cpsid/cpsie, wfi/wfe, or msr other than an APSR flag write, however
+the source spelled them.
 """
 
 from __future__ import annotations
@@ -468,6 +470,9 @@ _FLAG_LETTERS = ((0x1, "W"), (0x2, "A"), (0x4, "X"), (0x10, "M"), (0x20, "S"), (
 _PROGBITS, _NOBITS, _RELA, _REL = 1, 8, 4, 9
 _ADDRESS_INSN = re.compile(r"\t(?:mov|movw|movt|ldr)\S*\t|\t\.word\t")
 _IMMEDIATE = re.compile(r"#(-?(?:0x[0-9a-fA-F]+|\d+))|\.word\t(0x[0-9a-fA-F]+)")
+# Interrupt masks, sleep, and msr to anything but the APSR flags (PRIMASK,
+# BASEPRI, FAULTMASK, CONTROL, stack pointers and limits, _NS aliases).
+_FORBIDDEN_INSN = re.compile(r"\t(?:cpsi[de]|wf[ie])\S*(?:\t|$)|\tmsr\S*\t(?!(?:apsr|cpsr)_)", re.IGNORECASE)
 _RELOC_SECTION = re.compile(r"^Relocation section '.*' at offset")
 _SYMBOL_ROW = re.compile(r"^\s*\d+:\s+[0-9a-f]+\s+\d+\s+(\w+)\s+\w+\s+\w+\s+(\d+)\s+(\S+)")
 # Mapping symbols mark code: $t, $a.
@@ -587,6 +592,8 @@ def _object_hits(source: str, obj: Path, defined: frozenset[str], limits: tuple[
         hits.append({"rule": "object_address", "path": source, "text": text[:200]})
 
     for line in run_binutil("arm-none-eabi-objdump", ["-d", "--no-show-raw-insn", str(obj)], *limits).splitlines():
+        if _FORBIDDEN_INSN.search(line):
+            hits.append({"rule": "object_instruction", "path": source, "text": line.strip()[:200]})
         if not _ADDRESS_INSN.search(line):
             continue
         for match in _IMMEDIATE.finditer(line):

@@ -148,6 +148,42 @@ def test_odd_section_name_flagged(tmp_path: Path, name: str) -> None:
     assert "object_address" in rules
 
 
+def _asm(*body: str) -> str:
+    return ".syntax unified\n.thumb\n.text\n.global f\n.type f, %function\n.thumb_func\nf:\n" + "".join(
+        f"  {line}\n" for line in body) + "  bx lr\n"
+
+
+@needs_gcc
+@pytest.mark.parametrize("insn", [
+    ("cpsid i",), ("CPSIE f",), ("wfi",), ("wfe",), ("wfi.w",), ("it eq", "wfieq"),
+    ("msr PRIMASK, r0",), ("msr basepri, r0",), ("msr BASEPRI_MAX, r0",), ("msr FAULTMASK, r0",),
+    ("msr CONTROL, r0",), ("msr PRIMASK_NS, r0",), ("msr MSP, r0",), ("msr PSPLIM, r0",),
+])
+def test_object_scan_flags_forbidden_instructions(tmp_path: Path, insn: tuple[str, ...]) -> None:
+    findings, _, _ = candidate_scan.object_findings(_build(tmp_path, _asm(*insn), name="k.S"))
+    assert [f["rule"] for f in findings] == ["object_instruction"]
+    assert findings[0]["path"] == "Source/k.S"
+    assert insn[-1].split()[0].split(".")[0].lower() in findings[0]["text"].lower()
+
+
+@needs_gcc
+def test_object_scan_allows_lookalike_instructions(tmp_path: Path) -> None:
+    source = _asm("msr APSR_nzcvq, r0", "msr APSR_g, r0", "mrs r0, PRIMASK", "mrs r0, CONTROL", "vmsr fpscr, r0", "sev")
+    findings, summary, _ = candidate_scan.object_findings(_build(tmp_path, source, name="k.S"))
+    assert findings == [] and summary["count"] == 1
+
+
+@needs_gcc
+def test_object_scan_sees_through_source_spelling(tmp_path: Path) -> None:
+    # Pasted and stringized: no source rule sees "cpsid" or "wfi".
+    source = (
+        "#define CAT(a, b) a##b\n#define STR(x) #x\n#define XSTR(x) STR(x)\n"
+        "void f(void) { __asm__ volatile (XSTR(CAT(cps, id)) \" i\\n\" XSTR(CAT(w, fi))); }\n"
+    )
+    findings, _, _ = candidate_scan.object_findings(_build(tmp_path, source))
+    assert sorted(f["text"].split()[1] for f in findings if f["rule"] == "object_instruction") == ["cpsid", "wfi"]
+
+
 def test_bad_elf_fails(tmp_path: Path) -> None:
     obj = tmp_path / "k.o"
     obj.write_bytes(b"\x7fELF\x01\x01" + bytes(10))
