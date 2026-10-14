@@ -573,17 +573,30 @@ class TemplateContextBuilder:
             qmin, qmax = TemplateContextBuilder._INT_ACTIVATION_RANGE.get(act_dtype, (-128, 127))
             lo, hi = qmin, qmax
             if fused is not None and not ('activation_min' in desc and 'activation_max' in desc):
-                scale = float(TemplateContextBuilder._quant_param_scalar(output_quant, 'scale', 0.0))
-                zero_point = TemplateContextBuilder._quant_param_scalar(output_quant, 'zero_point', 0)
-                if not math.isfinite(scale) or scale <= 0.0:
-                    raise ValueError(f"{activation} needs a positive finite output scale, got {scale!r}")
-                if isinstance(zero_point, bool) or int(zero_point) != zero_point:
-                    raise ValueError(f"{activation} needs an integer output zero point, got {zero_point!r}")
-                zero_point = int(zero_point)
+                raw_scale = TemplateContextBuilder._quant_param_scalar(output_quant, 'scale', 0.0)
+                raw_zero_point = TemplateContextBuilder._quant_param_scalar(output_quant, 'zero_point', 0)
+                try:
+                    with np.errstate(over='ignore'):
+                        scale = np.float32(raw_scale) if not isinstance(raw_scale, bool) else None
+                except (TypeError, ValueError, OverflowError):
+                    scale = None
+                if scale is None or not math.isfinite(scale) or scale <= 0.0:
+                    raise ValueError(f"{activation} needs a positive finite output scale, got {raw_scale!r}")
+                try:
+                    zero_point = int(raw_zero_point)
+                    is_integer = not isinstance(raw_zero_point, bool) and zero_point == raw_zero_point
+                except (TypeError, ValueError, OverflowError):
+                    is_integer = False
+                if not is_integer:
+                    raise ValueError(f"{activation} needs an integer output zero point, got {raw_zero_point!r}")
 
                 def quantize(value: float) -> int:
-                    # TfLiteRound: half away from zero.
-                    scaled = value / scale
+                    # TFLite divides in float32 (the FlatBuffer scale is a float), then
+                    # TfLiteRound rounds half away from zero.
+                    with np.errstate(over='ignore'):
+                        scaled = float(np.float32(value) / scale)
+                    if not math.isfinite(scaled):
+                        raise ValueError(f"{activation} bound {value} overflows the output scale {raw_scale!r}")
                     return zero_point + int(math.copysign(math.floor(abs(scaled) + 0.5), scaled))
 
                 lo = max(qmin, quantize(fused[0]))

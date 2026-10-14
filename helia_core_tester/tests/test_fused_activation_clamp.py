@@ -72,8 +72,15 @@ def test_float_builders_clamp_at_the_fused_activation(build, activation: str, ex
         # 6 / 2.4 = 2.5: TfLiteRound goes away from zero, Python round() would give 2.
         ("S8", {"scale": 2.4, "zero_point": 0}, "RELU6", (0, 3)),
         ("S8", {"scale": 2.4, "zero_point": -10}, "RELU6", (-10, -7)),
+        # The FlatBuffer stores 2.400000095...: 6 / scale is 2.4999999 in float64 but exactly 2.5 in float32.
+        ("S8", {"scale": np.float32(2.4), "zero_point": 0}, "RELU6", (0, 3)),
+        ("S8", {"scale": np.array([2.4], dtype=np.float32), "zero_point": np.array([0])}, "RELU6", (0, 3)),
+        ("S8", {"scale": float(np.float32(2.4)), "zero_point": 0}, "RELU6", (0, 3)),
     ],
-    ids=["s8-full", "s8-zp0", "s8-zp-high", "s8-zp-below-qmin", "s8-zp-qmax", "s16-full", "s16-cap", "half-away", "half-away-zp"],
+    ids=[
+        "s8-full", "s8-zp0", "s8-zp-high", "s8-zp-below-qmin", "s8-zp-qmax", "s16-full", "s16-cap",
+        "half-away", "half-away-zp", "float32-scale", "float32-array-scale", "float32-widened-scale",
+    ],
 )
 def test_clamp_matches_tflite_activation_range(dtype: str, quant: dict, activation: str, expected: tuple[int, int]) -> None:
     assert clamp({"activation": activation}, dtype, quant) == expected
@@ -115,8 +122,14 @@ def test_unsupported_activation_is_rejected(activation) -> None:
 
 @pytest.mark.parametrize(
     "quant",
-    [None, {}, {"scale": 0.0}, {"scale": -0.1}, {"scale": math.nan}, {"scale": math.inf}, {"scale": []}],
-    ids=["none", "empty", "zero", "negative", "nan", "inf", "empty-list"],
+    [
+        None, {}, {"scale": 0.0}, {"scale": -0.1}, {"scale": math.nan}, {"scale": math.inf}, {"scale": []},
+        {"scale": 1e300}, {"scale": 1e-300}, {"scale": "abc"}, {"scale": object()}, {"scale": True},
+    ],
+    ids=[
+        "none", "empty", "zero", "negative", "nan", "inf", "empty-list",
+        "float32-overflow", "float32-underflow", "string", "object", "bool",
+    ],
 )
 @pytest.mark.parametrize("activation", ["RELU", "RELU6"])
 def test_fused_int_clamp_needs_a_valid_output_scale(quant, activation: str) -> None:
@@ -124,7 +137,11 @@ def test_fused_int_clamp_needs_a_valid_output_scale(quant, activation: str) -> N
         clamp({"activation": activation}, "S16", quant)
 
 
-@pytest.mark.parametrize("zero_point", [0.5, True])
+@pytest.mark.parametrize(
+    "zero_point",
+    [0.5, True, math.inf, -math.inf, math.nan, "abc", object(), None],
+    ids=["fraction", "bool", "inf", "neg-inf", "nan", "string", "object", "none"],
+)
 def test_fused_int_clamp_needs_an_integer_zero_point(zero_point) -> None:
     with pytest.raises(ValueError, match=r"^RELU needs an integer output zero point, got "):
         clamp({"activation": "RELU"}, "S8", {"scale": 0.1, "zero_point": zero_point})
