@@ -489,11 +489,13 @@ class HardSwishFamilyBase(OperationBase):
         relu_q3 = tflite_round(3.0 / float(input_scale))
         relu_q6 = tflite_round(6.0 / float(input_scale))
         
-        prescale = self._derive_prescale(relu_q3, relu_q6, input_zp, qmin, qmax)
         prescale_override = self._prescale_override(extras, variant)
-        if prescale_override is not None:
-            self._check_prescale_fits(prescale_override, relu_q3, relu_q6, input_zp, qmin, qmax)
-            prescale = prescale_override
+        prescale = 0
+        if variant == "precise":
+            prescale = self._derive_prescale(relu_q3, relu_q6, input_zp, qmin, qmax)
+            if prescale_override is not None:
+                self._check_prescale_fits(prescale_override, relu_q3, relu_q6, input_zp, qmin, qmax)
+                prescale = prescale_override
         
         # Calculate effective scale
         # Formula: real_multiplier = (input_scale^2) / (6.0 * output_scale)
