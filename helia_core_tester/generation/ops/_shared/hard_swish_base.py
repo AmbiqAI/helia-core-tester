@@ -204,7 +204,12 @@ class HardSwishFamilyBase(OperationBase):
         """Reject a prescale that overflows int32 or rounds the relu6 term to zero for every input."""
         x, shifted, xr = cls._relu6_terms(prescale, relu_q3, relu_q6, input_zp, qmin, qmax)
         product = x * xr
-        if cls._leaves_int32(shifted, product):
+        if cls._leaves_int32(shifted):
+            raise ValueError(
+                f"{cls.OPERATOR_NAME}: hint.extras.prescale {prescale} overflows int32 "
+                f"(x + relu_q3 spans [{int(shifted.min())}, {int(shifted.max())}])"
+            )
+        if cls._leaves_int32(product):
             raise ValueError(
                 f"{cls.OPERATOR_NAME}: hint.extras.prescale {prescale} overflows int32 "
                 f"(x * relu6 term spans [{int(product.min())}, {int(product.max())}])"
