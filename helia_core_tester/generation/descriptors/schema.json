@@ -39,6 +39,7 @@
         "Gather",
         "GatherND",
         "Gelu",
+        "GRUUnidirectional",
         "HardSwishCompat",
         "HardSwishPrecise",
         "LSTMUnidirectional",
@@ -59,6 +60,7 @@
         "Quantize",
         "ReduceMax",
         "ReduceMin",
+        "ReduceSum",
         "Relu",
         "Relu6",
         "Requantize",
@@ -92,15 +94,34 @@
       "enum": [
         "S8",
         "S16",
-        "S32"
+        "S32",
+        "FP16",
+        "FP32"
       ]
     },
     "weight_dtype": {
       "type": "string",
       "enum": [
         "S4",
-        "S8"
+        "S8",
+        "FP16",
+        "FP32"
       ]
+    },
+    "suite": {
+      "description": "Suite the case belongs to. Omitted means 'float' for *_float.yaml sources and 'default' otherwise.",
+      "type": "string",
+      "enum": ["default", "float"]
+    },
+    "required_capabilities": {
+      "description": "CPU capabilities the case needs; it is skipped on CPUs that lack any of them. Names must match core/cpu_targets.py known_capabilities().",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": ["dsp", "fp16_execution", "fp32_execution", "mve", "soft_float"]
+      }
     },
     "tensor_dtypes": {
       "type": "object",
@@ -272,13 +293,19 @@
       "$ref": "#/$defs/intArray"
     },
     "block_size": {
-      "$ref": "#/$defs/intArray"
+      "type": "integer",
+      "minimum": 1
     },
     "block_shape": {
       "$ref": "#/$defs/intArray"
     },
     "crops": {
-      "$ref": "#/$defs/intArray"
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/intArray",
+        "minItems": 2,
+        "maxItems": 2
+      }
     },
     "pads": {
       "$ref": "#/$defs/intArray"
@@ -382,6 +409,12 @@
             },
             "output_scale": {
               "type": "number"
+            },
+            "prescale": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 31,
+              "description": "HardSwishPrecise (integer): explicit prescale instead of the one derived from the scales; output_multiplier/output_shift follow from it. Generation rejects a value that lets the kernel's int32 x * relu6 product overflow or that rounds the relu6 term to 0 for every input."
             }
           }
         }
@@ -414,7 +447,7 @@
       "type": "object",
       "minProperties": 1,
       "additionalProperties": { "type": "string", "minLength": 1 },
-      "description": "Int elementwise cases: operand name -> reason the operand is intentionally one-signed after its zero point is applied. Waives the generation-time operand sign-span check for that operand only. This schema is not enforced at load time (#100); the same rule is enforced in code by OperationBase._enforce_int_operand_sign_span."
+      "description": "Int elementwise cases: operand name -> reason the operand is intentionally one-signed after its zero point is applied. Waives the generation-time operand sign-span check for that operand only. The schema validates this declaration at load time; OperationBase._enforce_int_operand_sign_span applies the exemption during generation."
     },
     "expected_input_ctx_size": {
       "type": "integer",
@@ -701,8 +734,33 @@
       },
       "then": {
         "required": [
-          "alpha_shape",
-          "scalar_input_value"
+          "alpha_shape"
+        ],
+        "anyOf": [
+          {
+            "required": [
+              "scalar_input_value"
+            ]
+          },
+          {
+            "required": [
+              "hint"
+            ],
+            "properties": {
+              "hint": {
+                "required": [
+                  "extras"
+                ],
+                "properties": {
+                  "extras": {
+                    "required": [
+                      "input_values"
+                    ]
+                  }
+                }
+              }
+            }
+          }
         ]
       }
     },
@@ -826,13 +884,43 @@
       "then": { "required": ["axis"] }
     },
     {
-      "$comment": "A sweep case has to say how its golden is compared. There is no safe default: 'strict' pins a value ns-cmsis-nn may not contract, 'mask' drops lanes a contracted kernel should be asserting, and which one applies is a per-kernel question the descriptor author has to answer. This if/then is not enforced by the descriptor loader, which validates a subset of the schema; the rule that actually fails a policy-less sweep is OperationBase.nonfinite_policy(). Enforcement moves here when #100 lands.",
+      "$comment": "A sweep case has to say how its golden is compared. There is no safe default: 'strict' pins a value ns-cmsis-nn may not contract, 'mask' drops lanes a contracted kernel should be asserting, and which one applies is a per-kernel question the descriptor author has to answer. The descriptor loader enforces this rule; OperationBase.nonfinite_policy() keeps the same check for descriptors built in code.",
       "if": {
         "properties": { "input_mode": { "const": "nonfinite_sweep" } },
         "required": ["input_mode"]
       },
       "then": {
         "required": ["nonfinite_policy"]
+      }
+    },
+    {
+      "$comment": "hint.extras.prescale is read only by the integer HardSwishPrecise kernels; generation also rejects it on the float route.",
+      "if": {
+        "properties": {
+          "hint": {
+            "properties": { "extras": { "required": ["prescale"] } },
+            "required": ["extras"]
+          }
+        },
+        "required": ["hint"]
+      },
+      "then": {
+        "properties": { "operator": { "const": "HardSwishPrecise" } }
+      }
+    },
+    {
+      "$comment": "Activation bounds are quantized codes outside the float suite, so they must be integral there.",
+      "if": {
+        "not": {
+          "properties": { "suite": { "const": "float" } },
+          "required": ["suite"]
+        }
+      },
+      "then": {
+        "properties": {
+          "act_min": { "type": "integer" },
+          "act_max": { "type": "integer" }
+        }
       }
     }
   ]

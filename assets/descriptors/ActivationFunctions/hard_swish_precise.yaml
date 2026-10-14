@@ -104,3 +104,57 @@ input_shape:
 - 48
 - 48
 - 16
+---
+# #123: the prescale derived from the scales is 0 for every case above, so the
+# kernel's prescale shift never runs. These pin it to 4 with the Unity suite's
+# s = 1/128 parameters {0, 0, 1431655765, -5, 384, 768, 4}.
+operator: HardSwishPrecise
+name: hard_swish_precise_vector_prescale4_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+  extras:
+    input_scale: 0.0078125
+    output_scale: 0.0078125
+    input_zero_point: 0
+    output_zero_point: 0
+    prescale: 4
+input_shape:
+- 1
+- 37
+---
+operator: HardSwishPrecise
+name: hard_swish_precise_vector_1760_lut_prescale4_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+  extras:
+    input_scale: 0.0078125
+    output_scale: 0.0078125
+    input_zero_point: 0
+    output_zero_point: 0
+    prescale: 4
+input_shape:
+- 1
+- 1760
+---
+operator: HardSwishPrecise
+name: hard_swish_precise_vector_prescale4_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+  extras:
+    input_scale: 0.0078125
+    output_scale: 0.0078125
+    input_zero_point: 0
+    output_zero_point: 0
+    prescale: 4
+input_shape:
+- 1
+- 37

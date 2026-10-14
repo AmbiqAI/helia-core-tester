@@ -672,6 +672,10 @@ uv run python -m helia_core_tester.scripts.setup_dependencies --gcc-version 13.2
 HELIA_GCC_VERSION=15.2.rel1 uv run helia_core_tester full --cpu cortex-m55
 ```
 
+### Source dependencies (CMSIS-5, Ethos-U core platform)
+
+`setup_dependencies.py` fetches CMSIS-5 and ethos-u-core-platform at the fixed commits listed in `SOURCE_PINS` in that script and checks `git rev-parse HEAD` after checkout. Run directly, it moves an existing clean checkout at another commit to the pin. It rejects a checkout with local changes (edits, untracked files, or assume-unchanged/skip-worktree entries) or a directory that is not a git checkout; `--force` replaces it, and the old checkout is restored if the replacement fails. The setup that `build`, `run` and `full` start enforces the pins the same way, so a run fails on a modified checkout until it is cleaned or replaced. Run directly with `--source-pins warn`, setup fetches missing sources at the pin but only reports an existing checkout that is off its pin. Bumping a pin means editing `SOURCE_PINS`.
+
 ### Compiler (`--toolchain`)
 
 `build`, `run` and `full` take `--toolchain gcc|armclang` (default `gcc`; also `toolchain` in `helia_core_tester.toml` and `HELIA_CORE_TESTER_TOOLCHAIN`). `armclang` selects ethos-u-core-platform's `armclang.cmake` and needs Arm Compiler 6 (`armclang`) on `PATH`; it is not fetched by `setup_dependencies.py`. Build output goes to `artifacts/build-<suite>-<cpu>-arm-compiler/`. `--toolchain armclang` is mutually exclusive with `--coverage` (gcov instrumentation is GCC-only). `doctor` reports which of `arm-none-eabi-gcc` / `armclang` it finds.
@@ -708,6 +712,16 @@ Generation report files (always emitted):
 Use `tensor_dtypes` for new float-aware descriptors. Legacy `activation_dtype` and `weight_dtype`
 still work, but the loader now normalizes both styles into `resolved_tensor_dtypes` and
 `resolved_comparison`.
+
+Every descriptor document read from YAML (`load_descriptor` / `load_all_descriptors`), and every
+base+variation merge in it, is validated against
+`helia_core_tester/generation/descriptors/schema.json`; a violation fails the load with the
+descriptor name, file and JSON path. Descriptors built as dicts in code skip the schema and rely on
+the loader's and operators' own checks. Every document needs a `name`. An unusable schema raises
+`DescriptorSchemaError` once, even with `best_effort=True`. The operator and `required_capabilities`
+enums are taken from the op catalog and `known_capabilities()` when the validator is built.
+Integer-suite descriptors (no `suite: float` and no `_float` file stem) must give
+`act_min`/`act_max` as integers.
 
 Example:
 
@@ -852,9 +866,9 @@ strict bundles need no migration. Matching NaNs and same-sign infinities pass st
 comparison; other non-finite pairings fail. This does not impose NaN-payload or signed-zero
 bit equality.
 
-`nonfinite_policy` is required by `OperationBase.nonfinite_policy()`, not by the schema: the
-`if`/`then` gate in `schema.json` is documentation until the descriptor loader validates the whole
-schema (#100).
+`nonfinite_policy` is required whenever `input_mode` is `nonfinite_sweep`: the descriptor loader
+enforces the `if`/`then` gate in `schema.json`, and `OperationBase.nonfinite_policy()` checks it
+again at generation time.
 
 To scaffold a new tester op, start from `helia_core_tester/scripts/scaffold_operator.py`.
 
@@ -978,8 +992,8 @@ operand_sign_span_exempt:
 The reason is required, and the key must name an operand the operator actually submits to the
 rule: each wired operator declares those labels as `SIGN_SPAN_OPERANDS`, and a waiver on
 anything else fails generation instead of silently waiving nothing. `operand_sign_span_exempt`
-is also declared in `helia_core_tester/generation/descriptors/schema.json`, but that schema is
-not enforced at load time (#100), so the rule lives in code.
+is also declared in `helia_core_tester/generation/descriptors/schema.json`, which the loader
+enforces, but the operand check needs the operator's labels, so it lives in code.
 
 ## Mutation scoring
 

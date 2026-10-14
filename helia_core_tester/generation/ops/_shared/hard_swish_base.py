@@ -1,10 +1,13 @@
 """Shared implementation for CMSIS-NN hard-swish operators."""
 
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 import numpy as np
 import tensorflow as tf
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.base import OperationBase
+
+PRESCALE_MAX = 31
+QUANT_EXTRAS = ("input_scale", "output_scale", "input_zero_point", "output_zero_point")
 
 
 class HardSwishFamilyBase(OperationBase):
@@ -25,21 +28,36 @@ class HardSwishFamilyBase(OperationBase):
         model = tf.keras.Model(inputs=[inputs], outputs=output)
         return model
 
+    def _descriptor_quantized(self) -> bool:
+        """Integer precise cases whose quantization comes from the descriptor, not a calibrated .tflite.
+
+        int16 HARD_SWISH cannot be quantized by TFLite; an int8 case that pins any
+        of QUANT_EXTRAS would otherwise ship a .tflite disagreeing with its C call.
+        """
+        if self.variant_name() != "precise":
+            return False
+        activation_dtype = str(self.tensor_dtype("input", default="S8")).upper()
+        if activation_dtype == "S16":
+            return True
+        extras = self.desc.get("hint", {}).get("extras") or {}
+        return activation_dtype == "S8" and any(key in extras for key in QUANT_EXTRAS)
+
+    def needs_keras_model(self) -> bool:
+        return not self._descriptor_quantized()
+
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
         """Convert Keras model to TFLite with quantization (plain float for FP32/FP16)."""
         activation_dtype = self.tensor_dtype("input", default="S8")
         if self.variant_name() == "compat" and str(activation_dtype).upper() != "S8":
             raise NotImplementedError("HardSwishCompat is only supported for S8.")
+        if self._descriptor_quantized():
+            return
         if str(activation_dtype).upper() in ("FP32", "FP16"):
             # arm_hard_swish_f32/f16 parity cases: plain float model, no
             # quantization (mirrors the other float-suite conversions).
             converter = tf.lite.TFLiteConverter.from_keras_model(model)
             tflite_model = converter.convert()
             self._write_tflite_bytes(out_path, tflite_model)
-            return
-        if self.variant_name() == "precise" and str(activation_dtype).upper() == "S16":
-            # TFLite quantization for HARD_SWISH int16 is not supported.
-            # Skip TFLite generation and rely on descriptor-provided scales.
             return
         # Create converter
         converter = tf.lite.TFLiteConverter.from_keras_model(model)
@@ -126,6 +144,81 @@ class HardSwishFamilyBase(OperationBase):
             }
         else:
             raise NotImplementedError(f"Unsupported HardSwish dtype: {activation_dtype}")
+
+    @classmethod
+    def _prescale_override(cls, extras: Dict, variant: str, float_kernel: bool = False) -> Optional[int]:
+        """Explicit hint.extras.prescale for the integer precise kernels, or None to derive it."""
+        if not isinstance(extras, dict) or "prescale" not in extras:
+            return None
+        name = cls.OPERATOR_NAME
+        if variant != "precise" or float_kernel:
+            raise ValueError(f"{name}: hint.extras.prescale applies only to the integer HardSwishPrecise kernels")
+        value = extras["prescale"]
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"{name}: hint.extras.prescale must be an integer, got {value!r}")
+        if not 0 <= value <= PRESCALE_MAX:
+            raise ValueError(f"{name}: hint.extras.prescale must be in [0, {PRESCALE_MAX}], got {value}")
+        return value
+
+    @classmethod
+    def _relu6_terms(
+        cls, prescale: int, relu_q3: int, relu_q6: int, input_zp: int, qmin: int, qmax: int
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """For every input code: x = q - zp, x + relu_q3, and the prescaled xr, as int64.
+
+        xr is clamp(x + relu_q3, 0, relu_q6) rounded by the prescale, so it moves
+        with x; bounding x and relu_q6 separately over- and under-states x * xr.
+        """
+        x = np.arange(int(qmin), int(qmax) + 1, dtype=np.int64) - int(input_zp)
+        shifted = x + int(relu_q3)
+        xr = np.clip(shifted, 0, max(int(relu_q6), 0))
+        if prescale:
+            xr = (xr + (1 << (prescale - 1))) >> prescale
+        return x, shifted, xr
+
+    @staticmethod
+    def _leaves_int32(*values: np.ndarray) -> bool:
+        info = np.iinfo(np.int32)
+        return any(v.max() > info.max or v.min() < info.min for v in values)
+
+    @classmethod
+    def _prescale_overflows(
+        cls, prescale: int, relu_q3: int, relu_q6: int, input_zp: int, qmin: int, qmax: int
+    ) -> bool:
+        """True when x + relu_q3 or x * xr leaves int32 for some input code at this prescale."""
+        x, shifted, xr = cls._relu6_terms(prescale, relu_q3, relu_q6, input_zp, qmin, qmax)
+        return cls._leaves_int32(shifted, x * xr)
+
+    @classmethod
+    def _derive_prescale(cls, relu_q3: int, relu_q6: int, input_zp: int, qmin: int, qmax: int) -> int:
+        """Smallest prescale that keeps x * xr inside int32 (the arm_hard_swish_* contract)."""
+        for prescale in range(PRESCALE_MAX + 1):
+            if not cls._prescale_overflows(prescale, relu_q3, relu_q6, input_zp, qmin, qmax):
+                return prescale
+        raise ValueError(f"{cls.OPERATOR_NAME}: no prescale in [0, {PRESCALE_MAX}] keeps x * relu6 in int32")
+
+    @classmethod
+    def _check_prescale_fits(
+        cls, prescale: int, relu_q3: int, relu_q6: int, input_zp: int, qmin: int, qmax: int
+    ) -> None:
+        """Reject a prescale that overflows int32 or rounds the relu6 term to zero for every input."""
+        x, shifted, xr = cls._relu6_terms(prescale, relu_q3, relu_q6, input_zp, qmin, qmax)
+        product = x * xr
+        if cls._leaves_int32(shifted):
+            raise ValueError(
+                f"{cls.OPERATOR_NAME}: hint.extras.prescale {prescale} overflows int32 "
+                f"(x + relu_q3 spans [{int(shifted.min())}, {int(shifted.max())}])"
+            )
+        if cls._leaves_int32(product):
+            raise ValueError(
+                f"{cls.OPERATOR_NAME}: hint.extras.prescale {prescale} overflows int32 "
+                f"(x * relu6 term spans [{int(product.min())}, {int(product.max())}])"
+            )
+        if not xr.any():
+            raise ValueError(
+                f"{cls.OPERATOR_NAME}: hint.extras.prescale {prescale} rounds the relu6 term "
+                f"(relu_q3 = {relu_q3}, relu_q6 = {relu_q6}) to 0 for every input, so the golden is constant"
+            )
 
     @staticmethod
     def _clamp(val: int, vmin: int, vmax: int) -> int:
@@ -322,6 +415,7 @@ class HardSwishFamilyBase(OperationBase):
         variant = self.variant_name()
         
         if kernel_info.get('float_kernel'):
+            self._prescale_override(self.desc.get("hint", {}).get("extras"), variant, float_kernel=True)
             self._generate_float_c_files(output_dir, kernel_info)
             return
         
@@ -400,12 +494,13 @@ class HardSwishFamilyBase(OperationBase):
         relu_q3 = tflite_round(3.0 / float(input_scale))
         relu_q6 = tflite_round(6.0 / float(input_scale))
         
-        # Keep x * relu6 inside int32.
+        prescale_override = self._prescale_override(extras, variant)
         prescale = 0
-        prod_max = 32767 * int(relu_q6)
-        while prod_max > np.iinfo(np.int32).max:
-            prescale += 1
-            prod_max >>= 1
+        if variant == "precise":
+            prescale = self._derive_prescale(relu_q3, relu_q6, input_zp, qmin, qmax)
+            if prescale_override is not None:
+                self._check_prescale_fits(prescale_override, relu_q3, relu_q6, input_zp, qmin, qmax)
+                prescale = prescale_override
         
         # Calculate effective scale
         # Formula: real_multiplier = (input_scale^2) / (6.0 * output_scale)
