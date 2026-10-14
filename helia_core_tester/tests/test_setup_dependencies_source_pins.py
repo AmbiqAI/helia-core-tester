@@ -1,5 +1,6 @@
 """CMSIS-5 / ethos-u-core-platform are fetched at, and verified against, pinned commits."""
 
+import os
 import shutil
 import subprocess
 import threading
@@ -343,6 +344,11 @@ def test_dubious_ownership_is_trusted_for_our_checkout(tmp_path, upstream, pin_t
     downloads = tmp_path / "downloads"
     pin_to(second)
     sd.setup_cmsis5(downloads)
+    # Ignore the host's system/global git config: a safe.directory entry there
+    # (the GitHub runner trusts the repo) hides the refusal this test needs.
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    monkeypatch.delenv("GIT_CONFIG_SYSTEM", raising=False)
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
     monkeypatch.setenv("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1")
     with pytest.raises(subprocess.CalledProcessError):
         subprocess.run(["git", "rev-parse", "HEAD"], cwd=downloads / NAME, check=True, capture_output=True)
@@ -515,3 +521,25 @@ def test_windows_lock_retries_until_held_and_releases(tmp_path, upstream, pin_to
     assert fake.calls == [(fake.LK_LOCK, 1)] * 3 + [(fake.LK_UNLCK, 1)]
     assert not stale.exists()
     assert _head(downloads / NAME) == first
+
+
+@pytest.mark.parametrize("flag", ["--skip-worktree", "--assume-unchanged"])
+@pytest.mark.parametrize("move", [False, True], ids=["reuse", "move"])
+def test_hidden_index_entry_counts_as_a_local_change(tmp_path, upstream, pin_to, flag, move):
+    # git status reports such a tree as clean, and checkout keeps its bytes.
+    _, first, second = upstream
+    downloads = tmp_path / "downloads"
+    pin_to(second)
+    sd.setup_cmsis5(downloads)
+    dest = downloads / NAME
+    _git(dest, "update-index", flag, "f.txt")
+    (dest / "f.txt").write_text("hidden edit\n")
+    assert _git(dest, "status", "--porcelain") == ""
+    if move:
+        pin_to(first)
+    with pytest.raises(sd.SourcePinError, match="skip-worktree"):
+        sd.setup_cmsis5(downloads)
+    assert _head(dest) == second
+    assert (dest / "f.txt").read_text() == "hidden edit\n"
+    sd.setup_cmsis5(downloads, force=True)
+    assert (dest / "f.txt").read_text() == ("one\n" if move else "two\n")

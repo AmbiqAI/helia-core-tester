@@ -534,8 +534,17 @@ def _checkout_head(path: Path) -> Optional[str]:
 
 
 def _has_local_changes(path: Path) -> bool:
-    """Tracked edits or untracked files; either can change what a build compiles."""
-    return bool(_git(["status", "--porcelain"], path))
+    """Tracked edits, untracked files, or index entries git status skips.
+
+    An assume-unchanged or skip-worktree entry hides edits from git status and
+    keeps its bytes across a checkout, so it is treated as a change (the same
+    rule as hardware/harness_lock.py).
+    """
+    if _git(["status", "--porcelain"], path):
+        return True
+    # ls-files -v tags: S = skip-worktree, lowercase = assume-unchanged.
+    entries = _git(["ls-files", "-v", "-z"], path).split("\0")
+    return any(entry[:1] == "S" or entry[:1].islower() for entry in entries if entry)
 
 
 def _has_commit(path: Path, commit: str) -> bool:
@@ -624,7 +633,10 @@ def _existing_checkout_problem(dest: Path, pin: SourcePin) -> tuple[Optional[str
         )
         return None, problem, (dest / pin.marker).is_dir()
     if _has_local_changes(dest):
-        return head, f"{dest} has local changes (edits or untracked files) at {head}", True
+        return head, (
+            f"{dest} has local changes (edits, untracked files, or assume-unchanged/skip-worktree "
+            f"entries) at {head}"
+        ), True
     return head, None, True
 
 
