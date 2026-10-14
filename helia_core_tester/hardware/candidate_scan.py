@@ -22,11 +22,13 @@ args (board and SoC macros, include paths), and each kernel object
 from its compile_commands.json must hold code in .text only, standard
 sections only, and no SCS address (0xE0000000-0xE00FFFFF: DWT, PMU,
 SysTick, SCB) in a literal pool, mov/movw/movt or data word. Addresses
-built at run time stay out of reach. Every loaded section, decoded as
-Thumb whether marked code or data, must hold no cpsid/cpsie, wfi/wfe,
-or msr other than an APSR flag write. Bytes that only decode as one of
-these from a halfword the disassembler steps over, and code written at
-run time, stay out of reach.
+built at run time stay out of reach. No loaded section may hold a
+cps or an msr other than an APSR flag write at any halfword, and
+none, decoded as Thumb whether marked code or data, may hold wfi/wfe.
+Every symbol, relocation and direct branch into code must land on an
+instruction the disassembler decoded, so bytes inside an instruction
+are never entered by name. Jump-table entries, data reached by
+pointer, and addresses or code built at run time stay out of reach.
 """
 
 from __future__ import annotations
@@ -472,11 +474,18 @@ _FLAG_LETTERS = ((0x1, "W"), (0x2, "A"), (0x4, "X"), (0x10, "M"), (0x20, "S"), (
 _PROGBITS, _NOBITS, _RELA, _REL = 1, 8, 4, 9
 _ADDRESS_INSN = re.compile(r"\t(?:mov|movw|movt|ldr)\S*\t|\t\.word\t")
 _IMMEDIATE = re.compile(r"#(-?(?:0x[0-9a-fA-F]+|\d+))|\.word\t(0x[0-9a-fA-F]+)")
-# Interrupt masks, sleep, and msr to anything but the APSR flags (PRIMASK,
-# BASEPRI, FAULTMASK, CONTROL, stack pointers and limits, _NS aliases).
-_FORBIDDEN_INSN = re.compile(r"\t(?:cpsi[de]|wf[ie])\S*(?:\t|$)|\tmsr\S*\t(?!(?:apsr|cpsr)_)", re.IGNORECASE)
+# Sleep, as the linear decode sees it. Its 16-bit encodings also sit
+# inside ordinary MVE loads (vldrw q5, [sp, #128] is ed9d bf20).
+_SLEEP_INSN = re.compile(r"\twf[ie]\S*(?:\t|$)", re.IGNORECASE)
+# Interrupt masks and msr, as raw encodings at every instruction start:
+# cps (T1, T2) and msr (T1) to anything but APSR (SYSm 0), i.e. PRIMASK,
+# BASEPRI, FAULTMASK, CONTROL, stack pointers and limits, _NS aliases.
+_MASK_ENCODING = re.compile(rb"(?=[\x60-\x7f]\xb6|[\x80-\x9f\xa0-\xaf]\xf3[\x00-\xff][\x80-\x8f\xa0-\xaf])")
+_DISASSEMBLY = re.compile(r"^Disassembly of section (\S+):$")
+_INSN_LINE = re.compile(r"^\s*([0-9a-f]+):\t")
+_DIRECT_TARGET = re.compile(r"\t(?:[^@\t]*[ ,])?([0-9a-f]+) <[^>]*>$")
 _RELOC_SECTION = re.compile(r"^Relocation section '.*' at offset")
-_SYMBOL_ROW = re.compile(r"^\s*\d+:\s+[0-9a-f]+\s+\d+\s+(\w+)\s+\w+\s+\w+\s+(\d+)\s+(\S+)")
+_SYMBOL_ROW = re.compile(r"^\s*\d+:\s+([0-9a-f]+)\s+\d+\s+(\w+)\s+\w+\s+\w+\s+(\d+)\s+(\S+)")
 # Mapping symbols mark code: $t, $a.
 _CODE_SYMBOL = re.compile(r"^\$[ta](?:\.|$)")
 _RELOC_ROW = re.compile(r"^([0-9a-f]{8})\s+[0-9a-f]{8}\s+(R_ARM_\w+)\s+[0-9a-f]{8}\s+(\S+)")
@@ -528,13 +537,8 @@ def _preprocess_args(args: list[str], source: str) -> tuple[str, ...]:
     return tuple(kept)
 
 
-def elf_sections(obj: Path) -> list[tuple[str, int, str, memoryview, int]]:
-    """(name, type, flags, data, info) per section.
-
-    Read from the ELF32 little-endian section table, not readelf text,
-    so no name spelling can hide a section. The file is mapped, not
-    read: section data are views into it.
-    """
+def _elf_headers(obj: Path) -> tuple[memoryview, list[tuple[int, ...]]]:
+    """Mapped file and raw ELF32 section headers."""
     with open(obj, "rb") as handle:
         # The map outlives the handle.
         raw = memoryview(mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ))
@@ -542,11 +546,31 @@ def elf_sections(obj: Path) -> list[tuple[str, int, str, memoryview, int]]:
         raise ValueError(f"{obj.name}: not ELF32 little-endian")
     try:
         shoff, = struct.unpack_from("<I", raw, 0x20)
-        entsize, count, names_index = struct.unpack_from("<HHH", raw, 0x2E)
+        entsize, count = struct.unpack_from("<HH", raw, 0x2E)
         headers = [struct.unpack_from("<10I", raw, shoff + i * entsize) for i in range(count or 1)]
         # Extended numbering keeps counts in section 0.
         count = count or headers[0][5]
         headers = [struct.unpack_from("<10I", raw, shoff + i * entsize) for i in range(count)]
+    except (struct.error, IndexError) as exc:
+        raise ValueError(f"{obj.name}: bad section table: {exc}") from exc
+    return raw, headers
+
+
+def _section_aligns(obj: Path) -> list[int]:
+    """sh_addralign per section."""
+    return [header[8] for header in _elf_headers(obj)[1]]
+
+
+def elf_sections(obj: Path) -> list[tuple[str, int, str, memoryview, int]]:
+    """(name, type, flags, data, info) per section.
+
+    Read from the ELF32 little-endian section table, not readelf text,
+    so no name spelling can hide a section. The file is mapped, not
+    read: section data are views into it.
+    """
+    raw, headers = _elf_headers(obj)
+    try:
+        names_index, = struct.unpack_from("<H", raw, 0x32)
         names_index = headers[0][6] if names_index == 0xFFFF else names_index
         table = headers[names_index]
     except (struct.error, IndexError) as exc:
@@ -560,6 +584,53 @@ def elf_sections(obj: Path) -> list[tuple[str, int, str, memoryview, int]]:
         data = raw[offset:offset + size] if kind != _NOBITS else memoryview(b"")
         sections.append((name, kind, "".join(letter for bit, letter in _FLAG_LETTERS if flags & bit), data, info))
     return sections
+
+
+def _mask_hits(name: str, data: memoryview, align: int) -> list[str]:
+    """cps or non-APSR msr encodings wherever an instruction could start.
+
+    Even offsets only, unless the section may land at an odd address.
+    """
+    found = []
+    for match in _MASK_ENCODING.finditer(data):
+        at = match.start()
+        if at & 1 and align > 1:
+            continue
+        first = data[at] | data[at + 1] << 8
+        if first & 0xFFE0 == 0xB660:
+            found.append(f"{name}+{at:#x}: {'cpsid' if first & 0x10 else 'cpsie'} {first:04x}")
+            continue
+        second = data[at + 2] | data[at + 3] << 8
+        if first & 0xFFE0 == 0xF380 and second & 0xFF:
+            found.append(f"{name}+{at:#x}: msr {first:04x} {second:04x}")
+        elif first & 0xFFF0 == 0xF3A0 and second & 0x0600:
+            found.append(f"{name}+{at:#x}: cps {first:04x} {second:04x}")
+    return found
+
+
+def _sign(value: int, bits: int) -> int:
+    return value - (1 << bits) if value >> (bits - 1) & 1 else value
+
+
+def _thumb_addend(kind: str, data: memoryview, offset: int) -> Optional[int]:
+    """REL addend of a Thumb branch or movw/movt, or None if unread."""
+    if offset + 4 > len(data):
+        return None
+    first, second = struct.unpack_from("<HH", data, offset)
+    sign = first >> 10 & 1
+    if kind in ("R_ARM_THM_CALL", "R_ARM_THM_JUMP24"):
+        high = (1 - (second >> 13 & 1 ^ sign)) << 1 | (1 - (second >> 11 & 1 ^ sign))
+        return _sign(sign << 24 | high << 22 | (first & 0x3FF) << 12 | (second & 0x7FF) << 1, 25)
+    if kind == "R_ARM_THM_JUMP19":
+        jumps = (second >> 11 & 1) << 1 | second >> 13 & 1
+        return _sign(sign << 20 | jumps << 18 | (first & 0x3F) << 12 | (second & 0x7FF) << 1, 21)
+    # imm4:i:imm3:imm8.
+    return _sign((first & 0xF) << 12 | sign << 11 | (second >> 12 & 7) << 8 | second & 0xFF, 16)
+
+
+_BRANCH_RELOCS = frozenset(("R_ARM_THM_CALL", "R_ARM_THM_JUMP24", "R_ARM_THM_JUMP19"))
+_MOVE_RELOCS = frozenset(("R_ARM_THM_MOVW_ABS_NC", "R_ARM_THM_MOVT_ABS", "R_ARM_THM_MOVW_PREL_NC", "R_ARM_THM_MOVT_PREL"))
+_WORD_RELOCS = frozenset(("R_ARM_ABS32", "R_ARM_REL32", "R_ARM_TARGET1", "R_ARM_TARGET2"))
 
 
 def _object_hits(source: str, obj: Path, defined: frozenset[str], limits: tuple[float, str]) -> list[dict]:
@@ -578,14 +649,16 @@ def _object_hits(source: str, obj: Path, defined: frozenset[str], limits: tuple[
             sections[index] = flags
 
     # Code outside .text, whatever its flags.
-    homes = {}
+    homes, places = {}, {}
     for row in run_binutil("arm-none-eabi-readelf", ["-sW", str(obj)], *limits).splitlines():
         match = _SYMBOL_ROW.match(row)
         if not match:
             continue
-        kind, index, symbol = match.groups()
+        value, kind, index, symbol = match.groups()
         home = names.get(index, "")
         homes[symbol] = home
+        if index.isdigit() and int(index) < len(table):
+            places.setdefault(symbol, set()).add((int(index), int(value, 16)))
         code = kind == "FUNC" or _CODE_SYMBOL.match(symbol)
         if code and not home.startswith(".text"):
             hits.append({"rule": "object_section", "path": source, "text": f"code {symbol} in {home}"})
@@ -593,7 +666,27 @@ def _object_hits(source: str, obj: Path, defined: frozenset[str], limits: tuple[
     def hit(text: str) -> None:
         hits.append({"rule": "object_address", "path": source, "text": text[:200]})
 
-    for line in run_binutil("arm-none-eabi-objdump", ["-d", "--no-show-raw-insn", str(obj)], *limits).splitlines():
+    def instruction(text: str) -> None:
+        hits.append({"rule": "object_instruction", "path": source, "text": text[:200]})
+
+    # Instruction starts and direct branch targets per code section.
+    by_name = {name: index for index, (name, *_) in enumerate(table)}
+    starts: dict[int, set[int]] = {index: set() for index, entry in enumerate(table) if "X" in entry[2]}
+    direct: dict[tuple[int, int], int] = {}
+    current = None
+    for line in run_binutil("arm-none-eabi-objdump", ["-dz", "--no-show-raw-insn", str(obj)], *limits).splitlines():
+        if heading := _DISASSEMBLY.match(line):
+            current = by_name.get(heading.group(1))
+            continue
+        if current in starts and (row := _INSN_LINE.match(line)):
+            at = int(row.group(1), 16)
+            starts[current].add(at)
+            # objdump restarts at every symbol, so a symbol inside an
+            # instruction shows up as a truncated decode before it.
+            if line.endswith("is out of bounds."):
+                instruction(f"instruction at {table[current][0]}+{at:#x} is cut by a symbol or the section end")
+            if target := _DIRECT_TARGET.search(line):
+                direct[(current, at)] = int(target.group(1), 16)
         if not _ADDRESS_INSN.search(line):
             continue
         for match in _IMMEDIATE.finditer(line):
@@ -601,6 +694,15 @@ def _object_hits(source: str, obj: Path, defined: frozenset[str], limits: tuple[
             # movt loads the top half.
             if SCS_LOW <= value <= SCS_HIGH or ("\tmovt" in line and SCS_LOW >> 16 <= value <= SCS_HIGH >> 16):
                 hit(line.strip())
+
+    def entry(origin: str, index: int, at: int) -> None:
+        """Code entered at `at` must start a decoded instruction."""
+        if index in starts and at not in starts[index] and at & ~1 not in starts[index] and at != len(table[index][3]):
+            instruction(f"{origin} enters {table[index][0]}+{at:#x} inside an instruction")
+
+    for symbol, spots in places.items():
+        for index, value in spots:
+            entry(f"symbol {symbol}", index, value)
     # -D decodes data too: bytes behind a $d mapping symbol, in .rodata or
     # .data, can still be branched to. Odd names are already findings.
     loaded = [table[index][0] for index in sections if _PLAIN_NAME.fullmatch(table[index][0])]
@@ -608,10 +710,13 @@ def _object_hits(source: str, obj: Path, defined: frozenset[str], limits: tuple[
         selected = [arg for name in loaded for arg in ("-j", name)]
         for line in run_binutil("arm-none-eabi-objdump", ["-D", "--no-show-raw-insn", *selected, str(obj)],
                                 *limits).splitlines():
-            if _FORBIDDEN_INSN.search(line):
-                hits.append({"rule": "object_instruction", "path": source, "text": line.strip()[:200]})
+            if _SLEEP_INSN.search(line):
+                instruction(line.strip())
     contents = {index: table[index][3] for index in sections}
+    aligns = _section_aligns(obj)
     for index, data in contents.items():
+        for text in _mask_hits(table[index][0], data, aligns[index]):
+            instruction(text)
         # Any byte offset: loads may be unaligned.
         if "X" not in sections[index] and _SCS_WORD.search(data):
             hit(f"SCS address in {table[index][0]}")
@@ -619,6 +724,7 @@ def _object_hits(source: str, obj: Path, defined: frozenset[str], limits: tuple[
     targets = iter([info for _, kind, _, _, info in table if kind in (_REL, _RELA)])
     expected, seen_relocs = sum(kind in (_REL, _RELA) for _, kind, _, _, _ in table), 0
     target = None
+    relocated: set[tuple[int, int]] = set()
     for line in run_binutil("arm-none-eabi-readelf", ["-rW", str(obj)], *limits).splitlines():
         if _RELOC_SECTION.match(line):
             seen_relocs += 1
@@ -629,11 +735,31 @@ def _object_hits(source: str, obj: Path, defined: frozenset[str], limits: tuple[
             continue
         section = table[target][0]
         offset, kind, symbol = int(row.group(1), 16), row.group(2), row.group(3)
+        relocated.add((target, offset))
+        data = contents[target]
         # Symbol plus addend can reach any address.
         if kind == "R_ARM_ABS32":
-            addend = int.from_bytes(contents[target][offset:offset + 4], "little", signed=True)
+            addend = int.from_bytes(data[offset:offset + 4], "little", signed=True)
             if not 0 <= addend < _ADDEND_MAX:
                 hit(f"{symbol}{addend:+#x} in {section}")
+        for index, value in places.get(symbol, ()):
+            if index not in starts:
+                continue
+            origin = f"{kind} at {section}+{offset:#x}"
+            if kind in _WORD_RELOCS:
+                addend = int.from_bytes(data[offset:offset + 4], "little", signed=True)
+            elif kind == "R_ARM_PREL31":
+                addend = _sign(int.from_bytes(data[offset:offset + 4], "little") & 0x7FFFFFFF, 31)
+            elif kind in _BRANCH_RELOCS or kind in _MOVE_RELOCS:
+                addend = _thumb_addend(kind, data, offset)
+                # The branch addend carries the -4 pipeline bias.
+                addend = None if addend is None else addend + 4 * (kind in _BRANCH_RELOCS)
+            else:
+                addend = None
+            if addend is None:
+                instruction(f"{origin} into {table[index][0]} is unchecked")
+            else:
+                entry(origin, index, value + addend)
         home = homes.get(symbol, "")
         if kind in _CALLS and home and not home.startswith(".text"):
             hits.append({"rule": "object_section", "path": source, "text": f"branch to {symbol} in {home}"})
@@ -641,6 +767,9 @@ def _object_hits(source: str, obj: Path, defined: frozenset[str], limits: tuple[
             hit(f"{kind} to {symbol} in {section}")
     if seen_relocs != expected:
         raise ValueError(f"{obj.name}: read {seen_relocs} of {expected} reloc sections")
+    for (index, at), goal in direct.items():
+        if (index, at) not in relocated:
+            entry(f"branch at {table[index][0]}+{at:#x}", index, goal)
     return hits
 
 

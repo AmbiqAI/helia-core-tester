@@ -198,6 +198,113 @@ def test_object_scan_decodes_data_as_code(tmp_path: Path, source: str, name: str
     assert {"cpsid", "cpsie"} <= found and found & {"wfe", "wfi"}
 
 
+# wfi as the second half of a 32-bit ldr.w, entered at `after - 2`.
+HIDDEN = """.syntax unified
+.thumb
+.section .text.hide,"ax",%progbits
+.global f
+.type f, %function
+.thumb_func
+f:
+  {local}
+  .inst.w 0xf8dfbf30
+after:
+  bx lr
+.section .text.call,"ax",%progbits
+.global g
+.type g, %function
+.thumb_func
+g:
+  {remote}
+  bx lr
+.section .rodata.p,"a"
+  .word 0
+  {data}
+"""
+
+
+@needs_gcc
+@pytest.mark.parametrize(("local", "remote", "data", "origin"), [
+    (".thumb_set hidden, after - 2\n.global hidden", "", "", "instruction at .text.hide+0x0 is cut"),
+    ("b.n after - 2", "", "", "branch at .text.hide+0x0"),
+    ("", "bl after - 2", "", "R_ARM_THM_CALL"),
+    ("", "b.w after - 2", "", "R_ARM_THM_JUMP24"),
+    ("", "beq.w after - 2", "", "R_ARM_THM_JUMP19"),
+    ("", "movw r0, #:lower16:(after - 1)", "", "R_ARM_THM_MOVW_ABS_NC"),
+    ("", "movt r0, #:upper16:(after - 1)", "", "R_ARM_THM_MOVT_ABS"),
+    ("", "", ".word after - 1", "R_ARM_ABS32"),
+])
+def test_object_scan_flags_entry_inside_instruction(
+    tmp_path: Path, local: str, remote: str, data: str, origin: str,
+) -> None:
+    source = HIDDEN.format(local=local, remote=remote, data=data)
+    findings, _, _ = candidate_scan.object_findings(_build(tmp_path, source, name="k.S"))
+    texts = [f["text"] for f in findings if f["rule"] == "object_instruction" and not f["text"].endswith("wfi")]
+    assert len(texts) == 1 and texts[0].startswith(origin)
+    assert ".text.hide+0x" in texts[0]
+
+
+@needs_gcc
+def test_object_scan_entry_unread_relocation_fails_closed(tmp_path: Path) -> None:
+    source = HIDDEN.format(local="", remote="", data=".hword after")
+    findings, _, _ = candidate_scan.object_findings(_build(tmp_path, source, name="k.S"))
+    texts = [f["text"] for f in findings if f["rule"] == "object_instruction"]
+    assert texts == ["R_ARM_ABS16 at .rodata.p+0x4 into .text.hide is unchecked"]
+
+
+@needs_gcc
+def test_object_scan_entry_at_boundaries_is_clean(tmp_path: Path) -> None:
+    source = HIDDEN.format(local="b.n after", remote="bl after\n  b.w f\n  movw r0, #:lower16:after",
+                           data=".word after + 1\n.word f")
+    findings, summary, _ = candidate_scan.object_findings(_build(tmp_path, source, name="k.S"))
+    assert findings == [] and summary["count"] == 1
+
+
+@needs_gcc
+@pytest.mark.parametrize(("body", "mnemonic"), [
+    # A 32-bit prefix swallows the next halfword in a linear decode.
+    ('.section .rodata.x,"a"\n.short 0xf8df, 0xb672\n', "cpsid"),
+    (_asm(".inst.w 0xf8dfb662"), "cpsie"),
+    (_asm(".short 0xf8df, 0xf380, 0x8810"), "msr"),
+    (_asm(".short 0xf8df, 0xf3af, 0x8610"), "cps"),
+    # A byte-aligned section can land at an odd address.
+    ('.section .rodata.x,"a"\n.byte 0, 0x72, 0xb6\n', "cpsid"),
+])
+def test_object_scan_finds_masks_at_any_halfword(tmp_path: Path, body: str, mnemonic: str) -> None:
+    findings, _, _ = candidate_scan.object_findings(_build(tmp_path, ".syntax unified\n.thumb\n" + body, name="k.S"))
+    assert [f["text"].split()[1] for f in findings if f["rule"] == "object_instruction"] == [mnemonic]
+
+
+@needs_gcc
+@pytest.mark.parametrize("body", [
+    # vldrw.u32 q5, [sp, #128] is ed9d bf20: wfe inside an MVE load.
+    _asm("vldrw.u32 q5, [sp, #128]"),
+    # Odd offsets of a halfword-aligned section never start an instruction.
+    '.section .rodata.x,"a"\n.p2align 1\n.byte 0, 0x72, 0xb6, 0\n',
+    # msr to APSR (SYSm 0) inside another instruction.
+    _asm(".short 0xf8df, 0xf380, 0x8800"),
+])
+def test_object_scan_ignores_masks_that_never_execute(tmp_path: Path, body: str) -> None:
+    findings, summary, _ = candidate_scan.object_findings(_build(tmp_path, ".syntax unified\n.thumb\n" + body, name="k.S"))
+    assert findings == [] and summary["count"] == 1
+
+
+@needs_gcc
+def test_object_scan_clean_calls_and_tables(tmp_path: Path) -> None:
+    source = (
+        "static int g(int x) { return x * 3; }\nint (*const tab[2])(int) = {g, 0};\nextern void ext(void);\n"
+        "__attribute__((noinline)) static int h(int x) { return x + tab[0](x); }\n"
+        "int f(int x) { ext(); switch (x) { case 0: return h(1); case 1: return 7; case 2: return 9;\n"
+        "case 3: return 11; case 4: return 13; } return h(x); }\n"
+    )
+    findings, summary, _ = candidate_scan.object_findings(_build(tmp_path, source))
+    assert findings == [] and summary["count"] == 1
+
+
+def test_thumb_addend_short_data_is_unread() -> None:
+    assert candidate_scan._thumb_addend("R_ARM_THM_CALL", memoryview(b"\x00\xf0"), 0) is None
+
+
 def test_bad_elf_fails(tmp_path: Path) -> None:
     obj = tmp_path / "k.o"
     obj.write_bytes(b"\x7fELF\x01\x01" + bytes(10))
