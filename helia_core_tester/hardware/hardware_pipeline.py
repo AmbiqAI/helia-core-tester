@@ -305,8 +305,9 @@ def hidden_summary(hidden_set: Path, cpu: str) -> dict[str, Any]:
 def hidden_record(hidden_set: Path, cpu: str) -> dict[str, Any]:
     """Seed commitment and case count."""
     from ..core.path_layout import generated_tests_dir
+    from .session_runner import normalize_suites
 
-    roots = [generated_tests_dir(hidden_set, normalize_cpu(cpu), suite) for suite in ("int", "float")]
+    roots = [generated_tests_dir(hidden_set, normalize_cpu(cpu), suite) for suite in normalize_suites("both")]
     cases = sum(1 for root in roots for case in root.glob("*/*") if (case / "descriptor.yaml").is_file())
     return {"seed_commitment": hidden_summary(hidden_set, cpu)["seed_commitment"], "cases": cases}
 

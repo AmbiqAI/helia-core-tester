@@ -336,10 +336,10 @@ class Config:
             return
         if self.random_shapes < 1:
             raise ConfigurationError(f"random_shapes must be >= 1, got {self.random_shapes}")
-        from helia_core_tester.generation.random_shapes import op_suites, select_ops
+        from helia_core_tester.generation.random_shapes import op_suites
 
         try:
-            suites = op_suites(select_ops(self.op_filter, self.dtype_filter))
+            suites = op_suites(self.op_filter, self.dtype_filter)
         except ValueError as exc:
             raise ConfigurationError(str(exc)) from exc
         if not suites & set(self.suites):

@@ -415,10 +415,10 @@ def _tcf_nonfinite(rng: np.random.Generator, dtype: str) -> Layer:
     # Five rows beat a four-tap patch.
     layer = Layer(_size(rng, 5, 10), _size(rng, 5, 14), _odd_channels(rng, 1, 24), _odd_channels(rng, 1, 16), kh, kw,
                   int(rng.integers(1, 4)), int(rng.integers(1, 4)), padding=_padding(rng), transpose=True)
-    token = str(rng.choice(["nan", "inf", "-inf"]))
-    layer.knobs = {"activation": "NONE", "use_bias": bool(rng.random() < 0.85), "input_mode": "nonfinite_sweep",
-                   "nonfinite_tokens": [token], "nonfinite_positions": [int(rng.integers(0, layer.h * layer.w * layer.cin))],
-                   "nonfinite_policy": "mask"}
+    token, bias = str(rng.choice(["nan", "inf", "-inf"])), bool(rng.random() < 0.85)
+    position = int(rng.integers(0, layer.h * layer.w * layer.cin))
+    layer.knobs = {"activation": "NONE", "use_bias": bias, "input_mode": "nonfinite_sweep", "nonfinite_tokens": [token],
+                   "nonfinite_positions": [position], "nonfinite_policy": "mask"}
     return layer
 
 
@@ -576,14 +576,14 @@ def select_ops(op_filter: str | None = None, dtype_filter: str | None = None) ->
     return picked
 
 
-def op_suites(keys: tuple[tuple[str, str], ...]) -> set[str]:
-    """Generated-test suites the keys write."""
-    return {GENERATORS[key].suite for key in keys}
+def op_suites(op_filter: str | None = None, dtype_filter: str | None = None) -> set[str]:
+    """Generated-test suites a draw writes."""
+    return {GENERATORS[key].suite for key in select_ops(op_filter, dtype_filter)}
 
 
 def shape_suite(op_filter: str | None, dtype_filter: str | None) -> str:
     """The one suite a draw needs, else both."""
-    suites = op_suites(select_ops(op_filter, dtype_filter))
+    suites = op_suites(op_filter, dtype_filter)
     return suites.pop() if len(suites) == 1 else "both"
 
 

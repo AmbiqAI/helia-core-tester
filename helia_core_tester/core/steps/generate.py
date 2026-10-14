@@ -181,10 +181,10 @@ class GenerateStep(StepBase):
         """Targets execute, dry run and plan share."""
         targets = self.config.iter_generation_targets()
         if self.config.random_shapes:
-            from helia_core_tester.generation.random_shapes import op_suites, select_ops
+            from helia_core_tester.generation.random_shapes import op_suites
 
             # Only suites with a drawn op.
-            suites = op_suites(select_ops(self.config.op_filter, self.config.dtype_filter))
+            suites = op_suites(self.config.op_filter, self.config.dtype_filter)
             targets = [target for target in targets if target[1] in suites]
         return targets
 
