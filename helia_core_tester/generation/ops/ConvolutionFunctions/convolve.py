@@ -132,8 +132,8 @@ class OpConvolve(OperationBase):
         else:
             padding = 'valid'
         
-        activation = self.desc.get('activation', 'NONE')
-        act = None if activation in (None, 'NONE', 'none') else activation.lower()
+        activation = self.activation_name()
+        act = None if activation == 'NONE' else activation.lower()
         
         dilation = self.desc.get('dilation', [1, 1])
         if isinstance(dilation, (int, float)):

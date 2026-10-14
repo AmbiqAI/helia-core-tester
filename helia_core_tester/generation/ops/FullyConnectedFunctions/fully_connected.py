@@ -83,7 +83,7 @@ class OpFullyConnected(OperationBase):
             output_units = filter_shape[0]
         
         # Get activation and use_bias from descriptor
-        activation_str = self.desc.get('activation', 'NONE')
+        activation_str = self.activation_name()
         use_bias = self.desc.get('use_bias', True)
         
         # Build model with input layer matching descriptor shape
@@ -282,39 +282,11 @@ class OpFullyConnected(OperationBase):
     
     def _compute_activation_range(self, output_quant: Dict[str, Any], output_dtype: np.dtype) -> tuple[int, int]:
         """Compute activation min/max based on output quantization and dtype."""
-        activation_str = self.desc.get('activation', 'NONE')
-        output_zp = self._get_zero_point(output_quant)
-        output_scale = output_quant.get('scale', 1.0)
-        if isinstance(output_scale, (list, np.ndarray)):
-            output_scale = float(output_scale[0])
-        
-        if output_dtype == np.int16:
-            default_min, default_max = -32768, 32767
-        else:  # int8
-            default_min, default_max = -128, 127
-        
-        # Real zero sits at the output zero point.
-        if activation_str == 'RELU':
-            activation_min = max(output_zp, default_min)
-            activation_max = default_max
-        elif activation_str == 'RELU6':
-            # RELU6: clamp to [0, 6] in float, then quantize
-            relu6_max_float = 6.0
-            relu6_max_quantized = int(np.round(relu6_max_float / output_scale + output_zp))
-            activation_min = max(output_zp, default_min)
-            activation_max = min(relu6_max_quantized, default_max)
-        else:  # NONE, TANH, SIGMOID, etc.
-            activation_min = default_min
-            activation_max = default_max
-        
-        # Override with descriptor values if present
-        if 'activation_min' in self.desc:
-            activation_min = int(self.desc['activation_min'])
-        if 'activation_max' in self.desc:
-            activation_max = int(self.desc['activation_max'])
-        
-        return activation_min, activation_max
-    
+        from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
+
+        act_dtype = 'S16' if output_dtype == np.int16 else 'S8'
+        return TemplateContextBuilder.activation_clamp(self.desc, act_dtype, output_quant)
+
     def _compute_weight_sum_size(self, weights: Optional[np.ndarray], output_dtype: np.dtype) -> int:
         """Compute the size of the weight sum tensor."""
         if weights is None:

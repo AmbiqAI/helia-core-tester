@@ -4,6 +4,7 @@ Handles dimension conversions, quantization parameters, and array formatting.
 """
 
 import math
+import numbers
 
 import numpy as np
 from pathlib import PurePosixPath
@@ -539,6 +540,102 @@ class TemplateContextBuilder:
         return f"{literal}{suffix}"
 
     
+    _INT_ACTIVATION_RANGE = {'S8': (-128, 127), 'S16': (-32768, 32767)}
+    _FLOAT_ACTIVATION_RANGE = (-1.0e30, 1.0e30)
+    # Activations the TFLite converter fuses into Conv/DepthwiseConv/TransposeConv/FC.
+    _FUSED_ACTIVATIONS = {'RELU': (0.0, None), 'RELU6': (0.0, 6.0)}
+    # Applied as separate ops in the reference graph, never as the kernel clamp.
+    _UNFUSED_ACTIVATIONS = {'NONE', 'TANH', 'SIGMOID'}
+
+    @staticmethod
+    def activation_clamp(
+        desc: Dict[str, Any], act_dtype: str, output_quant: Dict[str, Any] | None
+    ) -> Tuple[float, float] | Tuple[int, int]:
+        """Kernel clamp for the descriptor's fused activation.
+
+        Mirrors TFLite's CalculateActivationRange(Quantized): RELU/RELU6 are
+        quantized through the output scale and zero point, then limited to the
+        dtype range. An explicit activation_min/activation_max still wins.
+        """
+        raw = desc.get('activation', 'NONE')
+        activation = 'NONE' if raw is None else str(raw).upper()
+        if activation not in TemplateContextBuilder._FUSED_ACTIVATIONS and activation not in TemplateContextBuilder._UNFUSED_ACTIVATIONS:
+            raise ValueError(f"Unsupported activation: {raw!r}")
+        fused = TemplateContextBuilder._FUSED_ACTIVATIONS.get(activation)
+
+        if act_dtype in {'FP32', 'FP16'}:
+            lo, hi = TemplateContextBuilder._FLOAT_ACTIVATION_RANGE
+            if fused is not None:
+                lo = fused[0]
+                hi = hi if fused[1] is None else fused[1]
+            activation_min = float(desc.get('activation_min', lo))
+            activation_max = float(desc.get('activation_max', hi))
+        else:
+            if act_dtype not in TemplateContextBuilder._INT_ACTIVATION_RANGE:
+                raise ValueError(f"No kernel activation range for activation dtype {act_dtype!r}")
+            qmin, qmax = TemplateContextBuilder._INT_ACTIVATION_RANGE[act_dtype]
+            lo, hi = qmin, qmax
+            if fused is not None and not ('activation_min' in desc and 'activation_max' in desc):
+                raw_scale = TemplateContextBuilder._quant_param_scalar(output_quant, 'scale', 0.0)
+                raw_zero_point = TemplateContextBuilder._quant_param_scalar(output_quant, 'zero_point', 0)
+                try:
+                    with np.errstate(over='ignore'):
+                        scale = np.float32(raw_scale) if not isinstance(raw_scale, bool) else None
+                except (TypeError, ValueError, OverflowError):
+                    scale = None
+                if scale is None or not math.isfinite(scale) or scale <= 0.0:
+                    raise ValueError(f"{activation} needs a positive finite output scale, got {raw_scale!r}")
+                try:
+                    zero_point = int(raw_zero_point)
+                    is_integer = not isinstance(raw_zero_point, bool) and zero_point == raw_zero_point
+                except (TypeError, ValueError, OverflowError):
+                    is_integer = False
+                if not is_integer:
+                    raise ValueError(f"{activation} needs an integer output zero point, got {raw_zero_point!r}")
+
+                def quantize(value: float) -> int:
+                    # TFLite divides in float32 (the FlatBuffer scale is a float), then
+                    # TfLiteRound rounds half away from zero.
+                    with np.errstate(over='ignore'):
+                        scaled = float(np.float32(value) / scale)
+                    if not math.isfinite(scaled):
+                        raise ValueError(f"{activation} bound {value} overflows the output scale {raw_scale!r}")
+                    return zero_point + int(math.copysign(math.floor(abs(scaled) + 0.5), scaled))
+
+                lo = max(qmin, quantize(fused[0]))
+                if fused[1] is not None:
+                    hi = min(qmax, quantize(fused[1]))
+            activation_min = TemplateContextBuilder._explicit_int_bound(desc, 'activation_min', lo, act_dtype, qmin, qmax)
+            activation_max = TemplateContextBuilder._explicit_int_bound(desc, 'activation_max', hi, act_dtype, qmin, qmax)
+        if activation_min > activation_max:
+            raise ValueError(
+                f"{activation} clamp is empty for {act_dtype}: activation_min {activation_min} > activation_max {activation_max}"
+            )
+        return activation_min, activation_max
+
+    @staticmethod
+    def _explicit_int_bound(desc: Dict[str, Any], key: str, default: int, act_dtype: str, qmin: int, qmax: int) -> int:
+        """An explicit integer clamp bound: integral and inside the dtype range, or the default."""
+        if key not in desc:
+            return default
+        value = desc[key]
+        if isinstance(value, bool) or not isinstance(value, numbers.Real) or not math.isfinite(value) or value != int(value):
+            raise ValueError(f"{key} must be an integer for {act_dtype}, got {value!r}")
+        value = int(value)
+        if not qmin <= value <= qmax:
+            raise ValueError(f"{key} {value} is outside the {act_dtype} range [{qmin}, {qmax}]")
+        return value
+
+    @staticmethod
+    def _zero_points(act_dtype: str, input_quant: Dict[str, Any] | None, output_quant: Dict[str, Any] | None) -> Tuple[int, int]:
+        """(input, output) zero points; float kernels have none."""
+        if act_dtype in {'FP32', 'FP16'}:
+            return 0, 0
+        return (
+            int(TemplateContextBuilder._quant_param_scalar(input_quant, 'zero_point', 0)),
+            int(TemplateContextBuilder._quant_param_scalar(output_quant, 'zero_point', 0)),
+        )
+
     @staticmethod
     def build_conv_params(
         desc: Dict[str, Any],
@@ -611,21 +708,8 @@ class TemplateContextBuilder:
                 tensor_dtypes.get("input", desc.get('activation_dtype', 'S8')),
             )
         ).upper()
-        if act_dtype in {'FP32', 'FP16'}:
-            activation_min = float(desc.get('activation_min', -1.0e30))
-            activation_max = float(desc.get('activation_max', 1.0e30))
-            in_zp = 0
-            out_zp = 0
-        elif act_dtype == 'S16':
-            activation_min = int(desc.get('activation_min', -32768))
-            activation_max = int(desc.get('activation_max', 32767))
-            in_zp = int(TemplateContextBuilder._quant_param_scalar(input_quant, 'zero_point', 0))
-            out_zp = int(TemplateContextBuilder._quant_param_scalar(output_quant, 'zero_point', 0))
-        else:
-            activation_min = int(desc.get('activation_min', -128))
-            activation_max = int(desc.get('activation_max', 127))
-            in_zp = int(TemplateContextBuilder._quant_param_scalar(input_quant, 'zero_point', 0))
-            out_zp = int(TemplateContextBuilder._quant_param_scalar(output_quant, 'zero_point', 0))
+        activation_min, activation_max = TemplateContextBuilder.activation_clamp(desc, act_dtype, output_quant)
+        in_zp, out_zp = TemplateContextBuilder._zero_points(act_dtype, input_quant, output_quant)
 
         return {
             # CMSIS-NN convention: input_offset = -input_zero_point
@@ -718,21 +802,8 @@ class TemplateContextBuilder:
                 tensor_dtypes.get("input", desc.get('activation_dtype', 'S8')),
             )
         ).upper()
-        if act_dtype in {'FP32', 'FP16'}:
-            activation_min = float(desc.get('activation_min', -1.0e30))
-            activation_max = float(desc.get('activation_max', 1.0e30))
-            in_zp = 0
-            out_zp = 0
-        elif act_dtype == 'S16':
-            activation_min = int(desc.get('activation_min', -32768))
-            activation_max = int(desc.get('activation_max', 32767))
-            in_zp = int(TemplateContextBuilder._quant_param_scalar(input_quant, 'zero_point', 0))
-            out_zp = int(TemplateContextBuilder._quant_param_scalar(output_quant, 'zero_point', 0))
-        else:
-            activation_min = int(desc.get('activation_min', -128))
-            activation_max = int(desc.get('activation_max', 127))
-            in_zp = int(TemplateContextBuilder._quant_param_scalar(input_quant, 'zero_point', 0))
-            out_zp = int(TemplateContextBuilder._quant_param_scalar(output_quant, 'zero_point', 0))
+        activation_min, activation_max = TemplateContextBuilder.activation_clamp(desc, act_dtype, output_quant)
+        in_zp, out_zp = TemplateContextBuilder._zero_points(act_dtype, input_quant, output_quant)
         
         # Calculate channel multiplier: output_channels / input_channels
         ch_mult = out_c // in_c if in_c > 0 else 1
@@ -986,21 +1057,8 @@ class TemplateContextBuilder:
                 tensor_dtypes.get("input", desc.get('activation_dtype', 'S8')),
             )
         ).upper()
-        if act_dtype in {'FP32', 'FP16'}:
-            activation_min = float(desc.get('activation_min', -1.0e30))
-            activation_max = float(desc.get('activation_max', 1.0e30))
-            in_zp = 0
-            out_zp = 0
-        elif act_dtype == 'S16':
-            activation_min = int(desc.get('activation_min', -32768))
-            activation_max = int(desc.get('activation_max', 32767))
-            in_zp = int(TemplateContextBuilder._quant_param_scalar(input_quant, 'zero_point', 0))
-            out_zp = int(TemplateContextBuilder._quant_param_scalar(output_quant, 'zero_point', 0))
-        else:
-            activation_min = int(desc.get('activation_min', -128))
-            activation_max = int(desc.get('activation_max', 127))
-            in_zp = int(TemplateContextBuilder._quant_param_scalar(input_quant, 'zero_point', 0))
-            out_zp = int(TemplateContextBuilder._quant_param_scalar(output_quant, 'zero_point', 0))
+        activation_min, activation_max = TemplateContextBuilder.activation_clamp(desc, act_dtype, output_quant)
+        in_zp, out_zp = TemplateContextBuilder._zero_points(act_dtype, input_quant, output_quant)
         
         return {
             'input_offset': int(-in_zp),
@@ -1110,33 +1168,10 @@ class TemplateContextBuilder:
                 tensor_dtypes.get("input", desc.get('activation_dtype', 'S8')),
             )
         ).upper()
-        if act_dtype in {'FP32', 'FP16'}:
-            activation_min = float(desc.get('activation_min', -1.0e30))
-            activation_max = float(desc.get('activation_max', 1.0e30))
-        elif act_dtype == 'S16':
-            activation_min = int(desc.get('activation_min', -32768))
-            activation_max = int(desc.get('activation_max', 32767))
-        else:
-            activation_min = int(desc.get('activation_min', -128))
-            activation_max = int(desc.get('activation_max', 127))
+        activation_min, activation_max = TemplateContextBuilder.activation_clamp(desc, act_dtype, output_quant)
         
-        in_zp = input_quant.get('zero_point', 0)
-        if isinstance(in_zp, (list, np.ndarray)):
-            in_zp = int(in_zp[0])
-        else:
-            in_zp = int(in_zp)
-        
-        weight_zp = weight_quant.get('zero_point', 0)
-        if isinstance(weight_zp, (list, np.ndarray)):
-            weight_zp = int(weight_zp[0])
-        else:
-            weight_zp = int(weight_zp)
-        
-        out_zp = output_quant.get('zero_point', 0)
-        if isinstance(out_zp, (list, np.ndarray)):
-            out_zp = int(out_zp[0])
-        else:
-            out_zp = int(out_zp)
+        in_zp, out_zp = TemplateContextBuilder._zero_points(act_dtype, input_quant, output_quant)
+        weight_zp = int(TemplateContextBuilder._quant_param_scalar(weight_quant, 'zero_point', 0))
         
         # For S16 fully connected, CMSIS-NN requires offsets to be 0
         # (S16 quantization typically uses symmetric quantization with zero_point=0)

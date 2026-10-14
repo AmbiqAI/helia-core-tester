@@ -217,7 +217,7 @@ class OpDepthwiseConv(OperationBase):
         dwconv = tf.keras.layers.DepthwiseConv2D(**dwconv_kwargs)
         x = dwconv(inputs)
         
-        activation = self.desc.get('activation', 'NONE')
+        activation = self.activation_name()
         if activation == 'RELU':
             x = tf.keras.layers.ReLU()(x)
         elif activation == 'RELU6':
