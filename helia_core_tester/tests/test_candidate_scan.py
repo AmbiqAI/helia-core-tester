@@ -184,6 +184,20 @@ def test_object_scan_sees_through_source_spelling(tmp_path: Path) -> None:
     assert sorted(f["text"].split()[1] for f in findings if f["rule"] == "object_instruction") == ["cpsid", "wfi"]
 
 
+@needs_gcc
+@pytest.mark.parametrize(("source", "name"), [
+    # cpsid i, wfe, cpsie i as data words that fall through from code.
+    (_asm(".short 0xb672", ".short 0xbf20", ".short 0xb662"), "k.S"),
+    # A const array called through a pointer.
+    ("static const unsigned short blob[] = {0xb672, 0xbf30, 0xb662, 0x4770};\n"
+     "void f(void) { ((void (*)(void))((unsigned)blob | 1u))(); }\n", "k.c"),
+])
+def test_object_scan_decodes_data_as_code(tmp_path: Path, source: str, name: str) -> None:
+    findings, _, _ = candidate_scan.object_findings(_build(tmp_path, source, name=name))
+    found = {f["text"].split()[1] for f in findings if f["rule"] == "object_instruction"}
+    assert {"cpsid", "cpsie"} <= found and found & {"wfe", "wfi"}
+
+
 def test_bad_elf_fails(tmp_path: Path) -> None:
     obj = tmp_path / "k.o"
     obj.write_bytes(b"\x7fELF\x01\x01" + bytes(10))

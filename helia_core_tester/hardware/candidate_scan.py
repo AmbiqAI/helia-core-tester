@@ -22,9 +22,11 @@ args (board and SoC macros, include paths), and each kernel object
 from its compile_commands.json must hold code in .text only, standard
 sections only, and no SCS address (0xE0000000-0xE00FFFFF: DWT, PMU,
 SysTick, SCB) in a literal pool, mov/movw/movt or data word. Addresses
-built at run time stay out of reach. Its disassembly must hold no
-cpsid/cpsie, wfi/wfe, or msr other than an APSR flag write, however
-the source spelled them.
+built at run time stay out of reach. Every loaded section, decoded as
+Thumb whether marked code or data, must hold no cpsid/cpsie, wfi/wfe,
+or msr other than an APSR flag write. Bytes that only decode as one of
+these from a halfword the disassembler steps over, and code written at
+run time, stay out of reach.
 """
 
 from __future__ import annotations
@@ -592,8 +594,6 @@ def _object_hits(source: str, obj: Path, defined: frozenset[str], limits: tuple[
         hits.append({"rule": "object_address", "path": source, "text": text[:200]})
 
     for line in run_binutil("arm-none-eabi-objdump", ["-d", "--no-show-raw-insn", str(obj)], *limits).splitlines():
-        if _FORBIDDEN_INSN.search(line):
-            hits.append({"rule": "object_instruction", "path": source, "text": line.strip()[:200]})
         if not _ADDRESS_INSN.search(line):
             continue
         for match in _IMMEDIATE.finditer(line):
@@ -601,6 +601,15 @@ def _object_hits(source: str, obj: Path, defined: frozenset[str], limits: tuple[
             # movt loads the top half.
             if SCS_LOW <= value <= SCS_HIGH or ("\tmovt" in line and SCS_LOW >> 16 <= value <= SCS_HIGH >> 16):
                 hit(line.strip())
+    # -D decodes data too: bytes behind a $d mapping symbol, in .rodata or
+    # .data, can still be branched to. Odd names are already findings.
+    loaded = [table[index][0] for index in sections if _PLAIN_NAME.fullmatch(table[index][0])]
+    if loaded:
+        selected = [arg for name in loaded for arg in ("-j", name)]
+        for line in run_binutil("arm-none-eabi-objdump", ["-D", "--no-show-raw-insn", *selected, str(obj)],
+                                *limits).splitlines():
+            if _FORBIDDEN_INSN.search(line):
+                hits.append({"rule": "object_instruction", "path": source, "text": line.strip()[:200]})
     contents = {index: table[index][3] for index in sections}
     for index, data in contents.items():
         # Any byte offset: loads may be unaligned.
