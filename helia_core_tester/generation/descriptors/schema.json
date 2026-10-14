@@ -387,7 +387,7 @@
               "type": "integer",
               "minimum": 0,
               "maximum": 31,
-              "description": "HardSwishPrecise: explicit prescale instead of the one derived from the scales; output_multiplier/output_shift follow from it. Generation rejects a value that lets the kernel's int32 x * relu6 product overflow."
+              "description": "HardSwishPrecise (integer): explicit prescale instead of the one derived from the scales; output_multiplier/output_shift follow from it. Generation rejects a value that lets the kernel's int32 x * relu6 product overflow or that rounds the relu6 term to 0 for every input."
             }
           }
         }
@@ -839,6 +839,21 @@
       },
       "then": {
         "required": ["nonfinite_policy"]
+      }
+    },
+    {
+      "$comment": "hint.extras.prescale is read only by the integer HardSwishPrecise kernels; generation also rejects it on the float route.",
+      "if": {
+        "properties": {
+          "hint": {
+            "properties": { "extras": { "required": ["prescale"] } },
+            "required": ["extras"]
+          }
+        },
+        "required": ["hint"]
+      },
+      "then": {
+        "properties": { "operator": { "const": "HardSwishPrecise" } }
       }
     }
   ]
