@@ -302,28 +302,45 @@ def generate_test(
     name = desc['name']
     operator = desc['operator']
     print(f"Generating test: {name} ({operator})")
-    
-    # Create output directory
-    test_dir = _descriptor_test_dir(Path(out_dir), desc)
-    test_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Save the complete descriptor as YAML in the test directory
-    descriptor_path = test_dir / "descriptor.yaml"
-    with open(descriptor_path, 'w') as f:
-        yaml.dump(desc, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
-    
+
     # Get operation class
     op_map = get_op_map()
     if operator not in op_map:
         raise ValueError(f"Unsupported operator: {operator}")
-        
+
     op_class = op_map[operator]
-    
+
     # Initialize operation with deterministic seed
     if seed is None:
         seed = default_seed_for_case(name)
     op = op_class(desc, seed, target_cpu=cpu)
-    
+
+    try:
+        op.validate_descriptor()
+    except Exception as e:
+        if generation_failures is not None:
+            import traceback
+            generation_failures.append({
+                "name": name,
+                "operator": operator,
+                "family": _descriptor_family(desc),
+                "parity_kind": _descriptor_parity_kind(desc),
+                "stage": "validate_descriptor",
+                "exception": repr(e),
+                "traceback": traceback.format_exc(),
+            })
+        print(f"ERROR: Descriptor validation failed for {name} ({operator}): {e}")
+        raise
+
+    # Create output directory
+    test_dir = _descriptor_test_dir(Path(out_dir), desc)
+    test_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save the complete descriptor as YAML in the test directory
+    descriptor_path = test_dir / "descriptor.yaml"
+    with open(descriptor_path, 'w') as f:
+        yaml.dump(desc, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+
     # Build Keras model (skip for ops that generate LiteRT models directly)
     if op.needs_keras_model():
         try:

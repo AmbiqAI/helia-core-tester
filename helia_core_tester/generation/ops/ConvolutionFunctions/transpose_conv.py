@@ -2,12 +2,12 @@
 TransposeConv operation implementation.
 """
 
-import numbers
 from typing import Dict, Any
 import numpy as np
 import tensorflow as tf
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.ops._shared.quant_knobs import clamp_golden, kernel_init, value_range
+from helia_core_tester.generation.ops._shared.shape_checks import require_positive_int_dims
 from pathlib import Path
 
 class OpTransposeConv(OperationBase):
@@ -48,6 +48,9 @@ class OpTransposeConv(OperationBase):
                     "(stride <= 2 and input channels > 16)",
                 )
 
+    def validate_descriptor(self) -> None:
+        self.declared_filter_shape()
+
     def declared_filter_shape(self) -> tuple:
         """Validated descriptor filter_shape [KH, KW, OutCh, InCh].
 
@@ -63,13 +66,7 @@ class OpTransposeConv(OperationBase):
             raise ValueError(
                 f"{name}: TransposeConv filter_shape must be [KH, KW, OutCh, InCh], got {filter_shape!r}"
             )
-        for dim in (*input_shape, *filter_shape):
-            # numpy integers are Integral; bool is too, but never a dimension.
-            if isinstance(dim, bool) or not isinstance(dim, numbers.Integral) or dim <= 0:
-                raise ValueError(
-                    f"{name}: TransposeConv shapes must be positive integers, "
-                    f"got input_shape={input_shape!r} filter_shape={filter_shape!r}"
-                )
+        require_positive_int_dims(name, "TransposeConv", input_shape=input_shape, filter_shape=filter_shape)
         kh, kw, out_ch, in_ch = (int(dim) for dim in filter_shape)
         channels = int(input_shape[3])
         if in_ch != channels:

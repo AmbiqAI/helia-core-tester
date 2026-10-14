@@ -117,6 +117,13 @@ class OperationBase(ABC):
         for layer in model.layers:
             layer.set_weights([w.astype(np.float16).astype(np.float32) for w in layer.get_weights()])
 
+    def validate_descriptor(self) -> None:
+        """Reject a descriptor whose fields disagree with each other, before any file is written.
+
+        The schema checks each field alone; operators override this for the cross-field rules
+        a schema cannot express.
+        """
+
     def needs_keras_model(self) -> bool:
         """Return True if build_keras_model should be called for conversion."""
         return True

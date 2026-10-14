@@ -97,9 +97,10 @@ def test_last_input_dim_gets_a_flatten_hint(base_desc):
 def test_no_flatten_hint_for_a_2d_input(shipped):
     desc = copy.deepcopy(shipped["fully_connected_mve_case_01_s8"])  # [1, 20], [4, 20]
     desc["filter_shape"] = [4, 21]
-    with pytest.raises(ValueError, match=r"InFeatures \(21\) must equal the flattened input feature count \(20\)") as excinfo:
+    with pytest.raises(ValueError, match=r"InFeatures \(21\) must equal input_shape\[1\] \(20\)") as excinfo:
         OpFullyConnected(desc, 1).declared_filter_shape()
     assert "did you mean" not in str(excinfo.value)
+    assert "flattened" not in str(excinfo.value)
 
 
 @pytest.mark.parametrize("name", ["fully_connected_float_4d_input_f32", "fully_connected_float_4d_input_f16"])
@@ -187,9 +188,8 @@ def test_generate_test_fails_closed_on_a_mismatch(base_desc, tmp_path):
     failures = []
     with pytest.raises(ValueError, match=rf"^{BASE}: FullyConnected filter_shape InFeatures \(10\)"):
         generate_test(base_desc, str(tmp_path), seed=Config.seed, generation_failures=failures)
-    assert [f["stage"] for f in failures] == ["build_model"]
-    assert not list(tmp_path.rglob("*.tflite"))
-    assert not list(tmp_path.rglob("*.c"))
+    assert [f["stage"] for f in failures] == ["validate_descriptor"]
+    assert not any(tmp_path.rglob("*")), "nothing may be written for a rejected descriptor"
 
 
 def _weights_shape_from_tflite(tflite_path: Path) -> list:
