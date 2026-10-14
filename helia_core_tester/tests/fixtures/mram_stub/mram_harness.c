@@ -440,7 +440,7 @@ static int test_pool_wrap(uintptr_t base)
     if (ranges_overlap(&s.blobs[1], &s.blobs[2])) return 314;
     if (check_placed(&s.blobs[1], &blobs[1], base) != 0 || check_placed(&s.blobs[2], &blobs[2], base) != 0) return 315;
 
-    /* One byte more reaches the weights: refuse. */
+    /* One row (16 B) more reaches the weights: refuse. */
     blobs[2].length += 16u;
     status = wrap_case(&s, "mram_wrap_touch", blobs, 3u);
     if (status != HCTP_STATUS_INVALID_ARGUMENT || s.blobs[2].placed != NULL) return 320;
