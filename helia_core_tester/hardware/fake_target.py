@@ -491,12 +491,6 @@ class FakeTargetTransport:
             )
             for blob_id, spec in self._blob_specs.items()
         }
-        # plan_mram(): a case whose MRAM blobs exceed the placement pool is refused at CASE_META.
-        mram = sum(mram_extent(spec.role, spec.byte_length, self._placement) for spec in self._case_meta.blobs)
-        if mram > transfer.MRAM_POOL_BYTES:
-            raise CaseTooLargeError(
-                f"message_type={int(MessageType.CASE_META)} status={HCTP_STATUS_NO_SPACE} MRAM pool full"
-            )
         for spec in self._case_meta.blobs:
             self._arena.reserve_aligned(*staged_extent(spec.role, spec.byte_length, spec.alignment, self._placement))
         scratch_bytes = self._case_meta.scratch_bytes
@@ -505,6 +499,13 @@ class FakeTargetTransport:
             self._arena.reserve_aligned(scratch_bytes, 16)
         if output_bytes:
             self._arena.reserve_aligned(output_bytes, 16)
+        # plan_mram() runs after the workspace allocation in handle_case_meta(), so a
+        # workspace overflow is reported first; then an over-pool case is refused.
+        mram = sum(mram_extent(spec.role, spec.byte_length, self._placement) for spec in self._case_meta.blobs)
+        if mram > transfer.MRAM_POOL_BYTES:
+            raise CaseTooLargeError(
+                f"message_type={int(MessageType.CASE_META)} status={HCTP_STATUS_NO_SPACE} MRAM pool full"
+            )
 
     def _request_blob(self) -> None:
         assert self._current_blob_id is not None

@@ -94,3 +94,13 @@ def test_firmware_refusal_reaches_the_host_as_pool_full(conv_bundle: CaseBundle,
         host.run(conv_bundle)
     assert "TX:SESSION_PLAN" in host._trace
     assert "RX:ERROR" in host._trace
+
+
+def test_workspace_overflow_is_reported_before_the_pool(conv_bundle: CaseBundle, monkeypatch) -> None:
+    # Over both limits: like handle_case_meta(), the fake fails on the workspace before plan_mram().
+    monkeypatch.setattr(CaseBundle, "workspace_bytes_for", lambda self, placement: 0)
+    monkeypatch.setattr(transfer, "MRAM_POOL_BYTES", MRAM_LINE_BYTES)
+    host = HostSession(FakeTargetTransport(placement="mram", runtime_arena_capacity=16))
+    with pytest.raises(RuntimeError, match=r"exceeds arena capacity 16"):
+        host.run(conv_bundle)
+    assert "RX:ERROR" in host._trace
