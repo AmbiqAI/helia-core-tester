@@ -17,7 +17,7 @@ from typer.testing import CliRunner
 
 from helia_core_tester.cli import app
 from helia_core_tester.hardware import cli as hardware_cli
-from helia_core_tester.hardware import firmware_build, hardware_pipeline, nsx_app, nsx_cli, toolchain
+from helia_core_tester.hardware import firmware_build, hardware_pipeline, nsx_app, nsx_cli, toolchain, transport
 from helia_core_tester.hardware.boards import resolve_board
 from helia_core_tester.hardware.hardware_pipeline import HardwareRunOutcome, StreamOptions
 from helia_core_tester.hardware.jlink_library import JLinkExecutable, JLinkLibraryError
@@ -66,13 +66,22 @@ def nsx(monkeypatch: pytest.MonkeyPatch) -> list[tuple]:
         calls.append(("configure", frozen))
         (build_dir / "build.ninja").write_text("", encoding="utf-8")
         (build_dir / "CMakeCache.txt").write_text(
-            f"CMAKE_HOME_DIRECTORY:INTERNAL={app_dir.resolve()}\nNSX_BOARD:STRING={board}\n", encoding="utf-8",
+            f"CMAKE_HOME_DIRECTORY:INTERNAL={app_dir.resolve()}\nNSX_BOARD:STRING={board}\n"
+            # What the NSX template sets for RTT channel 0.
+            f"NSX_SEGGER_RTT_BUFFER_SIZE_UP:STRING={nsx_app.RTT_BUFFER_SIZE_UP}\n"
+            f"NSX_SEGGER_RTT_BUFFER_SIZE_DOWN:STRING={nsx_app.RTT_BUFFER_SIZE_DOWN}\n",
+            encoding="utf-8",
         )
 
     def build_app(app_dir, *, board, build_dir, jobs=None, frozen=False):
         calls.append(("build", jobs, frozen))
 
     monkeypatch.setattr(firmware_build, "ensure_build_tools", lambda repo_root: None)
+    # The "ELF" carries the configured SEGGER channel-0 arrays.
+    monkeypatch.setattr(
+        transport, "elf_symbol_sizes",
+        lambda elf: {"_acUpBuffer": nsx_app.RTT_BUFFER_SIZE_UP, "_acDownBuffer": nsx_app.RTT_BUFFER_SIZE_DOWN},
+    )
     # A host compiler on PATH must not leak in.
     monkeypatch.setattr(toolchain.ToolchainSpec, "installed", lambda self: None)
     _use_jlink(monkeypatch, None)
