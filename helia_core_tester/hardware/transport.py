@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
+import numbers
 import subprocess
 import time
 from typing import Any, Iterable, Protocol
@@ -50,14 +51,14 @@ class RttRings:
         expected_down_size: int | None = None,
     ) -> None:
         for label, size in (("expected_up_size", expected_up_size), ("expected_down_size", expected_down_size)):
-            if size is not None and (isinstance(size, bool) or not isinstance(size, int) or size < 2):
+            if size is not None and (isinstance(size, bool) or not isinstance(size, numbers.Integral) or size < 2):
                 raise ValueError(f"{label} must be an int >= 2 or None, got {size!r}")
         self._memory = memory
         self._address = address
         self._up_index = up_index
         self._down_index = down_index
-        self._expected_up_size = expected_up_size
-        self._expected_down_size = expected_down_size
+        self._expected_up_size = None if expected_up_size is None else int(expected_up_size)
+        self._expected_down_size = None if expected_down_size is None else int(expected_down_size)
         # Descriptor addresses, once the block is live.
         self._up: int | None = None
         self._down: int | None = None
@@ -86,16 +87,21 @@ class RttRings:
     def _check_size(self, direction: str, index: int, descriptor: int, expected: int | None) -> None:
         if expected is None:
             return
-        (size,) = self._words(descriptor + 8, 1)
+        _, size, _, _ = self._descriptor(descriptor)
         if size != expected:
             raise RttBufferSizeError(
                 f"RTT {direction} buffer {index} at 0x{self._address:08x} is {size} bytes, "
-                f"expected {expected}; the firmware was not built with the HCTP RTT buffer sizes."
+                f"expected {expected}; the board is not running firmware built with these RTT buffer sizes."
             )
+
+    def _descriptor(self, descriptor: int) -> tuple[int, int, int, int]:
+        """(buffer, size, write, read) as stored, unchecked."""
+        _, buffer, size, write, read, _ = self._words(descriptor, 6)
+        return buffer, size, write, read
 
     def _ring(self, descriptor: int) -> tuple[int, int, int, int] | None:
         """(buffer, size, write, read), or None when corrupt."""
-        _, buffer, size, write, read, _ = self._words(descriptor, 6)
+        buffer, size, write, read = self._descriptor(descriptor)
         return (buffer, size, write, read) if write < size and read < size else None
 
     def up_offsets(self) -> tuple[int, int, int] | None:
@@ -181,6 +187,8 @@ class JLinkRttTransport:
         speed_khz: int = 4000,
         up_buffer_index: int = 0,
         down_buffer_index: int = 0,
+        # SizeOfBuffer the opened channels must report (the build dir's configuration);
+        # None skips that check.
         expected_up_size: int | None = None,
         expected_down_size: int | None = None,
         reset_on_open: bool = False,
@@ -201,15 +209,13 @@ class JLinkRttTransport:
         self._read_timeout_s = read_timeout_s
         self._poll_interval_s = poll_interval_s
         self._jlink = open_jlink(pylink)
-        from .nsx_app import RTT_BUFFER_SIZE_DOWN, RTT_BUFFER_SIZE_UP
-
         self._rings = RttRings(
             self._jlink,
             rtt_address,
             up_index=up_buffer_index,
             down_index=down_buffer_index,
-            expected_up_size=RTT_BUFFER_SIZE_UP if expected_up_size is None else expected_up_size,
-            expected_down_size=RTT_BUFFER_SIZE_DOWN if expected_down_size is None else expected_down_size,
+            expected_up_size=expected_up_size,
+            expected_down_size=expected_down_size,
         )
         self._jlink.open(serial_no=serial_no)
         try:
@@ -291,6 +297,30 @@ def elf_symbols(elf_path: str) -> list[tuple[int, str, str]]:
         if len(parts) == 3:
             symbols.append((int(parts[0], 16), parts[1], parts[2]))
     return symbols
+
+
+def elf_symbol_sizes(elf_path: str) -> dict[str, int]:
+    """Size in bytes of every sized ELF symbol, by name.
+
+    LTO renames file-local statics (`_acUpBuffer.lto_priv.0`); those are listed
+    under the name before the first dot as well.
+    """
+    from .toolchain import arm_tool
+
+    result = subprocess.run(
+        [arm_tool("arm-none-eabi-nm"), "-S", elf_path],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    sizes: dict[str, int] = {}
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if len(parts) == 4:
+            name, size = parts[3], int(parts[1], 16)
+            sizes[name] = size
+            sizes.setdefault(name.split(".", 1)[0], size)
+    return sizes
 
 
 def symbol_address_from_elf(elf_path: str, symbol_name: str) -> int:

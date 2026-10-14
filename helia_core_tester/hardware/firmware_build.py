@@ -119,6 +119,60 @@ def _cache_value(build_dir: Path, name: str) -> Optional[str]:
     return match.group(1) if match else None
 
 
+# CMake cache vars the NSX template sets and nsx-segger-rtt compiles into
+# BUFFER_SIZE_UP/DOWN for RTT channel 0 (up, down).
+RTT_BUFFER_CACHE_VARS = ("NSX_SEGGER_RTT_BUFFER_SIZE_UP", "NSX_SEGGER_RTT_BUFFER_SIZE_DOWN")
+# SEGGER_RTT.c's channel-0 arrays, sized from those defines (rounded up to a cache line).
+RTT_BUFFER_SYMBOLS = ("_acUpBuffer", "_acDownBuffer")
+
+
+def configured_rtt_buffer_sizes(build_dir: Path) -> tuple[int, int]:
+    """(up, down) channel-0 RTT buffer sizes this build dir was configured with.
+
+    Raises RttBufferSizeError when either is missing or not a size: SEGGER then
+    falls back to its 1 KiB / 16 B defaults (#188).
+    """
+    from .transport import RttBufferSizeError
+
+    sizes = []
+    for name in RTT_BUFFER_CACHE_VARS:
+        value = _cache_value(build_dir, name)
+        try:
+            size = int(value) if value is not None else None
+        except ValueError:
+            size = None
+        if size is None or size < 2:
+            raise RttBufferSizeError(
+                f"{build_dir}/CMakeCache.txt has {name}={value!r}; without it the firmware runs on "
+                "SEGGER's 1 KiB / 16 B RTT buffers. Reconfigure the build dir."
+            )
+        sizes.append(size)
+    return sizes[0], sizes[1]
+
+
+def check_rtt_buffers(build_dir: Path) -> tuple[int, int]:
+    """Fail a build whose ELF does not carry its configured RTT channel-0 buffers.
+
+    Runs before anything is flashed, so a mis-sized image never reaches a board.
+    Returns the configured (up, down) sizes.
+    """
+    from .transport import RttBufferSizeError, elf_symbol_sizes
+
+    configured = configured_rtt_buffer_sizes(build_dir)
+    elf = elf_path(build_dir)
+    symbols = elf_symbol_sizes(str(elf))
+    for (name, cache_var), size in zip(zip(RTT_BUFFER_SYMBOLS, RTT_BUFFER_CACHE_VARS), configured):
+        actual = symbols.get(name)
+        if actual is None:
+            raise RttBufferSizeError(f"{elf} has no {name} symbol, so its RTT buffer size cannot be checked.")
+        if actual < size:
+            raise RttBufferSizeError(
+                f"{elf}: {name} is {actual} bytes but {cache_var} is {size}; the build did not "
+                "compile the configured RTT buffer size."
+            )
+    return configured
+
+
 def _configured_for(build_dir: Path, app_dir: Path, board: BoardSpec) -> bool:
     """The cache belongs to this app and board."""
     return (
@@ -286,11 +340,14 @@ def board_build_id(board: BoardSpec, serial_no: int, build_dir: Path) -> str:
     from .transport import JLinkRttTransport, symbol_address_from_elf
 
     rtt_address = symbol_address_from_elf(str(elf_path(build_dir)), "_SEGGER_RTT")
+    up_size, down_size = configured_rtt_buffer_sizes(build_dir)
     transport = JLinkRttTransport(
         serial_no=serial_no,
         chip_name=board.jlink_device,
         speed_khz=board.swd_speed_khz,
         rtt_address=rtt_address,
+        expected_up_size=up_size,
+        expected_down_size=down_size,
         reset_on_open=True,
         read_timeout_s=5.0,
     )
@@ -444,6 +501,7 @@ def build_firmware(
         typer.echo(f"[hardware] Reusing configured build dir: {build_dir}")
     # Ninja's default, not NSX's fixed 8.
     nsx_cli.build_app(app_dir, board=board.nsx_board, build_dir=build_dir, jobs=_jobs(jobs), frozen=True)
+    check_rtt_buffers(build_dir)
     # Record only what actually built.
     save_options(app_dir, options)
     _record_built(build_dir, options)

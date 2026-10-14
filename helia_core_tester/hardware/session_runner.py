@@ -24,7 +24,7 @@ from .case_bundle import (
 )
 from .case_validity import apply_floor
 from .errors import RunRefused
-from .firmware_build import elf_path
+from .firmware_build import configured_rtt_buffer_sizes, elf_path
 from .generated_test_bridge import (
     CaseSelection,
     GeneratedTestCase,
@@ -114,11 +114,14 @@ def open_rtt_session(
     the host session, its transport (the caller closes it) and the RTT control-block
     address taken from the ELF in `build_dir`. reset=False: the board just booted."""
     rtt_address = symbol_address_from_elf(str(elf_path(build_dir)), "_SEGGER_RTT")
+    up_size, down_size = configured_rtt_buffer_sizes(build_dir)
     transport = JLinkRttTransport(
         serial_no=serial_no,
         chip_name=board.jlink_device,
         speed_khz=board.swd_speed_khz,
         rtt_address=rtt_address,
+        expected_up_size=up_size,
+        expected_down_size=down_size,
         reset_on_open=reset,
         # Sampling waits this long per pass.
         read_timeout_s=10.0,

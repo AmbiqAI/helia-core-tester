@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import struct
 
+import numpy as np
 import pytest
 
 from helia_core_tester.hardware.nsx_app import RTT_BUFFER_SIZE_DOWN, RTT_BUFFER_SIZE_UP
@@ -311,19 +312,34 @@ def _open_transport(monkeypatch: pytest.MonkeyPatch, probe: _FakeJLink, **kwargs
     return JLinkRttTransport(serial_no=1, chip_name="AP510", rtt_address=BLOCK, **kwargs)
 
 
-def test_transport_defaults_to_the_built_rtt_sizes(monkeypatch: pytest.MonkeyPatch) -> None:
-    assert (RTT_BUFFER_SIZE_UP, RTT_BUFFER_SIZE_DOWN) == (8192, 512)
-    good = _FakeJLink()
-    for address, value in enumerate(_target(up_size=RTT_BUFFER_SIZE_UP, down_size=RTT_BUFFER_SIZE_DOWN).memory_read(BLOCK, 0x200)):
-        good.bytes[BLOCK + address] = value
-    assert _open_transport(monkeypatch, good)._rings.up_offsets() == (RTT_BUFFER_SIZE_UP, 0, 0)
+def _probe_with(up_size: int, down_size: int) -> "_FakeJLink":
+    probe = _FakeJLink()
+    for address, value in enumerate(_target(up_size=up_size, down_size=down_size).memory_read(BLOCK, 0x200)):
+        probe.bytes[BLOCK + address] = value
+    return probe
 
+
+def test_transport_without_expected_sizes_skips_the_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    # None means "do not check", as on RttRings: no built-in sizes to trip over.
+    transport = _open_transport(monkeypatch, _probe_with(1024, 16))
+    assert transport._rings.up_offsets() == (1024, 0, 0)
+
+
+def test_transport_refuses_segger_defaults_against_hctp_sizes(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert (RTT_BUFFER_SIZE_UP, RTT_BUFFER_SIZE_DOWN) == (8192, 512)
+    sizes = {"expected_up_size": RTT_BUFFER_SIZE_UP, "expected_down_size": RTT_BUFFER_SIZE_DOWN}
+    good = _open_transport(monkeypatch, _probe_with(RTT_BUFFER_SIZE_UP, RTT_BUFFER_SIZE_DOWN), **sizes)
+    assert good._rings.up_offsets() == (RTT_BUFFER_SIZE_UP, 0, 0)
     # SEGGER's own defaults: the regression #188 describes.
-    stale = _FakeJLink()
-    for address, value in enumerate(_target(up_size=1024, down_size=16).memory_read(BLOCK, 0x200)):
-        stale.bytes[BLOCK + address] = value
+    stale = _open_transport(monkeypatch, _probe_with(1024, 16), **sizes)
     with pytest.raises(RttBufferSizeError, match=r"is 1024 bytes, expected 8192;"):
-        _open_transport(monkeypatch, stale)._rings.up_offsets()
+        stale._rings.up_offsets()
+
+
+@pytest.mark.parametrize("size", [np.int64(8192), np.int32(8192)])
+def test_numpy_integer_expected_sizes_are_accepted(size) -> None:
+    rings = RttRings(_target(up_size=8192, down_size=512), BLOCK, expected_up_size=size, expected_down_size=512)
+    assert rings.up_offsets() == (8192, 0, 0)
 
 
 def test_transport_size_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
