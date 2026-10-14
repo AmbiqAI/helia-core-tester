@@ -1032,6 +1032,15 @@ class OpDepthwiseConv(OperationBase):
             or bool(kernel_info.get("direct_entry")),
             'direct_entry': bool(kernel_info.get("direct_entry")),
             'entry_buffer_size_fn': kernel_info.get("entry_buffer_size_fn"),
+            # Older Core releases run these entries even with AUTOVECTORIZE enabled.
+            'autovectorize_declines': (
+                kernel_info.get("entry_buffer_size_fn") == "arm_depthwise_conv_s8_opt_3x3_get_buffer_size"
+                and self.expected_status() == "ARM_CMSIS_NN_SUCCESS"
+            ),
+            'autovectorize_declines_if': (
+                "defined(HELIA_CMSIS_NN_INT_AUTOVECTORIZE) && "
+                "defined(ARM_NN_DEPTHWISE_CONV_S8_OPT_3X3_AUTOVECTORIZE_DECLINES)"
+            ),
             'expected_status': self.expected_status(),
             'planar_supported': self.desc.get("planar_supported"),
             'planar_rule_fn': DEPTHWISE_CONV_S8_PLANAR_RULE,
