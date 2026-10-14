@@ -28,6 +28,10 @@ class TransportStall(TransportError):
     """No complete frame within the read timeouts."""
 
 
+class RttBufferSizeError(RuntimeError):
+    """The control block's channel buffers are not the sizes the firmware was built with."""
+
+
 class RttRings:
     """Channel rings of a SEGGER_RTT_CB, by memory access.
 
@@ -35,11 +39,25 @@ class RttRings:
     the DLL: memory_read8 costs one SWD access per byte.
     """
 
-    def __init__(self, memory: Any, address: int, *, up_index: int = 0, down_index: int = 0) -> None:
+    def __init__(
+        self,
+        memory: Any,
+        address: int,
+        *,
+        up_index: int = 0,
+        down_index: int = 0,
+        expected_up_size: int | None = None,
+        expected_down_size: int | None = None,
+    ) -> None:
+        for label, size in (("expected_up_size", expected_up_size), ("expected_down_size", expected_down_size)):
+            if size is not None and (isinstance(size, bool) or not isinstance(size, int) or size < 2):
+                raise ValueError(f"{label} must be an int >= 2 or None, got {size!r}")
         self._memory = memory
         self._address = address
         self._up_index = up_index
         self._down_index = down_index
+        self._expected_up_size = expected_up_size
+        self._expected_down_size = expected_down_size
         # Descriptor addresses, once the block is live.
         self._up: int | None = None
         self._down: int | None = None
@@ -55,9 +73,25 @@ class RttRings:
         if self._up_index >= max_up or self._down_index >= max_down:
             raise RuntimeError(f"RTT block at 0x{self._address:08x} lacks the requested channels.")
         rings = self._address + RTT_ID_BYTES + 8
-        self._up = rings + RTT_RING_BYTES * self._up_index
-        self._down = rings + RTT_RING_BYTES * (max_up + self._down_index)
+        up = rings + RTT_RING_BYTES * self._up_index
+        down = rings + RTT_RING_BYTES * (max_up + self._down_index)
+        # SEGGER ignores the buffer passed to Config*Buffer for channel 0, so a
+        # build that misses BUFFER_SIZE_UP/DOWN silently runs on the 1 KiB / 16 B
+        # defaults (#188). Check once, before any ring access.
+        self._check_size("up", self._up_index, up, self._expected_up_size)
+        self._check_size("down", self._down_index, down, self._expected_down_size)
+        self._up, self._down = up, down
         return True
+
+    def _check_size(self, direction: str, index: int, descriptor: int, expected: int | None) -> None:
+        if expected is None:
+            return
+        (size,) = self._words(descriptor + 8, 1)
+        if size != expected:
+            raise RttBufferSizeError(
+                f"RTT {direction} buffer {index} at 0x{self._address:08x} is {size} bytes, "
+                f"expected {expected}; the firmware was not built with the HCTP RTT buffer sizes."
+            )
 
     def _ring(self, descriptor: int) -> tuple[int, int, int, int] | None:
         """(buffer, size, write, read), or None when corrupt."""
@@ -147,6 +181,8 @@ class JLinkRttTransport:
         speed_khz: int = 4000,
         up_buffer_index: int = 0,
         down_buffer_index: int = 0,
+        expected_up_size: int | None = None,
+        expected_down_size: int | None = None,
         reset_on_open: bool = False,
         reset_delay_s: float = 0.25,
         read_timeout_s: float = 2.0,
@@ -165,7 +201,16 @@ class JLinkRttTransport:
         self._read_timeout_s = read_timeout_s
         self._poll_interval_s = poll_interval_s
         self._jlink = open_jlink(pylink)
-        self._rings = RttRings(self._jlink, rtt_address, up_index=up_buffer_index, down_index=down_buffer_index)
+        from .nsx_app import RTT_BUFFER_SIZE_DOWN, RTT_BUFFER_SIZE_UP
+
+        self._rings = RttRings(
+            self._jlink,
+            rtt_address,
+            up_index=up_buffer_index,
+            down_index=down_buffer_index,
+            expected_up_size=RTT_BUFFER_SIZE_UP if expected_up_size is None else expected_up_size,
+            expected_down_size=RTT_BUFFER_SIZE_DOWN if expected_down_size is None else expected_down_size,
+        )
         self._jlink.open(serial_no=serial_no)
         try:
             self._jlink.set_tif(pylink.enums.JLinkInterfaces.SWD)

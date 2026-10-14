@@ -6,7 +6,15 @@ import struct
 
 import pytest
 
-from helia_core_tester.hardware.transport import RTT_ID, SCB_CFSR, JLinkRttTransport, RttRings, TransportError
+from helia_core_tester.hardware.nsx_app import RTT_BUFFER_SIZE_DOWN, RTT_BUFFER_SIZE_UP
+from helia_core_tester.hardware.transport import (
+    RTT_ID,
+    SCB_CFSR,
+    JLinkRttTransport,
+    RttBufferSizeError,
+    RttRings,
+    TransportError,
+)
 
 BLOCK = 0x2000_0000
 UP_BUFFER = 0x2000_1000
@@ -193,3 +201,134 @@ def test_short_descriptor_read_fails_the_transport() -> None:
     memory.memory_read32 = lambda address, count: []  # type: ignore[method-assign]
     with pytest.raises(TransportError, match=r"^Short RTT read at 0x20000018: 0/6 words\.$"):
         rings.take(4096)
+
+
+def test_rings_accept_the_expected_buffer_sizes() -> None:
+    memory = _target(up_size=16, down_size=8)
+    rings = RttRings(memory, BLOCK, expected_up_size=16, expected_down_size=8)
+    assert rings.up_offsets() == (16, 0, 0)
+
+
+@pytest.mark.parametrize(
+    ("up_size", "down_size", "message"),
+    [
+        (1024, 8, r"^RTT up buffer 0 at 0x20000000 is 1024 bytes, expected 16;"),
+        (15, 8, r"^RTT up buffer 0 at 0x20000000 is 15 bytes, expected 16;"),
+        (17, 8, r"^RTT up buffer 0 at 0x20000000 is 17 bytes, expected 16;"),
+        (16, 16, r"^RTT down buffer 0 at 0x20000000 is 16 bytes, expected 8;"),
+        (16, 0, r"^RTT down buffer 0 at 0x20000000 is 0 bytes, expected 8;"),
+    ],
+    ids=["up-default-1k", "up-minus-1", "up-plus-1", "down-default-16", "down-zero"],
+)
+def test_rings_refuse_unexpected_buffer_sizes(up_size: int, down_size: int, message: str) -> None:
+    memory = _target(up_size=up_size, down_size=down_size)
+    memory.memory_write(UP_BUFFER, list(b"abcd"))
+    _set_ring(memory, 0, UP_BUFFER, up_size, write=4 % max(up_size, 1), read=0)
+    before = dict(memory.bytes)
+    rings = RttRings(memory, BLOCK, expected_up_size=16, expected_down_size=8)
+    for access in (lambda: rings.take(4096), lambda: rings.put(b"x"), rings.up_offsets):
+        with pytest.raises(RttBufferSizeError, match=message):
+            access()
+    # Fail closed: no offset or data was touched.
+    assert memory.bytes == before
+
+
+def test_buffer_size_error_is_not_a_transport_stall() -> None:
+    # A mis-built image is not a stall: no target-state dump, no retry as one.
+    assert issubclass(RttBufferSizeError, RuntimeError)
+    assert not issubclass(RttBufferSizeError, TransportError)
+
+
+def test_rings_skip_the_size_check_when_not_requested() -> None:
+    assert RttRings(_target(up_size=1024, down_size=16), BLOCK).up_offsets() == (1024, 0, 0)
+
+
+def test_rings_check_only_the_requested_direction() -> None:
+    memory = _target(up_size=1024, down_size=8)
+    assert RttRings(memory, BLOCK, expected_down_size=8).up_offsets() == (1024, 0, 0)
+    with pytest.raises(RttBufferSizeError, match="up buffer"):
+        RttRings(memory, BLOCK, expected_up_size=16).up_offsets()
+
+
+def test_rings_check_the_selected_channel() -> None:
+    memory = _target(up_size=16, down_size=8)
+    _set_ring(memory, 1, UP_BUFFER, 64, 0, 0)
+    _set_ring(memory, 3 + 2, DOWN_BUFFER, 32, 0, 0)
+    rings = RttRings(memory, BLOCK, up_index=1, down_index=2, expected_up_size=64, expected_down_size=32)
+    assert rings.up_offsets() == (64, 0, 0)
+    with pytest.raises(RttBufferSizeError, match=r"^RTT up buffer 1 .* is 64 bytes, expected 16;"):
+        RttRings(memory, BLOCK, up_index=1, expected_up_size=16).up_offsets()
+
+
+@pytest.mark.parametrize("bad", [0, 1, -8192, True, False, 8192.0, "8192"], ids=repr)
+@pytest.mark.parametrize("field", ["expected_up_size", "expected_down_size"])
+def test_rings_reject_invalid_expected_sizes(field: str, bad: object) -> None:
+    with pytest.raises(ValueError, match=rf"^{field} must be an int >= 2 or None, got "):
+        RttRings(_Memory(), BLOCK, **{field: bad})
+
+
+def test_rings_accept_the_smallest_expected_size() -> None:
+    assert RttRings(_target(up_size=2, down_size=2), BLOCK, expected_up_size=2, expected_down_size=2).up_offsets() == (2, 0, 0)
+
+
+def test_rings_defer_the_size_check_until_the_block_is_live() -> None:
+    memory = _Memory()
+    rings = RttRings(memory, BLOCK, expected_up_size=16, expected_down_size=8)
+    assert rings.up_offsets() is None
+    for address, value in enumerate(_target(up_size=1024).memory_read(BLOCK, 0x200)):
+        memory.bytes[BLOCK + address] = value
+    with pytest.raises(RttBufferSizeError, match="is 1024 bytes, expected 16"):
+        rings.up_offsets()
+
+
+class _FakePylink:
+    class enums:
+        class JLinkInterfaces:
+            SWD = "swd"
+
+
+class _FakeJLink(_Memory):
+    def open(self, serial_no: int) -> None:
+        pass
+
+    def set_tif(self, tif: object) -> None:
+        pass
+
+    def connect(self, chip_name: str, speed: int, verbose: bool) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+
+def _open_transport(monkeypatch: pytest.MonkeyPatch, probe: _FakeJLink, **kwargs: object) -> JLinkRttTransport:
+    import sys
+
+    from helia_core_tester.hardware import jlink_library
+
+    monkeypatch.setitem(sys.modules, "pylink", _FakePylink)
+    monkeypatch.setattr(jlink_library, "open_jlink", lambda pylink: probe)
+    return JLinkRttTransport(serial_no=1, chip_name="AP510", rtt_address=BLOCK, **kwargs)
+
+
+def test_transport_defaults_to_the_built_rtt_sizes(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert (RTT_BUFFER_SIZE_UP, RTT_BUFFER_SIZE_DOWN) == (8192, 512)
+    good = _FakeJLink()
+    for address, value in enumerate(_target(up_size=RTT_BUFFER_SIZE_UP, down_size=RTT_BUFFER_SIZE_DOWN).memory_read(BLOCK, 0x200)):
+        good.bytes[BLOCK + address] = value
+    assert _open_transport(monkeypatch, good)._rings.up_offsets() == (RTT_BUFFER_SIZE_UP, 0, 0)
+
+    # SEGGER's own defaults: the regression #188 describes.
+    stale = _FakeJLink()
+    for address, value in enumerate(_target(up_size=1024, down_size=16).memory_read(BLOCK, 0x200)):
+        stale.bytes[BLOCK + address] = value
+    with pytest.raises(RttBufferSizeError, match=r"is 1024 bytes, expected 8192;"):
+        _open_transport(monkeypatch, stale)._rings.up_offsets()
+
+
+def test_transport_size_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    probe = _FakeJLink()
+    for address, value in enumerate(_target(up_size=16, down_size=8).memory_read(BLOCK, 0x200)):
+        probe.bytes[BLOCK + address] = value
+    transport = _open_transport(monkeypatch, probe, expected_up_size=16, expected_down_size=8)
+    assert transport._rings.up_offsets() == (16, 0, 0)
