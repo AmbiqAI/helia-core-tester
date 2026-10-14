@@ -49,7 +49,7 @@ def _run(tmp_path: Path, boards: list[str], *, previous: bool = True, note: str 
 
 def test_counts_per_family_and_flags_growth(tmp_path: Path) -> None:
     _leg(tmp_path / "cur", "apollo510_evb", 2, {"Add": 5, "Concat": 3, "Gather": 1}, ["arm_b", "arm_a", "arm_c"])
-    _leg(tmp_path / "prev", "apollo510_evb", 1, {"Add": 2, "Concat": 4, "Fill": 2}, ["arm_a", "arm_b"])
+    _leg(tmp_path / "prev" / "1", "apollo510_evb", 1, {"Add": 2, "Concat": 4, "Fill": 2}, ["arm_a", "arm_b"])
 
     markdown, warnings = _run(tmp_path, ["apollo510_evb"])
 
@@ -64,13 +64,13 @@ def test_counts_per_family_and_flags_growth(tmp_path: Path) -> None:
     assert warnings == [
         "apollo510_evb: Add skipped cases grew from 2 to 5",
         "apollo510_evb: Gather skipped cases grew from 0 to 1",
-        "apollo510_evb: arm_c is no longer timed",
+        "apollo510_evb: arm_c is newly untimed",
     ]
 
 
 def test_unchanged_counts_raise_no_warning(tmp_path: Path) -> None:
     _leg(tmp_path / "cur", "b", 2, {"Add": 2}, [])
-    _leg(tmp_path / "prev", "b", 1, {"Add": 2}, [])
+    _leg(tmp_path / "prev" / "1", "b", 1, {"Add": 2}, [])
 
     markdown, warnings = _run(tmp_path, ["b"])
 
@@ -81,7 +81,7 @@ def test_unchanged_counts_raise_no_warning(tmp_path: Path) -> None:
 
 def test_zero_skips_render_an_empty_table(tmp_path: Path) -> None:
     _leg(tmp_path / "cur", "b", 2, {}, [])
-    _leg(tmp_path / "prev", "b", 1, {}, [])
+    _leg(tmp_path / "prev" / "1", "b", 1, {}, [])
 
     markdown, warnings = _run(tmp_path, ["b"])
 
@@ -91,11 +91,12 @@ def test_zero_skips_render_an_empty_table(tmp_path: Path) -> None:
 
 def test_different_selection_is_not_compared(tmp_path: Path) -> None:
     _leg(tmp_path / "cur", "b", 2, {"Add": 9}, ["arm_x"])
-    _leg(tmp_path / "prev", "b", 1, {"Add": 1}, [], selection={"suite": "int", "limit": 2})
+    _leg(tmp_path / "prev" / "1", "b", 1, {"Add": 1}, [], selection={"suite": "int", "limit": 2})
 
     markdown, warnings = _run(tmp_path, ["b"])
 
-    assert "used a different selection" in markdown
+    assert ("No baseline: none of the 1 earlier run(s) searched has a comparable result for this board "
+            "(1 used a different selection).") in markdown
     assert "| Add | 9 |  |" in markdown
     assert "(new)" not in markdown
     assert warnings == []
@@ -113,7 +114,7 @@ def test_missing_baseline_reports_counts_with_the_note(tmp_path: Path) -> None:
 
 def test_board_without_current_result(tmp_path: Path) -> None:
     (tmp_path / "cur").mkdir()
-    _leg(tmp_path / "prev", "b", 1, {"Add": 1})
+    _leg(tmp_path / "prev" / "1", "b", 1, {"Add": 1})
 
     markdown, warnings = _run(tmp_path, ["b"])
 
@@ -201,19 +202,20 @@ def test_unreadable_current_result_warns_and_keeps_other_boards(tmp_path: Path) 
 
 def test_unreadable_baseline_still_reports_current_counts(tmp_path: Path) -> None:
     _leg(tmp_path / "cur", "b", 2, {"Add": 3}, [])
-    bad = _leg(tmp_path / "prev", "b", 1, {"Add": 1}, [])
+    bad = _leg(tmp_path / "prev" / "1", "b", 1, {"Add": 1}, [])
     (bad / "hardware" / "nightly-1-b" / "session_summary.json").write_text("[")
 
     markdown, warnings = _run(tmp_path, ["b"], note="should be replaced")
 
-    assert "No baseline: the baseline result is unreadable." in markdown
+    assert ("No baseline: none of the 1 earlier run(s) searched has a comparable result for this board "
+            "(1 unreadable).") in markdown
     assert "| Add | 3 |  |" in markdown
-    assert len(warnings) == 1 and warnings[0].startswith("b: baseline result unreadable")
+    assert len(warnings) == 1 and warnings[0].startswith("b: baseline run 1 result unreadable: session_summary.json")
 
 
 def test_main_appends_markdown_and_prints_warnings(tmp_path: Path, capsys) -> None:
     _leg(tmp_path / "cur", "b", 2, {"Add": 2})
-    _leg(tmp_path / "prev", "b", 1, {"Add": 1})
+    _leg(tmp_path / "prev" / "1", "b", 1, {"Add": 1})
     out = tmp_path / "summary.md"
     out.write_text("### Hardware nightly\n")
 
@@ -234,7 +236,7 @@ def test_main_without_downloaded_baseline_says_so(tmp_path: Path) -> None:
     report.main(["--current", str(tmp_path / "cur"), "--previous", str(tmp_path / "absent"),
                  "--boards", '["b"]', "--out", str(out)])
 
-    assert "No baseline: the baseline run's artifacts were not downloaded." in out.read_text()
+    assert "No baseline: no earlier run's artifacts were downloaded." in out.read_text()
 
 
 def test_warning_text_is_escaped_for_workflow_commands() -> None:
@@ -246,3 +248,55 @@ def test_main_rejects_bad_boards(tmp_path: Path, boards: str) -> None:
     with pytest.raises(SystemExit) as exc:
         report.main(["--current", str(tmp_path), "--boards", boards, "--out", str(tmp_path / "o.md")])
     assert exc.value.code == 2
+
+
+def test_baseline_skips_a_newer_run_without_a_result(tmp_path: Path) -> None:
+    _leg(tmp_path / "cur", "b", 9, {"Add": 6}, ["arm_a", "arm_b"])
+    _leg(tmp_path / "prev" / "8", "b", 8, {"Add": 6}, ["arm_a", "arm_b"])
+    (tmp_path / "prev" / "8" / "hct-hardware-b-20261006-8" / "hardware-nightly-run.json").unlink()
+    _leg(tmp_path / "prev" / "7", "b", 7, {"Add": 1}, ["arm_a"])
+
+    markdown, warnings = _run(tmp_path, ["b"])
+
+    assert "Baseline: `hct-hardware-b-20261006-7`." in markdown
+    assert warnings == ["b: Add skipped cases grew from 1 to 6", "b: arm_b is newly untimed"]
+
+
+def test_baseline_skips_unreadable_and_other_selection_runs_newest_first(tmp_path: Path) -> None:
+    _leg(tmp_path / "cur", "b", 20, {"Add": 4}, [])
+    bad = _leg(tmp_path / "prev" / "19", "b", 19, {"Add": 4}, [])
+    (bad / "hardware-nightly-run.json").write_text("{")
+    _leg(tmp_path / "prev" / "18", "b", 18, {"Add": 4}, [], selection={"suite": "int", "limit": 1})
+    _leg(tmp_path / "prev" / "17", "b", 17, {"Add": 3}, [])
+    _leg(tmp_path / "prev" / "9", "b", 9, {"Add": 0}, [])
+    (tmp_path / "prev" / "notes").mkdir()
+
+    markdown, warnings = _run(tmp_path, ["b"])
+
+    assert "Baseline: `hct-hardware-b-20261006-17`." in markdown
+    assert "| Add | 4 | +1 ⚠ |" in markdown
+    assert warnings[0].startswith("b: baseline run 19 result unreadable")
+    assert warnings[1:] == ["b: Add skipped cases grew from 3 to 4"]
+
+
+def test_baselines_are_chosen_per_board(tmp_path: Path) -> None:
+    _leg(tmp_path / "cur", "a", 3, {"Add": 2})
+    _leg(tmp_path / "cur", "c", 3, {"Add": 2})
+    _leg(tmp_path / "prev" / "2", "a", 2, {"Add": 2})
+    _leg(tmp_path / "prev" / "1", "c", 1, {"Add": 1})
+
+    markdown, warnings = _run(tmp_path, ["a", "c"])
+
+    assert "Baseline: `hct-hardware-a-20261006-2`." in markdown
+    assert "Baseline: `hct-hardware-c-20261006-1`." in markdown
+    assert warnings == ["c: Add skipped cases grew from 1 to 2"]
+
+
+def test_baseline_runs_order_numerically(tmp_path: Path) -> None:
+    for name in ("9", "10", "x1"):
+        (tmp_path / name).mkdir()
+    (tmp_path / "11").write_text("")
+
+    assert [run.name for run in report.baseline_runs(tmp_path)] == ["10", "9"]
+    assert report.baseline_runs(tmp_path / "absent") == []
+    assert report.baseline_runs(None) == []

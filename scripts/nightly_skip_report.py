@@ -5,6 +5,9 @@ Reads the TCM leg's `hct-hardware-<board>-<date>-<run>` artifacts: the bundle's
 `session_summary.json` (`skipped_cases`, each with its family) and `coverage.json`
 (`deployed.missing`). Writes a Markdown section per board and prints one GitHub
 `::warning::` per family whose skip count grew and per newly untimed entry point.
+The baseline for each board is the newest earlier run (one `<run id>/` directory
+each under --previous) with a readable result and the same selection, so a night
+that left no result does not hide growth.
 
 Stdlib only: the summary job runs it with the runner's python3, without uv.
 
@@ -109,16 +112,14 @@ def _delta(now: int, before: Optional[int]) -> str:
 
 def board_section(board: str, current: Optional[LegSkips], previous: Optional[LegSkips],
                   baseline_note: Optional[str]) -> tuple[list[str], list[str]]:
-    """Markdown lines and workflow warnings for one board."""
+    """Markdown lines and workflow warnings for one board; previous shares current's selection."""
     lines = [f"#### {board}", ""]
     warnings: list[str] = []
     if current is None:
         return lines + ["No TCM-leg result.", ""], warnings
-    comparable = previous is not None and previous.selection == current.selection
+    comparable = previous is not None
     if previous is None:
-        lines.append(f"No baseline: {baseline_note or 'the previous scheduled run left no result for this board'}.")
-    elif not comparable:
-        lines.append(f"No comparison: baseline `{previous.artifact}` used a different selection.")
+        lines.append(f"No baseline: {baseline_note or 'no earlier run has a result for this board'}.")
     else:
         lines.append(f"Baseline: `{previous.artifact}`.")
     lines.append("")
@@ -148,16 +149,13 @@ def board_section(board: str, current: Optional[LegSkips], previous: Optional[Le
     for name in current.untimed:
         lines.append(f"- `{name}`{' (new)' if name in new_untimed else ''}")
     for name in new_untimed:
-        warnings.append(f"{board}: {name} is no longer timed")
+        warnings.append(f"{board}: {name} is newly untimed")
     lines += ["", "</details>", ""]
     return lines, warnings
 
 
-def _safe_load(root: Optional[Path], board: str, label: str,
-               errors: list[str]) -> tuple[Optional[LegSkips], bool]:
+def _safe_load(root: Path, board: str, label: str, errors: list[str]) -> tuple[Optional[LegSkips], bool]:
     """The leg and whether it was unreadable."""
-    if root is None:
-        return None, False
     try:
         return load_leg(root, board), False
     except ReportError as exc:
@@ -165,20 +163,52 @@ def _safe_load(root: Optional[Path], board: str, label: str,
         return None, True
 
 
+def baseline_runs(previous_root: Optional[Path]) -> list[Path]:
+    """Earlier runs' directories, newest run id first."""
+    if previous_root is None or not previous_root.is_dir():
+        return []
+    runs = [child for child in previous_root.iterdir() if child.is_dir() and child.name.isdigit()]
+    return sorted(runs, key=lambda child: int(child.name), reverse=True)
+
+
+def find_baseline(runs: list[Path], board: str, current: LegSkips,
+                  errors: list[str]) -> tuple[Optional[LegSkips], str]:
+    """The newest readable leg with current's selection, else None and why."""
+    unreadable = other_selection = 0
+    for run in runs:
+        leg, bad = _safe_load(run, board, f"baseline run {run.name}", errors)
+        unreadable += bad
+        if leg is None:
+            continue
+        if leg.selection != current.selection:
+            other_selection += 1
+            continue
+        return leg, ""
+    if not runs:
+        return None, ""
+    reasons = []
+    if other_selection:
+        reasons.append(f"{other_selection} used a different selection")
+    if unreadable:
+        reasons.append(f"{unreadable} unreadable")
+    detail = f" ({', '.join(reasons)})" if reasons else ""
+    return None, f"none of the {len(runs)} earlier run(s) searched has a comparable result for this board{detail}"
+
+
 def render(current_root: Path, previous_root: Optional[Path], boards: list[str],
            baseline_note: Optional[str] = None) -> tuple[str, list[str]]:
     """The whole Markdown section and every workflow warning."""
     lines = ["### Skipped cases and untimed entry points (TCM leg)", ""]
     warnings: list[str] = []
+    runs = baseline_runs(previous_root)
     for board in boards:
         errors: list[str] = []
         current, current_bad = _safe_load(current_root, board, "current", errors)
-        previous, previous_bad = _safe_load(previous_root, board, "baseline", errors)
-        note = "the baseline result is unreadable" if previous_bad else baseline_note
         if current_bad:
             section, board_warnings = [f"#### {board}", "", "TCM-leg result unreadable; see warnings.", ""], []
         else:
-            section, board_warnings = board_section(board, current, previous, note)
+            previous, why = find_baseline(runs, board, current, errors) if current is not None else (None, "")
+            section, board_warnings = board_section(board, current, previous, why or baseline_note)
         lines += section
         warnings += errors + board_warnings
     return "\n".join(lines) + "\n", warnings
@@ -191,7 +221,7 @@ def _escape_command(text: str) -> str:
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--current", type=Path, required=True, help="Downloaded artifacts of this run")
-    parser.add_argument("--previous", type=Path, help="Downloaded artifacts of the baseline run")
+    parser.add_argument("--previous", type=Path, help="Earlier runs' artifacts, one <run id>/ directory each")
     parser.add_argument("--baseline-note", help="Why there is no baseline, for the summary")
     parser.add_argument("--boards", required=True, help="JSON list of board ids")
     parser.add_argument("--out", type=Path, required=True, help="File to append the Markdown to")
@@ -202,11 +232,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         parser.error(f"--boards is not JSON: {exc}")
     if not isinstance(boards, list) or not boards or not all(isinstance(board, str) and board for board in boards):
         parser.error("--boards must be a non-empty JSON list of non-empty strings")
-    previous = args.previous if args.previous is not None and args.previous.is_dir() else None
     note = args.baseline_note
-    if args.previous is not None and previous is None and not note:
-        note = "the baseline run's artifacts were not downloaded"
-    markdown, warnings = render(args.current, previous, boards, note)
+    if args.previous is not None and not baseline_runs(args.previous) and not note:
+        note = "no earlier run's artifacts were downloaded"
+    markdown, warnings = render(args.current, args.previous, boards, note)
     with args.out.open("a", encoding="utf-8") as handle:
         handle.write(markdown)
     for warning in warnings:
