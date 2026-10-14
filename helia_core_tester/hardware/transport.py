@@ -87,7 +87,8 @@ class RttRings:
     def _check_size(self, direction: str, index: int, descriptor: int, expected: int | None) -> None:
         if expected is None:
             return
-        _, size, _, _ = self._descriptor(descriptor)
+        # SizeOfBuffer only: WrOff/RdOff are not read until the size matches.
+        (size,) = self._words(descriptor + 8, 1)
         if size != expected:
             raise RttBufferSizeError(
                 f"RTT {direction} buffer {index} at 0x{self._address:08x} is {size} bytes, "

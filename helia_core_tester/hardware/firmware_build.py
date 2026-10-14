@@ -122,7 +122,8 @@ def _cache_value(build_dir: Path, name: str) -> Optional[str]:
 # CMake cache vars the NSX template sets and nsx-segger-rtt compiles into
 # BUFFER_SIZE_UP/DOWN for RTT channel 0 (up, down).
 RTT_BUFFER_CACHE_VARS = ("NSX_SEGGER_RTT_BUFFER_SIZE_UP", "NSX_SEGGER_RTT_BUFFER_SIZE_DOWN")
-# SEGGER_RTT.c's channel-0 arrays, sized from those defines (rounded up to a cache line).
+# SEGGER_RTT.c's channel-0 arrays, sized exactly from those defines: the Apollo
+# targets configure no RTT cache line, so SEGGER_RTT__ROUND_UP_2_CACHE_LINE_SIZE is a no-op.
 RTT_BUFFER_SYMBOLS = ("_acUpBuffer", "_acDownBuffer")
 
 
@@ -165,10 +166,10 @@ def check_rtt_buffers(build_dir: Path) -> tuple[int, int]:
         actual = symbols.get(name)
         if actual is None:
             raise RttBufferSizeError(f"{elf} has no {name} symbol, so its RTT buffer size cannot be checked.")
-        if actual < size:
+        if actual != size:
             raise RttBufferSizeError(
-                f"{elf}: {name} is {actual} bytes but {cache_var} is {size}; the build did not "
-                "compile the configured RTT buffer size."
+                f"{elf}: {name} is {actual} bytes but {cache_var} is {size}; the ELF was not "
+                "built with the configured RTT buffer size."
             )
     return configured
 

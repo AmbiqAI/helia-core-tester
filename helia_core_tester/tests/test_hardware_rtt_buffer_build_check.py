@@ -51,18 +51,9 @@ def test_configured_sizes_come_from_the_build_dir(tmp_path: Path) -> None:
     assert firmware_build.configured_rtt_buffer_sizes(tmp_path) == (4096, 256)
 
 
-@pytest.mark.parametrize(
-    "sizes",
-    [
-        {"_acUpBuffer": UP, "_acDownBuffer": DOWN},
-        # Rounded up to a cache line by SEGGER_RTT__ROUND_UP_2_CACHE_LINE_SIZE.
-        {"_acUpBuffer": UP + 32, "_acDownBuffer": DOWN + 32},
-    ],
-    ids=["exact", "cache-line-rounded"],
-)
-def test_elf_with_the_configured_arrays_passes(tmp_path: Path, monkeypatch, sizes) -> None:
+def test_elf_with_the_configured_arrays_passes(tmp_path: Path, monkeypatch) -> None:
     _cache(tmp_path, NSX_SEGGER_RTT_BUFFER_SIZE_UP=UP, NSX_SEGGER_RTT_BUFFER_SIZE_DOWN=DOWN)
-    _symbols(monkeypatch, sizes)
+    _symbols(monkeypatch, {"_acUpBuffer": UP, "_acDownBuffer": DOWN})
     assert firmware_build.check_rtt_buffers(tmp_path) == (UP, DOWN)
 
 
@@ -73,10 +64,13 @@ def test_elf_with_the_configured_arrays_passes(tmp_path: Path, monkeypatch, size
         ({"_acUpBuffer": 1024, "_acDownBuffer": DOWN}, "_acUpBuffer is 1024 bytes but NSX_SEGGER_RTT_BUFFER_SIZE_UP"),
         ({"_acUpBuffer": UP, "_acDownBuffer": 16}, "_acDownBuffer is 16 bytes but NSX_SEGGER_RTT_BUFFER_SIZE_DOWN"),
         ({"_acUpBuffer": UP - 1, "_acDownBuffer": DOWN}, f"_acUpBuffer is {UP - 1} bytes"),
+        # A stale ELF built for larger buffers than the cache now configures.
+        ({"_acUpBuffer": UP * 2, "_acDownBuffer": DOWN}, f"_acUpBuffer is {UP * 2} bytes"),
+        ({"_acUpBuffer": UP, "_acDownBuffer": DOWN + 32}, f"_acDownBuffer is {DOWN + 32} bytes"),
         ({"_acUpBuffer": UP}, "has no _acDownBuffer symbol"),
         ({}, "has no _acUpBuffer symbol"),
     ],
-    ids=["segger-up", "segger-down", "one-short", "no-down-symbol", "no-symbols"],
+    ids=["segger-up", "segger-down", "one-short", "stale-larger-up", "cache-line-rounded-down", "no-down-symbol", "no-symbols"],
 )
 def test_elf_without_the_configured_arrays_fails(tmp_path: Path, monkeypatch, sizes, message) -> None:
     _cache(tmp_path, NSX_SEGGER_RTT_BUFFER_SIZE_UP=UP, NSX_SEGGER_RTT_BUFFER_SIZE_DOWN=DOWN)

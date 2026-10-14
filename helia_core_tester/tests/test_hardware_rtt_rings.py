@@ -234,6 +234,21 @@ def test_rings_refuse_unexpected_buffer_sizes(up_size: int, down_size: int, mess
     assert memory.bytes == before
 
 
+def test_size_mismatch_reads_no_ring_offsets() -> None:
+    memory = _target(up_size=1024, down_size=8)
+    reads: list[tuple[int, int]] = []
+    read32 = memory.memory_read32
+    memory.memory_read32 = lambda address, count: reads.append((address, count)) or read32(address, count)  # type: ignore[method-assign]
+    rings = RttRings(memory, BLOCK, expected_up_size=16, expected_down_size=8)
+    with pytest.raises(RttBufferSizeError):
+        rings.up_offsets()
+    up = BLOCK + 24
+    words = {address + 4 * i for address, count in reads for i in range(count)}
+    assert up + 8 in words
+    # WrOff, RdOff (and pBuffer) stay unread.
+    assert words.isdisjoint({up + 4, up + 12, up + 16})
+
+
 def test_buffer_size_error_is_not_a_transport_stall() -> None:
     # A mis-built image is not a stall: no target-state dump, no retry as one.
     assert issubclass(RttBufferSizeError, RuntimeError)
