@@ -1,6 +1,5 @@
 """CMSIS-5 / ethos-u-core-platform are fetched at, and verified against, pinned commits."""
 
-import re
 import shutil
 import subprocess
 import threading
@@ -62,7 +61,7 @@ def _leftover_staging(downloads: Path) -> list:
 def test_shipped_pins_are_full_commits_on_expected_hosts():
     assert set(sd.SOURCE_PINS) == {"CMSIS_5", "ethos-u-core-platform"}
     for pin in sd.SOURCE_PINS.values():
-        assert re.fullmatch(r"[0-9a-f]{40}", pin.commit), pin
+        assert sd._COMMIT_RE.fullmatch(pin.commit), pin
         assert pin.url.startswith("https://"), pin
     assert sd.SOURCE_PINS["CMSIS_5"].marker == "CMSIS"
     assert sd.SOURCE_PINS["ethos-u-core-platform"].marker == "core_platform"
@@ -324,14 +323,14 @@ def test_unknown_pin_mode_is_rejected(tmp_path, upstream, pin_to):
     assert not (tmp_path / "downloads").exists()
 
 
-def test_run_setup_passes_warn_mode(monkeypatch, tmp_path):
+def test_run_setup_enforces_the_pins(monkeypatch, tmp_path):
     from helia_core_tester.fvp import env as fvp_env
 
     calls = []
     monkeypatch.setattr(fvp_env.subprocess, "call", lambda cmd, **kwargs: calls.append(cmd) or 0)
     fvp_env.call_setup_dependencies(tmp_path)
     (cmd,) = calls
-    assert cmd[cmd.index("--source-pins") + 1] == "warn"
+    assert "--source-pins" not in cmd  # default: enforce
 
 
 # --- git environment --------------------------------------------------------------
@@ -457,3 +456,62 @@ def _capture(errors: list, fn, *args) -> None:
         fn(*args)
     except Exception as exc:  # surfaced by the asserting test
         errors.append(exc)
+
+
+@pytest.mark.parametrize(
+    "commit",
+    ["", "abc123", "main", "A" * 40, "g" * 40, "0" * 39, "0" * 41, " " + "0" * 40, "0" * 40 + "\n"],
+)
+def test_malformed_pin_is_rejected_before_any_git_call(tmp_path, pin_to, monkeypatch, commit):
+    pin_to(commit)
+
+    def no_git(*a, **k):
+        raise AssertionError("git must not run for a malformed pin")
+
+    monkeypatch.setattr(sd, "_git", no_git)
+    with pytest.raises(sd.SourcePinError, match="40-hex"):
+        sd.setup_cmsis5(tmp_path / "downloads")
+    assert not (tmp_path / "downloads" / NAME).exists()
+
+
+def test_without_a_lock_stale_staging_is_left_alone(tmp_path, upstream, pin_to, monkeypatch):
+    # A concurrent setup's live staging dir looks the same as a killed one's.
+    _, first, _ = upstream
+    pin_to(first)
+    monkeypatch.setattr(sd, "fcntl", None)
+    monkeypatch.setattr(sd, "msvcrt", None)
+    downloads = tmp_path / "downloads"
+    live = downloads / f".{NAME}-other" / NAME
+    live.mkdir(parents=True)
+    sd.setup_cmsis5(downloads)
+    assert live.is_dir()
+    assert _head(downloads / NAME) == first
+
+
+class _FakeMsvcrt:
+    LK_LOCK, LK_UNLCK = 1, 0
+
+    def __init__(self, busy_attempts: int):
+        self.busy_attempts = busy_attempts
+        self.calls = []
+
+    def locking(self, fd, mode, nbytes):
+        self.calls.append((mode, nbytes))
+        if mode == self.LK_LOCK and self.busy_attempts:
+            self.busy_attempts -= 1
+            raise OSError("locked by another process")
+
+
+def test_windows_lock_retries_until_held_and_releases(tmp_path, upstream, pin_to, monkeypatch):
+    _, first, _ = upstream
+    pin_to(first)
+    fake = _FakeMsvcrt(busy_attempts=2)
+    monkeypatch.setattr(sd, "fcntl", None)
+    monkeypatch.setattr(sd, "msvcrt", fake)
+    downloads = tmp_path / "downloads"
+    stale = downloads / f".{NAME}-killed"
+    stale.mkdir(parents=True)
+    sd.setup_cmsis5(downloads)
+    assert fake.calls == [(fake.LK_LOCK, 1)] * 3 + [(fake.LK_UNLCK, 1)]
+    assert not stale.exists()
+    assert _head(downloads / NAME) == first

@@ -37,8 +37,12 @@ import certifi
 
 try:
     import fcntl
-except ImportError:  # non-POSIX hosts: setup runs without a cross-process lock
+except ImportError:
     fcntl = None
+try:
+    import msvcrt
+except ImportError:
+    msvcrt = None
 
 from helia_core_tester.core.discovery import find_repo_root
 
@@ -492,9 +496,11 @@ SOURCE_PINS = {
     ),
 }
 
-# enforce: an explicit setup puts every checkout at its pin or fails.
-# warn: the setup run before each build/run only fetches missing sources and
-# reports, without changing, an existing checkout that is off its pin.
+_COMMIT_RE = re.compile(r"[0-9a-f]{40}")
+
+# enforce (default, and what every build/run uses): put every checkout at its pin or fail.
+# warn (opt-in, --source-pins warn): fetch missing sources at the pin, but only
+# report an existing checkout that is off its pin.
 PIN_MODES = ("enforce", "warn")
 
 
@@ -553,12 +559,32 @@ def _fetch_pinned(path: Path, pin: SourcePin) -> None:
 
 
 @contextlib.contextmanager
-def _setup_lock(downloads_dir: Path, dirname: str) -> Iterator[None]:
-    """Serialize setup of one source across processes (parallel runs share downloads_dir)."""
+def _setup_lock(downloads_dir: Path, dirname: str) -> Iterator[bool]:
+    """Serialize setup of one source across processes (parallel runs share downloads_dir).
+
+    Yields whether a cross-process lock is held: flock on POSIX, msvcrt on
+    Windows, none elsewhere.
+    """
     with open(downloads_dir / f".{dirname}.lock", "a") as handle:
         if fcntl is not None:
             fcntl.flock(handle, fcntl.LOCK_EX)
-        yield
+            yield True
+        elif msvcrt is not None:
+            handle.seek(0)
+            while True:
+                try:
+                    # LK_LOCK retries for about 10 s before raising; keep waiting.
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+                    break
+                except OSError:
+                    continue
+            try:
+                yield True
+            finally:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            yield False
 
 
 def _remove_stale_staging(downloads_dir: Path, dirname: str) -> None:
@@ -619,11 +645,15 @@ def setup_pinned_source(
     if pin_mode not in PIN_MODES:
         raise ValueError(f"pin_mode must be one of {PIN_MODES}, got {pin_mode!r}")
     pin = SOURCE_PINS[dirname]
+    if not _COMMIT_RE.fullmatch(pin.commit):
+        raise SourcePinError(f"{pin.label} pin {pin.commit!r} is not a full 40-hex commit")
     dest = downloads_dir / dirname
     downloads_dir.mkdir(parents=True, exist_ok=True)
 
-    with _setup_lock(downloads_dir, dirname):
-        _remove_stale_staging(downloads_dir, dirname)
+    with _setup_lock(downloads_dir, dirname) as locked:
+        # Without a lock a concurrent setup's live staging dir would look stale.
+        if locked:
+            _remove_stale_staging(downloads_dir, dirname)
 
         if dest.exists() and not force:
             head, problem, usable = _existing_checkout_problem(dest, pin)
