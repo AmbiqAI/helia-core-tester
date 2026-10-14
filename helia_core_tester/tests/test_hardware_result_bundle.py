@@ -70,10 +70,11 @@ def test_result_bundle_writer_emits_spec_artifacts(tmp_path: Path) -> None:
     with (bundle_root / "case_summary.csv").open(encoding="utf-8", newline="") as handle:
         rows = list(csv.DictReader(handle))
     header = list(rows[0].keys())
-    assert header[:15] == ["case_id", "kernel_id", "comparison_passed", "mismatch_count", "max_abs_diff", "diff_count",
-                           "sample_count", "median_cycles", "mad_cycles", "p90_cycles", "p99_cycles", "fvp_status", "timed_symbol", "inner_symbol", "inner_variant"]
-    assert header[15:20] == ["macs", "ops", "cycles_per_mac", "cycles_per_op", "prepare_cycles"]
-    assert header[20] == "ARM_PMU_CPU_CYCLES"
+    assert header[:16] == ["case_id", "kernel_id", "comparison_passed", "mismatch_count", "max_abs_diff", "diff_count",
+                           "tolerance_fraction", "sample_count", "median_cycles", "mad_cycles", "p90_cycles", "p99_cycles",
+                           "fvp_status", "timed_symbol", "inner_symbol", "inner_variant"]
+    assert header[16:21] == ["macs", "ops", "cycles_per_mac", "cycles_per_op", "prepare_cycles"]
+    assert header[21] == "ARM_PMU_CPU_CYCLES"
     assert header[-4:] == ["overflow_detected", "valid_for_regression", "timing_status", "hidden"]
     assert "ARM_PMU_INST_RETIRED" in header and "ARM_PMU_MEM_ACCESS" in header
     # The schema follows the selection, not target support: every selected counter is a

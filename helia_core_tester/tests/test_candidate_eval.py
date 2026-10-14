@@ -187,6 +187,18 @@ def _cli_eval(kernels: Path, out: Path, *extra: str):
     return result, json.loads(result.stdout) if result.stdout.strip() else None
 
 
+def test_verdict_carries_worst_fraction(tmp_path) -> None:
+    cases = [{"case_id": "a", "tolerance_fraction": 0.4}, {"case_id": "b", "tolerance_fraction": None},
+             {"case_id": "h_1", "tolerance_fraction": 0.7}, {"case_id": "c", "tolerance_fraction": 0.6}]
+    report = {"verdict": "pass", "score": 0.1, "board": "b", "candidate": ["c1"], "baseline": ["b1"], "families": {},
+              "failures": [], "cases": cases, "settings": {"case_gate": "all"}}
+    verdict = candidate_eval.verdict_from(report, {"h_1"}, tmp_path / "none")
+    assert verdict["tolerance_fraction"] == 0.6
+    assert verdict["hidden"]["tolerance_fraction"] == 0.7
+    assert [c["tolerance_fraction"] for c in verdict["cases"]] == [0.4, None, 0.6]
+    assert candidate_eval.verdict_from({**report, "cases": cases[1:2]}, set(), tmp_path)["tolerance_fraction"] is None
+
+
 def test_eval_cli_prints_one_json_and_exits(tmp_path, kernels, monkeypatch) -> None:
     out, _ = _baseline(tmp_path, kernels)
     monkeypatch.setattr(candidate_eval, "hardware_run", FakeRun(tmp_path / "reports"))

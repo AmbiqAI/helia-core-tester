@@ -19,11 +19,23 @@ class ComparisonResult:
     mode: str
     # Elements off the golden, tolerance aside.
     diff_count: int | None = 0
+    # Worst |out - ref| / (atol + rtol*|ref|).
+    tolerance_fraction: float | None = None
+
+
+# Float error may spend this much tolerance.
+FLOAT_HEADROOM = 0.8
 
 
 def finite_or_none(value: float) -> float | None:
     """The value, or None if not finite."""
     return value if math.isfinite(value) else None
+
+
+def tolerance_fraction(result: ComparisonResult) -> float | None:
+    """Tolerance share used; None if unknown."""
+    fraction = result.tolerance_fraction
+    return None if fraction is None else finite_or_none(fraction)
 
 
 def strict_comparison(comparison: dict[str, Any]) -> dict[str, Any]:
@@ -55,6 +67,7 @@ def compare_output(actual: np.ndarray, expected: np.ndarray, descriptor_or_compa
 
     mode = str(comparison["mode"])
     diff_count = None
+    fraction = None
     if mode in ("exact_int", "tolerant_int"):
         abs_diff = int_abs_diff(actual_np, expected_np)
         if mode == "exact_int":
@@ -85,7 +98,11 @@ def compare_output(actual: np.ndarray, expected: np.ndarray, descriptor_or_compa
         tol = atol + rtol * np.abs(expected_float[finite])
         max_abs_diff = float("inf") if np.any(diffs) else (float(np.max(abs_diff)) if abs_diff.size else 0.0)
         diff_count = int(np.count_nonzero(diffs) + np.count_nonzero(abs_diff))
-        diffs[finite] = abs_diff > tol
+        ratio = tolerance_ratio(abs_diff, tol)
+        fraction = float("inf") if np.any(diffs) else (float(np.max(ratio)) if ratio.size else 0.0)
+        # Gated runs fail past the headroom.
+        headroom = comparison.get("headroom")
+        diffs[finite] = abs_diff > tol if headroom is None else ratio > float(headroom)
     elif mode == "bool":
         diffs = actual_np.astype(bool) != expected_np.astype(bool)
         max_abs_diff = float(np.max(diffs.astype(np.int32))) if actual_np.size else 0.0
@@ -102,7 +119,15 @@ def compare_output(actual: np.ndarray, expected: np.ndarray, descriptor_or_compa
         max_abs_diff=max_abs_diff,
         mode=mode,
         diff_count=mismatch_count if diff_count is None else diff_count,
+        tolerance_fraction=fraction,
     )
+
+
+def tolerance_ratio(abs_diff: np.ndarray, tol: np.ndarray) -> np.ndarray:
+    """Per-element share of tolerance used."""
+    # Zero error spends nothing at zero tolerance.
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return np.where(abs_diff == 0, 0.0, abs_diff / tol)
 
 
 def compare_status(actual_status: int, descriptor_or_comparison: dict[str, Any]) -> ComparisonResult:

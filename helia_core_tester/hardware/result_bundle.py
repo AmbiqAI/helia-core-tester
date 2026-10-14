@@ -11,7 +11,7 @@ from typing import Any
 from xml.etree.ElementTree import Element, SubElement, ElementTree
 
 from .case_bundle import input_digest
-from .comparison import finite_or_none
+from .comparison import finite_or_none, tolerance_fraction
 from .harness_lock import HARNESS_FIELD, HARNESS_INPUTS
 from .measurement import compute_counter_medians, counter_names_for_passes
 from .session import SessionResult
@@ -27,6 +27,7 @@ CASE_SUMMARY_BASE_FIELDS = [
     "mismatch_count",
     "max_abs_diff",
     "diff_count",
+    "tolerance_fraction",
     "sample_count",
     "median_cycles",
     "mad_cycles",
@@ -269,6 +270,7 @@ def write_result_bundle(
                 "mismatch_count": case.comparison.mismatch_count,
                 "max_abs_diff": finite_or_none(case.comparison.max_abs_diff),
                 "diff_count": case.comparison.diff_count,
+                "tolerance_fraction": tolerance_fraction(case.comparison),
                 "sample_count": len(case.samples),
                 "median_cycles": case.statistics.median_cycles,
                 "p90_cycles": case.statistics.p90_cycles,
@@ -298,6 +300,7 @@ def write_result_bundle(
             "mismatch_count": case.comparison.mismatch_count,
             "max_abs_diff": finite_or_none(case.comparison.max_abs_diff),
             "diff_count": case.comparison.diff_count,
+            "tolerance_fraction": tolerance_fraction(case.comparison),
             "sample_count": case.statistics.sample_count,
             "median_cycles": case.statistics.median_cycles,
             "mad_cycles": case.statistics.mad_cycles,
@@ -325,6 +328,7 @@ def write_result_bundle(
                     "mismatch_count": case.comparison.mismatch_count,
                     "max_abs_diff": finite_or_none(case.comparison.max_abs_diff),
                     "diff_count": case.comparison.diff_count,
+                    "tolerance_fraction": tolerance_fraction(case.comparison),
                     "comparison": case.case_bundle.comparison,
                     "rejection": rejection,
                     **digests,

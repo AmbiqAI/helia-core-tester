@@ -286,6 +286,12 @@ def _pool(rows: list[dict], key: str) -> float | None:
     return statistics.median(values) if len(values) == len(rows) else None
 
 
+def _worst(rows: list[dict], key: str) -> float | None:
+    """Largest finite value, else None."""
+    values = [v for v in (_num(row, key) for row in rows) if v is not None]
+    return max(values, default=None)
+
+
 def _spread(rows: list[dict], key: str = "median_cycles", mad_key: str | None = "mad_cycles") -> float:
     """Pooled MAD in cycles, scaled to sigma."""
     medians = [_num(row, key) or 0.0 for row in rows]
@@ -441,6 +447,7 @@ def _case(
         "pct_of_peak_candidate": _peak_pct(cpu, inner or symbol, cpm_b),
         "touched": None if touched is None else case_id in touched,
         "retired": _retired(base, cand),
+        "tolerance_fraction": _worst(cand, "tolerance_fraction"),
     }
     case["prepare"] = _prepare(base, cand, (a, b), scoring, _gated(case))
     case["in_focus"] = in_focus(base_route, symbol, case["dtype"], focus)
@@ -562,7 +569,9 @@ def score_bundles(
     for c in candidates:
         for case_id, row in c.rows.items():
             if row.get("comparison_passed") != "true":
-                failures.append({"kind": "comparison_failed", "case_id": case_id, "reason": f"{c.session_id}: output mismatch"})
+                fraction = _num(row, "tolerance_fraction")
+                spent = "" if fraction is None else f", tolerance fraction {fraction:.3g}"
+                failures.append({"kind": "comparison_failed", "case_id": case_id, "reason": f"{c.session_id}: output mismatch{spent}"})
     present = []
     for case_id in wanted:
         missing = [c.session_id for c in candidates if case_id not in c.rows]

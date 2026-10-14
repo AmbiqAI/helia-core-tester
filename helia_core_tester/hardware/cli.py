@@ -523,7 +523,8 @@ _STRICT_HELP = (
 _GOLDEN_FROM_HELP = (
     "Result bundle dir whose outputs/ become the goldens (self-golden). "
     "Implies --strict-compare: every int case must match that run bit for bit; "
-    "float cases keep their tolerance. Use it to judge kernel changes. "
+    "float cases keep the generated golden and fail past 0.8 of their tolerance. "
+    "Use it to judge kernel changes. "
     "Refuses a case the bundle lacks, one that run failed "
     "(see --golden-allow-failed), or one run on other inputs."
 )

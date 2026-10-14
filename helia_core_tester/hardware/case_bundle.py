@@ -11,12 +11,13 @@ import zlib
 
 import numpy as np
 
-from .comparison import strict_comparison
+from .comparison import FLOAT_HEADROOM, strict_comparison
 from .pathutil import write_text_lf
 from .transfer import staged_extent
 
 from helia_core_tester.generation.golden_check import EDGE_CASE_KEY
 from helia_core_tester.generation.io.descriptors import load_descriptor
+from helia_core_tester.generation.io.dtypes import FLOAT_DTYPES
 from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 from helia_core_tester.generation.utils.tflite_utils import calculate_per_channel_multiplier_shift, requantize_np
 
@@ -180,10 +181,24 @@ def golden_usable(bundle: CaseBundle, golden_dir: Path) -> bool:
         return False
 
 
+def golden_source(bundle: CaseBundle) -> str:
+    """Which golden judges this case."""
+    if bundle.expected_status_code is not None:
+        return "status"
+    # Float keeps the reference; int matches baseline.
+    if bundle.comparison.get("mode") == "float" and bundle.expected_output.dtype in FLOAT_DTYPES:
+        return "generator"
+    return "baseline"
+
+
 def golden_bundle(bundle: CaseBundle, golden_dir: Path) -> CaseBundle:
     """The bundle, judged against a past run's output."""
-    if bundle.expected_status_code is not None:
+    source = golden_source(bundle)
+    if source == "status":
         return bundle
+    if source == "generator":
+        comparison = {**bundle.comparison, "headroom": FLOAT_HEADROOM}
+        return replace(bundle, manifest={**bundle.manifest, "correctness_comparison": comparison, "golden": source})
     path = golden_dir / "outputs" / f"{bundle.case_id}.bin"
     expected = bundle.expected_output
     try:
@@ -197,7 +212,8 @@ def golden_bundle(bundle: CaseBundle, golden_dir: Path) -> CaseBundle:
         expected, path=path, expected_crc32=zlib.crc32(payload) & 0xFFFFFFFF, sha256=_sha256_bytes(payload),
     )
     blobs = tuple(swapped if blob is expected else blob for blob in bundle.blobs)
-    return replace(strict_bundle(bundle), blobs=blobs)
+    strict = strict_bundle(bundle)
+    return replace(strict, manifest={**strict.manifest, "golden": source}, blobs=blobs)
 
 
 def _sha256_bytes(payload: bytes) -> str:
