@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, List, Optional,
 
 from ..core.cpu_targets import get_cpu_profile, normalize_cpu
 from .boards import BoardSpec, default_session_id
+from .comparison import FLOAT_HEADROOM
 from .firmware_build import (
     FlashDecision,
     build_id_path,
@@ -348,7 +349,7 @@ class StreamOptions:
     strict_compare: bool = False
     """Integer outputs must match exactly: no tolerance."""
     golden_from: Optional[Path] = None
-    """Result bundle whose outputs replace the goldens; implies strict."""
+    """Baseline bundle: int goldens, float headroom gate; implies strict."""
     golden_allow_failed: bool = False
     """Accept golden cases the past run failed."""
     hidden_set: Optional[Path] = None
@@ -360,13 +361,26 @@ class StreamOptions:
 
         return CaseSelection(ops=self.ops, dtypes=self.dtypes, case_ids=self.case_ids)
 
-    def compare_record(self) -> dict[str, Any]:
+    def compare_record(self, bundles: Sequence = ()) -> dict[str, Any]:
         """How outputs get judged, for the bundle."""
-        return {
+        record = {
             "strict": self.strict_compare or self.golden_from is not None,
             "golden_from": str(self.golden_from) if self.golden_from else None,
             "golden_session_id": golden_session_id(self.golden_from),
         }
+        if self.golden_from is not None and bundles:
+            record["goldens"] = golden_split(bundles)
+        return record
+
+
+def golden_split(bundles: Sequence) -> dict[str, list[str]]:
+    """Case ids per golden source."""
+    from .case_bundle import golden_source
+
+    split: dict[str, list[str]] = {}
+    for bundle in bundles:
+        split.setdefault(golden_source(bundle), []).append(bundle.case_id)
+    return split
 
 
 def golden_session_id(golden_dir: Optional[Path]) -> Optional[str]:
@@ -452,8 +466,8 @@ def prepare_bundles(
 
 
 def golden_bundles(bundles: list, golden_dir: Path, *, allow_failed: bool) -> list:
-    """Swap in past outputs; refuse misfits."""
-    from .case_bundle import golden_bundle, golden_record, golden_usable, input_digest
+    """Swap int goldens, gate float; refuse misfits."""
+    from .case_bundle import golden_bundle, golden_record, golden_source, golden_usable, input_digest
 
     if not any((golden_dir / "correctness").glob("*.json")):
         raise RunRefused(f"Golden bundle has no results: {golden_dir}")
@@ -461,6 +475,9 @@ def golden_bundles(bundles: list, golden_dir: Path, *, allow_failed: bool) -> li
     _refuse("Golden run is missing these cases", [i for i, r in records.items() if r is None])
     if not allow_failed:
         _refuse("Golden run failed these cases", [i for i, r in records.items() if r.get("passed") is not True])
+        # Candidates cannot beat a spent baseline.
+        spent = [b.case_id for b in bundles if golden_source(b) == "generator" and over_headroom(records[b.case_id])]
+        _refuse(f"Golden run spends over {FLOAT_HEADROOM:g} of tolerance for", spent)
     # Status-only cases use no past output.
     judged = [b for b in bundles if b.expected_status_code is None]
     digests = {b.case_id: records[b.case_id].get("input_digest") for b in judged}
@@ -468,6 +485,13 @@ def golden_bundles(bundles: list, golden_dir: Path, *, allow_failed: bool) -> li
     _refuse("Golden run used other inputs for", [b.case_id for b in judged if digests[b.case_id] != input_digest(b)])
     _refuse(f"No usable golden output in {golden_dir} for", [b.case_id for b in bundles if not golden_usable(b, golden_dir)])
     return [golden_bundle(bundle, golden_dir) for bundle in bundles]
+
+
+def over_headroom(record: dict) -> bool:
+    """The baseline spent past the gate."""
+    fraction = record.get("tolerance_fraction")
+    # Old records carry no fraction.
+    return isinstance(fraction, (int, float)) and fraction > FLOAT_HEADROOM
 
 
 def _refuse(reason: str, case_ids: list[str]) -> None:
@@ -551,7 +575,7 @@ def stream_generated_tests(
         build_dir=build_dir,
         on_case_complete=on_case_complete,
         expected_build_id=expected_build_id,
-        compare=options.compare_record(),
+        compare=options.compare_record(bundles),
         fresh_boot=fresh_boot,
     )
     merge_summary(bundle, "selection", resolved_selection(repo_root, board, options))

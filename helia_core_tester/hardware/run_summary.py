@@ -58,6 +58,8 @@ def _format_case_line(case, *, id_width: int = 0) -> str:
         line += f"  {case.rejection.reason}"
     elif not passed:
         line += f"  mismatches={case.comparison.mismatch_count}  max_abs_diff={case.comparison.max_abs_diff:g}"
+        if case.comparison.tolerance_fraction is not None:
+            line += f"  tolerance_fraction={case.comparison.tolerance_fraction:.3g}"
     return line
 
 
@@ -248,6 +250,7 @@ def build_json_summary(
                 "timing_status": case.statistics.timing_status,
                 "max_abs_diff": finite_or_none(case.comparison.max_abs_diff),
                 "diff_count": case.comparison.diff_count,
+                "tolerance_fraction": finite_or_none(case.comparison.tolerance_fraction),
                 "skipped_reason": None,
             }
         )
@@ -261,6 +264,7 @@ def build_json_summary(
                 "timing_status": None,
                 "max_abs_diff": None,
                 "diff_count": None,
+                "tolerance_fraction": None,
                 "skipped_reason": _clean_skip_reason(test.name, reason),
             }
         )

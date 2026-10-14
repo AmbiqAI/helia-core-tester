@@ -165,6 +165,16 @@ def test_leg_view_compact() -> None:
     assert "hints" not in ledger.leg_view(verdict, hints=False)
 
 
+def test_ledger_keeps_tolerance_fraction() -> None:
+    case = {**_case("t1", True, 100, 1.1), "tolerance_fraction": 0.42}
+    verdict = {"verdict": "pass", "stage": "score", "score": 0.1, "cases": [case], "tolerance_fraction": 0.42}
+    view = ledger.leg_view(verdict, hints=False)
+    assert view["tolerance_fraction"] == 0.42
+    assert dict(zip(ledger.CASE_COLUMNS, view["cases"][0]))["tolerance_fraction"] == 0.42
+    row = ledger.ledger_row("001", "pass", {"tcm": verdict}, charged=True, infra=False, size={}, diff=b"", attempts={})
+    assert row["legs"]["tcm"]["tolerance_fraction"] == 0.42
+
+
 # --- submit -----------------------------------------------------------------------------
 
 

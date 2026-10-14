@@ -48,6 +48,7 @@ from typing import Any, Iterator, Optional
 import click
 import typer
 
+from ..generation.io.dtypes import FLOAT_DTYPES
 from .boards import UnknownBoardError, repo_root, resolve_board
 from .candidate_check import CheckError, _git, candidate_app, check_candidate
 from .code_graph import changed_nodes, code_graph, is_touched, read_graph
@@ -118,6 +119,14 @@ def build_dir_for(spec: RunSpec) -> Path:
     return toolchain_spec(spec.toolchain).build_dir(base.with_name(f"{base.name}-eval-{spec.placement}"))
 
 
+def run_suite(dtypes: tuple[str, ...]) -> Optional[str]:
+    """The suite the pinned dtypes need."""
+    floats = {dtype.upper() in FLOAT_DTYPES for dtype in dtypes}
+    if floats == {True}:
+        return "float"
+    return "both" if floats == {True, False} else None
+
+
 def run_args(
     spec: RunSpec, session_id: str, *, golden_from: Optional[Path] = None, skip_generate: bool = False, skip_flash: bool = False,
 ) -> list[str]:
@@ -130,6 +139,9 @@ def run_args(
     for flag, values in (("--pmu-counters", spec.pmu), ("--op", spec.ops), ("--dtype", spec.dtypes), ("--case-id", spec.case_ids)):
         for value in values:
             args += [flag, value]
+    suite = run_suite(spec.dtypes)
+    if suite is not None:
+        args += ["--suite", suite]
     if spec.hidden_set is not None:
         # TODO(hidden-run): flag lands with the hidden-set PR.
         args += ["--hidden-set", str(spec.hidden_set)]
@@ -445,7 +457,7 @@ def snapshot_hash(snap: Path) -> str:
 
 def _case_view(case: dict) -> dict:
     keys = ("case_id", "family", "timed_symbol", "excluded_by", "timing_lost", "baseline_cycles", "candidate_cycles",
-            "speedup", "delta_pct", "band_pct", "touched", "regression", "cycles_per_mac_candidate")
+            "speedup", "delta_pct", "band_pct", "touched", "regression", "cycles_per_mac_candidate", "tolerance_fraction")
     return {key: case.get(key) for key in keys}
 
 
@@ -459,6 +471,11 @@ def _hints(bundle: Path, hidden: set[str]) -> list[dict]:
         {"case_id": e.case_id, "pct_of_peak": e.pct_of_peak, "diagnosis": e.diagnosis, "hints": e.hints}
         for e in result["cases"] if e.case_id not in hidden
     ]
+
+
+def worst_fraction(cases: list[dict]) -> Optional[float]:
+    """Most tolerance any case spent."""
+    return max((c["tolerance_fraction"] for c in cases if c.get("tolerance_fraction") is not None), default=None)
 
 
 def hidden_failures(report: dict, hidden: set[str]) -> list[dict]:
@@ -494,11 +511,14 @@ def verdict_from(report: dict, hidden: set[str], candidate: Path, gate_reason: O
         "verdict": verdict, "stage": "score", "score": report["score"], "board": report["board"],
         "candidate_session": report["candidate"][0], "baseline_sessions": report["baseline"],
         "families": report["families"], "failures": failures, "cases": [_case_view(c) for c in public],
+        "tolerance_fraction": worst_fraction(public),
         "case_gate": {"scope": report["settings"]["case_gate"], "reason": gate_reason},
         "hidden": {"cases": len(hidden), "failures": dict(hidden_kinds), "failed": hidden_failures(report, hidden),
                    "touched": None if report["settings"]["case_gate"] == "all" else
                    sum(bool(c["touched"]) for c in report["cases"] if c["case_id"] in hidden),
-                   "subscores": (report.get("subscores") or {}).get("hidden")} if hidden else None,
+                   "subscores": (report.get("subscores") or {}).get("hidden"),
+                   "tolerance_fraction": worst_fraction([c for c in report["cases"] if c["case_id"] in hidden])}
+        if hidden else None,
         "hints": _hints(candidate, hidden),
     }
 

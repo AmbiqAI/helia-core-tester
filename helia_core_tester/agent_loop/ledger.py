@@ -20,7 +20,8 @@ ORDER = ("error", "rejected", "refused", "not_comparable", "fail", "no_gain", "p
 EXIT_BUDGET = 6
 # Stages the agent cannot cause.
 INFRA_STAGES = ("tester", "baseline")
-CASE_COLUMNS = ["case_id", "baseline_cycles", "candidate_cycles", "speedup", "band_pct", "cycles_per_mac"]
+CASE_COLUMNS = ["case_id", "baseline_cycles", "candidate_cycles", "speedup", "band_pct", "cycles_per_mac",
+                "tolerance_fraction"]
 TOP_HINTS = 10
 # A leg the judge did not run.
 SKIPPED = "skipped"
@@ -142,7 +143,7 @@ def leg_view(v: dict, hints: bool) -> dict[str, Any]:
     """One leg, compact: touched rows only."""
     if skipped(v):
         return dict(v)
-    keep = ("verdict", "stage", "reason", "findings", "failures", "score", "hidden")
+    keep = ("verdict", "stage", "reason", "findings", "failures", "score", "tolerance_fraction", "hidden")
     out = {k: v.get(k) for k in keep if v.get(k) is not None}
     fam_keys = ("cases", "geomean_speedup", "regression", "untouched_cases", "untouched_geomean")
     out["families"] = {f: {k: d.get(k) for k in fam_keys} for f, d in (v.get("families") or {}).items()}
@@ -150,7 +151,7 @@ def leg_view(v: dict, hints: bool) -> dict[str, Any]:
     touched = [c for c in cases if c.get("touched") is not False]
     out["cases"] = [[c.get("case_id"), c.get("baseline_cycles"), c.get("candidate_cycles"),
                      round(c["speedup"], 4) if c.get("speedup") else None, c.get("band_pct"),
-                     c.get("cycles_per_mac_candidate")] for c in touched]
+                     c.get("cycles_per_mac_candidate"), c.get("tolerance_fraction")] for c in touched]
     rest = [c["speedup"] for c in cases if c.get("touched") is False and c.get("speedup")]
     out["untouched_cases"] = {"count": len(rest), "speedup_min": round(min(rest), 4) if rest else None,
                               "speedup_max": round(max(rest), 4) if rest else None}
@@ -202,7 +203,8 @@ def ledger_row(eid: str, overall: str, legs: dict, *, charged: bool, infra: bool
         "infra": infra, "attempts": attempts,
         "legs": {k: {**v, "geomean": {}} if skipped(v) else
                  {"verdict": v.get("verdict"), "stage": v.get("stage"), "score": v.get("score"),
-                  "geomean": family_geomeans(v), "hidden": v.get("hidden")} for k, v in legs.items() if v},
+                  "geomean": family_geomeans(v), "tolerance_fraction": v.get("tolerance_fraction"),
+                  "hidden": v.get("hidden")} for k, v in legs.items() if v},
         "size_delta": size_deltas(size, runs), **diff_digest(diff),
     }
     gains = toolchain_gains(legs, runs, size)
