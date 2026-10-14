@@ -89,7 +89,10 @@ def test_3x3_entries_also_query_their_own_size(tmp_path: Path, name: str, calls_
 
 
 def test_declined_case_checks_the_status_and_an_untouched_output(tmp_path: Path) -> None:
-    source = _source("depthwise_conv_entry_3x3_declines_c62_s8", tmp_path)
+    name = "depthwise_conv_entry_3x3_declines_c15_s8"
+    desc = _descriptor(name)
+    assert desc["input_shape"][-1] == desc["filter_shape"][2] == 15
+    source = _source(name, tmp_path)
 
     assert "HELIA_GUARD_CHECK_UNTOUCHED(" in source
     assert re.search(r"HELIA_VALIDATE_EXPECTED_STATUS\([^;]*ARM_CMSIS_NN_NO_IMPL_ERROR", source)
