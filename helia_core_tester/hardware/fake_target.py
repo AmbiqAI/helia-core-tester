@@ -28,7 +28,8 @@ from .measurement import (
     auto_calibrate_iterations,
 )
 from .pmu_catalog import CPU_CYCLES_EVENT_ID, CPU_CYCLES_NAME, counter_by_event_id
-from .transfer import ArenaTracker, BlobAccumulator, BlobTransferSpec, CaseTooLargeError, staged_extent
+from . import transfer
+from .transfer import ArenaTracker, BlobAccumulator, BlobTransferSpec, CaseTooLargeError, mram_extent, staged_extent
 from .wire import (
     CAP_ABS_S8,
     CAP_BLOB_STORE,
@@ -85,6 +86,7 @@ EVENT_COUNTER_MASK = 0xFFFF  # one 16-bit slot
 CHAINED_COUNTER_MASK = 0xFFFFFFFF  # two slots chained
 CCNTR_MASK = 0xFFFFFFFF
 HCTP_STATUS_INVALID_ARGUMENT = -1  # hctp_protocol.h
+HCTP_STATUS_NO_SPACE = -8  # hctp_protocol.h
 
 
 class _TargetState(str, Enum):
@@ -489,6 +491,12 @@ class FakeTargetTransport:
             )
             for blob_id, spec in self._blob_specs.items()
         }
+        # plan_mram(): a case whose MRAM blobs exceed the placement pool is refused at CASE_META.
+        mram = sum(mram_extent(spec.role, spec.byte_length, self._placement) for spec in self._case_meta.blobs)
+        if mram > transfer.MRAM_POOL_BYTES:
+            raise CaseTooLargeError(
+                f"message_type={int(MessageType.CASE_META)} status={HCTP_STATUS_NO_SPACE} MRAM pool full"
+            )
         for spec in self._case_meta.blobs:
             self._arena.reserve_aligned(*staged_extent(spec.role, spec.byte_length, spec.alignment, self._placement))
         scratch_bytes = self._case_meta.scratch_bytes

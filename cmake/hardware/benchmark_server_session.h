@@ -292,8 +292,8 @@ typedef struct
     uint32_t output_stream_checksum;
     /* Next free MRAM address this case. */
     uintptr_t mram_cursor;
-    /* Placement end: pool end, or this case's first blob after a wrap. */
-    uintptr_t mram_limit;
+    /* MRAM bytes this case's blobs take, each from a cache line. */
+    uint32_t mram_case_bytes;
     uint8_t output_stream_active;
     uint8_t *workspace;
     uint32_t workspace_bytes;

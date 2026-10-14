@@ -98,6 +98,19 @@ MRAM_ROW_BYTES = 16
 MRAM_ROLES = frozenset({"weights", "bias"})
 
 
+# cmake/hardware/benchmark_server_mram.h: placement pool and cache line.
+MRAM_LINE_BYTES = 32
+MRAM_POOL_BYTES = 512 * 1024
+
+
+def mram_extent(role: str, byte_length: int, placement: str) -> int:
+    """MRAM pool bytes a blob takes (rows padded, from a cache line); 0 when it stays in SRAM."""
+    if placement != "mram" or role not in MRAM_ROLES:
+        return 0
+    padded = -(-byte_length // MRAM_ROW_BYTES) * MRAM_ROW_BYTES
+    return -(-padded // MRAM_LINE_BYTES) * MRAM_LINE_BYTES
+
+
 def staged_extent(role: str, byte_length: int, alignment: int, placement: str) -> tuple[int, int]:
     """Blob's firmware workspace length and alignment."""
     alignment = max(alignment, 1)
