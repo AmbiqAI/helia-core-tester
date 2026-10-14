@@ -136,7 +136,7 @@ def test_unverifiable_directory_is_rejected(tmp_path, upstream, pin_to, make):
         _git(dest, "init", "-q")
     else:
         dest.write_text("not a dir")
-    with pytest.raises(sd.SourcePinError, match="not a git checkout"):
+    with pytest.raises(sd.SourcePinError, match="not a git checkout git can read"):
         sd.setup_cmsis5(downloads)
     assert dest.exists()
 
@@ -224,3 +224,27 @@ def test_ethos_platform_uses_its_own_pin(tmp_path, upstream, monkeypatch):
     )
     sd.setup_ethos_u_platform(tmp_path / "downloads")
     assert _head(tmp_path / "downloads" / "ethos-u-core-platform") == first
+
+
+def test_full_clone_moved_to_pin_stays_full(tmp_path, upstream, pin_to):
+    repo, first, second = upstream
+    downloads = tmp_path / "downloads"
+    downloads.mkdir()
+    _git(downloads, "clone", "-q", repo.as_uri(), NAME)
+    assert _head(downloads / NAME) == second
+    pin_to(first)
+    sd.setup_cmsis5(downloads)
+    assert _head(downloads / NAME) == first
+    assert _git(downloads / NAME, "rev-parse", "--is-shallow-repository") == "false"
+    assert _git(downloads / NAME, "rev-list", "--count", second) == "2"
+
+
+def test_shallow_clone_fetches_missing_pin(tmp_path, upstream, pin_to):
+    repo, first, second = upstream
+    downloads = tmp_path / "downloads"
+    downloads.mkdir()
+    _git(downloads, "clone", "-q", "--depth=1", repo.as_uri(), NAME)
+    assert _git(downloads / NAME, "rev-parse", "--is-shallow-repository") == "true"
+    pin_to(first)
+    sd.setup_cmsis5(downloads)
+    assert _head(downloads / NAME) == first

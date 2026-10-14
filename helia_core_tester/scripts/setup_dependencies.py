@@ -500,8 +500,20 @@ def _has_local_changes(path: Path) -> bool:
     return bool(_git(["status", "--porcelain", "--untracked-files=no"], path))
 
 
+def _has_commit(path: Path, commit: str) -> bool:
+    try:
+        _git(["cat-file", "-e", f"{commit}^{{commit}}"], path)
+    except SourcePinError:
+        return False
+    return True
+
+
 def _fetch_pinned(path: Path, pin: SourcePin) -> None:
-    _git(["fetch", "--quiet", "--depth=1", pin.url, pin.commit], path)
+    if not _has_commit(path, pin.commit):
+        # Keep full clones full; only shallow (or new) repos get a depth-1 fetch.
+        shallow = _git(["rev-parse", "--is-shallow-repository"], path) == "true"
+        depth = ["--depth=1"] if shallow or not _git(["rev-list", "-n1", "--all"], path) else []
+        _git(["fetch", "--quiet", *depth, pin.url, pin.commit], path)
     _git(["checkout", "--quiet", "--detach", pin.commit], path)
     head = _checkout_head(path)
     if head != pin.commit:
@@ -526,7 +538,8 @@ def setup_pinned_source(downloads_dir: Path, dirname: str, force: bool = False) 
         head = _checkout_head(dest)
         if head is None:
             raise SourcePinError(
-                f"{dest} exists but is not a git checkout, so its revision cannot be verified "
+                f"{dest} exists but is not a git checkout git can read (a non-git directory, an "
+                f"empty repo, or one git refuses as unsafe), so its revision cannot be verified "
                 f"against {pin.commit}. Delete it or rerun with --force."
             )
         if _has_local_changes(dest):
