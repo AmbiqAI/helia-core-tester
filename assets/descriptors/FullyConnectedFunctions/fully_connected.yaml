@@ -745,3 +745,25 @@ input_shape: [1, 256]
 filter_shape: [2, 256]
 use_bias: true
 # END mlperf model shapes
+---
+operator: FullyConnected
+name: fully_connected_relu_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: RELU
+hint:
+  call_style: per_tensor
+input_shape: [2, 3, 3, 7]
+filter_shape: [11, 7]
+use_bias: true
+---
+operator: FullyConnected
+name: fully_connected_relu6_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: RELU6
+hint:
+  call_style: per_tensor
+input_shape: [3, 20]
+filter_shape: [9, 20]
+use_bias: true
