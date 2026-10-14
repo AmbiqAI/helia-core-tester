@@ -167,7 +167,10 @@ measures kernel-only cost. `mram` (Apollo510, Apollo330P)
 programs each case's weights and bias into a reserved MRAM pool past the image
 and evicts them from the D-cache before every timed call, as a large model's
 layer sees them; activations, scratch, multipliers and shifts stay in DTCM, as
-hpx places a TCM-sized arena. Neither programming nor eviction counts toward
+hpx places a TCM-sized arena. The packed fully-connected kernel reads a stream
+packed from its weights, so that stream is packed on the device once per case,
+before any timing, and placed in the pool after the bias; the per-call pack
+still runs, so `prepare_cycles` matches `tcm`. Neither programming nor eviction counts toward
 the timed cycles or `prepare_cycles`. Give each placement its own `--build-dir`. The
 bundle records it in `session_manifest.json` `target.placement`.
 

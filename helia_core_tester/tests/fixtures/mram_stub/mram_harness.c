@@ -492,6 +492,103 @@ static int test_pool_fit(uintptr_t base)
     return 0;
 }
 
+/* kCase plus a derived operand: CASE_META and streaming accepted. */
+static int derived_case(hct_server_session_t *s, const char *case_id, uint32_t bytes, uint32_t mode)
+{
+    hct_host_derived_bytes = bytes;
+    hct_host_derive_mode = mode;
+    hct_host_last_derived = NULL;
+    if (open_session(s, workspace, sizeof(workspace), case_id) != 0) return 1;
+    if (send_meta(s, case_id, kCase, 3u) != HCTP_STATUS_OK) return 2;
+    if (stream(s, kCase) != HCTP_STATUS_OK) return 3;
+    return (drain(s) == HCTP_MSG_CASE_READY && s->derived == NULL) ? 0 : 4;
+}
+
+/* RUN_CORRECTNESS on a derived case; expect a status, `programs` stub calls, nothing placed. */
+static int derived_refused(const char *case_id, uint32_t mode, int corrupt, int fail, uint32_t programs, hctp_status_t expected)
+{
+    static hct_server_session_t s;
+    uint32_t calls;
+    hct_host_derive_seed += 1u;
+    if (derived_case(&s, case_id, 100u, mode) != 0) return 1;
+    calls = hct_mram_stub.program_calls;
+    hct_mram_stub.corrupt_program = corrupt;
+    hct_mram_stub.fail_program = fail;
+    if (send(&s, HCTP_MSG_RUN_CORRECTNESS, 0u) != expected) return 2;
+    if (s.derived != NULL || hct_window.cold_count != 2u) return 3;
+    return (hct_mram_stub.program_calls == calls + programs) ? 0 : 4;
+}
+
+/* The packed FC stream (any adapter-derived operand) lives in MRAM after the blobs,
+ * is evicted with them, and is what the kernel reads (#377 part 1). */
+static int test_derived(uintptr_t base)
+{
+    static hct_server_session_t s;
+    const uint8_t *first;
+    uint32_t calls;
+    int status;
+
+    /* 100 bytes: six whole rows plus a zero-padded tail row. */
+    status = derived_case(&s, "derived_a", 100u, HCT_HOST_DERIVE_BUILD);
+    if (status != 0) return 900 + status;
+    if (s.mram_case_bytes != pool_lines(sizeof(kWeights)) + pool_lines(sizeof(kBias)) + pool_lines(100u)) return 905;
+    calls = hct_mram_stub.program_calls;
+    if (send(&s, HCTP_MSG_RUN_CORRECTNESS, 0u) != HCTP_STATUS_OK) return 906;
+    first = s.derived;
+    if (first != s.blobs[2].placed + pool_lines(sizeof(kBias))) return 907;
+    if ((uintptr_t)first + 112u > base + POOL_BYTES) return 908;
+    if (memcmp(first, hct_host_derived_data, 100u) != 0) return 909;
+    if (hct_mram_stub.program_calls != calls + 2u) return 911;
+    if (hct_window.cold_count != 3u || hct_window.cold_addr[2] != first || hct_window.cold_bytes[2] != 112) return 912;
+    if (hct_host_last_derived != first) return 913;
+    drain(&s);
+    payload[0] = 1u;
+    if (send(&s, HCTP_MSG_CORRECTNESS_ACK, 1u) != HCTP_STATUS_OK) return 914;
+    calls = hct_mram_stub.invalidate_calls;
+    if (send(&s, HCTP_MSG_RUN_PERFORMANCE, 0u) != HCTP_STATUS_OK) return 915;
+    if ((hct_mram_stub.invalidate_calls - calls) % 3u != 0u || hct_mram_stub.last_invalidate != (const volatile void *)first) return 916;
+    if (hct_host_last_derived != first || drain(&s) != HCTP_MSG_SESSION_COMPLETE) return 917;
+
+    /* Same case again: same address, no row programmed. */
+    status = derived_case(&s, "derived_b", 100u, HCT_HOST_DERIVE_BUILD);
+    if (status != 0) return 920 + status;
+    calls = hct_mram_stub.program_calls;
+    if (send(&s, HCTP_MSG_RUN_CORRECTNESS, 0u) != HCTP_STATUS_OK) return 925;
+    if (s.derived != first || hct_mram_stub.program_calls != calls) return 926;
+    drain(&s);
+
+    /* Planned at CASE_META: exactly the pool fits, one more byte is refused unwritten. */
+    hct_host_derived_bytes = POOL_BYTES - pool_lines(sizeof(kWeights)) - pool_lines(sizeof(kBias));
+    if (open_session(&s, workspace, sizeof(workspace), "derived_exact") != 0) return 930;
+    if (send_meta(&s, "derived_exact", kCase, 3u) != HCTP_STATUS_OK || s.mram_case_bytes != POOL_BYTES) return 931;
+    hct_host_derived_bytes += 1u;
+    calls = hct_mram_stub.program_calls;
+    if (open_session(&s, workspace, sizeof(workspace), "derived_over") != 0) return 932;
+    if (send_meta(&s, "derived_over", kCase, 3u) != HCTP_STATUS_NO_SPACE) return 933;
+    if (strstr(error_text(&s), "status=-8 MRAM pool full") == NULL) return 934;
+    if (hct_mram_stub.program_calls != calls) return 935;
+
+    /* An adapter error is the correctness run's to report; nothing is placed. */
+    status = derived_case(&s, "derived_fail", 100u, HCT_HOST_DERIVE_FAIL);
+    if (status != 0) return 940 + status;
+    calls = hct_mram_stub.program_calls;
+    if (send(&s, HCTP_MSG_RUN_CORRECTNESS, 0u) != HCTP_STATUS_OK) return 945;
+    if (s.derived != NULL || hct_host_last_derived != NULL || hct_mram_stub.program_calls != calls) return 946;
+    drain(&s);
+
+    /* Built nothing, or not the planned size: refused. A failed or corrupt program: refused. */
+    if (derived_refused("derived_nothing", HCT_HOST_DERIVE_NOTHING, 0, 0, 0u, HCTP_STATUS_INVALID_ARGUMENT) != 0) return 950;
+    if (derived_refused("derived_size", HCT_HOST_DERIVE_WRONG_SIZE, 0, 0, 0u, HCTP_STATUS_INVALID_ARGUMENT) != 0) return 951;
+    /* A new seed per case: the rows differ, so the stub programs them (corrupt: rows then tail). */
+    if (derived_refused("derived_corrupt", HCT_HOST_DERIVE_BUILD, 1, 0, 2u, HCTP_STATUS_PAYLOAD_CRC_MISMATCH) != 0) return 952;
+    if (derived_refused("derived_program", HCT_HOST_DERIVE_BUILD, 0, 1, 1u, HCTP_STATUS_INVALID_ARGUMENT) != 0) return 953;
+    hct_host_derived_bytes = 0u;
+    hct_host_derive_mode = HCT_HOST_DERIVE_BUILD;
+    hct_host_derive_seed = 0u;
+    printf("derived placed\n");
+    return 0;
+}
+
 #endif
 
 #if HCT_BLOB_STORE_BYTES > 0
@@ -645,6 +742,7 @@ int main(void)
         if (status == 0) status = test_row_skip();
         if (status == 0) status = test_pool_limits(base);
         if (status == 0) status = test_pool_fit(base);
+        if (status == 0) status = test_derived(base);
     }
 #endif
 #if HCT_BLOB_STORE_BYTES > 0

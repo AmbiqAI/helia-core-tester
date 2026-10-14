@@ -2633,11 +2633,19 @@ static arm_cmsis_nn_status run_fully_connected_once(hct_server_session_t *sessio
                 {
                     return ARM_CMSIS_NN_ARG_ERROR;
                 }
+                if (session->deriving != 0u)
+                {
+                    session->derived_source = (const uint8_t *)stream;
+                    session->derived_built = (uint32_t)packed_size;
+                    return ARM_CMSIS_NN_SUCCESS;
+                }
+                /* MRAM placement reads the copy programmed from this stream (#377);
+                 * the pack above still runs so prepare_cycles matches TCM. */
                 return arm_fully_connected_per_channel_packed_s8(&fc_params,
                                                                  &input_dims,
                                                                  (const int8_t *)blob_ptr(session, input),
                                                                  &filter_dims,
-                                                                 stream,
+                                                                 (session->derived != NULL) ? (const int8_t *)session->derived : stream,
                                                                  &output_dims,
                                                                  (int8_t *)hct_output_ptr(session));
             }
@@ -5881,9 +5889,35 @@ def _render_dispatch() -> list[str]:
         "            return ARM_CMSIS_NN_ARG_ERROR;",
         "    }",
         "}",
+        "",
+        _DERIVED_OPERAND_BYTES,
         "#endif",
     ])
     return lines
+
+
+# Read-only operands an adapter derives from its blobs: the packed FC stream. Sized from
+# the CASE_META weights dims so plan_mram() counts it before any blob arrives (#377).
+_DERIVED_OPERAND_BYTES = """uint32_t hct_derived_operand_bytes(hct_server_session_t *session)
+{
+    if (session->expected_kernel_id == HCT_KERNEL_ID_FULLY_CONNECTED_PER_CHANNEL_PACKED_S8)
+    {
+        const hct_server_blob_t *weights = find_blob_by_role(session, HCT_BLOB_ROLE_WEIGHTS);
+        cmsis_nn_dims filter_dims;
+        int32_t packed_size;
+        if (weights == NULL || arm_fully_connected_per_channel_packed_s8_get_packed_size == NULL)
+        {
+            return 0u;
+        }
+        filter_dims.n = (int32_t)weights->dimensions[1];
+        filter_dims.h = 1;
+        filter_dims.w = 1;
+        filter_dims.c = (int32_t)weights->dimensions[0];
+        packed_size = arm_fully_connected_per_channel_packed_s8_get_packed_size(&filter_dims);
+        return (packed_size > 0) ? (uint32_t)packed_size : 0u;
+    }
+    return 0u;
+}"""
 
 
 # Setup calls TFLM runs once in Prepare.
