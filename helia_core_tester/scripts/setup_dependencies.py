@@ -30,7 +30,7 @@ import tarfile
 import tempfile
 import urllib.request
 from pathlib import Path
-from typing import Optional
+from typing import NamedTuple, Optional
 
 import certifi
 
@@ -446,68 +446,124 @@ def setup_arm_gcc(
     print(f"ARM GCC {version} setup complete")
 
 
-def setup_cmsis5(downloads_dir: Path, force: bool = False) -> None:
-    """Clone CMSIS-5 repository."""
-    cmsis5_dir = downloads_dir / "CMSIS_5"
-    
-    # Check if it's a valid installation (has .git or CMSIS subdirectory)
-    is_valid_install = cmsis5_dir.exists() and (
-        (cmsis5_dir / ".git").exists() or 
-        (cmsis5_dir / "CMSIS").exists()
-    )
-    
-    if is_valid_install and not force:
-        print("CMSIS-5 already installed. If you wish to install a new version, please delete the old folder.")
+class SourcePin(NamedTuple):
+    label: str
+    url: str
+    commit: str
+
+
+# Reviewed source revisions, fetched by commit and verified after checkout.
+# Bumping one is a deliberate change to this table; CI's download cache is keyed
+# on this file's hash, so it refetches.
+SOURCE_PINS = {
+    # ARM-software/CMSIS_5 develop, 2024-09-03.
+    "CMSIS_5": SourcePin(
+        "CMSIS-5",
+        "https://github.com/ARM-software/CMSIS_5.git",
+        "55b19837f5703e418ca37894d5745b1dc05e4c91",
+    ),
+    # ethos-u-core-platform main, 2026-10-06.
+    "ethos-u-core-platform": SourcePin(
+        "Ethos-U core platform",
+        "https://gitlab.arm.com/artificial-intelligence/ethos-u/ethos-u-core-platform.git",
+        "8405e3fc7e6fc684917a6b0cdfc906ce8a94f204",
+    ),
+}
+
+_COMMIT_RE = re.compile(r"[0-9a-f]{40}")
+
+
+class SourcePinError(RuntimeError):
+    """Raised when a source dependency is not, or cannot be put, at its pinned commit."""
+
+
+def _git(args: list[str], cwd: Path) -> str:
+    try:
+        result = subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "").strip()
+        raise SourcePinError(f"git {' '.join(args)} failed in {cwd}: {detail}") from exc
+    return result.stdout.strip()
+
+
+def _checkout_head(path: Path) -> Optional[str]:
+    """HEAD of the checkout at path, or None when it is not a usable git checkout."""
+    if not (path / ".git").exists():
+        return None
+    try:
+        return _git(["rev-parse", "--verify", "HEAD^{commit}"], path)
+    except SourcePinError:
+        return None
+
+
+def _has_local_changes(path: Path) -> bool:
+    return bool(_git(["status", "--porcelain", "--untracked-files=no"], path))
+
+
+def _fetch_pinned(path: Path, pin: SourcePin) -> None:
+    _git(["fetch", "--quiet", "--depth=1", pin.url, pin.commit], path)
+    _git(["checkout", "--quiet", "--detach", pin.commit], path)
+    head = _checkout_head(path)
+    if head != pin.commit:
+        raise SourcePinError(f"{pin.label} checkout is at {head}, expected pinned {pin.commit}")
+
+
+def setup_pinned_source(downloads_dir: Path, dirname: str, force: bool = False) -> None:
+    """Put downloads_dir/dirname at its SOURCE_PINS commit.
+
+    A fresh install (or a --force reinstall) is fetched by commit into a staging
+    directory and moved in only once verified, so a failed fetch leaves any
+    existing checkout untouched. An existing clean checkout at another commit is moved
+    to the pin; one with local changes, or a directory whose revision cannot be
+    read, is rejected unless force replaces it.
+    """
+    pin = SOURCE_PINS[dirname]
+    if not _COMMIT_RE.fullmatch(pin.commit):
+        raise SourcePinError(f"{pin.label} pin {pin.commit!r} is not a full 40-hex commit")
+    dest = downloads_dir / dirname
+
+    if dest.exists() and not force:
+        head = _checkout_head(dest)
+        if head is None:
+            raise SourcePinError(
+                f"{dest} exists but is not a git checkout, so its revision cannot be verified "
+                f"against {pin.commit}. Delete it or rerun with --force."
+            )
+        if _has_local_changes(dest):
+            raise SourcePinError(
+                f"{dest} has local changes at {head}; refusing to move it to {pin.commit}. "
+                "Delete it or rerun with --force."
+            )
+        if head == pin.commit:
+            print(f"{pin.label} already at pinned {pin.commit[:12]}")
+            return
+        print(f"Moving {pin.label} from {head[:12]} to pinned {pin.commit[:12]}...")
+        _fetch_pinned(dest, pin)
+        print(f"{pin.label} setup complete")
         return
-    
-    if force and cmsis5_dir.exists():
-        print("Removing existing CMSIS-5 installation...")
-        shutil.rmtree(cmsis5_dir)
-    elif cmsis5_dir.exists() and not is_valid_install:
-        # Directory exists but is empty/invalid, remove it
-        print("Removing invalid/empty CMSIS-5 directory...")
-        shutil.rmtree(cmsis5_dir)
-    
-    print("Cloning CMSIS-5...")
-    run_command(
-        ["git", "clone", "--quiet", "--depth=1", "https://github.com/ARM-software/CMSIS_5.git"],
-        cwd=downloads_dir,
-        description="Cloning CMSIS-5"
-    )
-    
-    print("CMSIS-5 setup complete")
+
+    print(f"Fetching {pin.label} at {pin.commit[:12]}...")
+    downloads_dir.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=downloads_dir, prefix=f".{dirname}-") as tmp:
+        stage = Path(tmp) / dirname
+        stage.mkdir()
+        _git(["init", "--quiet"], stage)
+        _fetch_pinned(stage, pin)
+        if dest.exists():
+            print(f"Replacing existing {pin.label} at {dest}...")
+            shutil.rmtree(dest)
+        os.replace(stage, dest)
+    print(f"{pin.label} setup complete")
+
+
+def setup_cmsis5(downloads_dir: Path, force: bool = False) -> None:
+    """Fetch CMSIS-5 at its pinned commit."""
+    setup_pinned_source(downloads_dir, "CMSIS_5", force)
 
 
 def setup_ethos_u_platform(downloads_dir: Path, force: bool = False) -> None:
-    """Clone Ethos-U core platform repository."""
-    ethos_dir = downloads_dir / "ethos-u-core-platform"
-    
-    # Check if it's a valid installation (has .git or core_platform subdirectory)
-    is_valid_install = ethos_dir.exists() and (
-        (ethos_dir / ".git").exists() or 
-        (ethos_dir / "core_platform").exists()
-    )
-    
-    if is_valid_install and not force:
-        print("Ethos-U core platform already installed. If you wish to install a new version, please delete the old folder.")
-        return
-    
-    if force and ethos_dir.exists():
-        print("Removing existing Ethos-U core platform installation...")
-        shutil.rmtree(ethos_dir)
-    elif ethos_dir.exists() and not is_valid_install:
-        # Directory exists but is empty/invalid, remove it
-        print("Removing invalid/empty Ethos-U core platform directory...")
-        shutil.rmtree(ethos_dir)
-    
-    print("Cloning Ethos-U core platform...")
-    run_command(
-        ["git", "clone", "--quiet", "--depth=1", "https://gitlab.arm.com/artificial-intelligence/ethos-u/ethos-u-core-platform.git"],
-        cwd=downloads_dir,
-        description="Cloning Ethos-U core platform"
-    )
-    
-    print("Ethos-U core platform setup complete")
+    """Fetch the Ethos-U core platform at its pinned commit."""
+    setup_pinned_source(downloads_dir, "ethos-u-core-platform", force)
 
 
 DEFAULT_DOWNLOADS_DIR = Path("artifacts/downloads")
@@ -646,8 +702,8 @@ Examples:
     args = parser.parse_args()
     
     # Validate system. Only the two prebuilt-binary downloads (Corstone-300 FVP
-    # and the ARM GCC tarball) are Linux-only; the git-clone dependencies
-    # (CMSIS-5, Ethos-U core platform) install anywhere. Treat an
+    # and the ARM GCC tarball) are Linux-only; the git dependencies
+    # (CMSIS-5, Ethos-U core platform, fetched at pinned commits) install anywhere. Treat an
     # unsupported OS as "skip those two", not as a hard failure.
     try:
         get_architecture()
