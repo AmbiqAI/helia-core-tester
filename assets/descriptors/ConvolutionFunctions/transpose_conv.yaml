@@ -13,7 +13,7 @@ input_shape:
 filter_shape:
 - 6
 - 6
-- 9
+- 3
 - 9
 strides:
 - 2
@@ -36,7 +36,7 @@ input_shape:
 filter_shape:
 - 3
 - 3
-- 15
+- 4
 - 15
 strides:
 - 1
@@ -59,7 +59,7 @@ input_shape:
 filter_shape:
 - 1
 - 5
-- 7
+- 5
 - 7
 strides:
 - 5
@@ -82,7 +82,7 @@ input_shape:
 filter_shape:
 - 3
 - 3
-- 32
+- 5
 - 32
 strides:
 - 1
@@ -105,7 +105,7 @@ input_shape:
 filter_shape:
 - 2
 - 2
-- 32
+- 2
 - 32
 strides:
 - 1
@@ -128,7 +128,7 @@ input_shape:
 filter_shape:
 - 1
 - 1
-- 17
+- 5
 - 17
 strides:
 - 2
@@ -197,7 +197,7 @@ input_shape:
 filter_shape:
 - 3
 - 3
-- 16
+- 8
 - 16
 strides:
 - 1
@@ -220,7 +220,7 @@ input_shape:
 filter_shape:
 - 2
 - 2
-- 32
+- 8
 - 32
 strides:
 - 3
@@ -249,7 +249,7 @@ input_shape:
 filter_shape:
 - 4
 - 6
-- 8
+- 4
 - 8
 strides:
 - 2
@@ -275,7 +275,7 @@ input_shape:
 filter_shape:
 - 6
 - 4
-- 8
+- 4
 - 8
 strides:
 - 2
@@ -302,7 +302,7 @@ input_shape:
 filter_shape:
 - 4
 - 4
-- 8
+- 4
 - 8
 strides:
 - 2

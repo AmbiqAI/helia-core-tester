@@ -922,6 +922,20 @@
           "act_max": { "type": "integer" }
         }
       }
+    },
+    {
+      "$comment": "TransposeConv: input_shape [N, H, W, C] and filter_shape [KH, KW, OutCh, InCh], every dim positive. InCh == C is checked by OpTransposeConv.declared_filter_shape, since a schema cannot compare two fields; that check also covers descriptors built in code.",
+      "if": {
+        "properties": { "operator": { "const": "TransposeConv" } },
+        "required": ["operator"]
+      },
+      "then": {
+        "required": ["filter_shape"],
+        "properties": {
+          "input_shape": { "minItems": 4, "maxItems": 4, "items": { "minimum": 1 } },
+          "filter_shape": { "minItems": 4, "maxItems": 4, "items": { "minimum": 1 } }
+        }
+      }
     }
   ]
 }

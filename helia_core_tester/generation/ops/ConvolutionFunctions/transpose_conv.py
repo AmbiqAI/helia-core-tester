@@ -2,6 +2,7 @@
 TransposeConv operation implementation.
 """
 
+import numbers
 from typing import Dict, Any
 import numpy as np
 import tensorflow as tf
@@ -63,17 +64,24 @@ class OpTransposeConv(OperationBase):
                 f"{name}: TransposeConv filter_shape must be [KH, KW, OutCh, InCh], got {filter_shape!r}"
             )
         for dim in (*input_shape, *filter_shape):
-            if isinstance(dim, bool) or not isinstance(dim, int) or dim <= 0:
+            # numpy integers are Integral; bool is too, but never a dimension.
+            if isinstance(dim, bool) or not isinstance(dim, numbers.Integral) or dim <= 0:
                 raise ValueError(
                     f"{name}: TransposeConv shapes must be positive integers, "
                     f"got input_shape={input_shape!r} filter_shape={filter_shape!r}"
                 )
-        if filter_shape[3] != input_shape[3]:
+        kh, kw, out_ch, in_ch = (int(dim) for dim in filter_shape)
+        channels = int(input_shape[3])
+        if in_ch != channels:
+            hint = ""
+            if out_ch == channels:
+                # Conv2D descriptors use [KH, KW, InCh, OutCh]; this looks like that order.
+                hint = f"; did you mean [{kh}, {kw}, {in_ch}, {channels}] (OutCh {in_ch})?"
             raise ValueError(
-                f"{name}: TransposeConv filter_shape InCh ({filter_shape[3]}) must equal the "
-                f"input channel count ({input_shape[3]}); filter_shape is [KH, KW, OutCh, InCh]"
+                f"{name}: TransposeConv filter_shape InCh ({in_ch}) must equal the "
+                f"input channel count ({channels}); filter_shape is [KH, KW, OutCh, InCh]{hint}"
             )
-        return tuple(filter_shape)
+        return kh, kw, out_ch, in_ch
 
     def build_keras_model(self) -> tf.keras.Model:
         """Build Keras model for TransposeConv operation.

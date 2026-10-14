@@ -45,9 +45,9 @@ def test_transpose_conv_s8_reverse_buffer_covers_rolling_buffer_after_ns_cmsis_n
     tester's static scratch buffer must stay an upper bound on that new max.
 
     Dims below are read from the transpose_conv_reverse_valid_kernel1x1_stride2x2_no_bias_s8
-    descriptor (input_c=17, kernel 1x1, stride 2x2, VALID, filter [1, 1, 17, 17]).
-    Generation rejects a filter InCh that differs from input_c (issue #144), so
-    the declared filter dims are the ones plugged into the harness.
+    descriptor (input_c=17, kernel 1x1, stride 2x2, VALID, filter [1, 1, 5, 17]: 17 -> 5
+    channels). Generation uses all four declared filter dims (issue #144). The original
+    17 -> 17 shape PR#262 was found on stays covered by the parametrized test below.
     """
     desc = _load_transpose_conv_descriptor(
         "transpose_conv_reverse_valid_kernel1x1_stride2x2_no_bias_s8"
@@ -56,14 +56,14 @@ def test_transpose_conv_s8_reverse_buffer_covers_rolling_buffer_after_ns_cmsis_n
     stride_h, stride_w = int(strides[0]), int(strides[1])
     in_n, in_h, in_w, in_c = (int(v) for v in desc["input_shape"])
     kh, kw, out_ch, in_ch = (int(v) for v in desc["filter_shape"])
-    assert in_ch == in_c
 
     assert desc["padding"].upper() == "VALID"
-    assert (in_c, kh, kw, stride_h, stride_w) == (17, 1, 1, 2, 2)
+    # Still the reverse-conv route: stride <= 2 and input_c > 16.
+    assert (in_c, in_ch, out_ch, kh, kw, stride_h, stride_w) == (17, 17, 5, 1, 1, 2, 2)
 
     input_dims = {"n": in_n, "h": in_h, "w": in_w, "c": in_c}
     filter_dims = {"n": out_ch, "h": kh, "w": kw, "c": in_ch}
-    output_dims = {"n": in_n, "h": 2, "w": 4, "c": in_c}
+    output_dims = {"n": in_n, "h": 2, "w": 4, "c": out_ch}
 
     buffer_size = TemplateContextBuilder.calculate_transpose_conv_buffer_size_max(
         input_dims=input_dims,
@@ -74,11 +74,10 @@ def test_transpose_conv_s8_reverse_buffer_covers_rolling_buffer_after_ns_cmsis_n
         stride_w=stride_w,
     )
 
-    # Old reverse-only sizing yields 128 (ctx) vs. an output_ctx of 289, so the
-    # old function returns 289 for this shape -- comfortably short of the
-    # rolling-buffer requirement of 544 introduced by PR#262.
+    # Rolling buffer: ((w - 1) * stride_w + max(kw, stride)) * out_ch * max(kh, stride_h) * 4
+    # = (1 * 2 + 2) * 5 * 2 * 4 = 160 bytes, the floor PR#262 added.
     assert buffer_size >= 160
-    assert buffer_size == 544
+    assert buffer_size == 160
 
 
 @pytest.mark.parametrize(
