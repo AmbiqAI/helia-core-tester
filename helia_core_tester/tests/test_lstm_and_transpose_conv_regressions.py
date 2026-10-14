@@ -45,12 +45,9 @@ def test_transpose_conv_s8_reverse_buffer_covers_rolling_buffer_after_ns_cmsis_n
     tester's static scratch buffer must stay an upper bound on that new max.
 
     Dims below are read from the transpose_conv_reverse_valid_kernel1x1_stride2x2_no_bias_s8
-    descriptor (input_c=17, kernel 1x1, stride 2x2, VALID) and reflect the dims
-    actually plugged into the harness at generation time: filter/output channel
-    count is 17 because Keras' Conv2DTranspose infers the kernel's input-channel
-    dimension from the real input tensor (17), not from the descriptor's nominal
-    filter_shape InCh (5) -- confirmed by inspecting a generated harness for this
-    descriptor.
+    descriptor (input_c=17, kernel 1x1, stride 2x2, VALID, filter [1, 1, 17, 17]).
+    Generation rejects a filter InCh that differs from input_c (issue #144), so
+    the declared filter dims are the ones plugged into the harness.
     """
     desc = _load_transpose_conv_descriptor(
         "transpose_conv_reverse_valid_kernel1x1_stride2x2_no_bias_s8"
@@ -58,14 +55,14 @@ def test_transpose_conv_s8_reverse_buffer_covers_rolling_buffer_after_ns_cmsis_n
     strides = desc["strides"]
     stride_h, stride_w = int(strides[0]), int(strides[1])
     in_n, in_h, in_w, in_c = (int(v) for v in desc["input_shape"])
-    kh, kw, out_ch, _in_ch = (int(v) for v in desc["filter_shape"])
+    kh, kw, out_ch, in_ch = (int(v) for v in desc["filter_shape"])
+    assert in_ch == in_c
 
     assert desc["padding"].upper() == "VALID"
     assert (in_c, kh, kw, stride_h, stride_w) == (17, 1, 1, 2, 2)
 
     input_dims = {"n": in_n, "h": in_h, "w": in_w, "c": in_c}
-    # Real output channel count generated for this descriptor (see docstring).
-    filter_dims = {"n": out_ch, "h": kh, "w": kw, "c": in_c}
+    filter_dims = {"n": out_ch, "h": kh, "w": kw, "c": in_ch}
     output_dims = {"n": in_n, "h": 2, "w": 4, "c": in_c}
 
     buffer_size = TemplateContextBuilder.calculate_transpose_conv_buffer_size_max(
