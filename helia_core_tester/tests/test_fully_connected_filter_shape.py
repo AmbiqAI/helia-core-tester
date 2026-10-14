@@ -237,6 +237,27 @@ def test_converted_weights_disagreeing_with_descriptor_are_rejected(base_desc, t
         OpFullyConnected(tampered, Config.seed).generate_c_files(out)
 
 
+@pytest.mark.parametrize("filter_shape", [[5, 8], [3, 8]])
+def test_s4_c_files_reject_an_outch_only_mismatch(shipped, tmp_path, filter_shape):
+    """Fault injection: OutCh agrees with nothing in the S4 model, though InFeatures still matches the input."""
+    desc = copy.deepcopy(shipped[S4_BASE])
+    out = tmp_path / "case"
+    out.mkdir()
+    OpFullyConnected(desc, Config.seed).convert_to_tflite(None, str(out / f"{S4_BASE}.tflite"), Config.seed)
+    tampered = copy.deepcopy(desc)
+    tampered["filter_shape"] = filter_shape
+    with pytest.raises(
+        ValueError,
+        match=re.escape(
+            f"{S4_BASE}: converted FullyConnected S4 weights [OutCh, InFeatures]=[4, 8] "
+            f"do not match the descriptor's filter_shape {filter_shape}"
+        ),
+    ):
+        OpFullyConnected(tampered, Config.seed).generate_c_files(out)
+    assert not list(out.rglob("*.c"))
+    assert not list(out.rglob("*.h"))
+
+
 def test_weightless_model_fails_closed(base_desc, tmp_path, monkeypatch):
     """Fault injection: no weight tensor in the model stops generation before any C is written."""
     out = tmp_path / "case"

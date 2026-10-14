@@ -566,6 +566,13 @@ class OpFullyConnected(OperationBase):
 
         # Validate weights shape
         if weight_dtype == "S4":
+            # The dims come from the descriptor, so check them against the model's unpacked weights.
+            unpacked_shape = [int(dim) for dim in weights.shape] if weights is not None else None
+            if unpacked_shape != list(declared):
+                raise ValueError(
+                    f"{name}: converted FullyConnected S4 weights [OutCh, InFeatures]={unpacked_shape} "
+                    f"do not match the descriptor's filter_shape {list(declared)}"
+                )
             filter_dims = {
                 'n': declared[1],  # input_features
                 'h': 1,
