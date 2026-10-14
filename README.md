@@ -674,7 +674,7 @@ HELIA_GCC_VERSION=15.2.rel1 uv run helia_core_tester full --cpu cortex-m55
 
 ### Source dependencies (CMSIS-5, Ethos-U core platform)
 
-`setup_dependencies.py` fetches CMSIS-5 and ethos-u-core-platform at fixed commits listed in `SOURCE_PINS` (CMSIS_5 `55b19837f570`, ethos-u-core-platform `8405e3fc7e6f`) and checks `git rev-parse HEAD` after checkout. An existing clean checkout at another commit is moved to the pin. A checkout with local changes, or a directory that is not a git checkout, is rejected; `--force` replaces it, and the old checkout is removed only after the new one is verified. Bumping a pin means editing `SOURCE_PINS`.
+`setup_dependencies.py` fetches CMSIS-5 and ethos-u-core-platform at the fixed commits listed in `SOURCE_PINS` in that script and checks `git rev-parse HEAD` after checkout. Run directly, it moves an existing clean checkout at another commit to the pin. It rejects a checkout with local changes (edits or untracked files) or a directory that is not a git checkout; `--force` replaces it, and the old checkout is restored if the replacement fails. The setup that `build`, `run` and `full` start passes `--source-pins warn`: it fetches missing sources at the pin, but only reports an existing checkout that is off its pin, and uses it as is. Bumping a pin means editing `SOURCE_PINS`.
 
 ### Compiler (`--toolchain`)
 

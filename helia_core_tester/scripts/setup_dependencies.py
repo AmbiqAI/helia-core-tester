@@ -18,6 +18,7 @@ Usage:
 """
 
 import argparse
+import contextlib
 import hashlib
 import os
 import platform
@@ -30,9 +31,14 @@ import tarfile
 import tempfile
 import urllib.request
 from pathlib import Path
-from typing import NamedTuple, Optional
+from typing import Iterator, NamedTuple, Optional
 
 import certifi
+
+try:
+    import fcntl
+except ImportError:  # non-POSIX hosts: setup runs without a cross-process lock
+    fcntl = None
 
 from helia_core_tester.core.discovery import find_repo_root
 
@@ -283,8 +289,16 @@ def extract_tar_gz(archive_path: Path, extract_to: Path, strip_components: int =
     print("Extracted successfully")
 
 
-def run_command(cmd: list[str], cwd: Optional[Path] = None, description: str = "") -> None:
-    """Run a command and handle errors."""
+def run_command(
+    cmd: list[str],
+    cwd: Optional[Path] = None,
+    description: str = "",
+    *,
+    env: Optional[dict] = None,
+    stdin: Optional[int] = None,
+    quiet: bool = False,
+) -> str:
+    """Run a command and return its stdout; quiet leaves output and failure details to the caller."""
     if description:
         print(f"Running: {description}")
     
@@ -294,17 +308,21 @@ def run_command(cmd: list[str], cwd: Optional[Path] = None, description: str = "
             cwd=cwd,
             check=True,
             capture_output=True,
-            text=True
+            text=True,
+            env=env,
+            stdin=stdin,
         )
-        if result.stdout:
+        if result.stdout and not quiet:
             print(result.stdout)
+        return result.stdout
     except subprocess.CalledProcessError as e:
-        print(f"Command failed: {' '.join(cmd)}")
-        print(f"Return code: {e.returncode}")
-        if e.stdout:
-            print(f"STDOUT: {e.stdout}")
-        if e.stderr:
-            print(f"STDERR: {e.stderr}")
+        if not quiet:
+            print(f"Command failed: {' '.join(cmd)}")
+            print(f"Return code: {e.returncode}")
+            if e.stdout:
+                print(f"STDOUT: {e.stdout}")
+            if e.stderr:
+                print(f"STDERR: {e.stderr}")
         raise
 
 
@@ -450,6 +468,8 @@ class SourcePin(NamedTuple):
     label: str
     url: str
     commit: str
+    # Top-level directory every install of the repo has, git checkout or not.
+    marker: str
 
 
 # Reviewed source revisions, fetched by commit and verified after checkout.
@@ -461,16 +481,21 @@ SOURCE_PINS = {
         "CMSIS-5",
         "https://github.com/ARM-software/CMSIS_5.git",
         "55b19837f5703e418ca37894d5745b1dc05e4c91",
+        "CMSIS",
     ),
     # ethos-u-core-platform main, 2026-10-06.
     "ethos-u-core-platform": SourcePin(
         "Ethos-U core platform",
         "https://gitlab.arm.com/artificial-intelligence/ethos-u/ethos-u-core-platform.git",
         "8405e3fc7e6fc684917a6b0cdfc906ce8a94f204",
+        "core_platform",
     ),
 }
 
-_COMMIT_RE = re.compile(r"[0-9a-f]{40}")
+# enforce: an explicit setup puts every checkout at its pin or fails.
+# warn: the setup run before each build/run only fetches missing sources and
+# reports, without changing, an existing checkout that is off its pin.
+PIN_MODES = ("enforce", "warn")
 
 
 class SourcePinError(RuntimeError):
@@ -478,12 +503,18 @@ class SourcePinError(RuntimeError):
 
 
 def _git(args: list[str], cwd: Path) -> str:
+    """git without prompts, trusting cwd even when another user owns it.
+
+    downloads_dir is ours, but in a bind-mounted container it is owned by the
+    host user and git would otherwise refuse it as dubious ownership.
+    """
+    cmd = ["git", "-c", f"safe.directory={Path(cwd).resolve()}", *args]
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
     try:
-        result = subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
+        return run_command(cmd, cwd=cwd, env=env, stdin=subprocess.DEVNULL, quiet=True).strip()
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or exc.stdout or "").strip()
         raise SourcePinError(f"git {' '.join(args)} failed in {cwd}: {detail}") from exc
-    return result.stdout.strip()
 
 
 def _checkout_head(path: Path) -> Optional[str]:
@@ -497,7 +528,8 @@ def _checkout_head(path: Path) -> Optional[str]:
 
 
 def _has_local_changes(path: Path) -> bool:
-    return bool(_git(["status", "--porcelain", "--untracked-files=no"], path))
+    """Tracked edits or untracked files; either can change what a build compiles."""
+    return bool(_git(["status", "--porcelain"], path))
 
 
 def _has_commit(path: Path, commit: str) -> bool:
@@ -520,63 +552,122 @@ def _fetch_pinned(path: Path, pin: SourcePin) -> None:
         raise SourcePinError(f"{pin.label} checkout is at {head}, expected pinned {pin.commit}")
 
 
-def setup_pinned_source(downloads_dir: Path, dirname: str, force: bool = False) -> None:
+@contextlib.contextmanager
+def _setup_lock(downloads_dir: Path, dirname: str) -> Iterator[None]:
+    """Serialize setup of one source across processes (parallel runs share downloads_dir)."""
+    with open(downloads_dir / f".{dirname}.lock", "a") as handle:
+        if fcntl is not None:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+        yield
+
+
+def _remove_stale_staging(downloads_dir: Path, dirname: str) -> None:
+    """Drop staging dirs a killed setup left behind; safe only under _setup_lock."""
+    for leftover in downloads_dir.glob(f".{dirname}-*"):
+        if leftover.is_dir():
+            print(f"Removing stale staging directory {leftover}")
+            shutil.rmtree(leftover, ignore_errors=True)
+
+
+def _swap_in(stage: Path, dest: Path, scratch: Path) -> None:
+    """Move stage to dest; an existing dest is set aside first and restored if the move fails."""
+    backup = None
+    if dest.exists() or dest.is_symlink():
+        backup = scratch / f"{dest.name}.old"
+        os.replace(dest, backup)
+    try:
+        os.replace(stage, dest)
+    except OSError:
+        if backup is not None:
+            os.replace(backup, dest)
+        raise
+    if backup is not None:
+        try:
+            shutil.rmtree(backup)
+        except OSError as exc:
+            print(f"WARNING: could not remove the old checkout at {backup} ({exc}); the next setup removes it")
+
+
+def _existing_checkout_problem(dest: Path, pin: SourcePin) -> tuple[Optional[str], Optional[str], bool]:
+    """(head, problem, usable) for an existing dest; problem is None when it can be moved to the pin."""
+    head = _checkout_head(dest)
+    if head is None:
+        problem = (
+            f"{dest} exists but is not a git checkout git can read (a non-git directory or an "
+            f"empty repo), so its revision cannot be verified against {pin.commit}"
+        )
+        return None, problem, (dest / pin.marker).is_dir()
+    if _has_local_changes(dest):
+        return head, f"{dest} has local changes (edits or untracked files) at {head}", True
+    return head, None, True
+
+
+def setup_pinned_source(
+    downloads_dir: Path, dirname: str, force: bool = False, pin_mode: str = "enforce"
+) -> None:
     """Put downloads_dir/dirname at its SOURCE_PINS commit.
 
     A fresh install (or a --force reinstall) is fetched by commit into a staging
-    directory and moved in only once verified, so a failed fetch leaves any
-    existing checkout untouched. An existing clean checkout at another commit is moved
-    to the pin; one with local changes, or a directory whose revision cannot be
-    read, is rejected unless force replaces it.
+    directory and swapped in only once verified; the old checkout is set aside
+    and restored if the swap fails, so a failed setup leaves it untouched. In
+    enforce mode an existing clean checkout at another commit is moved to the
+    pin, and one with local changes, or a directory whose revision cannot be
+    read, is rejected unless force replaces it. In warn mode an existing
+    checkout off its pin is reported and used as is (a non-git install only if
+    it has the repo's marker directory).
     """
+    if pin_mode not in PIN_MODES:
+        raise ValueError(f"pin_mode must be one of {PIN_MODES}, got {pin_mode!r}")
     pin = SOURCE_PINS[dirname]
-    if not _COMMIT_RE.fullmatch(pin.commit):
-        raise SourcePinError(f"{pin.label} pin {pin.commit!r} is not a full 40-hex commit")
     dest = downloads_dir / dirname
-
-    if dest.exists() and not force:
-        head = _checkout_head(dest)
-        if head is None:
-            raise SourcePinError(
-                f"{dest} exists but is not a git checkout git can read (a non-git directory, an "
-                f"empty repo, or one git refuses as unsafe), so its revision cannot be verified "
-                f"against {pin.commit}. Delete it or rerun with --force."
-            )
-        if _has_local_changes(dest):
-            raise SourcePinError(
-                f"{dest} has local changes at {head}; refusing to move it to {pin.commit}. "
-                "Delete it or rerun with --force."
-            )
-        if head == pin.commit:
-            print(f"{pin.label} already at pinned {pin.commit[:12]}")
-            return
-        print(f"Moving {pin.label} from {head[:12]} to pinned {pin.commit[:12]}...")
-        _fetch_pinned(dest, pin)
-        print(f"{pin.label} setup complete")
-        return
-
-    print(f"Fetching {pin.label} at {pin.commit[:12]}...")
     downloads_dir.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(dir=downloads_dir, prefix=f".{dirname}-") as tmp:
-        stage = Path(tmp) / dirname
-        stage.mkdir()
-        _git(["init", "--quiet"], stage)
-        _fetch_pinned(stage, pin)
-        if dest.exists():
-            print(f"Replacing existing {pin.label} at {dest}...")
-            shutil.rmtree(dest)
-        os.replace(stage, dest)
+
+    with _setup_lock(downloads_dir, dirname):
+        _remove_stale_staging(downloads_dir, dirname)
+
+        if dest.exists() and not force:
+            head, problem, usable = _existing_checkout_problem(dest, pin)
+            if problem is None and head == pin.commit:
+                print(f"{pin.label} already at pinned {pin.commit[:12]}")
+                return
+            if pin_mode == "warn" and usable:
+                reason = problem or f"{dest} is at {head[:12]}, not pinned {pin.commit[:12]}"
+                print(
+                    f"WARNING: {reason}; using it as is. setup_dependencies.py moves a clean "
+                    "checkout to the pin; --force replaces any other."
+                )
+                return
+            if problem is not None:
+                raise SourcePinError(
+                    f"{problem}; refusing to move it to {pin.commit}. Delete it or rerun with --force."
+                )
+            print(f"Moving {pin.label} from {head[:12]} to pinned {pin.commit[:12]}...")
+            _fetch_pinned(dest, pin)
+            print(f"{pin.label} setup complete")
+            return
+
+        print(f"Fetching {pin.label} at {pin.commit[:12]}...")
+        with tempfile.TemporaryDirectory(
+            dir=downloads_dir, prefix=f".{dirname}-", ignore_cleanup_errors=True
+        ) as tmp:
+            stage = Path(tmp) / dirname
+            stage.mkdir()
+            _git(["init", "--quiet"], stage)
+            _fetch_pinned(stage, pin)
+            if dest.exists() or dest.is_symlink():
+                print(f"Replacing existing {pin.label} at {dest}...")
+            _swap_in(stage, dest, Path(tmp))
     print(f"{pin.label} setup complete")
 
 
-def setup_cmsis5(downloads_dir: Path, force: bool = False) -> None:
+def setup_cmsis5(downloads_dir: Path, force: bool = False, pin_mode: str = "enforce") -> None:
     """Fetch CMSIS-5 at its pinned commit."""
-    setup_pinned_source(downloads_dir, "CMSIS_5", force)
+    setup_pinned_source(downloads_dir, "CMSIS_5", force, pin_mode)
 
 
-def setup_ethos_u_platform(downloads_dir: Path, force: bool = False) -> None:
+def setup_ethos_u_platform(downloads_dir: Path, force: bool = False, pin_mode: str = "enforce") -> None:
     """Fetch the Ethos-U core platform at its pinned commit."""
-    setup_pinned_source(downloads_dir, "ethos-u-core-platform", force)
+    setup_pinned_source(downloads_dir, "ethos-u-core-platform", force, pin_mode)
 
 
 DEFAULT_DOWNLOADS_DIR = Path("artifacts/downloads")
@@ -704,6 +795,15 @@ Examples:
         help="Skip Ethos-U core platform download"
     )
     parser.add_argument(
+        "--source-pins",
+        choices=PIN_MODES,
+        default="enforce",
+        help=(
+            "enforce (default): move CMSIS-5 / Ethos-U checkouts to their pinned commits or fail; "
+            "warn: fetch missing ones at the pin, report but keep existing ones that are off it"
+        ),
+    )
+    parser.add_argument(
         "--skip-python",
         action="store_true",
         help="Skip Python virtual environment setup"
@@ -755,11 +855,11 @@ Examples:
             print()
         
         if not args.skip_cmsis5:
-            setup_cmsis5(args.downloads_dir, args.force)
+            setup_cmsis5(args.downloads_dir, args.force, args.source_pins)
             print()
         
         if not args.skip_ethos:
-            setup_ethos_u_platform(args.downloads_dir, args.force)
+            setup_ethos_u_platform(args.downloads_dir, args.force, args.source_pins)
             print()
         
         if not args.skip_python:
