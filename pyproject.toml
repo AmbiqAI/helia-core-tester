@@ -9,6 +9,7 @@ include = ["helia_core_tester*"]
 [tool.setuptools.package-data]
 "helia_core_tester.mutation" = ["host/*.h", "host/*.c"]
 "helia_core_tester.agent_loop" = ["prompt.md.j2"]
+"helia_core_tester.generation" = ["descriptors/schema.json"]
 
 [project]
 name = "helia_core_tester"
@@ -30,6 +31,8 @@ dependencies = [
     "pytest>=7.4.0,<9.0.0",
     "pyyaml>=6.0.0,<7.0.0",
     "jinja2>=3.0.0,<4.0.0",
+    # Validates every descriptor against generation/descriptors/schema.json (draft 2020-12).
+    "jsonschema>=4.18.0,<5.0.0",
     "ai_edge_litert>=2.1.1",
     "typer>=0.9.0,<1.0.0",
     "pylink-square>=1.2.0,<3.0.0",
