@@ -10,7 +10,7 @@ static cmsis_nn_context transpose_conv_float_default_f32_ctx;
 
 // Runtime scratch buffer (max upper bound; actual size queried at runtime)
 // Buffer size calculated conservatively to handle MVE and DSP implementations
-#define TRANSPOSE_CONV_FLOAT_DEFAULT_F32_BUFFER_SIZE_MAX 1112
+#define TRANSPOSE_CONV_FLOAT_DEFAULT_F32_BUFFER_SIZE_MAX 8192
 static struct __attribute__((aligned(16))) {
     uint8_t head[HELIA_GUARD_BYTES];
     uint8_t body[TRANSPOSE_CONV_FLOAT_DEFAULT_F32_BUFFER_SIZE_MAX];

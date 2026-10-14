@@ -1696,8 +1696,8 @@ def _build_transpose_conv_case(
     input_dims = _extract_dims(header_text, f"{prefix}_input_dims")
     filter_dims = _extract_dims(header_text, f"{prefix}_filter_dims")
     output_dims = _extract_dims(header_text, f"{prefix}_output_dims")
-    # Only the s16 adapter loops batches.
-    batched = activation_dtype == "S16" and input_dims["n"] == output_dims["n"]
+    # The s8 adapter takes one image.
+    batched = activation_dtype != "S8" and input_dims["n"] == output_dims["n"]
     if not batched and (input_dims["n"] != 1 or output_dims["n"] != 1):
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: batch size > 1 is not yet supported by the hardware bridge."

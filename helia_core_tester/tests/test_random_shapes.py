@@ -21,6 +21,7 @@ from helia_core_tester.hardware.generated_test_bridge import HW_CASE_SUFFIX
 
 SEEDS = (0, 1, 7, 12345)
 CONV, DW, DW16, TC16 = ("Convolve", "S8"), ("DepthwiseConv", "S8"), ("DepthwiseConv", "S16"), ("TransposeConv", "S16")
+TCF32, TCF16 = ("TransposeConv", "FP32"), ("TransposeConv", "FP16")
 
 
 def _layer(case: dict) -> rs.Layer:
@@ -50,7 +51,7 @@ def test_ops_draw_independently() -> None:
 
 
 @pytest.mark.parametrize(("op", "dtype", "picked"), [
-    (None, None, (CONV, DW, DW16, TC16)),
+    (None, None, (CONV, DW, DW16, TC16, TCF32, TCF16)),
     ("TransposeConv", "S16", (TC16,)),
     ("transpose_conv", None, (TC16,)),
     ("Convolve", None, (CONV,)),
@@ -73,7 +74,7 @@ def test_select_ops_matches_filters(op, dtype, picked) -> None:
     ("rs7_conv", None),
 ])
 def test_select_ops_refuses_unknown(op, dtype) -> None:
-    with pytest.raises(ValueError, match="have Convolve S8, DepthwiseConv S8, DepthwiseConv S16, TransposeConv S16$"):
+    with pytest.raises(ValueError, match="TransposeConv S16, TransposeConv FP32, TransposeConv FP16$"):
         rs.select_ops(op, dtype)
 
 
@@ -255,7 +256,8 @@ def test_explicit_zero_seed_beats_env(monkeypatch: pytest.MonkeyPatch) -> None:
     ({"random_shapes": -3}, "random_shapes must be >= 1"),
     ({"random_shapes": 2, "shape_seed": -1}, "shape_seed must be in"),
     ({"random_shapes": 2, "shape_seed": 2**32}, "shape_seed must be in"),
-    ({"random_shapes": 2, "suite": "float"}, "needs the int suite"),
+    ({"random_shapes": 2, "suite": "float", "dtype_filter": "S8"}, "needs the int suite"),
+    ({"random_shapes": 2, "dtype_filter": "FP32"}, "needs the float suite"),
     ({"hidden_dir": "/tmp/hidden"}, "needs random_shapes"),
     ({"random_shapes": 2, "hidden_dir": "artifacts/hidden"}, "neither hold nor sit inside"),
     ({"random_shapes": 2, "hidden_dir": ".."}, "neither hold nor sit inside"),
@@ -273,10 +275,11 @@ def test_bad_random_settings_refused(settings: dict, message: str) -> None:
         Config(project_root=Path.cwd(), **settings)
 
 
-def test_dry_run_and_plan_skip_float_targets() -> None:
-    step = GenerateStep(Config(project_root=Path.cwd(), random_shapes=2, suite="both"))
+@pytest.mark.parametrize(("dtype", "suites"), [("S8,S16", {"int"}), ("FP16", {"float"}), (None, {"int", "float"})])
+def test_dry_run_and_plan_follow_drawn_suites(dtype, suites) -> None:
+    step = GenerateStep(Config(project_root=Path.cwd(), random_shapes=2, suite="both", dtype_filter=dtype))
     previews = step.dry_run().details["commands"]
-    assert previews and all(cmd[cmd.index("--suite") + 1] == "int" for cmd in previews)
+    assert {cmd[cmd.index("--suite") + 1] for cmd in previews} == suites
     assert len(previews) == len(step._targets())
 
 

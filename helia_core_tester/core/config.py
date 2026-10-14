@@ -336,14 +336,14 @@ class Config:
             return
         if self.random_shapes < 1:
             raise ConfigurationError(f"random_shapes must be >= 1, got {self.random_shapes}")
-        if "int" not in self.suites:
-            raise ConfigurationError("random_shapes needs the int suite")
-        from helia_core_tester.generation.random_shapes import select_ops
+        from helia_core_tester.generation.random_shapes import op_suites, select_ops
 
         try:
-            select_ops(self.op_filter, self.dtype_filter)
+            suites = op_suites(select_ops(self.op_filter, self.dtype_filter))
         except ValueError as exc:
             raise ConfigurationError(str(exc)) from exc
+        if not suites & set(self.suites):
+            raise ConfigurationError(f"random_shapes needs the {' or '.join(sorted(suites))} suite")
 
     def _validate_hidden(self) -> None:
         if self.hidden_dir is None:
@@ -367,7 +367,8 @@ class Config:
 
         try:
             for cpu in self.cpus:
-                check_hidden_paths(self.hidden_dir, self.project_root, cpu)
+                for suite in self.suites:
+                    check_hidden_paths(self.hidden_dir, self.project_root, cpu, suite)
         except ValueError as exc:
             raise ConfigurationError(str(exc)) from exc
 

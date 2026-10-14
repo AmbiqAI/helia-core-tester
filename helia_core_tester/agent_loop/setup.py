@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
+from helia_core_tester.generation.random_shapes import shape_suite
 from helia_core_tester.hardware.boards import repo_root, resolve_board
 from helia_core_tester.hardware.candidate_check import CheckError
 from helia_core_tester.hardware.candidate_check import _git as check_git
@@ -144,7 +145,7 @@ def make_hidden(ws: Workspace, campaign: Campaign, facts: dict) -> None:
     cpu = resolve_board(campaign.board).cpu
     _run([*ws.tester_cmd(), "generate", "--cpu", cpu, "--random-shapes", str(campaign.hidden_shapes),
           "--hidden-dir", str(hidden), "--hidden-seed-file", str(seed), "--op", campaign.op,
-          "--dtype", campaign.dtype], ws.logs / "hidden.log",
+          "--dtype", campaign.dtype, "--suite", shape_suite(campaign.op, campaign.dtype)], ws.logs / "hidden.log",
          # Probe the base tree's kernels.
          env={"CMSIS_NN_ROOT": str(ws.base)})
     hidden.chmod(0o700)

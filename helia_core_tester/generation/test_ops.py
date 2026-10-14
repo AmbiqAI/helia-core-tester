@@ -415,9 +415,11 @@ def test_generation(test_filters):
     random_shapes = test_filters.get("random_shapes")
     hidden_dir = test_filters.get("hidden_dir")
     if random_shapes:
-        from helia_core_tester.generation.random_shapes import select_ops
+        from helia_core_tester.generation.random_shapes import GENERATORS, select_ops
 
-        shape_ops = select_ops(test_filters.get("op"), test_filters.get("dtype"))
+        # Draw only this run's suite.
+        shape_ops = tuple(key for key in select_ops(test_filters.get("op"), test_filters.get("dtype"))
+                          if GENERATORS[key].suite == _suite_mode(test_filters))
     if random_shapes and hidden_dir:
         from helia_core_tester.generation.random_shapes import prepare_hidden
 

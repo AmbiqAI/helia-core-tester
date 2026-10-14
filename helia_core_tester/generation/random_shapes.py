@@ -44,6 +44,10 @@ DW16_ROUTES = ("arm_depthwise_conv_fast_s16", "arm_depthwise_conv_s16")
 # Direct entry; no wrapper.
 TC16_ROUTE = "arm_transpose_conv_s16"
 TC16_SYMBOLS = [TC16_ROUTE, "arm_transpose_conv_s16_get_buffer_size"]
+# Float entries, called directly.
+TCF_ROUTES = {"FP32": "arm_transpose_conv_f32", "FP16": "arm_transpose_conv_f16"}
+# MVE lanes per vector.
+TCF_LANES = {"FP32": 4, "FP16": 8}
 SECRET_ENV = "HCT_HIDDEN_SEED"
 # Short secrets fall to brute force.
 MIN_SECRET = 16
@@ -62,6 +66,7 @@ class Generator:
     draw: Callable
     # Per-index targets; overrides route cycling.
     plan: Optional[Callable[[int], list[str]]] = None
+    suite: str = "int"
 
 
 @dataclass
@@ -239,21 +244,30 @@ def _odd_channels(rng: np.random.Generator, lo: int, hi: int) -> int:
     return int(rng.integers(lo, hi + 1))
 
 
-def tc16_edge_count(n: int) -> int:
-    """Edge slots in an n-case tc16 draw.
+def edge_count(n: int, kinds: int) -> int:
+    """Edge slots in an n-case draw.
 
-    max(ceil(n/3), min(categories, floor(2n/3))): at least a third
+    max(ceil(n/3), min(kinds, floor(2n/3))): at least a third
     (so one case is all edge), more so every category fits once
-    n >= 14, else at most two thirds. Slots take TC16_EDGES in
-    order; each shape is still drawn.
+    n >= 3 * kinds / 2, else at most two thirds. Slots take the
+    categories in order; each shape is still drawn.
     """
-    return max(-(-n // 3), min(len(TC16_EDGES), 2 * n // 3))
+    return max(-(-n // 3), min(kinds, 2 * n // 3))
+
+
+def tc16_edge_count(n: int) -> int:
+    """Edge slots in an n-case tc16 draw."""
+    return edge_count(n, len(TC16_EDGES))
+
+
+def _edge_plan(n: int, route: str, edges: tuple[str, ...]) -> list[str]:
+    """Mixed draws, then edge categories."""
+    count = edge_count(n, len(edges))
+    return [route] * (n - count) + [edges[i % len(edges)] for i in range(count)]
 
 
 def _tc16_plan(n: int) -> list[str]:
-    """Mixed draws, then edge categories."""
-    edges = tc16_edge_count(n)
-    return [TC16_ROUTE] * (n - edges) + [TC16_EDGES[i % len(TC16_EDGES)] for i in range(edges)]
+    return _edge_plan(n, TC16_ROUTE, TC16_EDGES)
 
 
 def _glorot_limit(layer: Layer) -> float:
@@ -377,6 +391,111 @@ def _tc16_mixed(rng: np.random.Generator) -> Layer:
     return Layer(_size(rng, 1, 16), _size(rng, 1, 16), cin, cout, kh, kw, sh, sw, padding=pad, transpose=True)
 
 
+def _tcf_rms(layer: Layer, data: float) -> float:
+    """Output RMS for Glorot weights, |x| <= data."""
+    taps = layer.cin * max(layer.kh / layer.sh, 1.0) * max(layer.kw / layer.sw, 1.0)
+    return float(np.sqrt(taps * (_glorot_limit(layer) * data) ** 2 / 9 + 0.25 / 3))
+
+
+def _tcf_long(rng: np.random.Generator, dtype: str) -> Layer:
+    """Thousands of terms per output."""
+    kh, kw = int(rng.integers(5, 9)), int(rng.integers(5, 9))
+    # Inputs cover the kernel: full-tap outputs.
+    layer = Layer(kh + int(rng.integers(0, 3)), kw + int(rng.integers(0, 3)), int(rng.integers(32, 97)),
+                  int(rng.integers(1, 5)), kh, kw, padding=_padding(rng), transpose=True)
+    # One-signed data never cancels.
+    low = 0.0 if rng.random() < 0.5 else -1.0
+    layer.knobs = {"activation": "NONE", "use_bias": True, "input_range": [low, 1.0]}
+    return layer
+
+
+def _tcf_nonfinite(rng: np.random.Generator, dtype: str) -> Layer:
+    """One NaN or Inf input."""
+    kh, kw = int(rng.integers(1, 5)), int(rng.integers(1, 5))
+    # Five rows beat a four-tap patch.
+    layer = Layer(_size(rng, 5, 10), _size(rng, 5, 14), _odd_channels(rng, 1, 24), _odd_channels(rng, 1, 16), kh, kw,
+                  int(rng.integers(1, 4)), int(rng.integers(1, 4)), padding=_padding(rng), transpose=True)
+    token = str(rng.choice(["nan", "inf", "-inf"]))
+    layer.knobs = {"activation": "NONE", "use_bias": bool(rng.random() < 0.85), "input_mode": "nonfinite_sweep",
+                   "nonfinite_tokens": [token], "nonfinite_positions": [int(rng.integers(0, layer.h * layer.w * layer.cin))],
+                   "nonfinite_policy": "mask"}
+    return layer
+
+
+def _tcf_clamp(rng: np.random.Generator, dtype: str) -> Layer:
+    """Clamps hit on both sides."""
+    layer = _tc16_mixed(rng)
+    rms, cast = _tcf_rms(layer, 1.0), np.float16 if dtype == "FP16" else np.float32
+    low, high = (float(cast(rms * sign * rng.uniform(0.1, 0.8))) for sign in (-1, 1))
+    layer.knobs = {"activation": "NONE", "use_bias": bool(rng.random() < 0.7), "activation_min": low,
+                   "activation_max": high}
+    return layer
+
+
+def _tcf_tail(rng: np.random.Generator, dtype: str) -> Layer:
+    """Channels past the last full vector."""
+    layer, lanes = _tc16_mixed(rng), TCF_LANES[dtype]
+    layer.cin = lanes * int(rng.integers(0, 4)) + int(rng.integers(1, lanes))
+    layer.cout = lanes * int(rng.integers(1, 4)) + int(rng.integers(1, lanes))
+    return layer
+
+
+def _tcf_wide(rng: np.random.Generator, dtype: str) -> Layer:
+    """Data far from unit scale."""
+    layer = _tc16_mixed(rng)
+    # At least 10x off unit scale.
+    scale = float(10 ** (rng.choice([-1, 1]) * rng.uniform(1, 2 if dtype == "FP16" else 3)))
+    if dtype == "FP16":
+        # Keep outputs well inside half range.
+        scale = min(scale, 1e4 / _tcf_rms(layer, 1.0))
+    layer.knobs = {"activation": "NONE", "use_bias": True, "input_range": [-scale, scale],
+                   "bias_range": [-scale / 2, scale / 2]}
+    return layer
+
+
+def _tcf_same_offset(rng: np.random.Generator, dtype: str) -> Layer:
+    """SAME with an odd total pad."""
+    sh, sw = int(rng.integers(1, 4)), int(rng.integers(1, 4))
+    # Kernel minus stride is odd.
+    kh, kw = sh + 2 * int(rng.integers(0, 3)) + 1, sw + 2 * int(rng.integers(0, 3)) + 1
+    return Layer(_size(rng, 1, 10), _size(rng, 2, 16), _odd_channels(rng, 1, 24), _odd_channels(rng, 1, 16),
+                 kh, kw, sh, sw, padding="SAME", transpose=True)
+
+
+# Float edge categories, highest priority first.
+TCF_DRAWS: dict[str, Callable[[np.random.Generator, str], Layer]] = {
+    "long_acc": _tcf_long, "nonfinite": _tcf_nonfinite, "clamp": _tcf_clamp, "odd_tail": _tcf_tail,
+    "batch2": lambda rng, dtype: _tc16_batch2(rng), "wide": _tcf_wide, "gaps": lambda rng, dtype: _tc16_gaps(rng),
+    "same_offset": _tcf_same_offset, "overlap": lambda rng, dtype: _tc16_overlap(rng),
+}
+TCF_EDGES = tuple(TCF_DRAWS)
+
+
+def _tcf_draw(dtype: str) -> Callable[[np.random.Generator, str], Layer]:
+    """A float transpose conv draw."""
+    def draw(rng: np.random.Generator, target: str) -> Layer:
+        edge = TCF_DRAWS.get(target)
+        return edge(rng, dtype) if edge else _tc16_mixed(rng)
+    return draw
+
+
+def _float_knobs(rng: np.random.Generator, layer: Layer) -> dict[str, Any]:
+    """Activation and data knobs, float."""
+    oh, ow = layer.out_hw()
+    # Few outputs flatten under clamps.
+    act = str(rng.choice(["NONE", "RELU", "RELU6"])) if oh * ow * layer.cout >= 64 else "NONE"
+    knobs: dict[str, Any] = {"activation": act, "use_bias": bool(rng.random() < 0.85)}
+    data = 1.0
+    if rng.random() < 0.3:
+        # Off-centre data shifts the mean.
+        data = float(rng.uniform(0.5, 2.0))
+        knobs["input_range"] = [-float(rng.uniform(0.0, 1.0)), data]
+    if act == "RELU6":
+        # Pre-activation RMS near 6.
+        knobs["weight_gain"] = (6.0 / _tcf_rms(layer, data)) ** 2 * float(rng.uniform(0.5, 2.0))
+    return knobs
+
+
 def _conv_routes(mve: bool) -> list[str]:
     return [r for r in CONV_ROUTES if mve or r not in MVE_CONV_ROUTES]
 
@@ -394,6 +513,15 @@ def _tc16_routes(mve: bool) -> list[str]:
     return [TC16_ROUTE]
 
 
+def _tcf_gen(dtype: str, stream: int) -> Generator:
+    """Float transpose conv generator."""
+    route = TCF_ROUTES[dtype]
+    return Generator(
+        f"tcf{dtype[2:]}", "ConvolutionFunctions/transpose_conv_float.yaml", stream, lambda mve: [route],
+        _tcf_draw(dtype), lambda n: _edge_plan(n, route, TCF_EDGES), "float",
+    )
+
+
 # Register new random-shape ops here.
 GENERATORS: dict[tuple[str, str], Generator] = {
     ("Convolve", "S8"): Generator("conv", "ConvolutionFunctions/convolve.yaml", 0, _conv_routes, _conv_layer),
@@ -402,6 +530,8 @@ GENERATORS: dict[tuple[str, str], Generator] = {
     ("TransposeConv", "S16"): Generator(
         "tc16", "ConvolutionFunctions/transpose_conv.yaml", 3, _tc16_routes, _tc16_layer, _tc16_plan,
     ),
+    ("TransposeConv", "FP32"): _tcf_gen("FP32", 4),
+    ("TransposeConv", "FP16"): _tcf_gen("FP16", 5),
 }
 # (op, dtype) keys, in draw order.
 OPS = tuple(GENERATORS)
@@ -446,10 +576,21 @@ def select_ops(op_filter: str | None = None, dtype_filter: str | None = None) ->
     return picked
 
 
+def op_suites(keys: tuple[tuple[str, str], ...]) -> set[str]:
+    """Generated-test suites the keys write."""
+    return {GENERATORS[key].suite for key in keys}
+
+
+def shape_suite(op_filter: str | None, dtype_filter: str | None) -> str:
+    """The one suite a draw needs, else both."""
+    suites = op_suites(select_ops(op_filter, dtype_filter))
+    return suites.pop() if len(suites) == 1 else "both"
+
+
 def layer_route(op: str, layer: Layer, mve: bool, dtype: str = "S8") -> str:
     """The wrapper's direct callee."""
     if op == "TransposeConv":
-        return TC16_ROUTE
+        return TCF_ROUTES.get(dtype, TC16_ROUTE)
     oh, ow = layer.out_hw()
     i, o = (1, layer.h, layer.w, layer.cin), (1, oh, ow, layer.cout)
     stride, dil, pad = (layer.sh, layer.sw), (layer.dh, layer.dw), layer.pads()
@@ -465,6 +606,8 @@ def footprint(op: str, layer: Layer, dtype: str = "S8") -> int:
     oh, ow = layer.out_hw()
     idims = {"n": 1, "h": layer.h, "w": layer.w, "c": layer.cin}
     odims = {"n": 1, "h": oh, "w": ow, "c": layer.cout}
+    if dtype in TCF_ROUTES:
+        return _float_footprint(layer, idims, odims, 4 if dtype == "FP32" else 2)
     # Element and bias bytes.
     item, bias = (2, 8) if dtype == "S16" else (1, 4)
     if op == "Convolve":
@@ -493,6 +636,20 @@ def footprint(op: str, layer: Layer, dtype: str = "S8") -> int:
         used = _align_up(used, align) + size
     used = _align_up(used, 16) + scratch
     return _align_up(used, 16) + item * layer.n * oh * ow * layer.cout
+
+
+def _float_footprint(layer: Layer, idims: dict, odims: dict, item: int) -> int:
+    """Float transpose conv workspace bytes."""
+    idims, odims = {**idims, "n": layer.n}, {**odims, "n": layer.n}
+    fdims = {"n": layer.cout, "h": layer.kh, "w": layer.kw, "c": layer.cin}
+    ctx, reverse = TemplateContextBuilder.float_transpose_conv_scratch(idims, fdims, odims)
+    used = 0
+    # input, weights, bias
+    for size, align in ((item * layer.n * layer.h * layer.w * layer.cin, item),
+                        (item * layer.kh * layer.kw * layer.cin * layer.cout, item), (item * layer.cout, item)):
+        used = _align_up(used, align) + size
+    used = _align_up(used, 16) + _align_up(_align_up(ctx, 16) + reverse, 16)
+    return _align_up(used, 16) + item * layer.n * odims["h"] * odims["w"] * layer.cout
 
 
 def layer_macs(op: str, layer: Layer) -> int:
@@ -564,7 +721,7 @@ def _descriptor(
         "operator": op,
         "name": name,
         "activation_dtype": dtype,
-        "weight_dtype": "S8",
+        "weight_dtype": dtype if dtype in TCF_ROUTES else "S8",
         "input_shape": [layer.n, layer.h, layer.w, layer.cin],
         "strides": [layer.sh, layer.sw],
         "padding": layer.padding,
@@ -575,6 +732,10 @@ def _descriptor(
     }
     if op == "Convolve":
         desc["filter_shape"] = [layer.kh, layer.kw, layer.cin, layer.cout]
+    elif dtype in TCF_ROUTES:
+        desc["filter_shape"] = [layer.kh, layer.kw, layer.cout, layer.cin]
+        desc["suite"] = "float"
+        desc["tensor_dtypes"] = dict.fromkeys(("input", "output", "weights", "bias"), dtype)
     elif op == "TransposeConv":
         desc["filter_shape"] = [layer.kh, layer.kw, layer.cout, layer.cin]
         # Skip on kernels without the entry.
@@ -610,7 +771,7 @@ def sample_op(key: tuple[str, str], n: int, seed: int, cpu: str, workspace: int)
         else:
             raise RuntimeError(f"No {op} {dtype} shape for route {target}")
         name = f"rs{seed}_{gen.tag}_{index:03d}"
-        knobs = layer.knobs or _quant(rng, op, layer, dtype)
+        knobs = layer.knobs or (_float_knobs(rng, layer) if gen.suite == "float" else _quant(rng, op, layer, dtype))
         case = _descriptor(op, dtype, name, layer, knobs, seed, route)
         if target not in routes:
             case["edge"] = target
