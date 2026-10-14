@@ -382,8 +382,10 @@ class HardSwishFamilyBase(OperationBase):
             output_scale = float(self._quant_param_scalar(output_quant, 'scale', 1.0))
             output_zp = int(self._quant_param_scalar(output_quant, 'zero_point', 0))
 
+            # Descriptor-pinned quantization overrides the calibrated one, so a
+            # case can reproduce a fixed parameter set (e.g. the Unity tests).
             extras = self.desc.get("hint", {}).get("extras", {})
-            if variant == "compat" and extras:
+            if extras:
                 if "input_scale" in extras:
                     input_scale = float(extras["input_scale"])
                 if "output_scale" in extras:

@@ -132,6 +132,16 @@ def test_compat_rejects_prescale(monkeypatch, tmp_path: Path) -> None:
         _context(monkeypatch, desc, tmp_path, op_cls=OpHardSwishCompat)
 
 
+UNITY_PARAMS = {
+    "input_offset": 0,
+    "output_offset": 0,
+    "output_multiplier": 1431655765,
+    "output_shift": -5,
+    "relu_q3": 384,
+    "relu_q6": 768,
+    "prescale": 4,
+}
+
 PRESCALE_CASES = [
     "hard_swish_precise_vector_prescale4_s8",
     "hard_swish_precise_vector_1760_lut_prescale4_s8",
@@ -151,4 +161,10 @@ def test_shipped_prescale_cases_have_live_goldens(tmp_path: Path, name: str) -> 
     (case_dir,) = tmp_path.glob(f"*/{name}")
     assert case_problems(case_dir) == []
     c_text = next(case_dir.rglob("*_hard_swish.c")).read_text()
-    assert re.search(r"\b4,\s*// prescale", c_text)
+    # Through the real pipeline (int8 builds a calibrated .tflite), the
+    # descriptor's scales and zero points must win, giving the Unity set.
+    params = {
+        key: int(value)
+        for value, key in re.findall(r"^\s*(-?\d+),\s*// (\w+)", c_text, flags=re.M)
+    }
+    assert {k: params.get(k) for k in UNITY_PARAMS} == UNITY_PARAMS
