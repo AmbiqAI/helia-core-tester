@@ -2,6 +2,8 @@
 FullyConnected operation implementation with dtype-aware quantization.
 """
 
+import math
+import numbers
 from typing import Dict, Any, Optional
 import numpy as np
 from helia_core_tester.generation.ops._shared.base import OperationBase
@@ -57,12 +59,49 @@ class OpFullyConnected(OperationBase):
 
     def needs_keras_model(self) -> bool:
         return str(self.desc.get("weight_dtype", "S8")).upper() != "S4"
-    
+
+    def declared_filter_shape(self) -> tuple:
+        """Validated descriptor filter_shape [OutCh, InFeatures].
+
+        A 4-D input is flattened to prod(input_shape[1:]) features and Dense takes
+        its input width from that, so a descriptor InFeatures that differs from the
+        flattened count would be silently replaced; reject it.
+        """
+        name = self.desc.get('name', '<unnamed>')
+        filter_shape = self.desc.get('filter_shape')
+        input_shape = self.desc.get('input_shape')
+        if not isinstance(input_shape, (list, tuple)) or len(input_shape) not in (2, 4):
+            raise ValueError(
+                f"{name}: FullyConnected input_shape must be [N, C] or [N, H, W, C], got {input_shape!r}"
+            )
+        if not isinstance(filter_shape, (list, tuple)) or len(filter_shape) != 2:
+            raise ValueError(
+                f"{name}: FullyConnected filter_shape must be [OutCh, InFeatures], got {filter_shape!r}"
+            )
+        for dim in (*input_shape, *filter_shape):
+            # numpy integers are Integral; bool is too, but never a dimension.
+            if isinstance(dim, bool) or not isinstance(dim, numbers.Integral) or dim <= 0:
+                raise ValueError(
+                    f"{name}: FullyConnected shapes must be positive integers, "
+                    f"got input_shape={input_shape!r} filter_shape={filter_shape!r}"
+                )
+        out_ch, in_features = (int(dim) for dim in filter_shape)
+        features = math.prod(int(dim) for dim in input_shape[1:])
+        if in_features != features:
+            hint = ""
+            if len(input_shape) == 4 and in_features == int(input_shape[3]):
+                hint = f"; a 4-D input is flattened over H*W*C, did you mean [{out_ch}, {features}]?"
+            raise ValueError(
+                f"{name}: FullyConnected filter_shape InFeatures ({in_features}) must equal the "
+                f"flattened input feature count ({features}) of input_shape {list(input_shape)}{hint}"
+            )
+        return out_ch, in_features
+
     def build_keras_model(self):
         """Build Keras model for FullyConnected operation."""
         input_shape = self.desc['input_shape']
-        filter_shape = self.desc['filter_shape']
-        
+        filter_shape = self.declared_filter_shape()
+
         # Handle both 2D [batch, features] and 4D [batch, h, w, c] input shapes
         if len(input_shape) == 2:
             # 2D input: [batch, features]
@@ -76,12 +115,8 @@ class OpFullyConnected(OperationBase):
             batch_size = input_shape[0]
             needs_flatten = True
         
-        # Extract output units from filter_shape
-        if len(filter_shape) == 2:
-            output_units = filter_shape[0]
-        else:
-            output_units = filter_shape[0]
-        
+        output_units = filter_shape[0]
+
         # Get activation and use_bias from descriptor
         activation_str = self.desc.get('activation', 'NONE')
         use_bias = self.desc.get('use_bias', True)
@@ -160,8 +195,7 @@ class OpFullyConnected(OperationBase):
             output_zp = int(extras.get("output_zero_point", 0))
 
             input_shape = tuple(self.desc["input_shape"])
-            fs = tuple(self.desc["filter_shape"])  # O, I
-            filter_shape = fs
+            filter_shape = self.declared_filter_shape()
             out_ch = filter_shape[0]
 
             weights_int4 = self.rng.integers(-8, 8, size=filter_shape).astype(np.int8)
@@ -540,9 +574,7 @@ class OpFullyConnected(OperationBase):
 
         # Validate weights shape
         if weight_dtype == "S4":
-            fs = tuple(self.desc['filter_shape'])
-            if len(fs) != 2:
-                raise ValueError(f"Unsupported filter_shape in descriptor: {fs}")
+            fs = self.declared_filter_shape()
             filter_dims = {
                 'n': int(fs[1]),  # input_features
                 'h': 1,
@@ -567,6 +599,13 @@ class OpFullyConnected(OperationBase):
             if len(filter_shape) != 2:
                 raise ValueError(f"Unsupported filter shape: {filter_shape}")
             
+            declared = self.declared_filter_shape()
+            if tuple(int(dim) for dim in filter_shape) != declared:
+                raise ValueError(
+                    f"{name}: converted FullyConnected weights [OutCh, InFeatures]={list(filter_shape)} "
+                    f"do not match the descriptor's filter_shape {list(declared)}"
+                )
+
             if not float_kernel and weights.dtype != np.int8:
                 weights = weights.astype(np.int8)
             
@@ -579,9 +618,7 @@ class OpFullyConnected(OperationBase):
             }
         else:
             # Fallback: descriptor format
-            fs = tuple(self.desc['filter_shape'])
-            if len(fs) != 2:
-                raise ValueError(f"Unsupported filter_shape in descriptor: {fs}")
+            fs = self.declared_filter_shape()
             filter_dims = {
                 'n': int(fs[1]),  # input_features
                 'h': 1,
@@ -612,7 +649,7 @@ class OpFullyConnected(OperationBase):
         
         # Compute output dimensions - use weights shape to get correct output_units
         if weight_dtype == "S4":
-            fs = tuple(self.desc['filter_shape'])
+            fs = self.declared_filter_shape()
             batch_size = int(output_shape[0]) if len(output_shape) >= 1 else int(input_shape[0])
             output_dims = {
                 'n': batch_size,
