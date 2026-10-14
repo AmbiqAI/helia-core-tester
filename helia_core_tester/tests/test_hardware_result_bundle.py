@@ -70,17 +70,18 @@ def test_result_bundle_writer_emits_spec_artifacts(tmp_path: Path) -> None:
     with (bundle_root / "case_summary.csv").open(encoding="utf-8", newline="") as handle:
         rows = list(csv.DictReader(handle))
     header = list(rows[0].keys())
-    assert header[:15] == ["case_id", "kernel_id", "comparison_passed", "mismatch_count", "max_abs_diff", "diff_count",
-                           "sample_count", "median_cycles", "mad_cycles", "p90_cycles", "p99_cycles", "fvp_status", "timed_symbol", "inner_symbol", "inner_variant"]
-    assert header[15:20] == ["macs", "ops", "cycles_per_mac", "cycles_per_op", "prepare_cycles"]
-    assert header[20] == "ARM_PMU_CPU_CYCLES"
+    assert header[:16] == ["case_id", "kernel_id", "comparison_passed", "mismatch_count", "max_abs_diff", "diff_count",
+                           "tolerance_fraction", "sample_count", "median_cycles", "mad_cycles", "p90_cycles", "p99_cycles",
+                           "fvp_status", "timed_symbol", "inner_symbol", "inner_variant"]
+    assert header[16:21] == ["macs", "ops", "cycles_per_mac", "cycles_per_op", "prepare_cycles"]
+    assert header[21] == "ARM_PMU_CPU_CYCLES"
     assert header[-4:] == ["overflow_detected", "valid_for_regression", "timing_status", "hidden"]
     assert "ARM_PMU_INST_RETIRED" in header and "ARM_PMU_MEM_ACCESS" in header
     # The schema follows the selection, not target support: every selected counter is a
     # column in plan order, including the four MVE defaults that neither fake adapter
     # supports (unsupported in every sample of every case), whose cells stay empty.
-    assert header[20:-4] == counter_names_for_passes(passes)
-    assert header[20:-4] == ["ARM_PMU_CPU_CYCLES", "ARM_PMU_INST_RETIRED", "ARM_PMU_STALL_FRONTEND", "ARM_PMU_STALL_BACKEND",
+    assert header[21:-4] == counter_names_for_passes(passes)
+    assert header[21:-4] == ["ARM_PMU_CPU_CYCLES", "ARM_PMU_INST_RETIRED", "ARM_PMU_STALL_FRONTEND", "ARM_PMU_STALL_BACKEND",
                              "ARM_PMU_MEM_ACCESS", "ARM_PMU_L1D_CACHE_REFILL", "ARM_PMU_BUS_ACCESS", "ARM_PMU_BUS_CYCLES",
                              "ARM_PMU_MVE_INST_RETIRED", "ARM_PMU_MVE_INT_MAC_RETIRED", "ARM_PMU_MVE_LDST_RETIRED", "ARM_PMU_MVE_STALL"]
     abs_row, conv_row = rows
@@ -88,7 +89,7 @@ def test_result_bundle_writer_emits_spec_artifacts(tmp_path: Path) -> None:
     assert float(abs_row["ARM_PMU_INST_RETIRED"]) > 0
     assert abs_row["ARM_PMU_MEM_ACCESS"] == ""  # abs fake adapter only supports the cpu group
     assert float(conv_row["ARM_PMU_MEM_ACCESS"]) > 0
-    assert all(row[name] == "" for row in rows for name in header[20:-4] if name.startswith("ARM_PMU_MVE_"))
+    assert all(row[name] == "" for row in rows for name in header[21:-4] if name.startswith("ARM_PMU_MVE_"))
     assert abs_row["overflow_detected"] == "false" and abs_row["valid_for_regression"] == "true"
     assert abs_row["timing_status"] == "valid" and abs_row["hidden"] == "false"
     # Abs has ops only; conv has MACs.
@@ -102,7 +103,7 @@ def test_result_bundle_writer_emits_spec_artifacts(tmp_path: Path) -> None:
     assert cases[0]["counters"]["ARM_PMU_CPU_CYCLES"] == float(abs_row["ARM_PMU_CPU_CYCLES"])
     assert "ARM_PMU_MVE_STALL" not in cases[0]["counters"]  # no supported value -> no median
     # abs supports only the cpu group: memory and mve are unsupported (sorted); conv supports memory.
-    assert cases[0]["unsupported_counters"] == sorted(header[24:-4])
+    assert cases[0]["unsupported_counters"] == sorted(header[25:-4])
     assert cases[1]["unsupported_counters"] == ["ARM_PMU_MVE_INST_RETIRED", "ARM_PMU_MVE_INT_MAC_RETIRED", "ARM_PMU_MVE_LDST_RETIRED", "ARM_PMU_MVE_STALL"]
     assert cases[0]["overflow_detected"] is False and cases[0]["valid_for_regression"] is True
     assert cases[1]["macs"] == int(conv_row["macs"]) and cases[1]["shapes"]["weights"]
@@ -116,7 +117,7 @@ def test_result_bundle_writer_emits_spec_artifacts(tmp_path: Path) -> None:
     assert manifest["compare"] == {"strict": False, "golden_from": None, "golden_session_id": None}
 
     summary = json.loads((bundle_root / "session_summary.json").read_text())
-    assert summary["counters"] == header[20:-4]
+    assert summary["counters"] == header[21:-4]
     assert summary["passes"] == ["cpu_0", "memory_0", "mve_0"]
     assert summary["batch_count"] == 1
     assert summary["cases_with_overflow"] == []
@@ -143,7 +144,7 @@ def test_result_bundle_writer_handles_empty_session(tmp_path: Path) -> None:
 
     case_summary_text = (bundle_root / "case_summary.csv").read_text(encoding="utf-8")
     raw_samples_text = (bundle_root / "raw_samples.csv").read_text(encoding="utf-8")
-    assert case_summary_text.splitlines() == ["case_id,kernel_id,comparison_passed,mismatch_count,max_abs_diff,diff_count,sample_count,median_cycles,mad_cycles,p90_cycles,p99_cycles,fvp_status,timed_symbol,inner_symbol,inner_variant,macs,ops,cycles_per_mac,cycles_per_op,prepare_cycles,overflow_detected,valid_for_regression,timing_status,hidden"]
+    assert case_summary_text.splitlines() == ["case_id,kernel_id,comparison_passed,mismatch_count,max_abs_diff,diff_count,tolerance_fraction,sample_count,median_cycles,mad_cycles,p90_cycles,p99_cycles,fvp_status,timed_symbol,inner_symbol,inner_variant,macs,ops,cycles_per_mac,cycles_per_op,prepare_cycles,overflow_detected,valid_for_regression,timing_status,hidden"]
     assert raw_samples_text.splitlines() == ["case_id,sample_index,pass_name,iterations,cycles,cycles_per_invocation,counter_name,event_id,counter_value,overflow,supported"]
     assert (bundle_root / "junit.xml").exists()
 

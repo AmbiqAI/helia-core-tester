@@ -389,6 +389,27 @@ arm_cmsis_nn_status hct_run_empty_once(hct_server_session_t *session);
  * harness, which compiles without that file, defines an abs-only one instead. */
 arm_cmsis_nn_status hct_run_kernel_once(hct_server_session_t *session);
 
+/* Size of the read-only operand the case's adapter derives from its blobs (0: none),
+ * from CASE_META dims alone. Generated beside hct_run_kernel_once(). */
+uint32_t hct_derived_operand_bytes(hct_server_session_t *session);
+
+#ifdef HCT_HOST_ABS_ONLY
+/* Host harness knobs for the derived operand (benchmark_server_session.c). */
+#define HCT_HOST_DERIVED_MAX_BYTES 1024u
+typedef enum
+{
+    HCT_HOST_DERIVE_BUILD = 0,
+    HCT_HOST_DERIVE_FAIL = 1,
+    HCT_HOST_DERIVE_NOTHING = 2,
+    HCT_HOST_DERIVE_WRONG_SIZE = 3,
+} hct_host_derive_mode_t;
+extern uint32_t hct_host_derived_bytes;
+extern uint32_t hct_host_derive_mode;
+extern uint32_t hct_host_derive_seed;
+extern const uint8_t *hct_host_last_derived;
+extern uint8_t hct_host_derived_data[HCT_HOST_DERIVED_MAX_BYTES];
+#endif
+
 #ifdef __cplusplus
 }
 #endif

@@ -35,6 +35,8 @@ static uint8_t workspace[32768u];
 static uint8_t probe_workspace[sizeof(workspace)];
 static uint8_t big_workspace[600u * 1024u];
 static uint8_t big_weights[BIG_WEIGHTS];
+#define POOL_BIAS_BYTES (352u * 1024u)
+static uint8_t big_bias[POOL_BIAS_BYTES];
 #endif
 static uint8_t frame[2048];
 static uint8_t payload[1024];
@@ -103,6 +105,29 @@ static uint16_t drain(hct_server_session_t *s)
     }
     return last;
 }
+
+#if defined(HCT_PLACEMENT_MRAM)
+/* Text of the last queued ERROR frame, or "" when there is none. */
+static const char *error_text(hct_server_session_t *s)
+{
+    static char text[64];
+    uint8_t out[256];
+    hctp_frame_view_t view;
+    size_t length;
+    text[0] = '\0';
+    while ((length = hct_server_session_take_next_frame(s, out, sizeof(out))) != 0u)
+    {
+        uint32_t count;
+        if (hctp_decode_frame(out, length, HCTP_DEFAULT_MAX_PAYLOAD, &view) != HCTP_STATUS_OK) break;
+        if (view.header.message_type != HCTP_MSG_ERROR || view.header.payload_length < 2u) continue;
+        count = (uint32_t)view.payload[0] | ((uint32_t)view.payload[1] << 8);
+        if (count >= sizeof(text) || count + 2u > view.header.payload_length) break;
+        memcpy(text, &view.payload[2], count);
+        text[count] = '\0';
+    }
+    return text;
+}
+#endif
 
 /* Init, handshake, one-case plan. */
 static int open_session(hct_server_session_t *s, uint8_t *ws, uint32_t ws_bytes, const char *case_id)
@@ -350,8 +375,8 @@ static int test_pool_limits(uintptr_t base)
     for (uint32_t index = 0u; index < sizeof(big_weights); ++index) big_weights[index] = (uint8_t)(index * 7u);
     status = open_session(&s, big_workspace, sizeof(big_workspace), "mram_big");
     if (status != 0) return 200 + status;
-    if (send_meta(&s, "mram_big", big, 2u) != HCTP_STATUS_OK) return 210;
-    if (stream(&s, big) != HCTP_STATUS_INVALID_ARGUMENT) return 211;
+    if (send_meta(&s, "mram_big", big, 2u) != HCTP_STATUS_NO_SPACE) return 210;
+    if (strstr(error_text(&s), "status=-8 MRAM pool full") == NULL) return 211;
     if (hct_mram_stub.program_calls != calls || hct_window.cold_count != 0u) return 212;
 
     /* Pool past MRAM end: refuse. */
@@ -363,6 +388,204 @@ static int test_pool_limits(uintptr_t base)
     if (hct_mram_stub.program_calls != calls) return 223;
     hct_stub_mram_end = (uintptr_t)hct_stub_mram + HCT_STUB_MRAM_BYTES;
     printf("pool limits refused\n");
+    return 0;
+}
+
+/* MRAM a blob takes: 16-byte rows from a 32-byte line. */
+static uint32_t pool_lines(uint32_t length)
+{
+    return (((length + 15u) & ~15u) + 31u) & ~31u;
+}
+
+/* First placement address, as the firmware derives it for a case of case_bytes. */
+static uintptr_t pool_start(uintptr_t base, const uint8_t *data, uint32_t length, uint32_t case_bytes)
+{
+    const uint32_t room = POOL_BYTES - case_bytes + 32u;
+    const uint32_t window = room < POOL_BYTES / 2u ? room : POOL_BYTES / 2u;
+    return base + ((hctp_crc32(data, length) % window) & ~(uintptr_t)31u);
+}
+
+/* Reseed weights until the content start alone (half-pool window) is at or past min_offset. */
+static int seed_weights(uint32_t length, uint32_t min_offset)
+{
+    for (uint32_t seed = 1u; seed < 4096u; ++seed)
+    {
+        for (uint32_t index = 0u; index < length; ++index) big_weights[index] = (uint8_t)(index * 7u + seed);
+        if ((hctp_crc32(big_weights, length) % (POOL_BYTES / 2u)) >= min_offset) return 0;
+    }
+    return 1;
+}
+
+static int ranges_overlap(const hct_server_blob_t *a, const hct_server_blob_t *b)
+{
+    const uintptr_t a0 = (uintptr_t)a->placed;
+    const uintptr_t b0 = (uintptr_t)b->placed;
+    return a0 < b0 + b->byte_length && b0 < a0 + a->byte_length;
+}
+
+/* Weights+bias case: CASE_META status, then (if accepted) the stream status. */
+static hctp_status_t pool_case(hct_server_session_t *s, const char *case_id, const blob_spec_t *blobs, uint16_t count)
+{
+    hctp_status_t status;
+    if (open_session(s, big_workspace, sizeof(big_workspace), case_id) != 0) return HCTP_STATUS_TRUNCATED_FRAME;
+    status = send_meta(s, case_id, blobs, count);
+    return status != HCTP_STATUS_OK ? status : stream(s, blobs);
+}
+
+/* A case starts where all of it fits, so its blobs never wrap onto each other (#377). */
+static int test_pool_fit(uintptr_t base)
+{
+    static hct_server_session_t s;
+    blob_spec_t blobs[3] = {
+        {"input_0", (const uint8_t *)kInput, sizeof(kInput), 1u},
+        {"weights", big_weights, 0u, 1u},
+        {"bias", big_bias, 0u, 4u},
+    };
+    uint32_t total;
+    uint32_t calls;
+    uintptr_t start;
+    for (uint32_t index = 0u; index < POOL_BIAS_BYTES; ++index) big_bias[index] = (uint8_t)(index * 13u + 5u);
+
+    /* 400 KiB case whose content start alone (>= 200 KiB) would overflow: placed from a start that fits. */
+    blobs[1].length = 50u * 1024u;
+    blobs[2].length = 350u * 1024u;
+    if (seed_weights(blobs[1].length, 200u * 1024u) != 0) return 800;
+    total = pool_lines(blobs[1].length) + pool_lines(blobs[2].length);
+    start = pool_start(base, big_weights, blobs[1].length, total);
+    if (pool_case(&s, "mram_fit_400k", blobs, 3u) != HCTP_STATUS_OK) return 801;
+    if (s.blobs[1].placed != (const uint8_t *)start) return 802;
+    if (s.blobs[2].placed != (const uint8_t *)(start + pool_lines(blobs[1].length))) return 803;
+    if ((uintptr_t)s.blobs[2].placed + s.blobs[2].byte_length > base + POOL_BYTES) return 804;
+    if (ranges_overlap(&s.blobs[1], &s.blobs[2])) return 805;
+    if (check_placed(&s.blobs[1], &blobs[1], base) != 0 || check_placed(&s.blobs[2], &blobs[2], base) != 0) return 806;
+
+    /* Exactly the pool: starts at base and ends at the pool end. */
+    blobs[1].length = POOL_BYTES / 2u;
+    blobs[2].length = POOL_BYTES / 2u;
+    if (pool_case(&s, "mram_fit_exact", blobs, 3u) != HCTP_STATUS_OK) return 810;
+    if (s.blobs[1].placed != (const uint8_t *)base) return 811;
+    if (s.blobs[2].placed != (const uint8_t *)(base + POOL_BYTES / 2u)) return 812;
+    if (check_placed(&s.blobs[1], &blobs[1], base) != 0 || check_placed(&s.blobs[2], &blobs[2], base) != 0) return 813;
+
+    /* One row more than the pool: refused at CASE_META, nothing programmed. */
+    blobs[2].length = POOL_BYTES / 2u + 16u;
+    calls = hct_mram_stub.program_calls;
+    if (pool_case(&s, "mram_fit_over", blobs, 3u) != HCTP_STATUS_NO_SPACE) return 820;
+    if (strstr(error_text(&s), "status=-8 MRAM pool full") == NULL) return 821;
+    if (hct_mram_stub.program_calls != calls || s.blobs[1].placed != NULL || s.blobs[2].placed != NULL) return 822;
+
+    /* The case that used to wrap onto its own weights is refused before any write. */
+    blobs[1].length = POOL_BYTES / 2u - 32u;
+    blobs[2].length = 300u * 1024u;
+    calls = hct_mram_stub.program_calls;
+    if (pool_case(&s, "mram_fit_overlap", blobs, 3u) != HCTP_STATUS_NO_SPACE) return 830;
+    if (hct_mram_stub.program_calls != calls || hct_window.cold_count != 0u) return 831;
+
+    /* Small cases keep the half-pool content spread. */
+    blobs[1].length = 4096u;
+    blobs[2].length = 64u;
+    if (seed_weights(blobs[1].length, 0u) != 0) return 840;
+    if (pool_case(&s, "mram_fit_small", blobs, 3u) != HCTP_STATUS_OK) return 841;
+    start = base + ((hctp_crc32(big_weights, blobs[1].length) % (POOL_BYTES / 2u)) & ~(uintptr_t)31u);
+    if (s.blobs[1].placed != (const uint8_t *)start) return 842;
+    printf("pool fit placed\n");
+    return 0;
+}
+
+/* kCase plus a derived operand: CASE_META and streaming accepted. */
+static int derived_case(hct_server_session_t *s, const char *case_id, uint32_t bytes, uint32_t mode)
+{
+    hct_host_derived_bytes = bytes;
+    hct_host_derive_mode = mode;
+    hct_host_last_derived = NULL;
+    if (open_session(s, workspace, sizeof(workspace), case_id) != 0) return 1;
+    if (send_meta(s, case_id, kCase, 3u) != HCTP_STATUS_OK) return 2;
+    if (stream(s, kCase) != HCTP_STATUS_OK) return 3;
+    return (drain(s) == HCTP_MSG_CASE_READY && s->derived == NULL) ? 0 : 4;
+}
+
+/* RUN_CORRECTNESS on a derived case; expect a status, `programs` stub calls, nothing placed. */
+static int derived_refused(const char *case_id, uint32_t mode, int corrupt, int fail, uint32_t programs, hctp_status_t expected)
+{
+    static hct_server_session_t s;
+    uint32_t calls;
+    hct_host_derive_seed += 1u;
+    if (derived_case(&s, case_id, 100u, mode) != 0) return 1;
+    calls = hct_mram_stub.program_calls;
+    hct_mram_stub.corrupt_program = corrupt;
+    hct_mram_stub.fail_program = fail;
+    if (send(&s, HCTP_MSG_RUN_CORRECTNESS, 0u) != expected) return 2;
+    if (s.derived != NULL || hct_window.cold_count != 2u) return 3;
+    return (hct_mram_stub.program_calls == calls + programs) ? 0 : 4;
+}
+
+/* The packed FC stream (any adapter-derived operand) lives in MRAM after the blobs,
+ * is evicted with them, and is what the kernel reads (#377 part 1). */
+static int test_derived(uintptr_t base)
+{
+    static hct_server_session_t s;
+    const uint8_t *first;
+    uint32_t calls;
+    int status;
+
+    /* 100 bytes: six whole rows plus a zero-padded tail row. */
+    status = derived_case(&s, "derived_a", 100u, HCT_HOST_DERIVE_BUILD);
+    if (status != 0) return 900 + status;
+    if (s.mram_case_bytes != pool_lines(sizeof(kWeights)) + pool_lines(sizeof(kBias)) + pool_lines(100u)) return 905;
+    calls = hct_mram_stub.program_calls;
+    if (send(&s, HCTP_MSG_RUN_CORRECTNESS, 0u) != HCTP_STATUS_OK) return 906;
+    first = s.derived;
+    if (first != s.blobs[2].placed + pool_lines(sizeof(kBias))) return 907;
+    if ((uintptr_t)first + 112u > base + POOL_BYTES) return 908;
+    if (memcmp(first, hct_host_derived_data, 100u) != 0) return 909;
+    if (hct_mram_stub.program_calls != calls + 2u) return 911;
+    if (hct_window.cold_count != 3u || hct_window.cold_addr[2] != first || hct_window.cold_bytes[2] != 112) return 912;
+    if (hct_host_last_derived != first) return 913;
+    drain(&s);
+    payload[0] = 1u;
+    if (send(&s, HCTP_MSG_CORRECTNESS_ACK, 1u) != HCTP_STATUS_OK) return 914;
+    calls = hct_mram_stub.invalidate_calls;
+    if (send(&s, HCTP_MSG_RUN_PERFORMANCE, 0u) != HCTP_STATUS_OK) return 915;
+    if ((hct_mram_stub.invalidate_calls - calls) % 3u != 0u || hct_mram_stub.last_invalidate != (const volatile void *)first) return 916;
+    if (hct_host_last_derived != first || drain(&s) != HCTP_MSG_SESSION_COMPLETE) return 917;
+
+    /* Same case again: same address, no row programmed. */
+    status = derived_case(&s, "derived_b", 100u, HCT_HOST_DERIVE_BUILD);
+    if (status != 0) return 920 + status;
+    calls = hct_mram_stub.program_calls;
+    if (send(&s, HCTP_MSG_RUN_CORRECTNESS, 0u) != HCTP_STATUS_OK) return 925;
+    if (s.derived != first || hct_mram_stub.program_calls != calls) return 926;
+    drain(&s);
+
+    /* Planned at CASE_META: exactly the pool fits, one more byte is refused unwritten. */
+    hct_host_derived_bytes = POOL_BYTES - pool_lines(sizeof(kWeights)) - pool_lines(sizeof(kBias));
+    if (open_session(&s, workspace, sizeof(workspace), "derived_exact") != 0) return 930;
+    if (send_meta(&s, "derived_exact", kCase, 3u) != HCTP_STATUS_OK || s.mram_case_bytes != POOL_BYTES) return 931;
+    hct_host_derived_bytes += 1u;
+    calls = hct_mram_stub.program_calls;
+    if (open_session(&s, workspace, sizeof(workspace), "derived_over") != 0) return 932;
+    if (send_meta(&s, "derived_over", kCase, 3u) != HCTP_STATUS_NO_SPACE) return 933;
+    if (strstr(error_text(&s), "status=-8 MRAM pool full") == NULL) return 934;
+    if (hct_mram_stub.program_calls != calls) return 935;
+
+    /* An adapter error is the correctness run's to report; nothing is placed. */
+    status = derived_case(&s, "derived_fail", 100u, HCT_HOST_DERIVE_FAIL);
+    if (status != 0) return 940 + status;
+    calls = hct_mram_stub.program_calls;
+    if (send(&s, HCTP_MSG_RUN_CORRECTNESS, 0u) != HCTP_STATUS_OK) return 945;
+    if (s.derived != NULL || hct_host_last_derived != NULL || hct_mram_stub.program_calls != calls) return 946;
+    drain(&s);
+
+    /* Built nothing, or not the planned size: refused. A failed or corrupt program: refused. */
+    if (derived_refused("derived_nothing", HCT_HOST_DERIVE_NOTHING, 0, 0, 0u, HCTP_STATUS_INVALID_ARGUMENT) != 0) return 950;
+    if (derived_refused("derived_size", HCT_HOST_DERIVE_WRONG_SIZE, 0, 0, 0u, HCTP_STATUS_INVALID_ARGUMENT) != 0) return 951;
+    /* A new seed per case: the rows differ, so the stub programs them (corrupt: rows then tail). */
+    if (derived_refused("derived_corrupt", HCT_HOST_DERIVE_BUILD, 1, 0, 2u, HCTP_STATUS_PAYLOAD_CRC_MISMATCH) != 0) return 952;
+    if (derived_refused("derived_program", HCT_HOST_DERIVE_BUILD, 0, 1, 1u, HCTP_STATUS_INVALID_ARGUMENT) != 0) return 953;
+    hct_host_derived_bytes = 0u;
+    hct_host_derive_mode = HCT_HOST_DERIVE_BUILD;
+    hct_host_derive_seed = 0u;
+    printf("derived placed\n");
     return 0;
 }
 
@@ -514,10 +737,12 @@ int main(void)
 #if defined(HCT_PLACEMENT_MRAM)
     {
         const uintptr_t base = ((uintptr_t)hct_stub_mram + 0xFFFFu) & ~(uintptr_t)0xFFFFu;
-        if ((hct_benchmark_server_capability_flags() & HCT_CAP_WEIGHTS_MRAM) == 0u) return 10;
-        status = test_place_and_reuse(base);
+        status = (hct_benchmark_server_capability_flags() & HCT_CAP_WEIGHTS_MRAM) == 0u ? 10 : 0;
+        if (status == 0) status = test_place_and_reuse(base);
         if (status == 0) status = test_row_skip();
         if (status == 0) status = test_pool_limits(base);
+        if (status == 0) status = test_pool_fit(base);
+        if (status == 0) status = test_derived(base);
     }
 #endif
 #if HCT_BLOB_STORE_BYTES > 0
@@ -526,5 +751,11 @@ int main(void)
     if (status == 0) status = test_store_exact_fill();
     if (status == 0) status = test_store_overlap();
 #endif
-    return status;
+    /* Check ids exceed an exit code's 8 bits: print the id, exit 1. */
+    if (status != 0)
+    {
+        printf("FAILED check %d\n", status);
+        return 1;
+    }
+    return 0;
 }

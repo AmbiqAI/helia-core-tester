@@ -12,7 +12,8 @@ from helia_core_tester.cli import app
 from helia_core_tester.hardware.score import FAMILY_KEYS, GATE_KEYS, kernel_commit, load_bundle, load_scoring, parse_focus, score_bundles
 
 FIELDS = ["case_id", "kernel_id", "comparison_passed", "median_cycles", "mad_cycles", "timed_symbol", "inner_symbol", "macs",
-          "ARM_PMU_INST_RETIRED", "ARM_PMU_MVE_INST_RETIRED", "timing_status", "prepare_cycles", "hidden"]
+          "ARM_PMU_INST_RETIRED", "ARM_PMU_MVE_INST_RETIRED", "timing_status", "prepare_cycles", "hidden",
+          "tolerance_fraction"]
 CASES = {
     "conv_a": ("arm_convolve_wrapper_s8", 1000.0),
     "dw_a": ("arm_depthwise_conv_wrapper_s8", 2000.0),
@@ -89,6 +90,15 @@ def test_failed_comparison_fails(tmp_path):
     assert report["verdict"] == "fail" and "comparison_failed" in _kinds(report)
     dw = next(case for case in report["cases"] if case["case_id"] == "dw_a")
     assert not dw["eligible"]
+
+
+def test_tolerance_fraction_carries(tmp_path):
+    rows = {"conv_a": {"tolerance_fraction": 0.5}, "dw_a": {"comparison_passed": "false", "tolerance_fraction": 0.93}}
+    report = _score([_bundle(tmp_path, "a")], [_bundle(tmp_path, "b", rows=rows)])
+    fractions = {case["case_id"]: case["tolerance_fraction"] for case in report["cases"]}
+    assert fractions == {"conv_a": 0.5, "dw_a": 0.93, "fc_a": None, "add_a": None}
+    (failure,) = [f for f in report["failures"] if f["kind"] == "comparison_failed"]
+    assert failure["reason"] == "b: output mismatch, tolerance fraction 0.93"
 
 
 def test_missing_case_fails(tmp_path):
