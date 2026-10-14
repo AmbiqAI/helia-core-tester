@@ -40,8 +40,8 @@ def test_tc16_hidden_set_unchanged(cpu: str) -> None:
 
 
 def test_float_suite_plumbing() -> None:
-    assert rs.shape_suite("TransposeConv", "FP32") == "float" and rs.shape_suite("TransposeConv", "S16") == "int"
-    assert rs.shape_suite("TransposeConv", None) == "both"
+    assert rs.op_suites("TransposeConv", "FP32") == {"float"} and rs.op_suites("TransposeConv", "S16") == {"int"}
+    assert rs.op_suites("TransposeConv", None) == {"int", "float"}
     config = Config(project_root=PROJECT_ROOT, random_shapes=2, suite="both", op_filter="TransposeConv",
                     dtype_filter="FP32")
     assert {suite for _, suite, _ in GenerateStep(config)._targets()} == {"float"}

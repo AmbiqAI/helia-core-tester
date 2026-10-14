@@ -581,12 +581,6 @@ def op_suites(op_filter: str | None = None, dtype_filter: str | None = None) -> 
     return {GENERATORS[key].suite for key in select_ops(op_filter, dtype_filter)}
 
 
-def shape_suite(op_filter: str | None, dtype_filter: str | None) -> str:
-    """The one suite a draw needs, else both."""
-    suites = op_suites(op_filter, dtype_filter)
-    return suites.pop() if len(suites) == 1 else "both"
-
-
 def layer_route(op: str, layer: Layer, mve: bool, dtype: str = "S8") -> str:
     """The wrapper's direct callee."""
     if op == "TransposeConv":
