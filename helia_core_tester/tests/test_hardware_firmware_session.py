@@ -199,3 +199,4 @@ def test_c_mram_placement(tmp_path: Path) -> None:
     assert "rows skipped" in result.stdout
     assert "pool limits refused" in result.stdout
     assert "pool fit placed" in result.stdout
+    assert "derived placed" in result.stdout

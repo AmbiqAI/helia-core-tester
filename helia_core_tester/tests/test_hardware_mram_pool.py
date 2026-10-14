@@ -104,3 +104,65 @@ def test_workspace_overflow_is_reported_before_the_pool(conv_bundle: CaseBundle,
     with pytest.raises(RuntimeError, match=r"exceeds arena capacity 16"):
         host.run(conv_bundle)
     assert "RX:ERROR" in host._trace
+
+
+@pytest.mark.parametrize(
+    ("k", "n", "expected"),
+    [
+        (1, 1, 4 * 16 + 48),
+        (16, 4, 4 * 16 + 48),
+        (17, 4, 4 * 32 + 48),
+        (16, 5, 2 * (4 * 16 + 48)),
+        (0, 4, 0),
+        (16, 0, 0),
+        (-16, 4, 0),
+        (2**31, 4, 0),
+    ],
+)
+def test_packed_fc_size_mirrors_ns_cmsis_nn(k: int, n: int, expected: int) -> None:
+    assert transfer.packed_fc_s8_size(k, n) == expected
+
+
+def test_packed_fc_kernel_id_matches_registry_and_firmware() -> None:
+    from helia_core_tester.hardware.kernel_registry import lookup_entry_id
+
+    assert lookup_entry_id(PROJECT_ROOT, "arm_fully_connected_per_channel_packed_s8") == transfer.PACKED_FC_S8_KERNEL_ID
+    adapters_h = HARDWARE / "benchmark_server_adapters.h"
+    assert _c_int(_c_define(adapters_h, "HCT_KERNEL_ID_FULLY_CONNECTED_PER_CHANNEL_PACKED_S8")) == transfer.PACKED_FC_S8_KERNEL_ID
+
+
+class _Blob:
+    def __init__(self, role: str, dimensions: tuple[int, ...]) -> None:
+        self.role = role
+        self.dimensions = dimensions
+
+
+def test_derived_extent_counts_only_the_packed_fc_on_mram() -> None:
+    # Weights [C=out, N=depth], as the generated hook reads them.
+    blobs = [_Blob("input_0", (1, 20)), _Blob("weights", (5, 20)), _Blob("bias", (5,))]
+    packed = transfer.packed_fc_s8_size(20, 5)
+    expected = mram_extent("weights", packed, "mram")
+    assert transfer.derived_mram_extent(transfer.PACKED_FC_S8_KERNEL_ID, blobs, "mram") == expected > packed - MRAM_LINE_BYTES
+    assert transfer.derived_mram_extent(transfer.PACKED_FC_S8_KERNEL_ID, blobs, "tcm") == 0
+    assert transfer.derived_mram_extent(transfer.PACKED_FC_S8_KERNEL_ID - 1, blobs, "mram") == 0
+    assert transfer.derived_mram_extent(transfer.PACKED_FC_S8_KERNEL_ID, blobs[:1], "mram") == 0
+    assert transfer.derived_mram_extent(transfer.PACKED_FC_S8_KERNEL_ID, [_Blob("weights", (5,))], "mram") == 0
+
+
+def test_bundle_mram_bytes_count_the_packed_stream(conv_bundle: CaseBundle, monkeypatch) -> None:
+    blobs_only = conv_bundle.mram_bytes_for("mram")
+    packed = transfer.derived_mram_extent(transfer.PACKED_FC_S8_KERNEL_ID, conv_bundle.streamable_blobs, "mram")
+    assert packed > 0
+    monkeypatch.setattr(CaseBundle, "kernel_id", property(lambda self: transfer.PACKED_FC_S8_KERNEL_ID))
+    assert conv_bundle.mram_bytes_for("mram") == blobs_only + packed
+    assert conv_bundle.mram_bytes_for("tcm") == 0
+
+
+def test_fake_target_refuses_a_packed_stream_over_the_pool(conv_bundle: CaseBundle, monkeypatch) -> None:
+    # Blobs fit, blobs plus the packed stream do not: the fake (like plan_mram()) refuses CASE_META.
+    blobs_only = sum(mram_extent(blob.role, blob.byte_length, "mram") for blob in conv_bundle.streamable_blobs)
+    monkeypatch.setattr(transfer, "MRAM_POOL_BYTES", blobs_only)
+    monkeypatch.setattr(fake_target, "derived_mram_extent", lambda kernel_id, blobs, placement: MRAM_LINE_BYTES)
+    host = HostSession(FakeTargetTransport(placement="mram"))
+    with pytest.raises(RuntimeError, match=r"^message_type=\d+ status=-8 MRAM pool full"):
+        host.run(conv_bundle)

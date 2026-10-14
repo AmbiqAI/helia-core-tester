@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any, Iterable
 import zlib
 
 
@@ -109,6 +110,30 @@ def mram_extent(role: str, byte_length: int, placement: str) -> int:
         return 0
     padded = -(-byte_length // MRAM_ROW_BYTES) * MRAM_ROW_BYTES
     return -(-padded // MRAM_LINE_BYTES) * MRAM_LINE_BYTES
+
+
+# HCT_KERNEL_ID_FULLY_CONNECTED_PER_CHANNEL_PACKED_S8: the one kernel with a derived operand.
+PACKED_FC_S8_KERNEL_ID = 182
+_INT32_MAX = 2**31 - 1
+
+
+def packed_fc_s8_size(k: int, n: int) -> int:
+    """arm_fully_connected_per_channel_packed_s8_get_packed_size() for depth k, n outputs; 0 when unsupported."""
+    if k <= 0 or n <= 0:
+        return 0
+    size = (n + 3) // 4 * (4 * (-(-k // 16) * 16) + 48)
+    return 0 if size > _INT32_MAX else size
+
+
+def derived_mram_extent(kernel_id: int, blobs: Iterable[Any], placement: str) -> int:
+    """MRAM pool bytes of the operand the adapter derives (hct_derived_operand_bytes()); 0 when none."""
+    if placement != "mram" or kernel_id != PACKED_FC_S8_KERNEL_ID:
+        return 0
+    weights = next((blob for blob in blobs if blob.role == "weights"), None)
+    if weights is None:
+        return 0
+    dims = tuple(weights.dimensions) + (0, 0)
+    return mram_extent("weights", packed_fc_s8_size(int(dims[1]), int(dims[0])), placement)
 
 
 def staged_extent(role: str, byte_length: int, alignment: int, placement: str) -> tuple[int, int]:

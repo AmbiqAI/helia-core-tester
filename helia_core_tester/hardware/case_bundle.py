@@ -13,7 +13,7 @@ import numpy as np
 
 from .comparison import strict_comparison
 from .pathutil import write_text_lf
-from .transfer import mram_extent, staged_extent
+from .transfer import derived_mram_extent, mram_extent, staged_extent
 
 from helia_core_tester.generation.golden_check import EDGE_CASE_KEY
 from helia_core_tester.generation.io.descriptors import load_descriptor
@@ -120,8 +120,11 @@ class CaseBundle:
         return used
 
     def mram_bytes_for(self, placement: str) -> int:
-        """MRAM placement-pool bytes the firmware needs for this case's weights and bias."""
-        return sum(mram_extent(blob.role, blob.byte_length, placement) for blob in self.streamable_blobs)
+        """MRAM placement-pool bytes the firmware needs: weights, bias and any derived operand (plan_mram())."""
+        blobs = self.streamable_blobs
+        return sum(mram_extent(blob.role, blob.byte_length, placement) for blob in blobs) + derived_mram_extent(
+            self.kernel_id, blobs, placement
+        )
 
     def blob_by_role(self, role: str) -> BlobInfo:
         return next(blob for blob in self.blobs if blob.role == role)
