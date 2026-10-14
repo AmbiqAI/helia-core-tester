@@ -2,6 +2,7 @@
 TransposeConv operation implementation.
 """
 
+import numbers
 from typing import Dict, Any
 import numpy as np
 import tensorflow as tf
@@ -47,11 +48,46 @@ class OpTransposeConv(OperationBase):
                     "(stride <= 2 and input channels > 16)",
                 )
 
+    def declared_filter_shape(self) -> tuple:
+        """Validated descriptor filter_shape [KH, KW, OutCh, InCh].
+
+        Keras takes InCh from the input tensor, so a descriptor InCh that differs
+        from the input channel count would be silently replaced; reject it.
+        """
+        name = self.desc.get('name', '<unnamed>')
+        filter_shape = self.desc.get('filter_shape')
+        input_shape = self.desc.get('input_shape')
+        if not isinstance(input_shape, (list, tuple)) or len(input_shape) != 4:
+            raise ValueError(f"{name}: TransposeConv input_shape must be [N, H, W, C], got {input_shape!r}")
+        if not isinstance(filter_shape, (list, tuple)) or len(filter_shape) != 4:
+            raise ValueError(
+                f"{name}: TransposeConv filter_shape must be [KH, KW, OutCh, InCh], got {filter_shape!r}"
+            )
+        for dim in (*input_shape, *filter_shape):
+            # numpy integers are Integral; bool is too, but never a dimension.
+            if isinstance(dim, bool) or not isinstance(dim, numbers.Integral) or dim <= 0:
+                raise ValueError(
+                    f"{name}: TransposeConv shapes must be positive integers, "
+                    f"got input_shape={input_shape!r} filter_shape={filter_shape!r}"
+                )
+        kh, kw, out_ch, in_ch = (int(dim) for dim in filter_shape)
+        channels = int(input_shape[3])
+        if in_ch != channels:
+            hint = ""
+            if out_ch == channels:
+                # Conv2D descriptors use [KH, KW, InCh, OutCh]; this looks like that order.
+                hint = f"; did you mean [{kh}, {kw}, {in_ch}, {channels}] (OutCh {in_ch})?"
+            raise ValueError(
+                f"{name}: TransposeConv filter_shape InCh ({in_ch}) must equal the "
+                f"input channel count ({channels}); filter_shape is [KH, KW, OutCh, InCh]{hint}"
+            )
+        return kh, kw, out_ch, in_ch
+
     def build_keras_model(self) -> tf.keras.Model:
         """Build Keras model for TransposeConv operation.
         """
         input_shape = self.desc['input_shape']
-        filter_shape = self.desc['filter_shape']
+        filter_shape = self.declared_filter_shape()
         
         # Build input layer (exclude batch dimension in Input shape)
         inputs = tf.keras.Input(
@@ -411,11 +447,19 @@ class OpTransposeConv(OperationBase):
                 }
             else:
                 raise ValueError(f"Unsupported filter shape: {filter_shape}")
+            kh, kw, out_ch, in_ch = self.declared_filter_shape()
+            declared = {'n': out_ch, 'h': kh, 'w': kw, 'c': in_ch}
+            if filter_dims != declared:
+                raise ValueError(
+                    f"{self.desc.get('name')}: converted TransposeConv filter "
+                    f"[OutCh, KH, KW, InCh]={list(filter_shape)} does not match the descriptor's "
+                    f"filter_shape [KH, KW, OutCh, InCh]={[kh, kw, out_ch, in_ch]}"
+                )
             if not float_kernel and weights.dtype != np.int8:
                 weights = weights.astype(np.int8)
         else:
             # Fallback: descriptor format [KH, KW, OutCh, InCh]
-            fs = tuple(self.desc['filter_shape'])
+            fs = self.declared_filter_shape()
             filter_dims = {
                 'n': int(fs[2]),  # OutCh
                 'h': int(fs[0]),  # KH
