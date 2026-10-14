@@ -19,6 +19,7 @@ from helia_core_tester.hardware.generated_test_bridge import (
     build_case_bundle_from_generated_test,
 )
 from helia_core_tester.hardware.kernel_registry import lookup_kernel_id
+from helia_core_tester.hardware.work_count import case_work
 from helia_core_tester.hardware.wrapper_route import inner_symbol
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -102,6 +103,8 @@ def test_svdf_sends_every_time_filter(tmp_path: Path) -> None:
     assert (scalars["input_offset"], scalars["output_offset"]) == (3, -4)
     # Not a wrapper: no inner route.
     assert inner_symbol("arm_svdf_s8", bundle.manifest, True) is None
+    # 2 batches x 4 filters x (4 inputs + 3 time steps).
+    assert case_work(bundle)["macs"] == 2 * 4 * (4 + 3)
 
 
 def test_svdf_s16_state_without_bias(tmp_path: Path) -> None:
@@ -148,6 +151,7 @@ def test_lstm_packs_gates_in_input_forget_cell_output_order(tmp_path: Path) -> N
     # Per gate: input mult/shift, hidden mult/shift.
     assert meta[15:19] == [1000, -1001, 1002, -1003]
     assert meta[27:31] == [1030, -1031, 1032, -1033]
+    assert case_work(load_case_bundle(bundle.manifest_path))["macs"] == 1 * 2 * 4 * 2 * (3 + 2)
 
 
 def test_lstm_s16_is_skipped(tmp_path: Path) -> None:

@@ -38,6 +38,65 @@ def test_mac_kernels_count_dense_macs(operator: str, scalars: dict | None, shape
     assert case_work(_bundle(operator, scalars, **shapes)) == {"macs": macs, "ops": 2 * macs}
 
 
+# LSTM blobs are flat: input B*T*I, weights 4*H*(I+H), output B*T*H.
+def _lstm(batch: int, steps: int, inputs: int, hidden: int) -> CaseBundle:
+    return _bundle(
+        "LSTMUnidirectional", input_0=(batch * steps * inputs,), weights=(4 * hidden * (inputs + hidden),),
+        bias=(4 * hidden,), expected_output=(batch * steps * hidden,),
+    )
+
+
+@pytest.mark.parametrize(
+    ("batch", "steps", "inputs", "hidden"),
+    [(1, 1, 1, 1), (1, 2, 3, 2), (2, 25, 10, 5), (3, 7, 1, 16), (1, 1, 32, 1), (4, 9, 13, 13)],
+)
+def test_lstm_counts_four_gates_per_step(batch: int, steps: int, inputs: int, hidden: int) -> None:
+    macs = batch * steps * 4 * hidden * (inputs + hidden)
+    assert case_work(_lstm(batch, steps, inputs, hidden)) == {"macs": macs, "ops": 2 * macs}
+
+
+@pytest.mark.parametrize(
+    "shapes",
+    [
+        {"weights": (40,), "expected_output": (4,)},
+        {"input_0": (6,), "expected_output": (4,)},
+        {"input_0": (6,), "weights": (40,)},
+        # Weights not 4*H*(I+H) for any H.
+        {"input_0": (6,), "weights": (41,), "expected_output": (4,)},
+        {"input_0": (6,), "weights": (40,), "expected_output": (5,)},
+        {"input_0": (6,), "weights": (0,), "expected_output": (4,)},
+        {"input_0": (0,), "weights": (40,), "expected_output": (4,)},
+    ],
+)
+def test_lstm_without_consistent_shapes_has_no_macs(shapes: dict) -> None:
+    assert case_work(_bundle("LSTMUnidirectional", **shapes)) == {"macs": None, "ops": None}
+
+
+def test_svdf_counts_feature_and_time_products() -> None:
+    # 2 batches, 4 inputs, 6 filters, 3 time steps.
+    bundle = _bundle("SVDF", input_0=(2, 4, 1, 1), input_1=(2, 6, 3, 1), input_2=(6, 3, 1, 1),
+                     weights=(6, 4, 1, 1), expected_output=(2, 3, 1, 1))
+    assert case_work(bundle) == {"macs": 2 * 6 * (4 + 3), "ops": 2 * 2 * 6 * (4 + 3)}
+
+
+@pytest.mark.parametrize(
+    "shapes",
+    [
+        {"input_2": (6, 3), "weights": (6, 4)},
+        {"input_0": (2, 4), "weights": (6, 4)},
+        {"input_0": (2, 4), "input_2": (6, 3)},
+        {"input_0": (8,), "input_2": (6, 3), "weights": (6, 4)},
+        # Feature width must match the input, filters must match the time weights.
+        {"input_0": (2, 5), "input_2": (6, 3), "weights": (6, 4)},
+        {"input_0": (2, 4), "input_2": (5, 3), "weights": (6, 4)},
+        {"input_0": (0, 4), "input_2": (6, 3), "weights": (6, 4)},
+        {"input_0": (2, 4), "input_2": (6, 0), "weights": (6, 4)},
+    ],
+)
+def test_svdf_without_consistent_shapes_has_no_macs(shapes: dict) -> None:
+    assert case_work(_bundle("SVDF", expected_output=(2, 3), **shapes)) == {"macs": None, "ops": None}
+
+
 def test_other_kernels_count_ops() -> None:
     pool = _bundle("AvgPool", {"pool_h": 3, "pool_w": 1}, input_0=(1, 20, 1, 21), expected_output=(1, 7, 1, 21))
     assert case_work(pool) == {"macs": None, "ops": 7 * 21 * 3}
