@@ -40,6 +40,10 @@ def test_real_litert_generation(desc, tmp_path, monkeypatch):
     expected = (a.astype(np.float64) / b.astype(np.float64)).astype(dtype)
     expected = np.clip(expected, desc.get("act_min", -1000), desc.get("act_max", 1000)).astype(dtype)
     np.testing.assert_array_equal(got, expected.ravel())
+    for field, shape in (("input1", a.shape), ("input2", b.shape), ("output", expected.shape)):
+        dims = header.split(name + "_" + field + "_dims = {", 1)[1].split("};", 1)[0]
+        actual = tuple(int(value) for value in re.findall(r"\.[nhwc] = (\d+)", dims))
+        assert actual == (1,) * (4 - len(shape)) + shape
     assert "HELIA_GUARD_CHECK" in text
     if a.shape != b.shape:
         assert "&" + name + "_input1_dims" in text
