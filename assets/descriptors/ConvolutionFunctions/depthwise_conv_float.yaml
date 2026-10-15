@@ -1,4 +1,9 @@
 # FP16 comparisons follow the rule stated at the top of ConvolutionFunctions/convolve_float.yaml.
+# Re-derived by that rule against ns-cmsis-nn v7.43.0 (3f8c6126, past #471) for #124: every override
+# below is still the rule's value. The floor is the MVE float16 lane accumulation (folded into
+# float32 every 32 taps, ns-cmsis-nn#600): the cortex-m55 fallback leg accumulates in float32 and
+# matches every finite-input golden exactly, while the shipped and MVE float coverage legs need the
+# override. Retire an override only once the MVE route accumulates in float32 at the pinned commit.
 operator: DepthwiseConv
 name: depthwise_conv_float_default_f32
 suite: float
@@ -629,13 +634,8 @@ strides: [1, 1]
 padding: SAME
 use_bias: true
 depth_multiplier: 1
-# The unmasked lanes here are a 9-tap f16 multiply-accumulate chain compared against a
-# float32 reference model, so the rounding floor of the accumulation alone consumes the
-# FP16 default budget; the tokens play no part, and a token-free case of this shape
-# fails at the same lane with the same numbers. The override is sized off the worst
-# fraction seen across several generation seeds, not off one run.
-# Whether the f16 depthwise family should carry a tolerance of this shape at family
-# level, rather than case by case, is a Lane C policy call.
+# The tokens play no part in the override: the unmasked lanes carry the MVE accumulation floor
+# described at the top of this file.
 comparison:
   atol: 0.002
   rtol: 0.002
@@ -659,13 +659,8 @@ strides: [1, 1]
 padding: SAME
 use_bias: true
 depth_multiplier: 1
-# The unmasked lanes here are a 9-tap f16 multiply-accumulate chain compared against a
-# float32 reference model, so the rounding floor of the accumulation alone consumes the
-# FP16 default budget; the tokens play no part, and a token-free case of this shape
-# fails at the same lane with the same numbers. The override is sized off the worst
-# fraction seen across several generation seeds, not off one run.
-# Whether the f16 depthwise family should carry a tolerance of this shape at family
-# level, rather than case by case, is a Lane C policy call.
+# The tokens play no part in the override: the unmasked lanes carry the MVE accumulation floor
+# described at the top of this file.
 comparison:
   atol: 0.002
   rtol: 0.002
@@ -689,13 +684,8 @@ strides: [1, 1]
 padding: SAME
 use_bias: true
 depth_multiplier: 1
-# The unmasked lanes here are a 9-tap f16 multiply-accumulate chain compared against a
-# float32 reference model, so the rounding floor of the accumulation alone consumes the
-# FP16 default budget; the tokens play no part, and a token-free case of this shape
-# fails at the same lane with the same numbers. The override is sized off the worst
-# fraction seen across several generation seeds, not off one run.
-# Whether the f16 depthwise family should carry a tolerance of this shape at family
-# level, rather than case by case, is a Lane C policy call.
+# The tokens play no part in the override: the unmasked lanes carry the MVE accumulation floor
+# described at the top of this file.
 comparison:
   atol: 0.002
   rtol: 0.002
