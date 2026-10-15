@@ -8,7 +8,12 @@ import tensorflow as tf
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.ops._shared.quant_knobs import clamp_golden, kernel_init, value_range
 from helia_core_tester.generation.ops._shared.shape_checks import require_positive_int_dims
+from helia_core_tester.generation.ops._shared.sum_bound import tconv_tolerance
 from pathlib import Path
+
+# Data draws before a bounded case fails.
+REDRAWS = 8
+
 
 class OpTransposeConv(OperationBase):
     """
@@ -189,6 +194,24 @@ class OpTransposeConv(OperationBase):
 
             patch_requant(out_path, self.desc, self.seed)
     
+    def _bounded_draw(self, shape, dtype, reference, weights, biases, params) -> tuple:
+        """Input and golden; scaled tolerance if asked."""
+        low, high = value_range(self.desc, 'input_range', (-1.0, 1.0))
+        base = self.comparison_config()
+        for attempt in range(REDRAWS):
+            # Attempt 0 keeps the unbounded data.
+            rng = np.random.default_rng([self.seed, attempt]) if attempt else None
+            data = self._sample_uniform(shape, low=low, high=high, dtype=dtype, rng=rng)
+            golden = reference([data])
+            if not self.desc.get('sum_bound'):
+                return data, golden
+            atol = tconv_tolerance(data, weights, biases, params, golden, base['rtol'], base['atol'])
+            if atol is not None:
+                self.desc['comparison'] = {'atol': atol, 'rtol': base['rtol']}
+                self.desc['resolved_comparison'] = self.comparison_config()
+                return data, golden
+        raise ValueError(f"{self.desc['name']}: reordered sums exceed half the tolerance")
+
     def _select_cmsis_transpose_conv_kernel(self) -> Dict[str, str]:
         """
         Select appropriate CMSIS-NN transpose convolution kernel function.
@@ -484,8 +507,6 @@ class OpTransposeConv(OperationBase):
             if has_biases and biases.dtype != float_dtype:
                 biases = biases.astype(float_dtype)
 
-            low, high = value_range(self.desc, 'input_range', (-1.0, 1.0))
-            input_data = self._sample_uniform(input_shape, low=low, high=high, dtype=float_dtype)
             interpreter_input_dtype = interpreter.get_input_details()[0]['dtype']
 
             def float_reference(operands, _dtype=float_dtype, _in_dtype=interpreter_input_dtype):
@@ -493,7 +514,9 @@ class OpTransposeConv(OperationBase):
                     str(tflite_path), operands[0].astype(_in_dtype)
                 ).astype(_dtype))
 
-            output_data = float_reference([input_data])
+            input_data, output_data = self._bounded_draw(
+                input_shape, float_dtype, float_reference, weights, biases if has_biases else None,
+                transpose_conv_params)
 
             output_data, nonfinite_context = self.apply_nonfinite_policy(
                 output_data, reference=float_reference, inputs=[input_data]

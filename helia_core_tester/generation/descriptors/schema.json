@@ -241,6 +241,10 @@
       "type": "string",
       "enum": ["strict", "mask"]
     },
+    "sum_bound": {
+      "description": "Float TransposeConv only: set atol from the data, 3 * sqrt(K) * eps32 * sqrt(sum terms^2) at the worst output (f32 accumulation for FP16 too), and redraw the input until reordered f32 host sums spend at most half the tolerance.",
+      "type": "boolean"
+    },
     "fault": {
       "description": "Argument fault to inject before the kernel call, selecting the operator's <op>_fault.c.j2 template. Each operator validates the kind against its FAULT_KINDS; shared kinds are null_ctx_buf, null_input, null_output, zero_dim and negative_dim. A fault case asserts the returned status against expected_status and never validates outputs.",
       "type": "string",

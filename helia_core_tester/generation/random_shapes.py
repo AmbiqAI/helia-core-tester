@@ -730,6 +730,8 @@ def _descriptor(
         desc["filter_shape"] = [layer.kh, layer.kw, layer.cout, layer.cin]
         desc["suite"] = "float"
         desc["tensor_dtypes"] = dict.fromkeys(("input", "output", "weights", "bias"), dtype)
+        # Tolerance scales with the summed terms.
+        desc["sum_bound"] = True
     elif op == "TransposeConv":
         desc["filter_shape"] = [layer.kh, layer.kw, layer.cout, layer.cin]
         # Skip on kernels without the entry.
