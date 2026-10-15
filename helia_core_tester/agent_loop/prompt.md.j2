@@ -10,11 +10,11 @@ every output bit-exact. The cases are the tester's {{ op }} {{ dtype }} cases
 Models reach the kernels through these routes (timed symbol -> inner kernel,
 measured on the base tree, {{ first_leg }} leg):
 {% for r in routes %}
-- `{{ r.timed }}`{% if r.inner and r.inner != r.timed %} -> `{{ r.inner }}`{% endif %}: {{ r.cases }} case{{ "s" if r.cases != 1 }}, median {{ r.median }} cycles/MAC, best {{ r.best }}{% if r.ceiling %}; ceiling {{ r.ceiling }}{% endif %}
+- `{{ r.timed }}`{% if r.inner and r.inner != r.timed %} -> `{{ r.inner }}`{% endif %}: {{ r.cases }} case{{ "s" if r.cases != 1 }}, median {{ r.median }} cycles/{{ unit }}, best {{ r.best }}{% if r.ceiling %}; ceiling {{ r.ceiling }}{% endif %}
 {%- endfor %}
 {%- if median is not none %}
 
-Overall median is {{ median }} cycles per MAC{% if ceilings %}; the hardware ceiling is {{ ceilings }}{% endif %}.
+Overall median is {{ median }} cycles per {{ unit }}{% if ceilings %}; the hardware ceiling is {{ ceilings }}{% endif %}.
 {%- endif %}
 {%- for basis in bases %}
 Ceiling basis: {{ basis }}.
@@ -116,7 +116,7 @@ may Read if the printed output was cut:
     `untouched_cases` and `untouched_geomean`.
   - `cases`: one row per public case your change touched (see
     `cases_columns`): baseline vs candidate cycles, speedup, noise band (%),
-    cycles per MAC. `untouched_cases` gives only their count and speedup
+    cycles per {{ unit }}. `untouched_cases` gives only their count and speedup
     range.
   - `hints` (`{{ first_leg }}` leg only): for the ten slowest touched cases, % of peak, a
     diagnosis from PMU counters and suggested fixes.

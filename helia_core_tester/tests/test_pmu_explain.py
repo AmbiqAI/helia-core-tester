@@ -45,7 +45,8 @@ def _rules(row, **kwargs):
         ("arm_transpose_conv_f32", ("conv", "f32")),
         ("arm_convolve_wrapper_s4", ("conv", "s8")),
         ("arm_depthwise_conv_wrapper_s16", ("depthwise", "s16")),
-        ("arm_softmax_s8", (None, "s8")),
+        ("arm_softmax_s8", ("softmax", "s8")),
+        ("arm_elementwise_add_s8", (None, "s8")),
     ],
 )
 def test_classify_route(symbol, expected):
@@ -199,7 +200,19 @@ def test_ceilings_entries_are_complete():
     for cpu in load_ceilings()["cpus"].values():
         for dtypes in cpu["ops"].values():
             for entry in dtypes.values():
-                assert entry["cycles_per_mac"] > 0 and entry["lanes"] >= 0 and entry["basis"]
+                cycles = entry.get("cycles_per_mac", entry.get("cycles_per_op"))
+                assert cycles > 0 and entry["lanes"] >= 0 and entry["basis"]
+
+
+def test_softmax_peak_per_op():
+    row = {**_row(MVE_INST_RETIRED=30), "timed_symbol": "arm_softmax_s8", "inner_symbol": "", "macs": None,
+           "ops": 500, "median_cycles": 4000}
+    result = explain_case(row, cpu=M55)
+    assert result.cycles_per_op == 8.0 and result.pct_of_peak == pytest.approx(50.0)
+    assert "8.0 cyc/op vs 4.0 = 50% of peak" in result.lines()[0]
+    rules = [f.rule for f in result.findings]
+    assert "low_mve_share" in rules and "instruction_overhead" not in rules
+    assert result.metrics["inst_per_mac_instr"] is None
 
 
 def test_explain_cli_json(tmp_path):

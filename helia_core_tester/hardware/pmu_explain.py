@@ -35,6 +35,8 @@ AGENT_PMU_SELECTION: dict[str, list[str]] = {
 _WANTED = tuple(name for names in AGENT_PMU_SELECTION.values() for name in names)
 _CEILINGS_PATH = repo_root() / "assets" / "scoring" / "ceilings.yaml"
 _OPS = ("conv", "depthwise", "fc")
+# Ops scored per element, not MAC.
+_PER_OP = ("softmax",)
 _DTYPE_RE = re.compile(r"_(s4|s8|s16|f16|f32)(?=_|$)")
 # Cortex-M55 L1D line size.
 _LINE_BYTES = 32
@@ -70,12 +72,23 @@ def classify_route(symbol: str) -> tuple[Optional[str], Optional[str]]:
         op = "fc"
     elif "conv" in symbol:
         op = "conv"
+    elif "softmax" in symbol:
+        op = "softmax"
     else:
         op = None
     match = _DTYPE_RE.search(symbol)
     dtype = match.group(1) if match else None
     # s4 weights unpack to s8 MACs.
     return op, ("s8" if dtype == "s4" else dtype)
+
+
+def peak_pct(ceiling: Optional[Mapping[str, Any]], per_mac: Optional[float], per_op: Optional[float]):
+    """Percent of the MAC or op ceiling."""
+    if not ceiling:
+        return None
+    if "cycles_per_mac" in ceiling:
+        return 100 * ceiling["cycles_per_mac"] / per_mac if per_mac else None
+    return 100 * ceiling["cycles_per_op"] / per_op if per_op else None
 
 
 def _number(value: Any) -> Optional[float]:
@@ -116,6 +129,7 @@ class Explanation:
     metrics: dict[str, Optional[float]]
     missing_counters: list[str]
     findings: list[Finding] = field(default_factory=list)
+    cycles_per_op: Optional[float] = None
 
     @property
     def diagnosis(self) -> str:
@@ -127,8 +141,11 @@ class Explanation:
 
     def lines(self) -> list[str]:
         head = f"{self.case_id}: {self.op or '?'} {self.dtype or '?'} via {self.route or '?'}"
-        if self.pct_of_peak is not None:
+        if self.pct_of_peak is not None and self.cycles_per_mac:
             head += (f", {self.cycles_per_mac:.3f} cyc/MAC vs {self.ceiling['cycles_per_mac']}"
+                     f" = {self.pct_of_peak:.0f}% of peak")
+        elif self.pct_of_peak is not None:
+            head += (f", {self.cycles_per_op:.1f} cyc/op vs {self.ceiling['cycles_per_op']}"
                      f" = {self.pct_of_peak:.0f}% of peak")
         elif self.cycles is not None:
             head += f", {self.cycles:.0f} cycles"
@@ -171,7 +188,7 @@ def _metrics(row: Mapping[str, Any], cycles: Optional[float], macs: Optional[flo
         "mve_share": _ratio(mve_inst, inst) if lanes else None,
         # Counts every MVE multiply, requantize too.
         "mve_mul_ratio": _ratio(mve_mac, macs / lanes) if lanes and macs else None,
-        "inst_per_mac_instr": _ratio(inst, mve_mac) if lanes else None,
+        "inst_per_mac_instr": _ratio(inst, mve_mac) if lanes and macs else None,
         "stall_frontend": _ratio(counter("STALL_FRONTEND"), cycles),
         "stall_backend": _ratio(counter("STALL_BACKEND"), cycles),
         "mve_stall_mem": _ratio(counter("MVE_STALL_RESOURCE_MEM"), cycles),
@@ -298,13 +315,13 @@ def explain_case(
         target = (cpu_table.get("op_targets") or {}).get(op, cpu_table.get("target_inst_per_mac_instr"))
         ceiling = dict(entry, key=f"{cpu}/{op}/{dtype}", target_inst_per_mac_instr=target)
     cpm = _number(row.get("cycles_per_mac")) or _ratio(cycles, macs)
+    cpo = None if cpm else _number(row.get("cycles_per_op")) or _ratio(cycles, _number(row.get("ops")))
     lanes = int(ceiling["lanes"]) if ceiling else 0
     metrics, missing = _metrics(row, cycles, macs, lanes, dtype)
     result = Explanation(
         case_id=str(row.get("case_id")), cpu=cpu, placement=placement, op=op, dtype=dtype, route=route,
         timing_status=row.get("timing_status"), cycles=cycles, macs=macs, cycles_per_mac=cpm, ceiling=ceiling,
-        pct_of_peak=100 * ceiling["cycles_per_mac"] / cpm if ceiling and cpm else None,
-        metrics=metrics, missing_counters=missing,
+        pct_of_peak=peak_pct(ceiling, cpm, cpo), metrics=metrics, missing_counters=missing, cycles_per_op=cpo,
     )
     if result.timing_status not in (None, "valid"):
         result.findings = [Finding("timing_invalid", 0.0, f"Timing {result.timing_status}: no diagnosis",
@@ -330,7 +347,7 @@ def _selected(row: Mapping[str, Any], cases: tuple[str, ...], ops: tuple[str, ..
     # Op names match exactly, else substring.
     if ops and not any(o == op if o in _OPS else o.lower() in text for o in ops):
         return False
-    return bool(cases) or all_cases or bool(_number(row.get("macs")))
+    return bool(cases) or all_cases or bool(_number(row.get("macs")) or (op in _PER_OP and _number(row.get("ops"))))
 
 
 def explain_bundle(

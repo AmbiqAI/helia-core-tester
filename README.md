@@ -71,9 +71,11 @@ activation dtype, or `S4` for s4-weight cases),
 with `--suite int` or `float`, `--op`/`--dtype`/`--case-id` also narrow generation; other cases stay in the tree),
 `--skip-generate`, `--skip-flash`, `--force-flash`.
 
-Held-out shapes: `generate --random-shapes N --shape-seed S` draws N s8
-Convolve, N s8 DepthwiseConv and N s16 DepthwiseConv cases (`rs<S>_conv_*`,
-`rs<S>_dw_*`, `rs<S>_dw16_*`) instead of the `assets/` descriptors. `--op`/`--dtype`
+Held-out shapes: `generate --random-shapes N --shape-seed S` draws N cases per
+generator: s8 Convolve, s8 and s16 DepthwiseConv, s16, FP32 and FP16
+TransposeConv, and s8 Softmax (`rs<S>_conv_*`, `rs<S>_dw_*`, `rs<S>_dw16_*`,
+`rs<S>_tc16_*`, `rs<S>_tcf32_*`, `rs<S>_tcf16_*`, `rs<S>_sm8_*`) instead of the
+`assets/` descriptors. `--op`/`--dtype`
 limit the draw to matching generators (e.g. `--op Convolve` draws only
 `rs<S>_conv_*`, the same cases as an unfiltered draw; `--op DepthwiseConv --dtype S16`
 draws only `rs<S>_dw16_*`). Every `--op` token must name a registered op by operator,
@@ -88,6 +90,7 @@ dropped and counted as `skipped_degenerate`. To add an op, register its route
 list and layer sampler in `GENERATORS` (`generation/random_shapes.py`), keyed by
 (op, dtype), with a new stream id and tag, and teach the op-specific helpers
 (`layer_route`, `footprint`, `layer_macs`, `_relu6_gain`, `_descriptor`) its layout.
+An op without layers sets `sample` instead (Softmax: `_softmax_cases`).
 
 Hidden shapes: `generate --random-shapes N --hidden-dir DIR` draws the same
 kind of cases from a secret seed instead (env `HCT_HIDDEN_SEED`, or
@@ -480,7 +483,8 @@ Needs, on the bench host: `uv`, `git`, `patch`, `bench-agent`, the
 
 ### 1. Write a campaign file
 
-Start from `assets/campaigns/conv-s8.example.yaml`, `dw-s8.example.yaml` or `dw-s16.example.yaml`:
+Start from `assets/campaigns/conv-s8.example.yaml`, `dw-s8.example.yaml`, `dw-s16.example.yaml`
+or `softmax-s8.example.yaml`:
 
 ```yaml
 name: conv-s8                  # lowercase, digits, dashes
@@ -513,8 +517,10 @@ agent's 10 minute Bash limit), `retries` (per leg, default 1) and `max_infra_err
 failing board results in a row, default 5) and `size_evals` (the last evals,
 which go to cutting code size once something passed; default a third of
 `evals`, below `evals`, 0 for none). The hidden set holds only the
-target op and dtype. Hidden shapes exist for `Convolve` S8 and `DepthwiseConv`
-S8 and S16 only; set `hidden_shapes: 0` for other targets.
+target op and dtype. Hidden shapes exist for `Convolve` S8, `DepthwiseConv`
+S8 and S16, `TransposeConv` S16, FP32 and FP16, and `Softmax` S8 only; set
+`hidden_shapes: 0` for other targets. Ops without MACs (Softmax) report and
+score cycles per op (one per element) instead of cycles per MAC.
 With `toolchains: [gcc, atfe]` every placement runs once per compiler:
 gcc legs keep their names (`tcm`, `mram`), atfe legs are `tcm-atfe` and
 `mram-atfe`. Each atfe leg has its own baseline, build dir and size

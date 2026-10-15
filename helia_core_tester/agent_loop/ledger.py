@@ -20,7 +20,7 @@ ORDER = ("error", "rejected", "refused", "not_comparable", "fail", "no_gain", "p
 EXIT_BUDGET = 6
 # Stages the agent cannot cause.
 INFRA_STAGES = ("tester", "baseline")
-CASE_COLUMNS = ["case_id", "baseline_cycles", "candidate_cycles", "speedup", "band_pct", "cycles_per_mac",
+CASE_COLUMNS = ["case_id", "baseline_cycles", "candidate_cycles", "speedup", "band_pct", "cycles_per_unit",
                 "tolerance_fraction"]
 TOP_HINTS = 10
 # A leg the judge did not run.
@@ -151,7 +151,8 @@ def leg_view(v: dict, hints: bool) -> dict[str, Any]:
     touched = [c for c in cases if c.get("touched") is not False]
     out["cases"] = [[c.get("case_id"), c.get("baseline_cycles"), c.get("candidate_cycles"),
                      round(c["speedup"], 4) if c.get("speedup") else None, c.get("band_pct"),
-                     c.get("cycles_per_mac_candidate"), c.get("tolerance_fraction")] for c in touched]
+                     c.get("cycles_per_mac_candidate") or c.get("cycles_per_op_candidate"), c.get("tolerance_fraction")]
+                    for c in touched]
     rest = [c["speedup"] for c in cases if c.get("touched") is False and c.get("speedup")]
     out["untouched_cases"] = {"count": len(rest), "speedup_min": round(min(rest), 4) if rest else None,
                               "speedup_max": round(max(rest), 4) if rest else None}
