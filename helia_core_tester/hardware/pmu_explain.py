@@ -208,7 +208,7 @@ def _rule_near_peak(e: Explanation) -> Optional[Finding]:
     if pct is None or pct < NEAR_PEAK:
         return None
     return Finding("near_peak", pct / 100, f"Near ceiling at {pct:.0f}% of peak",
-                   "Only fewer MACs or fused work helps now")
+                   "Only fewer MACs or fused work helps now" if e.cycles_per_mac else "Only less work per element helps now")
 
 
 def _rule_memory_bound(e: Explanation) -> Optional[Finding]:

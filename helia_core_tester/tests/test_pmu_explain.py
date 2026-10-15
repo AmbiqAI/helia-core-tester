@@ -213,6 +213,8 @@ def test_softmax_peak_per_op():
     rules = [f.rule for f in result.findings]
     assert "low_mve_share" in rules and "instruction_overhead" not in rules
     assert result.metrics["inst_per_mac_instr"] is None
+    near = explain_case({**row, "median_cycles": 400}, cpu=M55).findings[0]
+    assert near.rule == "near_peak" and "MAC" not in near.hint
 
 
 def test_explain_cli_json(tmp_path):

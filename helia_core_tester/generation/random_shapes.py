@@ -545,7 +545,8 @@ def _sm_pattern(rng: np.random.Generator) -> tuple[int, int, dict]:
 
 def _sm_long(rng: np.random.Generator) -> tuple[int, int, dict]:
     """One or two rows of 3072+."""
-    pattern = str(rng.choice(SOFTMAX_PATTERNS)) if rng.random() < 0.3 else None
+    # Equal or peak rows lose the sum.
+    pattern = str(rng.choice(SOFTMAX_PATTERNS[1:3])) if rng.random() < 0.3 else None
     return int(rng.integers(1, 3)), _channels(rng, 3072, 4096), _sm_knobs(rng, 0.5, 300.0, pattern)
 
 
@@ -839,12 +840,12 @@ def sample_op(key: tuple[str, str], n: int, seed: int, cpu: str, workspace: int)
     """N descriptors for one generator, cycling routes."""
     mve = get_cpu_profile(cpu).has_mve
     gen, (op, dtype) = GENERATORS[key], key
-    if gen.sample:
-        return gen.sample(np.random.default_rng([seed, gen.stream]), n, seed, workspace)
-    routes, draw = gen.routes(mve), gen.draw
-    targets = gen.plan(n) if gen.plan else routes
     # One stream per op keeps ops independent.
     rng = np.random.default_rng([seed, gen.stream])
+    if gen.sample:
+        return gen.sample(rng, n, seed, workspace)
+    routes, draw = gen.routes(mve), gen.draw
+    targets = gen.plan(n) if gen.plan else routes
     cases = []
     for index in range(n):
         target = targets[index % len(targets)]
