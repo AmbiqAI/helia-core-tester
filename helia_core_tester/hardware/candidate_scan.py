@@ -633,8 +633,34 @@ _MOVE_RELOCS = frozenset(("R_ARM_THM_MOVW_ABS_NC", "R_ARM_THM_MOVT_ABS", "R_ARM_
 _WORD_RELOCS = frozenset(("R_ARM_ABS32", "R_ARM_REL32", "R_ARM_TARGET1", "R_ARM_TARGET2"))
 
 
-def _object_hits(source: str, obj: Path, defined: frozenset[str], limits: tuple[float, str]) -> list[dict]:
-    """Section, SCS and reference hits."""
+def _reloc_addend(kind: str, data: memoryview, offset: int) -> Optional[int]:
+    """Byte offset from the symbol that a relocation reaches, or None if unread."""
+    if kind in _WORD_RELOCS:
+        return int.from_bytes(data[offset:offset + 4], "little", signed=True)
+    if kind == "R_ARM_PREL31":
+        return _sign(int.from_bytes(data[offset:offset + 4], "little") & 0x7FFFFFFF, 31)
+    if kind in _BRANCH_RELOCS or kind in _MOVE_RELOCS:
+        addend = _thumb_addend(kind, data, offset)
+        # The branch addend carries the -4 pipeline bias.
+        return None if addend is None else addend + 4 * (kind in _BRANCH_RELOCS)
+    return None
+
+
+def _inside(starts: set[int], size: int, at: int) -> bool:
+    """`at` is neither an instruction start nor the section end."""
+    return at not in starts and at & ~1 not in starts and at != size
+
+
+# A global code symbol: section name, value, instruction starts, section size.
+Export = tuple[str, int, frozenset[int], int]
+# A reference into another object: symbol, addend (None if unread), origin.
+External = tuple[str, Optional[int], str]
+
+
+def _object_hits(
+    source: str, obj: Path, defined: frozenset[str], limits: tuple[float, str],
+) -> tuple[list[dict], dict[str, Export], list[External]]:
+    """Section, SCS and reference hits, global code symbols, references to other objects."""
     hits, sections, names = [], {}, {}
     # Locals resolve only inside this object.
     local = _defined_symbols([obj], local=True, limits=limits)
@@ -658,7 +684,11 @@ def _object_hits(source: str, obj: Path, defined: frozenset[str], limits: tuple[
         home = names.get(index, "")
         homes[symbol] = home
         if index.isdigit() and int(index) < len(table):
-            places.setdefault(symbol, set()).add((int(index), int(value, 16)))
+            at = int(value, 16)
+            # Bit 0 of a Thumb function's value is the state tag, not an offset.
+            if kind == "FUNC":
+                at &= ~1
+            places.setdefault(symbol, set()).add((int(index), at))
         code = kind == "FUNC" or _CODE_SYMBOL.match(symbol)
         if code and not home.startswith(".text"):
             hits.append({"rule": "object_section", "path": source, "text": f"code {symbol} in {home}"})
@@ -697,7 +727,7 @@ def _object_hits(source: str, obj: Path, defined: frozenset[str], limits: tuple[
 
     def entry(origin: str, index: int, at: int) -> None:
         """Code entered at `at` must start a decoded instruction."""
-        if index in starts and at not in starts[index] and at & ~1 not in starts[index] and at != len(table[index][3]):
+        if index in starts and _inside(starts[index], len(table[index][3]), at):
             instruction(f"{origin} enters {table[index][0]}+{at:#x} inside an instruction")
 
     for symbol, spots in places.items():
@@ -725,6 +755,7 @@ def _object_hits(source: str, obj: Path, defined: frozenset[str], limits: tuple[
     expected, seen_relocs = sum(kind in (_REL, _RELA) for _, kind, _, _, _ in table), 0
     target = None
     relocated: set[tuple[int, int]] = set()
+    externals: list[External] = []
     for line in run_binutil("arm-none-eabi-readelf", ["-rW", str(obj)], *limits).splitlines():
         if _RELOC_SECTION.match(line):
             seen_relocs += 1
@@ -742,20 +773,14 @@ def _object_hits(source: str, obj: Path, defined: frozenset[str], limits: tuple[
             addend = int.from_bytes(data[offset:offset + 4], "little", signed=True)
             if not 0 <= addend < _ADDEND_MAX:
                 hit(f"{symbol}{addend:+#x} in {section}")
+        origin = f"{kind} at {section}+{offset:#x}"
+        if symbol not in places and symbol not in local and symbol in defined:
+            # Defined in another kernel object: checked once all are read.
+            externals.append((symbol, _reloc_addend(kind, data, offset), origin))
         for index, value in places.get(symbol, ()):
             if index not in starts:
                 continue
-            origin = f"{kind} at {section}+{offset:#x}"
-            if kind in _WORD_RELOCS:
-                addend = int.from_bytes(data[offset:offset + 4], "little", signed=True)
-            elif kind == "R_ARM_PREL31":
-                addend = _sign(int.from_bytes(data[offset:offset + 4], "little") & 0x7FFFFFFF, 31)
-            elif kind in _BRANCH_RELOCS or kind in _MOVE_RELOCS:
-                addend = _thumb_addend(kind, data, offset)
-                # The branch addend carries the -4 pipeline bias.
-                addend = None if addend is None else addend + 4 * (kind in _BRANCH_RELOCS)
-            else:
-                addend = None
+            addend = _reloc_addend(kind, data, offset)
             if addend is None:
                 instruction(f"{origin} into {table[index][0]} is unchecked")
             else:
@@ -770,6 +795,33 @@ def _object_hits(source: str, obj: Path, defined: frozenset[str], limits: tuple[
     for (index, at), goal in direct.items():
         if (index, at) not in relocated:
             entry(f"branch at {table[index][0]}+{at:#x}", index, goal)
+    exports: dict[str, Export] = {}
+    for symbol, spots in places.items():
+        for index, value in spots:
+            if symbol in defined and index in starts:
+                exports[symbol] = (table[index][0], value, frozenset(starts[index]), len(table[index][3]))
+    return hits, exports, externals
+
+
+def _external_hits(results: list[tuple[str, tuple[list[dict], dict[str, Export], list[External]]]]) -> list[dict]:
+    """References that enter another kernel object's code inside an instruction."""
+    exports: dict[str, Export] = {}
+    for _, (_, found, _) in results:
+        for symbol, spot in found.items():
+            exports.setdefault(symbol, spot)
+    hits = []
+    for source, (_, _, externals) in results:
+        for symbol, addend, origin in externals:
+            if symbol not in exports:
+                continue
+            section, value, starts, size = exports[symbol]
+            if addend is None:
+                text = f"{origin} into {symbol} ({section}) is unchecked"
+            elif _inside(starts, size, value + addend):
+                text = f"{origin} enters {symbol}{addend:+#x} ({section}+{value + addend:#x}) inside an instruction"
+            else:
+                continue
+            hits.append({"rule": "object_instruction", "path": source, "text": text[:200]})
     return hits
 
 
@@ -821,7 +873,8 @@ def object_findings(build_dir: Path, deadline_s: float = SCAN_DEADLINE_S) -> tup
             done, late = wait(jobs, timeout=max(0.0, deadline - time.monotonic()))
             if late:
                 return error(f"object scan passed its {deadline_s:g} s deadline")
-            findings = [hit for job in jobs for hit in job.result()]
+            results = [(source, job.result()) for (source, _, _), job in zip(units, jobs)]
+            findings = [hit for _, (hits, _, _) in results for hit in hits] + _external_hits(results)
         except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as exc:
             return error(f"object scan failed: {exc}")
         finally:

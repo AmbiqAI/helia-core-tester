@@ -83,16 +83,24 @@ def test_missing_compiler_fails(kernels: Path, monkeypatch) -> None:
 
 def _build(tmp_path: Path, source: str, define: str = "-DBOARD_X", name: str = "k.c") -> Path:
     """A build dir with one kernel object."""
+    return _build_units(tmp_path, {name: source}, define)
+
+
+def _build_units(tmp_path: Path, sources: dict[str, str], define: str = "-DBOARD_X") -> Path:
+    """A build dir with one kernel object per source."""
     build = tmp_path / "build"
-    src = build / "nsx_app/modules/nsx-cmsis-nn/Source" / name
-    src.parent.mkdir(parents=True)
-    src.write_text(source, encoding="utf-8")
     gcc = arm_tool("arm-none-eabi-gcc")
-    subprocess.run([gcc, "-mcpu=cortex-m55", "-O2", "-c", str(src), "-o", str(build / "k.c.obj")], check=True)
     include = f"-I{build}/nsx_app/modules/nsx-cmsis-nn/Include"
-    args = ["gcc", define, include, "-MD", "-MF", "k.d", "-o", "k.c.obj", "-c", str(src)]
-    entry = {"directory": str(build), "file": str(src), "output": "k.c.obj", "arguments": args}
-    (build / "compile_commands.json").write_text(json.dumps([entry]), encoding="utf-8")
+    entries = []
+    for name, source in sources.items():
+        src = build / "nsx_app/modules/nsx-cmsis-nn/Source" / name
+        src.parent.mkdir(parents=True, exist_ok=True)
+        src.write_text(source, encoding="utf-8")
+        out = f"{Path(name).stem}.c.obj"
+        subprocess.run([gcc, "-mcpu=cortex-m55", "-O2", "-c", str(src), "-o", str(build / out)], check=True)
+        args = ["gcc", define, include, "-MD", "-MF", f"{Path(name).stem}.d", "-o", out, "-c", str(src)]
+        entries.append({"directory": str(build), "file": str(src), "output": out, "arguments": args})
+    (build / "compile_commands.json").write_text(json.dumps(entries), encoding="utf-8")
     return build
 
 
@@ -233,6 +241,9 @@ g:
     ("", "movw r0, #:lower16:(after - 1)", "", "R_ARM_THM_MOVW_ABS_NC"),
     ("", "movt r0, #:upper16:(after - 1)", "", "R_ARM_THM_MOVT_ABS"),
     ("", "", ".word after - 1", "R_ARM_ABS32"),
+    # f carries the Thumb tag, so f + 3 enters at offset 2.
+    ("", "", ".word f + 3", "R_ARM_ABS32"),
+    ("", "movw r0, #:lower16:(f + 3)", "", "R_ARM_THM_MOVW_ABS_NC"),
 ])
 def test_object_scan_flags_entry_inside_instruction(
     tmp_path: Path, local: str, remote: str, data: str, origin: str,
@@ -255,7 +266,7 @@ def test_object_scan_entry_unread_relocation_fails_closed(tmp_path: Path) -> Non
 @needs_gcc
 def test_object_scan_entry_at_boundaries_is_clean(tmp_path: Path) -> None:
     source = HIDDEN.format(local="b.n after", remote="bl after\n  b.w f\n  movw r0, #:lower16:after",
-                           data=".word after + 1\n.word f")
+                           data=".word after + 1\n.word f\n.word f + 1")
     findings, summary, _ = candidate_scan.object_findings(_build(tmp_path, source, name="k.S"))
     assert findings == [] and summary["count"] == 1
 
@@ -299,6 +310,76 @@ def test_object_scan_clean_calls_and_tables(tmp_path: Path) -> None:
     )
     findings, summary, _ = candidate_scan.object_findings(_build(tmp_path, source))
     assert findings == [] and summary["count"] == 1
+
+
+# wfi as the second half of a 32-bit ldr.w in one object; `{call}` in another.
+VICTIM = """.syntax unified
+.thumb
+.text
+.global victim
+.type victim, %function
+.thumb_func
+victim:
+  .inst.w 0xf8dfbf30
+  bx lr
+.section .rodata.tab,"a"
+.global tab
+tab:
+  .word 1, 2, 3
+"""
+CALLER = """.syntax unified
+.thumb
+.text
+.global caller
+.type caller, %function
+.thumb_func
+caller:
+  {call}
+  bx lr
+.section .rodata.p,"a"
+  {data}
+"""
+
+
+@needs_gcc
+@pytest.mark.parametrize(("call", "data", "expected"), [
+    ("bl victim + 2", "", "R_ARM_THM_CALL at .text+0x0 enters victim+0x2 (.text+0x2) inside an instruction"),
+    ("b.w victim + 2", "", "R_ARM_THM_JUMP24 at .text+0x0 enters victim+0x2 (.text+0x2) inside an instruction"),
+    ("movw r0, #:lower16:(victim + 3)", "",
+     "R_ARM_THM_MOVW_ABS_NC at .text+0x0 enters victim+0x3 (.text+0x3) inside an instruction"),
+    ("", ".word victim + 3", "R_ARM_ABS32 at .rodata.p+0x0 enters victim+0x3 (.text+0x3) inside an instruction"),
+    ("", ".hword victim", "R_ARM_ABS16 at .rodata.p+0x0 into victim (.text) is unchecked"),
+])
+def test_object_scan_flags_entry_inside_another_objects_instruction(
+    tmp_path: Path, call: str, data: str, expected: str,
+) -> None:
+    build = _build_units(tmp_path, {"v.S": VICTIM, "c.S": CALLER.format(call=call, data=data)})
+    findings, summary, _ = candidate_scan.object_findings(build)
+    hits = [f for f in findings if f["rule"] == "object_instruction" and not f["text"].endswith("wfi")]
+    assert [(f["path"], f["text"]) for f in hits] == [("Source/c.S", expected)]
+    assert summary["count"] == 2
+
+
+@needs_gcc
+def test_object_scan_cross_object_boundaries_are_clean(tmp_path: Path) -> None:
+    call = "bl victim\n  b.w victim\n  movw r0, #:lower16:(tab + 6)\n  movt r0, #:upper16:(tab + 6)"
+    build = _build_units(tmp_path, {"v.S": VICTIM, "c.S": CALLER.format(call=call, data=".word victim\n  .word tab + 5")})
+    findings, summary, _ = candidate_scan.object_findings(build)
+    assert [f for f in findings if not f["text"].endswith("wfi")] == [] and summary["count"] == 2
+
+
+def test_external_hits_ignores_symbols_without_code() -> None:
+    results = [("Source/a.c", ([], {}, [("tab", 3, "R_ARM_ABS32 at .data+0x0")]))]
+    assert candidate_scan._external_hits(results) == []
+
+
+def test_external_hits_end_of_section_is_clean() -> None:
+    results = [
+        ("Source/a.c", ([], {"f": (".text", 0, frozenset({0, 4}), 6)}, [])),
+        ("Source/b.c", ([], {}, [("f", 6, "R_ARM_ABS32 at .data+0x0"), ("f", 2, "R_ARM_ABS32 at .data+0x4")])),
+    ]
+    assert [h["text"] for h in candidate_scan._external_hits(results)] == [
+        "R_ARM_ABS32 at .data+0x4 enters f+0x2 (.text+0x2) inside an instruction"]
 
 
 def test_thumb_addend_short_data_is_unread() -> None:
@@ -736,7 +817,7 @@ def test_object_scan_drops_clang_flags(tmp_path: Path, monkeypatch) -> None:
     args = ["/opt/atfe/bin/clang", "--target=arm-none-eabi", "-o", "k.c.obj", "-c", str(src)]
     entry = {"directory": str(build), "file": str(src), "output": "k.c.obj", "arguments": args}
     (build / "compile_commands.json").write_text(json.dumps([entry]), encoding="utf-8")
-    monkeypatch.setattr(candidate_scan, "_object_hits", lambda *a: [])
+    monkeypatch.setattr(candidate_scan, "_object_hits", lambda *a: ([], {}, []))
     monkeypatch.setattr(candidate_scan, "_defined_symbols", lambda *a, **k: frozenset())
     findings, summary, flags = candidate_scan.object_findings(build)
     assert findings == [] and summary["count"] == 1 and flags == {}
