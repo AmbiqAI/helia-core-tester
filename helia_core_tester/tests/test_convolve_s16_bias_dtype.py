@@ -88,6 +88,7 @@ def test_bias_dtype_rejected_outside_s16(activation_dtype: str, weight_dtype: st
     [
         "convolve_int32_bias_1x1_in8_out7_s16",
         "convolve_int32_bias_group_ch_mult1_k3x3_w12_s16",
+        "convolve_int32_bias_group_ch_mult1_k3x3_w9_same_s16",
     ],
 )
 def test_int32_bias_case_emits_int32_bias_end_to_end(name: str, tmp_path: Path) -> None:
@@ -109,3 +110,18 @@ def test_bias_width_mismatch_between_golden_and_kernel_fails(tmp_path: Path) -> 
     pinned = OpConvolve(desc, seed=1, target_cpu=_CPU)
     with pytest.raises(ValueError, match="bias_dtype pins int32_t but the converted model carries a int64 bias"):
         pinned.generate_c_files(tmp_path)
+
+
+def test_int32_bias_group_cases_reach_the_group_kernel() -> None:
+    """arm_convolve_wrapper_s16 routes a filter with < 9 taps and zero leading padding to
+    arm_convolve_s16_fast_small_kernel before the ch_mult_1 group kernel. SAME padding
+    on an even filter pads only after (leading pad 0), so >= 9 taps is the safe rule."""
+    found = 0
+    for descriptor in load_all_descriptors(str(_PROJECT_ROOT / "assets" / "descriptors")):
+        if descriptor.get("bias_dtype") != "S32" or "groups" not in descriptor:
+            continue
+        found += 1
+        fh, fw, cin, _ = descriptor["filter_shape"]
+        taps = fh * fw * (cin // descriptor["groups"])
+        assert taps >= 9, descriptor["name"]
+    assert found >= 7
