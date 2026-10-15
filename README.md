@@ -36,7 +36,7 @@ Removed interfaces:
 - the `perf-stream` command group and `scripts/run_hardware_perf_suite.sh` (replaced by `hardware run`, see below)
 
 INT32 predicate tests are available through the FVP pipeline with
-`generate --op Comparison --op SelectV2 --dtype s32`. They cover all six
+`generate --op Comparison,SelectV2 --dtype s32`. They cover all six
 comparisons and SELECT_V2, including scalar operands, broadcasting, tails and
 signed integer boundaries. S32 references come from LiteRT and use exact output
 validation; generation fails if that reference cannot run. These descriptors
