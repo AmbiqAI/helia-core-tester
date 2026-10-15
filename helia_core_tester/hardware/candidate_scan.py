@@ -31,9 +31,24 @@ exact Thumb sizes. No instruction may be cut by a label, data or the
 section end, and no code span may fall into data or off the end.
 Every symbol, relocation and direct branch into code must land on a
 decoded instruction start; a branch or odd address into data is
-refused, and in code only an instruction's own field may be
-relocated. So bytes inside an instruction or in data are never
-entered by name. Jump-table entries, data reached by pointer, and
+refused. Direct branch targets are decoded from those starts, not from
+a disassembler listing, so a branch written as data rows is followed
+too; a branch leaving its section, or any branch future (bf, bfx,
+bfl, bflx, bfcsel), is refused. In code, a data relocation must write
+only bytes of one data span, and an instruction relocation must sit
+on an instruction it is defined for (opcode and width); any other
+relocation kind, or a relocation row the scan cannot read, is
+refused. So bytes inside an instruction or in data are never entered
+by name.
+
+The link fills relocations in, so the linked image
+(hardware/hct_benchmark_server.elf and its .map, GNU ld or lld) is
+read too: each kernel code section the map places must equal the
+object outside relocated bytes, and every instruction the link
+changed gets the instruction and SCS checks again. A missing image or
+map, a map in another format, or a map placing none of the kernel code
+fails the scan. Jump-table entries, data reached by pointer, kernel
+data sections in the image, branch targets the link resolves, and
 addresses or code built at run time stay out of reach.
 """
 
@@ -489,13 +504,14 @@ _SLEEP_INSN = re.compile(r"\twf[ie]\S*(?:\t|$)", re.IGNORECASE)
 _MASK_ENCODING = re.compile(rb"(?=[\x60-\x7f]\xb6|[\x80-\x9f\xa0-\xaf]\xf3[\x00-\xff][\x80-\x8f\xa0-\xaf])")
 _DISASSEMBLY = re.compile(r"^Disassembly of section (\S+):$")
 _INSN_LINE = re.compile(r"^\s*([0-9a-f]+):\t")
-_DIRECT_TARGET = re.compile(r"\t(?:[^@\t]*[ ,])?([0-9a-f]+) <[^>]*>$")
 _RELOC_SECTION = re.compile(r"^Relocation section '.*' at offset")
 _SYMBOL_ROW = re.compile(r"^\s*\d+:\s+([0-9a-f]+)\s+\d+\s+(\w+)\s+(\w+)\s+\w+\s+(\d+)\s+(\S+)")
 # Mapping symbols mark code: $t, $a.
 _CODE_SYMBOL = re.compile(r"^\$[ta](?:\.|$)")
 _MAPPING_SYMBOL = re.compile(r"^\$([adt])(?:\.|$)")
-_RELOC_ROW = re.compile(r"^([0-9a-f]{8})\s+[0-9a-f]{8}\s+(R_ARM_\w+)\s+[0-9a-f]{8}\s+(\S+)")
+# Symbol 0 (an absolute value) has no symbol columns.
+_RELOC_ROW = re.compile(r"^([0-9a-f]{8})\s+[0-9a-f]{8}\s+(R_ARM_\w+)(?:\s+[0-9a-f]{8}\s+(\S+))?\s*$")
+_ANY_RELOC_ROW = re.compile(r"^[0-9a-f]{8}\s")
 _CALLS = frozenset(("R_ARM_THM_CALL", "R_ARM_THM_JUMP24", "R_ARM_THM_JUMP19", "R_ARM_CALL", "R_ARM_JUMP24"))
 # Kernel tables stay below 1 MiB.
 _ADDEND_MAX = 1 << 20
@@ -593,6 +609,19 @@ def elf_sections(obj: Path) -> list[tuple[str, int, str, memoryview, int]]:
     return sections
 
 
+def _mask_name(first: int, second: Optional[int]) -> Optional[str]:
+    """cps or non-APSR msr, by name and encoding, or None."""
+    if first & 0xFFE0 == 0xB660:
+        return f"{'cpsid' if first & 0x10 else 'cpsie'} {first:04x}"
+    if second is None:
+        return None
+    if first & 0xFFE0 == 0xF380 and second & 0xFF:
+        return f"msr {first:04x} {second:04x}"
+    if first & 0xFFF0 == 0xF3A0 and second & 0x0600:
+        return f"cps {first:04x} {second:04x}"
+    return None
+
+
 def _mask_hits(name: str, data: memoryview, align: int) -> list[str]:
     """cps or non-APSR msr encodings wherever an instruction could start.
 
@@ -603,15 +632,10 @@ def _mask_hits(name: str, data: memoryview, align: int) -> list[str]:
         at = match.start()
         if at & 1 and align > 1:
             continue
-        first = data[at] | data[at + 1] << 8
-        if first & 0xFFE0 == 0xB660:
-            found.append(f"{name}+{at:#x}: {'cpsid' if first & 0x10 else 'cpsie'} {first:04x}")
-            continue
-        second = data[at + 2] | data[at + 3] << 8
-        if first & 0xFFE0 == 0xF380 and second & 0xFF:
-            found.append(f"{name}+{at:#x}: msr {first:04x} {second:04x}")
-        elif first & 0xFFF0 == 0xF3A0 and second & 0x0600:
-            found.append(f"{name}+{at:#x}: cps {first:04x} {second:04x}")
+        first = _halfword(data, at)
+        second = _halfword(data, at + 2) if first & 0xFFE0 != 0xB660 else None
+        if text := _mask_name(first, second):
+            found.append(f"{name}+{at:#x}: {text}")
     return found
 
 
@@ -619,20 +643,34 @@ def _sign(value: int, bits: int) -> int:
     return value - (1 << bits) if value >> (bits - 1) & 1 else value
 
 
+def _imm25(first: int, second: int) -> int:
+    """Offset of b.w (T4), bl or blx."""
+    sign = first >> 10 & 1
+    high = (1 - (second >> 13 & 1 ^ sign)) << 1 | (1 - (second >> 11 & 1 ^ sign))
+    return _sign(sign << 24 | high << 22 | (first & 0x3FF) << 12 | (second & 0x7FF) << 1, 25)
+
+
+def _imm21(first: int, second: int) -> int:
+    """Offset of a conditional b.w (T3)."""
+    jumps = (second >> 11 & 1) << 1 | second >> 13 & 1
+    return _sign((first >> 10 & 1) << 20 | jumps << 18 | (first & 0x3F) << 12 | (second & 0x7FF) << 1, 21)
+
+
+def _imm16(first: int, second: int) -> int:
+    """imm4:i:imm3:imm8 of movw/movt."""
+    return (first & 0xF) << 12 | (first >> 10 & 1) << 11 | (second >> 12 & 7) << 8 | second & 0xFF
+
+
 def _thumb_addend(kind: str, data: memoryview, offset: int) -> Optional[int]:
     """REL addend of a Thumb branch or movw/movt, or None if unread."""
     if offset + 4 > len(data):
         return None
     first, second = struct.unpack_from("<HH", data, offset)
-    sign = first >> 10 & 1
     if kind in ("R_ARM_THM_CALL", "R_ARM_THM_JUMP24"):
-        high = (1 - (second >> 13 & 1 ^ sign)) << 1 | (1 - (second >> 11 & 1 ^ sign))
-        return _sign(sign << 24 | high << 22 | (first & 0x3FF) << 12 | (second & 0x7FF) << 1, 25)
+        return _imm25(first, second)
     if kind == "R_ARM_THM_JUMP19":
-        jumps = (second >> 11 & 1) << 1 | second >> 13 & 1
-        return _sign(sign << 20 | jumps << 18 | (first & 0x3F) << 12 | (second & 0x7FF) << 1, 21)
-    # imm4:i:imm3:imm8.
-    return _sign((first & 0xF) << 12 | sign << 11 | (second >> 12 & 7) << 8 | second & 0xFF, 16)
+        return _imm21(first, second)
+    return _sign(_imm16(first, second), 16)
 
 
 _BRANCH_RELOCS = frozenset(("R_ARM_THM_CALL", "R_ARM_THM_JUMP24", "R_ARM_THM_JUMP19"))
@@ -656,12 +694,116 @@ def _reloc_addend(kind: str, data: memoryview, offset: int) -> Optional[int]:
 # Relocations that rewrite a Thumb instruction, by the bytes they rewrite.
 _CODE_RELOCS = {
     **dict.fromkeys(("R_ARM_THM_JUMP11", "R_ARM_THM_JUMP8", "R_ARM_THM_JUMP6", "R_ARM_THM_PC8"), 2),
-    **dict.fromkeys((*_BRANCH_RELOCS, *_MOVE_RELOCS, "R_ARM_THM_PC12", "R_ARM_THM_BF16", "R_ARM_THM_BF12",
-                     "R_ARM_THM_BF18"), 4),
+    **dict.fromkeys((*_BRANCH_RELOCS, *_MOVE_RELOCS, "R_ARM_THM_PC12"), 4),
 }
+# Relocations that write data, by the bytes they write. Any other kind in
+# code is refused.
+_DATA_RELOCS = {**dict.fromkeys((*_WORD_RELOCS, "R_ARM_PREL31"), 4), "R_ARM_ABS16": 2, "R_ARM_ABS8": 1}
 # Relocations that set a branch target.
 _BRANCHES = _CALLS | {"R_ARM_THM_JUMP11", "R_ARM_THM_JUMP8", "R_ARM_THM_JUMP6", "R_ARM_THM_BF16",
                       "R_ARM_THM_BF12", "R_ARM_THM_BF18"}
+
+
+def _fits(kind: str, first: int, second: Optional[int]) -> bool:
+    """The instruction is one the relocation is defined for.
+
+    The linker writes only the immediate fields (and may turn bl into
+    blx), so the result stays that instruction.
+    """
+    if second is None:
+        return {
+            "R_ARM_THM_JUMP11": first & 0xF800 == 0xE000,
+            "R_ARM_THM_JUMP8": first & 0xF000 == 0xD000 and first >> 8 & 0xF < 0xE,
+            "R_ARM_THM_JUMP6": first & 0xF500 == 0xB100,
+            "R_ARM_THM_PC8": first & 0xF800 in (0x4800, 0xA000),
+        }.get(kind, False)
+    branch = first & 0xF800 == 0xF000 and second & 0x8000
+    if kind == "R_ARM_THM_CALL":
+        return bool(branch) and (second & 0xD000 == 0xD000 or second & 0xD001 == 0xC000)
+    if kind == "R_ARM_THM_JUMP24":
+        return bool(branch) and second & 0xD000 == 0x9000
+    if kind == "R_ARM_THM_JUMP19":
+        # cond 111x is the hint, msr and barrier space.
+        return bool(branch) and second & 0xD000 == 0x8000 and first >> 6 & 0xF < 0xE
+    if kind in ("R_ARM_THM_MOVW_ABS_NC", "R_ARM_THM_MOVW_PREL_NC"):
+        return first & 0xFBF0 == 0xF240 and not second & 0x8000
+    if kind in ("R_ARM_THM_MOVT_ABS", "R_ARM_THM_MOVT_PREL"):
+        return first & 0xFBF0 == 0xF2C0 and not second & 0x8000
+    if kind == "R_ARM_THM_PC12":
+        # ldr, ldrb, ldrh, ldrsb, ldrsh (literal).
+        return first & 0xFE1F == 0xF81F and first >> 5 & 3 != 3
+    return False
+
+
+def _reloc_problem(kind: str, layout: "Layout", data: memoryview, offset: int) -> Optional[str]:
+    """Why a relocation in a code section is refused, or None.
+
+    Data relocations must write only bytes of one data span; instruction
+    relocations must sit on an instruction they are defined for.
+    """
+    starts, data_spans, _ = layout
+    if kind in _DATA_RELOCS:
+        end = offset + _DATA_RELOCS[kind]
+        inside = end <= len(data) and any(low <= offset and end <= high for low, high in data_spans)
+        return None if inside else "rewrites code it does not fit"
+    width = _CODE_RELOCS.get(kind)
+    if width is None:
+        return "is not a supported code relocation"
+    if starts.get(offset) != width:
+        return "rewrites code it does not fit"
+    second = _halfword(data, offset + 2) if width == 4 else None
+    return None if _fits(kind, _halfword(data, offset), second) else "rewrites code it does not fit"
+
+
+def _reloc_size(kind: str) -> int:
+    """Bytes a relocation writes; 0 for R_ARM_NONE and unsupported kinds."""
+    return _DATA_RELOCS.get(kind) or _CODE_RELOCS.get(kind) or 0
+
+
+def _branch_target(at: int, first: int, second: Optional[int]) -> Optional[int]:
+    """Where a direct Thumb branch at `at` goes, or None for any other instruction."""
+    pc = at + 4
+    if second is None:
+        if first & 0xF800 == 0xE000:
+            return pc + _sign((first & 0x7FF) << 1, 12)
+        if first & 0xF000 == 0xD000 and first >> 8 & 0xF < 0xE:
+            return pc + _sign((first & 0xFF) << 1, 9)
+        if first & 0xF500 == 0xB100:
+            return pc + ((first >> 9 & 1) << 6 | (first >> 3 & 0x1F) << 1)
+        return None
+    if first & 0xF800 != 0xF000 or not second & 0x8000:
+        return None
+    op = second & 0xD000
+    if op in (0x9000, 0xD000):
+        return pc + _imm25(first, second)
+    if op == 0x8000 and first >> 6 & 0xF < 0xE:
+        return pc + _imm21(first, second)
+    if op == 0xC000 and not second & 1:
+        # blx to Arm state.
+        return (pc & ~3) + _imm25(first, second)
+    if _loop_branch(first, second) and second >> 12 == 0xC:
+        # wls/wlstp jump forward; le/letp (Rn 15) back.
+        offset = (second >> 1 & 0x3FF) << 2 | (second >> 11 & 1) << 1
+        return pc - offset if first & 0xF == 0xF else pc + offset
+    return None
+
+
+def _loop_branch(first: int, second: int) -> bool:
+    """wls, wlstp, le, letp, dls, dlstp, lctp or vctp."""
+    if first & 0xFF80 != 0xF000 or second & 0xD001 != 0xC001:
+        return False
+    return (first >> 4 & 7 <= 4 and (second >> 12 == 0xC or second == 0xE001)
+            or first >> 4 & 7 <= 3 and second == 0xE801)
+
+
+def _branch_future(first: int, second: Optional[int]) -> bool:
+    """Any other encoding of the branch future and loop space.
+
+    bf, bfx, bfl, bflx and bfcsel branch later, from another address.
+    """
+    return (second is not None and first & 0xF800 == 0xF000 and second & 0xD001 == 0xC001
+            and not _loop_branch(first, second))
+
 
 # Code section layout: instruction starts with their sizes, data spans, problems.
 Layout = tuple[dict[int, int], tuple[tuple[int, int], ...], list[str]]
@@ -775,12 +917,15 @@ Export = tuple[str, int, Layout, int]
 Exports = dict[str, list[tuple[Export, bool]]]
 # A reference into another object: symbol, addend (None if unread), origin, whether it branches.
 External = tuple[str, Optional[int], str, bool]
+# A code section as the linked image must hold it: name, bytes, layout,
+# marks, labels, relocations (offset, kind, whether the object scan accepted it).
+LinkSection = tuple[str, memoryview, Layout, dict[int, str], set[int], tuple[tuple[int, str, bool], ...]]
 
 
 def _object_hits(
     source: str, obj: Path, defined: frozenset[str], weak: frozenset[str], limits: tuple[float, str],
-) -> tuple[list[dict], Exports, list[External]]:
-    """Section, SCS and reference hits, global code symbols, references to other objects.
+) -> tuple[list[dict], Exports, list[External], list[LinkSection]]:
+    """Section, SCS and reference hits, global code symbols, references to other objects, code sections.
 
     `defined` and `weak` are the strong and weak global definitions of all kernel objects.
     """
@@ -841,18 +986,7 @@ def _object_hits(
     for _, _, problems in layouts.values():
         for text in problems:
             instruction(text)
-    # Direct branch targets; data rows decode to none.
-    by_name = {name: index for index, (name, *_) in enumerate(table)}
-    direct: dict[tuple[int, int], int] = {}
-    current = None
     for line in run_binutil("arm-none-eabi-objdump", ["-dz", "--no-show-raw-insn", str(obj)], *limits).splitlines():
-        if heading := _DISASSEMBLY.match(line):
-            current = by_name.get(heading.group(1))
-            continue
-        if current in layouts and (row := _INSN_LINE.match(line)):
-            at = int(row.group(1), 16)
-            if target := _DIRECT_TARGET.search(line):
-                direct[(current, at)] = int(target.group(1), 16)
         if not _ADDRESS_INSN.search(line):
             continue
         for match in _IMMEDIATE.finditer(line):
@@ -901,6 +1035,7 @@ def _object_hits(
     expected, seen_relocs = sum(kind in (_REL, _RELA) for _, kind, _, _, _ in table), 0
     target = None
     relocated: set[tuple[int, int]] = set()
+    section_relocs: dict[int, list[tuple[int, str, bool]]] = {}
     externals: list[External] = []
     for line in run_binutil("arm-none-eabi-readelf", ["-rW", str(obj)], *limits).splitlines():
         if _RELOC_SECTION.match(line):
@@ -908,10 +1043,12 @@ def _object_hits(
             target = next(targets, None)
             continue
         row = _RELOC_ROW.match(line)
+        if not row and _ANY_RELOC_ROW.match(line):
+            raise ValueError(f"{obj.name}: unread relocation {line.strip()[:80]}")
         if not row or target not in contents:
             continue
         section = table[target][0]
-        offset, kind, symbol = int(row.group(1), 16), row.group(2), row.group(3)
+        offset, kind, symbol = int(row.group(1), 16), row.group(2), row.group(3) or "*ABS*"
         # Only a branch relocation replaces the target the bytes encode.
         if kind in _BRANCHES:
             relocated.add((target, offset))
@@ -922,12 +1059,13 @@ def _object_hits(
             if not 0 <= addend < _ADDEND_MAX:
                 hit(f"{symbol}{addend:+#x} in {section}")
         origin = f"{kind} at {section}+{offset:#x}"
-        # The linker rewrites relocated bytes, so in code only instruction
-        # fields may be relocated.
-        if (target in layouts and kind != "R_ARM_NONE"
-                and not any(low <= offset < high for low, high in layouts[target][1])
-                and layouts[target][0].get(offset) != _CODE_RELOCS.get(kind)):
-            instruction(f"{origin} rewrites code it does not fit")
+        # The linker rewrites relocated bytes, so in code only data and
+        # instruction fields may be relocated.
+        problem = None
+        if target in layouts and kind != "R_ARM_NONE":
+            if problem := _reloc_problem(kind, layouts[target], data, offset):
+                instruction(f"{origin} {problem}")
+            section_relocs.setdefault(target, []).append((offset, kind, not problem))
         addend = _reloc_addend(kind, data, offset)
         # A weak definition here may lose to another one at link time.
         own_weak = any(is_weak for _, _, is_weak in linked.get(symbol, ()))
@@ -953,19 +1091,32 @@ def _object_hits(
             hit(f"{kind} to {symbol} in {section}")
     if seen_relocs != expected:
         raise ValueError(f"{obj.name}: read {seen_relocs} of {expected} reloc sections")
-    for (index, at), goal in direct.items():
-        if (index, at) not in relocated:
-            entry(f"branch at {table[index][0]}+{at:#x}", index, goal, True)
+    # Direct branches, decoded from the instruction starts the core runs.
+    for index, (code_starts, _, _) in layouts.items():
+        name, data = table[index][0], table[index][3]
+        for at, width in sorted(code_starts.items()):
+            first = _halfword(data, at)
+            second = _halfword(data, at + 2) if width == 4 else None
+            if _branch_future(first, second):
+                instruction(f"branch future or loop at {name}+{at:#x} is unchecked")
+            elif (index, at) not in relocated and (goal := _branch_target(at, first, second)) is not None:
+                if 0 <= goal < len(data):
+                    entry(f"branch at {name}+{at:#x}", index, goal, True)
+                else:
+                    # Whatever the link places there is unchecked.
+                    instruction(f"branch at {name}+{at:#x} leaves the section")
     exports: Exports = {}
     for symbol, spots in linked.items():
         for index, value, is_weak in spots:
             if index in layouts:
                 spot = (table[index][0], value, layouts[index], len(table[index][3]))
                 exports.setdefault(symbol, []).append((spot, is_weak))
-    return hits, exports, externals
+    code = [(table[index][0], table[index][3], layout, marks.get(index, {}), labels.get(index, set()),
+             tuple(section_relocs.get(index, ()))) for index, layout in layouts.items()]
+    return hits, exports, externals, code
 
 
-def _external_hits(results: list[tuple[str, tuple[list[dict], Exports, list[External]]]]) -> list[dict]:
+def _external_hits(results: list[tuple[str, tuple]]) -> list[dict]:
     """References that enter another kernel object's code inside an instruction.
 
     A strong definition wins the link. With only weak ones, any of them
@@ -973,11 +1124,11 @@ def _external_hits(results: list[tuple[str, tuple[list[dict], Exports, list[Exte
     weak body is checked and only the symbol's own entry is accepted.
     """
     exports: Exports = {}
-    for _, (_, found, _) in results:
+    for _, (_, found, *_) in results:
         for symbol, spots in found.items():
             exports.setdefault(symbol, []).extend(spots)
     hits = []
-    for source, (_, _, externals) in results:
+    for source, (_, _, externals, *_) in results:
         for symbol, addend, origin, branch in externals:
             spots = exports.get(symbol)
             if not spots:
@@ -993,6 +1144,152 @@ def _external_hits(results: list[tuple[str, tuple[list[dict], Exports, list[Exte
                 reach = "" if addend is None else f"{addend:+#x}"
                 texts.append(f"{origin} into weak {symbol}{reach} is unchecked: another definition can replace it")
             hits += [{"rule": "object_instruction", "path": source, "text": text[:200]} for text in texts]
+    return hits
+
+
+# GNU ld: " .text.f  0xADDR  0xSIZE file", the name alone on its own line when long.
+_GNU_INPUT = re.compile(r"^ (\S+)\s+0x([0-9a-fA-F]+)\s+0x([0-9a-fA-F]+)\s+(\S.*)$")
+_GNU_NAME = re.compile(r"^ (\S+)$")
+_GNU_WRAPPED = re.compile(r"^\s+0x([0-9a-fA-F]+)\s+0x([0-9a-fA-F]+)\s+(\S.*)$")
+# lld: "VMA LMA Size Align", then the input as "file:(section)" indented by 8.
+_LLD_HEADER = re.compile(r"^\s*VMA\s+LMA\s+Size\s+Align\s+Out\s+In\s+Symbol\s*$")
+_LLD_INPUT = re.compile(r"^\s*([0-9a-fA-F]+)\s+[0-9a-fA-F]+\s+([0-9a-fA-F]+)\s+\d+ {9}(\S.*):\(([^()]*)\)$")
+_ARCHIVE_MEMBER = re.compile(r"^.*\(([^()]+)\)$")
+
+
+def _map_sections(text: str) -> list[tuple[str, str, int, int]]:
+    """(object file name, section, address, size) of each input section a link map places.
+
+    Reads GNU ld and lld maps; anything else is refused. An archive
+    member is named by itself.
+    """
+    lines = text.splitlines()
+    placed = []
+
+    def add(file: str, section: str, address: str, size: str) -> None:
+        member = _ARCHIVE_MEMBER.match(file.strip())
+        placed.append((Path(member.group(1) if member else file.strip()).name, section, int(address, 16),
+                       int(size, 16)))
+
+    if lines and _LLD_HEADER.match(lines[0]):
+        for line in lines[1:]:
+            if match := _LLD_INPUT.match(line):
+                add(match.group(3), match.group(4), match.group(1), match.group(2))
+        return placed
+    try:
+        start = lines.index("Linker script and memory map")
+    except ValueError:
+        raise ValueError("link map is neither GNU ld nor lld") from None
+    pending = None
+    # Discarded input sections come before the memory map and are skipped.
+    for line in lines[start + 1:]:
+        if match := _GNU_INPUT.match(line):
+            add(match.group(4), match.group(1), match.group(2), match.group(3))
+        elif pending and (match := _GNU_WRAPPED.match(line)):
+            add(match.group(3), pending, match.group(1), match.group(2))
+        pending = match.group(1) if (match := _GNU_NAME.match(line)) else None
+    return placed
+
+
+def _image_bytes(raw: memoryview, headers: list[tuple[int, ...]], address: int, size: int) -> Optional[memoryview]:
+    """Bytes the image loads at `address`, or None if no loaded section holds them all."""
+    for _, kind, flags, base, offset, length, *_ in headers:
+        if kind == _PROGBITS and flags & 0x2 and base <= address and address + size <= base + length:
+            start = offset + address - base
+            return raw[start:start + size] if start + size <= len(raw) else None
+    return None
+
+
+def _linked_problems(code: LinkSection, linked: memoryview, address: int) -> Optional[list[tuple[str, str]]]:
+    """(rule, text) per linked instruction the link made forbidden, or None if the bytes are not this section's.
+
+    Only relocated bytes may differ from the object. Each instruction
+    with a changed byte gets the object checks again: no sleep, cps or
+    msr, an instruction relocation still on its instruction, and no SCS
+    address from a movt or a data word. Bytes a refused relocation
+    writes are already findings and are not reported again.
+    """
+    name, data, layout, marks, labels, relocs = code
+    if len(linked) != len(data):
+        return None
+    written = bytearray(len(data))
+    # Refused writes win where they overlap; no ARM relocation writes more than 4 bytes.
+    for offset, kind, ok in sorted(relocs, key=lambda reloc: not reloc[2]):
+        end = min(offset + (_reloc_size(kind) if ok else 4), len(data))
+        written[offset:end] = (b"\x01" if ok else b"\x02") * max(end - offset, 0)
+    changed = {at for at, (old, new) in enumerate(zip(data, linked)) if old != new}
+    if any(not written[at] for at in changed):
+        return None
+    changed = {at for at in changed if written[at] == 1}
+    if not changed:
+        return []
+    found = []
+    if 2 not in written and _thumb_layout(name, linked, marks, labels)[0] != layout[0]:
+        found.append(("object_instruction", f"linked {name} at {address:#x} decodes differently from the object"))
+    kinds = {offset: kind for offset, kind, ok in relocs if ok}
+    for at, width in sorted(layout[0].items()):
+        if not changed & set(range(at, at + width)) or 2 in written[at:at + width]:
+            continue
+        first = _halfword(linked, at)
+        second = _halfword(linked, at + 2) if width == 4 else None
+        where = f"linked {name}+{at:#x} ({address + at:#x})"
+        kind = kinds.get(at, "")
+        nop = (first, second) == (0xF3AF, 0x8000) and kind in ("R_ARM_THM_CALL", "R_ARM_THM_JUMP24")
+        if bad := _sleep_name(first, second) or _mask_name(first, second):
+            found.append(("object_instruction", f"{where}: {bad}"))
+        elif kind in _CODE_RELOCS and not nop and not _fits(kind, first, second):
+            # A call to an undefined weak symbol becomes nop.w.
+            found.append(("object_instruction", f"{where}: {kind} left no instruction it fits"))
+        elif second is not None and first & 0xFBF0 == 0xF2C0 and SCS_LOW >> 16 <= _imm16(first, second) <= SCS_HIGH >> 16:
+            found.append(("object_address", f"{where}: movt {_imm16(first, second):#x}"))
+    for offset, kind, ok in relocs:
+        word = linked[offset:offset + 4]
+        if ok and _DATA_RELOCS.get(kind) == 4 and len(word) == 4 and changed & set(range(offset, offset + 4)):
+            if SCS_LOW <= int.from_bytes(word, "little") <= SCS_HIGH:
+                found.append(("object_address", f"linked {name}+{offset:#x} ({address + offset:#x}): SCS address"))
+    return found
+
+
+def _linked_hits(build_dir: Path, results: list[tuple[str, Path, tuple]]) -> list[dict]:
+    """The object checks on kernel code as the linked image holds it.
+
+    Relocations are filled in at link time, so every kernel code section
+    the link map places is read back from the image. It must equal the
+    object outside the relocated bytes, and each instruction the link
+    changed is checked again. A missing or unreadable image or map, or
+    kernel code with none of it in the map, fails the scan.
+    """
+    from .firmware_build import elf_path, map_path
+
+    image, link_map = elf_path(build_dir), map_path(build_dir)
+    for path in (image, link_map):
+        if not path.is_file():
+            raise ValueError(f"linked image missing: {path}")
+    placed = _map_sections(link_map.read_text(encoding="utf-8", errors="replace"))
+    raw, headers = _elf_headers(image)
+    sections: dict[tuple[str, str], list[tuple[str, LinkSection]]] = {}
+    for source, obj, (*_, code) in results:
+        for section in code:
+            if len(section[1]):
+                sections.setdefault((obj.name, section[0]), []).append((source, section))
+    hits, seen = [], 0
+    for file, name, address, size in placed:
+        candidates = sections.get((file, name))
+        if not candidates or not size:
+            continue
+        seen += 1
+        linked = _image_bytes(raw, headers, address, size)
+        outcomes = [] if linked is None else [(source, _linked_problems(code, linked, address))
+                                               for source, code in candidates]
+        # Objects sharing a file name are told apart by their bytes.
+        match = next(((source, found) for source, found in outcomes if found is not None), None)
+        if match is None:
+            text = f"linked {name} of {file} at {address:#x} is not the object's code"
+            hits.append({"rule": "object_instruction", "path": candidates[0][0], "text": text[:200]})
+            continue
+        hits += [{"rule": rule, "path": match[0], "text": text[:200]} for rule, text in match[1]]
+    if not seen and sections:
+        raise ValueError(f"no kernel code in link map {link_map}")
     return hits
 
 
@@ -1048,7 +1345,9 @@ def object_findings(build_dir: Path, deadline_s: float = SCAN_DEADLINE_S) -> tup
             if late:
                 return error(f"object scan passed its {deadline_s:g} s deadline")
             results = [(source, job.result()) for (source, _, _), job in zip(units, jobs)]
-            findings = [hit for _, (hits, _, _) in results for hit in hits] + _external_hits(results)
+            findings = [hit for _, (hits, *_) in results for hit in hits] + _external_hits(results)
+            findings += _linked_hits(build_dir, [(source, obj, result) for (source, obj, _), (_, result)
+                                                 in zip(units, results)])
         except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as exc:
             return error(f"object scan failed: {exc}")
         finally:

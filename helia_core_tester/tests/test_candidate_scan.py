@@ -101,7 +101,20 @@ def _build_units(tmp_path: Path, sources: dict[str, str], define: str = "-DBOARD
         args = ["gcc", define, include, "-MD", "-MF", f"{Path(name).stem}.d", "-o", out, "-c", str(src)]
         entries.append({"directory": str(build), "file": str(src), "output": out, "arguments": args})
     (build / "compile_commands.json").write_text(json.dumps(entries), encoding="utf-8")
+    _link(build)
     return build
+
+
+def _link(build: Path, *extra: str) -> None:
+    """The linked image and map a board build leaves, from every kernel object."""
+    entries = json.loads((build / "compile_commands.json").read_text(encoding="utf-8"))
+    image = build / "hardware/hct_benchmark_server.elf"
+    image.parent.mkdir(exist_ok=True)
+    # Broken references still link: the scan, not ld, must judge them.
+    subprocess.run([arm_tool("arm-none-eabi-gcc"), "-mcpu=cortex-m55", "-nostdlib", "-Wl,--noinhibit-exec",
+                    "-Wl,--unresolved-symbols=ignore-all", "-Wl,--allow-multiple-definition",
+                    f"-Wl,-Map={image.with_suffix('.map')}", *extra, "-o", str(image),
+                    *(str(build / entry["output"]) for entry in entries)], check=True, capture_output=True)
 
 
 @needs_gcc
@@ -386,6 +399,318 @@ def test_landing_boundaries() -> None:
     assert candidate_scan._landing(layout, 10, 6, True) == "in data"
     assert candidate_scan._landing(layout, 10, 7, False) == "in data"
     assert candidate_scan._landing(layout, 10, 9, False) == "in data"
+
+
+G = ".thumb_func\ng:\n  bx lr\n"
+
+
+@needs_gcc
+@pytest.mark.parametrize(("body", "expected"), [
+    # Data rows a function symbol starts run as code: b, cbz, b.w, bl and
+    # wls into the wfi a linear decode reads as part of ldr.w.
+    ([".short 0xe000, 0xf8df, 0xbf30", "bx lr"], ["branch at .text+0x0 enters .text+0x4 inside an instruction"]),
+    ([".short 0xb100, 0xf8df, 0xbf30", "bx lr"], ["branch at .text+0x0 enters .text+0x4 inside an instruction"]),
+    ([".short 0xf000, 0xb801, 0xf8df, 0xbf30", "bx lr"],
+     ["branch at .text+0x0 enters .text+0x6 inside an instruction"]),
+    ([".short 0xf000, 0xf801, 0xf8df, 0xbf30", "bx lr"],
+     ["branch at .text+0x0 enters .text+0x6 inside an instruction"]),
+    ([".short 0xf040, 0xc801, 0xf8df, 0xbf30", "bx lr"],
+     ["branch at .text+0x0 enters .text+0x6 inside an instruction"]),
+    # le jumps back.
+    ([".short 0xf8df, 0xbf30, 0xf00f, 0xc803", "bx lr"],
+     ["branch at .text+0x4 enters .text+0x2 inside an instruction"]),
+    # bf branches later, from another address.
+    ([".short 0xf0c0, 0xe803", "bx lr"], ["branch future or loop at .text+0x0 is unchecked"]),
+    # Whatever the link places after the section is unchecked.
+    (["nop", ".inst.n 0xe7ff"], ["branch at .text+0x2 leaves the section"]),
+    ([".inst.n 0xe100", "bx lr"], ["branch at .text+0x0 leaves the section"]),
+    ([".inst.n 0xe7fd", "bx lr"], ["branch at .text+0x0 leaves the section"]),
+])
+def test_object_scan_decodes_branches_in_data_rows(tmp_path: Path, body: list[str], expected: list[str]) -> None:
+    assert [t for t in _instruction_texts(tmp_path, _raw(*body)) if not t.endswith("wfi")] == expected
+
+
+@needs_gcc
+@pytest.mark.parametrize("body", [
+    [".short 0xe000, 0xbf00", "bx lr"],
+    # b to itself, and to the last instruction.
+    [".inst.n 0xe7fe"],
+    ["cbz r0, .Lend", "nop", ".Lend:", "bx lr"],
+    ["movs r0, #1", "dls lr, r0", ".Lloop:", "nop", "le lr, .Lloop", "bx lr"],
+    ["movs r0, #4", "wlstp.8 lr, r0, .Lend", ".Lloop:", "vldrb.u8 q0, [r1], #16", "letp lr, .Lloop", ".Lend:",
+     "bx lr"],
+])
+def test_object_scan_decoded_branches_are_clean(tmp_path: Path, body: list[str]) -> None:
+    assert _instruction_texts(tmp_path, _raw(*body)) == []
+
+
+@needs_gcc
+@pytest.mark.parametrize(("body", "tail", "expected"), [
+    # A data relocation must write inside its data span and the section.
+    (["bx lr", ".reloc ., R_ARM_REL32, anchor", ".short 0", "nop.w", "bx lr"], "",
+     ["R_ARM_REL32 at .text+0x2 rewrites code it does not fit"]),
+    (["bx lr", ".reloc ., R_ARM_ABS32, anchor", ".short 0"], "",
+     ["R_ARM_ABS32 at .text+0x2 rewrites code it does not fit"]),
+    (["bx lr", ".reloc ., R_ARM_ABS16, anchor", ".byte 0", ".inst.n 0x4770"], "",
+     ["R_ARM_ABS16 at .text+0x2 rewrites code it does not fit"]),
+    # Inside an instruction, whatever the kind.
+    ([".reloc .+2, R_ARM_REL32, anchor", "nop.w", "bx lr"], "",
+     ["R_ARM_REL32 at .text+0x2 rewrites code it does not fit"]),
+    ([".reloc .+2, R_ARM_THM_CALL, g", "nop.w", "bx lr"], G,
+     ["R_ARM_THM_CALL at .text+0x2 rewrites code it does not fit",
+      "R_ARM_THM_CALL at .text+0x2 enters .text+0xc00eea inside an instruction"]),
+    ([".reloc ., R_ARM_THM_ALU_PREL_11_0, anchor", "nop.w", "bx lr"], "",
+     ["R_ARM_THM_ALU_PREL_11_0 at .text+0x0 is not a supported code relocation"]),
+    ([".reloc ., R_ARM_THM_BF16, g", "nop.w", "bx lr"], G,
+     ["R_ARM_THM_BF16 at .text+0x0 is not a supported code relocation",
+      "R_ARM_THM_BF16 at .text+0x0 into .text is unchecked"]),
+    # The width fits but the opcode does not: movw on nop.w links to wfi.w.
+    ([".set k, 0x10003", ".reloc ., R_ARM_THM_MOVW_ABS_NC, k", "nop.w", "bx lr"], "",
+     ["R_ARM_THM_MOVW_ABS_NC at .text+0x0 rewrites code it does not fit"]),
+    ([".reloc ., R_ARM_THM_MOVT_ABS, anchor", "movw r0, #0", "bx lr"], "",
+     ["R_ARM_THM_MOVT_ABS at .text+0x0 rewrites code it does not fit"]),
+    ([".reloc ., R_ARM_THM_JUMP19, g", "nop.w", "bx lr"], G,
+     ["R_ARM_THM_JUMP19 at .text+0x0 rewrites code it does not fit",
+      "R_ARM_THM_JUMP19 at .text+0x0 enters .text+0x2f00a inside an instruction"]),
+    ([".reloc ., R_ARM_THM_JUMP8, g", ".inst.n 0xdf00", "bx lr"], G,
+     ["R_ARM_THM_JUMP8 at .text+0x0 rewrites code it does not fit",
+      "R_ARM_THM_JUMP8 at .text+0x0 into .text is unchecked"]),
+    ([".reloc ., R_ARM_THM_PC12, anchor", "nop.w", "bx lr"], "",
+     ["R_ARM_THM_PC12 at .text+0x0 rewrites code it does not fit"]),
+])
+def test_object_scan_relocations_must_fit(tmp_path: Path, body: list[str], tail: str, expected: list[str]) -> None:
+    assert _instruction_texts(tmp_path, _raw(*body, tail=tail)) == expected
+
+
+@needs_gcc
+@pytest.mark.parametrize("body", [
+    ["bx lr", ".reloc ., R_ARM_ABS32, anchor", ".word 0"],
+    ["bx lr", ".reloc ., R_ARM_ABS16, anchor", ".short 0", ".reloc ., R_ARM_ABS8, anchor", ".byte 0", ".byte 0"],
+    ["movw r0, #:lower16:anchor", "movt r0, #:upper16:anchor", "ldr r1, =anchor", "bx lr"],
+    ["b.w g", "bl g", "beq.w g", "bx lr"],
+])
+def test_object_scan_fitting_relocations_are_clean(tmp_path: Path, body: list[str]) -> None:
+    assert _instruction_texts(tmp_path, _raw(*body, tail=G)) == []
+
+
+def test_symbol_less_relocation_row_is_read() -> None:
+    row = candidate_scan._RELOC_ROW.match("00000000  0000002f R_ARM_THM_MOVW_ABS_NC")
+    assert row and row.group(2) == "R_ARM_THM_MOVW_ABS_NC" and row.group(3) is None
+    assert candidate_scan._RELOC_ROW.match("00000004  00000a0a R_ARM_THM_CALL    00000000   g").group(3) == "g"
+    # An addend column is not read, so it fails the scan.
+    rela = "00000004  00000a02 R_ARM_ABS32       00000000   g + 4"
+    assert not candidate_scan._RELOC_ROW.match(rela) and candidate_scan._ANY_RELOC_ROW.match(rela)
+
+
+@needs_gcc
+def test_object_scan_flags_symbol_less_relocation(tmp_path: Path) -> None:
+    source = _raw(".set k, 0xe000e010", ".reloc ., R_ARM_THM_MOVW_ABS_NC, k", "movw r0, #0", "bx lr")
+    findings, _, _ = candidate_scan.object_findings(_build(tmp_path, source, name="k.S"))
+    assert [(f["rule"], f["text"]) for f in findings] == [
+        ("object_address", "R_ARM_THM_MOVW_ABS_NC to *ABS* in .text")]
+
+
+@pytest.mark.parametrize(("kind", "first", "second"), [
+    ("R_ARM_THM_JUMP11", 0xE000, None), ("R_ARM_THM_JUMP8", 0xD000, None), ("R_ARM_THM_JUMP8", 0xDDFF, None),
+    ("R_ARM_THM_JUMP6", 0xB100, None), ("R_ARM_THM_JUMP6", 0xB9FF, None), ("R_ARM_THM_PC8", 0x4800, None),
+    ("R_ARM_THM_PC8", 0xA000, None), ("R_ARM_THM_CALL", 0xF000, 0xF800), ("R_ARM_THM_CALL", 0xF000, 0xE800),
+    ("R_ARM_THM_JUMP24", 0xF000, 0xB800), ("R_ARM_THM_JUMP19", 0xF000, 0x8000),
+    ("R_ARM_THM_JUMP19", 0xF340, 0x8000), ("R_ARM_THM_MOVW_ABS_NC", 0xF240, 0x0000),
+    ("R_ARM_THM_MOVW_PREL_NC", 0xF640, 0x7FFF), ("R_ARM_THM_MOVT_ABS", 0xF2C0, 0x0000),
+    ("R_ARM_THM_MOVT_PREL", 0xF6C0, 0x0000), ("R_ARM_THM_PC12", 0xF85F, 0x0000),
+    ("R_ARM_THM_PC12", 0xF81F, 0x0000), ("R_ARM_THM_PC12", 0xF93F, 0x0000),
+])
+def test_fits_accepts_its_instructions(kind: str, first: int, second: int | None) -> None:
+    assert candidate_scan._fits(kind, first, second)
+
+
+@pytest.mark.parametrize(("kind", "first", "second"), [
+    # udf, svc, sxth, nop.
+    ("R_ARM_THM_JUMP8", 0xDE00, None), ("R_ARM_THM_JUMP8", 0xDF00, None), ("R_ARM_THM_JUMP6", 0xB200, None),
+    ("R_ARM_THM_JUMP11", 0xBF00, None), ("R_ARM_THM_PC8", 0xBF00, None),
+    # cond 111x: nop.w, msr; wfi.w; the wrong branch form.
+    ("R_ARM_THM_JUMP19", 0xF3AF, 0x8000), ("R_ARM_THM_JUMP19", 0xF380, 0x8800),
+    ("R_ARM_THM_CALL", 0xF3AF, 0x8003), ("R_ARM_THM_CALL", 0xF000, 0xB800), ("R_ARM_THM_JUMP24", 0xF000, 0xF800),
+    ("R_ARM_THM_MOVW_ABS_NC", 0xF3AF, 0x8003), ("R_ARM_THM_MOVW_ABS_NC", 0xF240, 0x8000),
+    ("R_ARM_THM_MOVW_ABS_NC", 0xF2C0, 0x0000), ("R_ARM_THM_MOVT_ABS", 0xF240, 0x0000),
+    # pld (literal) and a store.
+    ("R_ARM_THM_PC12", 0xF87F, 0x0000), ("R_ARM_THM_PC12", 0xF84F, 0x0000),
+    # Width mismatches and kinds with no instruction.
+    ("R_ARM_THM_JUMP11", 0xE000, 0x0000), ("R_ARM_THM_CALL", 0xF000, None), ("R_ARM_ABS32", 0xF240, 0x0000),
+    ("R_ARM_THM_BF16", 0xF0C0, 0xE803),
+])
+def test_fits_refuses_other_instructions(kind: str, first: int, second: int | None) -> None:
+    assert not candidate_scan._fits(kind, first, second)
+
+
+@pytest.mark.parametrize(("at", "first", "second", "target"), [
+    (0, 0xE000, None, 4), (0, 0xE7FE, None, 0), (2, 0xE7FD, None, 0), (0, 0xD0FE, None, 0),
+    (0, 0xB100, None, 4), (0, 0xB908, None, 6), (0, 0xBBF8, None, 0x82),
+    (0, 0xF000, 0xB801, 6), (0, 0xF7FF, 0xBFFE, 0), (0, 0xF000, 0xF801, 6), (0, 0xF43F, 0xAFFE, 0),
+    # blx goes to a word-aligned Arm address.
+    (2, 0xF000, 0xE800, 4), (0, 0xF040, 0xC801, 6), (4, 0xF00F, 0xC803, 2), (0, 0xF020, 0xC005, 0xC),
+    # Not direct branches: bx lr, udf, svc, nop.w, dls, msr, ldr.w.
+    (0, 0x4770, None, None), (0, 0xDE00, None, None), (0, 0xDF00, None, None), (0, 0xF3AF, 0x8000, None),
+    (0, 0xF040, 0xE001, None), (0, 0xF380, 0x8810, None), (0, 0xF8DF, 0xBF30, None),
+])
+def test_branch_target_decodes(at: int, first: int, second: int | None, target: int | None) -> None:
+    assert candidate_scan._branch_target(at, first, second) == target
+
+
+@pytest.mark.parametrize(("first", "second", "future"), [
+    (0xF0C0, 0xE803, True), (0xF0C0, 0xE801, True), (0xF060, 0xE001, True), (0xF070, 0xE001, True),
+    # dls, wls, le, letp, lctp, vctp, wlstp.8, and outside the space.
+    (0xF000, 0xC001, False), (0xF040, 0xE001, False), (0xF040, 0xC801, False), (0xF00F, 0xC803, False), (0xF01F, 0xC005, False),
+    (0xF00F, 0xE001, False), (0xF014, 0xE801, False), (0xF3AF, 0x8000, False), (0xE000, None, False),
+])
+def test_branch_future_space(first: int, second: int | None, future: bool) -> None:
+    assert candidate_scan._branch_future(first, second) is future
+
+
+def _symbol(image: Path, name: str) -> int:
+    out = subprocess.run([arm_tool("arm-none-eabi-nm"), str(image)], check=True, capture_output=True, text=True).stdout
+    return next(int(line.split()[0], 16) for line in out.splitlines() if line.split()[-1] == name)
+
+
+def _patch(image: Path, address: int, data: bytes) -> None:
+    """Overwrite the loaded bytes at `address`, as a linker could."""
+    _, headers = candidate_scan._elf_headers(image)
+    blob = bytearray(image.read_bytes())
+    _, _, _, base, offset, _, *_ = next(h for h in headers if h[1] == 1 and h[2] & 2 and h[3] <= address < h[3] + h[5])
+    blob[offset + address - base:offset + address - base + len(data)] = data
+    image.write_bytes(blob)
+
+
+def _linked_texts(build: Path) -> list[tuple[str, str]]:
+    findings, _, _ = candidate_scan.object_findings(build)
+    return [(f["rule"], f.get("text", f.get("message", ""))) for f in findings]
+
+
+LINKED = _raw("bl g", "movw r0, #:lower16:anchor", "movt r0, #:upper16:anchor", "bx lr", ".align 2", ".word anchor",
+              tail='.section .text.g,"ax",%progbits\n.global g\n.type g, %function\n.thumb_func\ng:\n  bx lr\n')
+
+
+@needs_gcc
+@pytest.mark.parametrize(("at", "data", "expected"), [
+    # Relocated bytes the link turned into something forbidden.
+    (0, b"\xaf\xf3\x03\x80", [("object_instruction", "linked .text+0x0 ({f:#x}): wfi")]),
+    (0, b"\x72\xb6\x00\xbf", [("object_instruction", "linked .text at {f:#x} decodes differently from the object"),
+                              ("object_instruction", "linked .text+0x0 ({f:#x}): cpsid b672")]),
+    (0, b"\x00\xf2\x00\x00", [("object_instruction", "linked .text+0x0 ({f:#x}): R_ARM_THM_CALL left no "
+                                                      "instruction it fits")]),
+    (8, b"\xce\xf2\x00\x00", [("object_address", "linked .text+0x8 ({f8:#x}): movt 0xe000")]),
+    (16, b"\x10\xe0\x00\xe0", [("object_address", "linked .text+0x10 ({f16:#x}): SCS address")]),
+    # Bytes no relocation writes must equal the object.
+    (12, b"\x30\xbf", [("object_instruction", "linked .text of k.c.obj at {f:#x} is not the object's code")]),
+])
+def test_linked_image_scan(tmp_path: Path, at: int, data: bytes, expected: list[tuple[str, str]]) -> None:
+    build = _build(tmp_path, LINKED, name="k.S")
+    image = build / "hardware/hct_benchmark_server.elf"
+    assert _linked_texts(build) == []
+    f = _symbol(image, "f")
+    _patch(image, f + at, data)
+    assert _linked_texts(build) == [(rule, text.format(f=f, f8=f + 8, f16=f + 16)) for rule, text in expected]
+
+
+@needs_gcc
+def test_linked_image_scan_skips_refused_relocations(tmp_path: Path) -> None:
+    # The object check already refuses movw on nop.w; the link writes wfi.w.
+    build = _build(tmp_path, _raw(".reloc ., R_ARM_THM_MOVW_ABS_NC, k", "nop.w", "bx lr"), name="k.S")
+    _link(build, "-Wl,--defsym,k=0x10003")
+    image = build / "hardware/hct_benchmark_server.elf"
+    assert image.read_bytes().find(b"\xaf\xf3\x03\x80") >= 0
+    assert _linked_texts(build) == [
+        ("object_instruction", "R_ARM_THM_MOVW_ABS_NC at .text+0x0 rewrites code it does not fit"),
+        ("object_address", "R_ARM_THM_MOVW_ABS_NC to k in .text")]
+
+
+@needs_gcc
+@pytest.mark.parametrize(("body", "link"), [
+    # A call to an undefined weak symbol links to nop.w.
+    ([".weak ext", "bl ext", "bx lr"], ()),
+    # gc-sections drops g; f stays.
+    (["bl ext", "bx lr"], ("-Wl,--gc-sections", "-Wl,-e,f")),
+])
+def test_linked_image_scan_is_clean(tmp_path: Path, body: list[str], link: tuple[str, ...]) -> None:
+    tail = '.section .text.g,"ax",%progbits\n.global g\n.type g, %function\n.thumb_func\ng:\n  bx lr\n'
+    build = _build(tmp_path, _raw(*body, tail=tail), name="k.S")
+    _link(build, *link)
+    assert _linked_texts(build) == []
+
+
+@needs_gcc
+@pytest.mark.parametrize(("change", "message"), [
+    ("no_image", "linked image missing"),
+    ("no_map", "linked image missing"),
+    ("empty_map", "no kernel code in link map"),
+    ("odd_map", "link map is neither GNU ld nor lld"),
+    ("cut_image", "not ELF32"),
+])
+def test_linked_image_scan_fails_closed(tmp_path: Path, change: str, message: str) -> None:
+    build = _build(tmp_path, LINKED, name="k.S")
+    image = build / "hardware/hct_benchmark_server.elf"
+    link_map = image.with_suffix(".map")
+    {"no_image": image.unlink, "no_map": link_map.unlink,
+     "empty_map": lambda: link_map.write_text("Linker script and memory map\n", encoding="utf-8"),
+     "odd_map": lambda: link_map.write_text("Address  Size  Name\n", encoding="utf-8"),
+     "cut_image": lambda: image.write_bytes(b"\x7fELF")}[change]()
+    found = _linked_texts(build)
+    assert [rule for rule, _ in found] == ["scan_error"] and message in found[0][1]
+
+
+GNU_MAP = """Archive member included to satisfy reference by file (symbol)
+
+Discarded input sections
+
+ .text.gone     0x00000000       0x10 /x/libcmsis-nn.a(Dir__gone.c.obj)
+
+Linker script and memory map
+
+.text           0x00008000      0x100
+ *(.text*)
+ .text          0x00008000        0x0 /x/start.o
+ .text.f        0x00008000        0x8 /x/libcmsis-nn.a(Dir__a.c.obj)
+                0x00008000                f
+ .text.a_very_long_function_name_that_wraps
+                0x00008008        0x4 /x/b.c.obj
+"""
+
+LLD_MAP = """             VMA              LMA     Size Align Out     In      Symbol
+            8000             8000      100    16 .text
+            8000             8000        8     4         /x/libcmsis-nn.a(Dir__a.c.obj):(.text.f)
+            8000             8000        0     1                 f
+            8008             8008        4     4         /x/b.c.obj:(.text.g)
+"""
+
+
+def test_map_sections_reads_gnu_and_lld() -> None:
+    assert candidate_scan._map_sections(GNU_MAP) == [
+        ("start.o", ".text", 0x8000, 0), ("Dir__a.c.obj", ".text.f", 0x8000, 8),
+        ("b.c.obj", ".text.a_very_long_function_name_that_wraps", 0x8008, 4)]
+    assert candidate_scan._map_sections(LLD_MAP) == [
+        ("Dir__a.c.obj", ".text.f", 0x8000, 8), ("b.c.obj", ".text.g", 0x8008, 4)]
+
+
+@pytest.mark.parametrize("text", ["", "Address  Size  Name\n", GNU_MAP.replace("Linker script and memory map", "")])
+def test_map_sections_refuses_other_formats(text: str) -> None:
+    with pytest.raises(ValueError):
+        candidate_scan._map_sections(text)
+
+
+def test_linked_problems_boundaries() -> None:
+    layout = ({0: 4, 4: 2}, ((6, 10),), [])
+    data = memoryview(b"\x00\xf0\x00\xf8\x70\x47\x00\x00\x00\x00")
+    marks = {0: "t", 6: "d"}
+    code = (".text", data, layout, marks, set(), ((0, "R_ARM_THM_CALL", True), (6, "R_ARM_ABS32", True)))
+    assert candidate_scan._linked_problems(code, data, 0x100) == []
+    # Size mismatch, and a change outside every relocation, are not this section.
+    assert candidate_scan._linked_problems(code, data[:8], 0x100) is None
+    assert candidate_scan._linked_problems(code, memoryview(b"\x00\xf0\x00\xf8\x30\xbf\x00\x00\x00\x00"), 0) is None
+    # The last relocated byte, and a nop.w a weak call becomes.
+    assert candidate_scan._linked_problems(code, memoryview(bytes(data[:9]) + b"\x01"), 0x100) == []
+    assert candidate_scan._linked_problems(code, memoryview(b"\xaf\xf3\x00\x80" + bytes(data[4:])), 0) == []
+    refused = (".text", data, layout, marks, set(), ((0, "R_ARM_THM_BF16", False),))
+    assert candidate_scan._linked_problems(refused, memoryview(b"\xaf\xf3\x03\x80" + bytes(data[4:])), 0) == []
 
 
 @needs_gcc
@@ -698,6 +1023,7 @@ def test_local_name_hides_no_global(tmp_path: Path) -> None:
     entries = json.loads((build / "compile_commands.json").read_text(encoding="utf-8"))
     entries.append({**entries[0], "file": str(other), "output": "o.c.obj", "arguments": ["gcc", "-c", str(other)]})
     (build / "compile_commands.json").write_text(json.dumps(entries), encoding="utf-8")
+    _link(build)
     findings, _, flags = candidate_scan.object_findings(build)
     assert {f["path"] for f in findings} == {"Source/o.c"}
     assert flags["Source/o.c"] == () and flags["Source/k.c"][0] == "-DBOARD_X"
@@ -1050,7 +1376,8 @@ def test_object_scan_drops_clang_flags(tmp_path: Path, monkeypatch) -> None:
     args = ["/opt/atfe/bin/clang", "--target=arm-none-eabi", "-o", "k.c.obj", "-c", str(src)]
     entry = {"directory": str(build), "file": str(src), "output": "k.c.obj", "arguments": args}
     (build / "compile_commands.json").write_text(json.dumps([entry]), encoding="utf-8")
-    monkeypatch.setattr(candidate_scan, "_object_hits", lambda *a: ([], {}, []))
+    monkeypatch.setattr(candidate_scan, "_object_hits", lambda *a: ([], {}, [], []))
+    monkeypatch.setattr(candidate_scan, "_linked_hits", lambda *a: [])
     monkeypatch.setattr(candidate_scan, "_defined_symbols", lambda *a, **k: frozenset())
     findings, summary, flags = candidate_scan.object_findings(build)
     assert findings == [] and summary["count"] == 1 and flags == {}
