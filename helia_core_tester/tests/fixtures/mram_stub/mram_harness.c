@@ -13,6 +13,9 @@
 #define POOL_BYTES (512u * 1024u)
 #define BIG_WEIGHTS (POOL_BYTES + 16u)
 
+/* Convolve S8 accepts input_0, weights and bias; the host build runs it as abs on input_0. */
+#define HARNESS_KERNEL_ID HCT_KERNEL_ID_CONVOLVE_S8
+
 typedef struct
 {
     const char *role;
@@ -148,17 +151,17 @@ static int open_session(hct_server_session_t *s, uint8_t *ws, uint32_t ws_bytes,
     put_u32(&at, 1u);
     put_u8(&at, 0u);
     put_text(&at, case_id);
-    put_u32(&at, HCT_KERNEL_ID_ABS_S8);
+    put_u32(&at, HARNESS_KERNEL_ID);
     if (send(s, HCTP_MSG_SESSION_PLAN, at) != HCTP_STATUS_OK) return 4;
     return drain(s) == HCTP_MSG_REQUEST_CASE ? 0 : 5;
 }
 
-/* CASE_META for an abs_s8 case. */
+/* CASE_META for the stand-in case: abs on input_0, plus S8 weights and S32 bias. */
 static hctp_status_t send_meta(hct_server_session_t *s, const char *case_id, const blob_spec_t *blobs, uint16_t count)
 {
     size_t at = 0u;
     put_text(&at, case_id);
-    put_u32(&at, HCT_KERNEL_ID_ABS_S8);
+    put_u32(&at, HARNESS_KERNEL_ID);
     put_u16(&at, 1u);
     put_u8(&at, 1u);
     put_u32(&at, 0u);
@@ -172,7 +175,7 @@ static hctp_status_t send_meta(hct_server_session_t *s, const char *case_id, con
     {
         put_u32(&at, index + 1u);
         put_text(&at, blobs[index].role);
-        put_text(&at, "S8");
+        put_text(&at, strcmp(blobs[index].role, "bias") == 0 ? "S32" : "S8");
         put_u8(&at, 1u);
         put_u32(&at, blobs[index].length);
         for (int dim = 1; dim < 6; ++dim) put_u32(&at, 0u);

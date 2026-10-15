@@ -49,6 +49,9 @@ uint32_t hct_benchmark_server_capability_flags(void);
 /* Number of 16-bit PMU event-counter slots (__PMU_NUM_EVENTCNT, 8 on Cortex-M55);
  * 0 when HCT_CAP_PMU_ARMV8M is not set. */
 uint8_t hct_benchmark_server_pmu_counter_slots(void);
+/* HCT_DTYPE_* a CASE_META blob with HCT_BLOB_ROLE_* `role` must carry for `kernel_id`;
+ * HCT_DTYPE_UNKNOWN when the kernel is unknown or does not take that role. */
+uint8_t hct_kernel_blob_dtype(uint32_t kernel_id, uint8_t role);
 
 #ifdef __cplusplus
 }

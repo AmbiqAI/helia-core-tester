@@ -10,6 +10,7 @@ stays centralized and testable against the firmware's `HCT_KERNEL_ID_*` defines 
 from __future__ import annotations
 
 import functools
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -28,10 +29,20 @@ class KernelEntry:
     cmsis_function: str
     # Reached only through a descriptor's `entry:`.
     direct_entry: bool = False
+    # CASE_META contract: (role, dtype) pairs the kernel accepts; firmware rejects any other.
+    blobs: tuple[tuple[str, str], ...] = ()
 
 
 class UnknownKernelError(Exception):
     """Raised when a (family, operator, dtype) tuple has no registered kernel_id."""
+
+
+class BlobContractError(ValueError):
+    """A case's streamed blobs break its kernel's `blobs:` contract in the registry.
+
+    Firmware rejects such a CASE_META with INVALID_ARGUMENT, so this is a bridge or
+    registry bug rather than an unsupported case, and it is not converted to a skip.
+    """
 
 
 class AmbiguousKernelError(UnknownKernelError):
@@ -70,6 +81,7 @@ def _parse_registry(raw: bytes) -> tuple[KernelEntry, ...]:
             weight_dtype=(None if entry.get("weight_dtype") is None else str(entry["weight_dtype"])),
             cmsis_function=str(entry.get("cmsis_function", "")),
             direct_entry=bool(entry.get("direct_entry", False)),
+            blobs=tuple((str(role), str(dtype)) for role, dtype in (entry.get("blobs") or {}).items()),
         )
         for entry in data.get("kernels", [])
     )
@@ -129,3 +141,30 @@ def lookup_entry_id(project_root: Path, entry: str) -> int | None:
         if kernel.direct_entry and kernel.cmsis_function == entry:
             return kernel.kernel_id
     return None
+
+
+def blob_contract(project_root: Path, kernel_id: int) -> dict[str, str]:
+    """Role -> dtype the kernel accepts in CASE_META; empty for an unknown kernel_id."""
+    for kernel in load_kernel_registry(project_root):
+        if kernel.kernel_id == kernel_id:
+            return dict(kernel.blobs)
+    return {}
+
+
+def check_blob_contract(project_root: Path, kernel_id: int, blobs: Iterable[tuple[str, str]]) -> None:
+    """Raise BlobContractError unless every (role, dtype) streamed for kernel_id is allowed, once."""
+    contract = blob_contract(project_root, kernel_id)
+    if not contract:
+        raise BlobContractError(f"kernel_id={kernel_id} has no `blobs:` contract in {_REGISTRY_RELATIVE_PATH}")
+    problems: list[str] = []
+    seen: set[str] = set()
+    for role, dtype in blobs:
+        if role in seen:
+            problems.append(f"role {role!r} appears more than once")
+        seen.add(role)
+        if role not in contract:
+            problems.append(f"role {role!r} is not accepted (contract: {contract})")
+        elif dtype != contract[role]:
+            problems.append(f"role {role!r} is {dtype}, contract requires {contract[role]}")
+    if problems:
+        raise BlobContractError(f"kernel_id={kernel_id}: " + "; ".join(problems))

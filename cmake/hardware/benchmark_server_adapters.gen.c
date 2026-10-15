@@ -4847,19 +4847,40 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             params.shape = shape;
             params.seq_dim = meta[1];
             params.batch_dim = meta[2];
+            if (params.seq_dim < 0 || params.seq_dim >= rank || params.batch_dim < 0 ||
+                params.batch_dim >= rank || params.seq_dim == params.batch_dim)
+            {
+                return ARM_CMSIS_NN_ARG_ERROR;
+            }
             session->output_length = input0->byte_length;
             if (session->output_length > session->output_capacity_bytes)
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
             {
-                /* seq_lengths (input1) sizing is batch_dim-relative and not independently
-                 * confirmed here -- only the primary operand (input0) is bounds-checked. */
                 uint32_t operand_bytes_needed;
                 if (!hct_checked_shape_bytes(shape, rank, hct_dtype_size_bytes(input0->dtype),
                                              input0->byte_length, &operand_bytes_needed))
                 {
                     return ARM_CMSIS_NN_ARG_ERROR;
+                }
+            }
+            {
+                /* The kernel reads seq_lengths[coord[batch_dim]] and reverses up to that
+                 * many steps along seq_dim, so both must stay inside their tensors. */
+                const int32_t *seq_lengths = (const int32_t *)blob_ptr(session, input1);
+                int32_t batch;
+                if (input1->dtype != HCT_DTYPE_S32 ||
+                    input1->byte_length / sizeof(int32_t) < (uint32_t)shape[params.batch_dim])
+                {
+                    return ARM_CMSIS_NN_ARG_ERROR;
+                }
+                for (batch = 0; batch < shape[params.batch_dim]; ++batch)
+                {
+                    if (seq_lengths[batch] < 0 || seq_lengths[batch] > shape[params.seq_dim])
+                    {
+                        return ARM_CMSIS_NN_ARG_ERROR;
+                    }
                 }
             }
             if (session->expected_kernel_id == HCT_KERNEL_ID_REVERSE_SEQUENCE_S16)

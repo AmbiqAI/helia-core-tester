@@ -147,6 +147,13 @@ firmware byte for byte.
 All integers are little-endian; `text` is `u16 length + UTF-8 bytes`; `raw` is
 `u32 length + bytes`.
 
+Each `CASE_META` blob descriptor must match the kernel's `blobs:` contract in
+`assets/kernel_registry.yaml` (rendered into `benchmark_server_catalog.c`): the role must
+be one the kernel accepts, at most once, with exactly that dtype. Adapters cast blob
+pointers by kernel id rather than by declared dtype, so the firmware answers any other
+descriptor with `INVALID_ARGUMENT` before allocating it. The bridge applies the same
+check on the host and raises `BlobContractError`.
+
 A kernel error during the correctness run or sampling (an adapter refusing a
 shape, say) ends only that case: the target sends `CASE_COMPLETE` with
 `performance_ran = 0` and the kernel status, then requests the next case. The host

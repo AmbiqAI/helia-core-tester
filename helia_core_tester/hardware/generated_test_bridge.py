@@ -30,7 +30,13 @@ import yaml
 from .case_bundle import (
     DEGENERATE_REASON_KEY, BlobInfo, CaseBundle, _blob_info, _case_root, _manifest_blob_entry, _write_blob, _write_manifest,
 )
-from .kernel_registry import AmbiguousKernelError, UnknownKernelError, lookup_entry_id, lookup_kernel_id
+from .kernel_registry import (
+    AmbiguousKernelError,
+    UnknownKernelError,
+    check_blob_contract,
+    lookup_entry_id,
+    lookup_kernel_id,
+)
 from .pathutil import display_path
 from helia_core_tester.generation.io.descriptors import descriptor_matches_op
 from helia_core_tester.generation.kernel_dispatch import entry_scratch_bytes
@@ -781,6 +787,9 @@ def build_case_bundle_from_generated_test(
             f"{sorted(f'{fam}/{op}' for fam, op in _BUILDERS)})."
         )
     bundle = builder(project_root, generated_test, output_root=output_root)
+    check_blob_contract(
+        project_root, bundle.kernel_id, ((blob.role, blob.dtype) for blob in bundle.streamable_blobs)
+    )
     _check_case_arena_capacity(generated_test, bundle.manifest, bundle.blobs)
     _persist_nonfinite_mask(generated_test, bundle)
     # Gate provenance is attached after assembly and mask persistence.
