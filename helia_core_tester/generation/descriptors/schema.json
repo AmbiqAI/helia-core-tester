@@ -629,7 +629,6 @@
               "Softmax",
               "Quantize",
               "Dequantize",
-        "Div",
               "Abs",
               "Transpose",
               "StridedSlice",
