@@ -35,6 +35,15 @@ Removed interfaces:
 - `--include-float` (replaced by `--suite float` or `--suite both`)
 - the `perf-stream` command group and `scripts/run_hardware_perf_suite.sh` (replaced by `hardware run`, see below)
 
+INT32 predicate tests are available through the FVP pipeline with
+`generate --op Comparison,SelectV2 --dtype s32`. They cover all six
+comparisons and SELECT_V2, including scalar operands, broadcasting, tails and
+signed integer boundaries. S32 references come from LiteRT and use exact output
+validation; generation fails if that reference cannot run. These descriptors
+require their corresponding `arm_*_s32` declarations and are reported as
+capability skips with an older Core checkout. This adds generated FVP tests;
+hardware streaming adapters for these S32 operators are not added here.
+
 ## Hardware CLI
 
 The FVP commands above simulate; `hardware` runs the generated kernel tests on a

@@ -53,3 +53,108 @@ input_2_shape: [2, 3]
 condition_shape: [1, 3]
 x_shape: [2, 3]
 y_shape: [2, 3]
+---
+operator: SelectV2
+name: select_v2_tail_s32
+activation_dtype: S32
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [13]
+input_1_shape: &id001 [13]
+input_2_shape: &id002 [13]
+condition_shape: [13]
+x_shape: *id001
+y_shape: *id002
+required_kernel_symbols: [arm_select_v2_s32]
+---
+operator: SelectV2
+name: select_v2_scalar_condition_s32
+activation_dtype: S32
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [13]
+input_1_shape: &id001 [13]
+input_2_shape: &id002 [13]
+condition_shape: [1]
+x_shape: *id001
+y_shape: *id002
+required_kernel_symbols: [arm_select_v2_s32]
+---
+operator: SelectV2
+name: select_v2_scalar_x_s32
+activation_dtype: S32
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [13]
+input_1_shape: &id001 [1]
+input_2_shape: &id002 [13]
+condition_shape: [13]
+x_shape: *id001
+y_shape: *id002
+required_kernel_symbols: [arm_select_v2_s32]
+---
+operator: SelectV2
+name: select_v2_scalar_y_s32
+activation_dtype: S32
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [13]
+input_1_shape: &id001 [13]
+input_2_shape: &id002 [1]
+condition_shape: [13]
+x_shape: *id001
+y_shape: *id002
+required_kernel_symbols: [arm_select_v2_s32]
+---
+operator: SelectV2
+name: select_v2_mixed_s32
+activation_dtype: S32
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [2, 3, 5]
+input_1_shape: &id001 [1, 3, 1]
+input_2_shape: &id002 [2, 1, 5]
+condition_shape: [2, 1, 5]
+x_shape: *id001
+y_shape: *id002
+required_kernel_symbols: [arm_select_v2_s32]
+---
+operator: SelectV2
+name: select_v2_rank8_s32
+activation_dtype: S32
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [1, 1, 1, 1, 1, 2, 3, 5]
+input_1_shape: &id001 [1]
+input_2_shape: &id002 [1, 1, 1, 1, 1, 2, 3, 5]
+condition_shape: [1, 1, 1, 1, 1, 2, 3, 5]
+x_shape: *id001
+y_shape: *id002
+required_kernel_symbols: [arm_select_v2_s32]
+---
+operator: SelectV2
+name: select_v2_singleton_s32
+activation_dtype: S32
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [2, 1, 5]
+input_1_shape: &id001 [1, 1, 5]
+input_2_shape: &id002 [2, 1, 1]
+condition_shape: [2, 1, 5]
+x_shape: *id001
+y_shape: *id002
+required_kernel_symbols: [arm_select_v2_s32]
