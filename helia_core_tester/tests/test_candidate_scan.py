@@ -271,6 +271,123 @@ def test_object_scan_entry_at_boundaries_is_clean(tmp_path: Path) -> None:
     assert findings == [] and summary["count"] == 1
 
 
+def _raw(*body: str, tail: str = "") -> str:
+    """Function f with exactly `body`, then `tail` outside any function."""
+    return (".syntax unified\n.thumb\n.bss\nanchor:\n  .space 4\n.text\n.global f\n.type f, %function\n"
+            ".thumb_func\nf:\n" + "".join(f"  {line}\n" for line in body) + tail)
+
+
+def _instruction_texts(tmp_path: Path, source: str) -> list[str]:
+    findings, _, _ = candidate_scan.object_findings(_build(tmp_path, source, name="k.S"))
+    return [f["text"] for f in findings if f["rule"] == "object_instruction"]
+
+
+@needs_gcc
+@pytest.mark.parametrize(("body", "expected"), [
+    # -dz lists data rows as starts, and -D reads both halfwords as one ldr.w.
+    (["b.n .Lhidden", ".short 0xf8df", ".Lhidden:", ".short 0xbf30", "bx lr"],
+     ["branch at .text+0x0 enters .text+0x4 in data"]),
+    (["beq.n .Lhidden", "bx lr", ".short 0xf8df", ".Lhidden:", ".short 0xbf30"],
+     ["branch at .text+0x0 enters .text+0x6 in data"]),
+    (["cbz r0, .Lhidden", "bx lr", ".Lhidden:", ".short 0xbf30"],
+     ["branch at .text+0x0 enters .text+0x4 in data"]),
+    # A relocation that leaves the branch alone does not excuse it.
+    (["b.n .Lafter - 2", ".reloc .-2, R_ARM_NONE, anchor", ".inst.w 0xf8dfbf30", ".Lafter:", "bx lr"],
+     ["branch at .text+0x0 enters .text+0x4 inside an instruction"]),
+    (["b.n .Lafter - 2", ".reloc .-2, R_ARM_ABS16, anchor", ".inst.w 0xf8dfbf30", ".Lafter:", "bx lr"],
+     ["R_ARM_ABS16 at .text+0x0 rewrites code it does not fit",
+      "branch at .text+0x0 enters .text+0x4 inside an instruction"]),
+])
+def test_object_scan_branches_follow_thumb_decoding(tmp_path: Path, body: list[str], expected: list[str]) -> None:
+    assert [t for t in _instruction_texts(tmp_path, _raw(*body)) if not t.endswith("wfi")] == expected
+
+
+@needs_gcc
+@pytest.mark.parametrize(("body", "tail"), [
+    # Literal pools stay data: loads, and symbols and words naming them.
+    (["ldr r0, =0x12345678", "ldr r1, .Lpool", "ldr r2, pool", "bx lr", ".align 2", ".Lpool:", ".word 1",
+      ".global pool", "pool:", ".word 2"], ".data\n.word pool\n.word .Lpool + 2\n"),
+    # nop padding after a return, then a pool.
+    (["ldr r0, =0x12345678", "bx lr", "nop", "nop.w", ".align 3", ".word 3"], ""),
+    (["cmp r0, #0", "ite eq", "moveq r0, #1", "movne r0, #2", "pop {r4, pc}", ".word 0"], ""),
+    (["b.w g", ".word 0"], ".thumb_func\ng:\n  udf #0\n"),
+    (["tbb [pc, r0]", ".byte 0, 1", "bx lr"], ""),
+    # The section end, reached without falling through.
+    (["movs r0, #0", "bx lr"], ""),
+])
+def test_object_scan_code_and_pools_are_clean(tmp_path: Path, body: list[str], tail: str) -> None:
+    assert _instruction_texts(tmp_path, _raw(*body, tail=tail)) == []
+
+
+@needs_gcc
+@pytest.mark.parametrize(("body", "tail", "expected"), [
+    (["movs r0, #0", ".short 0x4770"], "", ["code at .text+0x0 can run into data at .text+0x2"]),
+    # Inside an it block, a return may not run.
+    (["cmp r0, #0", "it eq", "bxeq lr", ".word 0"], "", ["code at .text+0x0 can run into data at .text+0x6"]),
+    (["movs r0, #0"], "", ["code at .text+0x0 can run into the section end"]),
+    # A cut instruction at the section end.
+    ([".short 0xf8df"], "", ["instruction at .text+0x0 is cut by a symbol or the section end"]),
+    # A literal pool may be named, but not entered through bx or blx.
+    (["bx lr", ".align 2", "pool:", ".word 0"], ".data\n.word pool + 1\n",
+     ["R_ARM_ABS32 at .data+0x0 enters .text+0x5 in data"]),
+    # In code only an instruction field may be relocated.
+    ([".reloc ., R_ARM_ABS32, anchor", "nop.w", "bx lr"], "",
+     ["R_ARM_ABS32 at .text+0x0 rewrites code it does not fit"]),
+    (["bl g", ".reloc .-2, R_ARM_THM_CALL, g", "bx lr"], ".thumb_func\ng:\n  bx lr\n",
+     ["R_ARM_THM_CALL at .text+0x2 rewrites code it does not fit",
+      "R_ARM_THM_CALL at .text+0x2 enters .text+0xc01eea inside an instruction"]),
+    ([".reloc ., R_ARM_THM_JUMP11, g", "nop.w", "bx lr"], ".thumb_func\ng:\n  bx lr\n",
+     ["R_ARM_THM_JUMP11 at .text+0x0 rewrites code it does not fit",
+      "R_ARM_THM_JUMP11 at .text+0x0 into .text is unchecked"]),
+])
+def test_object_scan_flags_code_layout(tmp_path: Path, body: list[str], tail: str, expected: list[str]) -> None:
+    assert _instruction_texts(tmp_path, _raw(*body, tail=tail)) == expected
+
+
+@needs_gcc
+@pytest.mark.parametrize("body", [
+    # Data-marked bytes a function symbol starts run as code.
+    [".short 0xbf30", "bx lr"],
+    [".short 0xf3af, 0x8003", "bx lr"],
+    ["wfi", "bx lr"],
+])
+def test_object_scan_reports_each_sleep_once(tmp_path: Path, body: list[str]) -> None:
+    assert [t.split()[-1].split(".")[0] for t in _instruction_texts(tmp_path, _raw(*body))] == ["wfi"]
+
+
+def _layout(data: bytes, marks: dict[int, str] | None = None, labels: set[int] | None = None):
+    return candidate_scan._thumb_layout(".text", memoryview(data), marks or {}, labels or set())
+
+
+def test_thumb_layout_boundaries() -> None:
+    assert _layout(b"") == ({}, (), [])
+    # 0xf8df opens a 32-bit instruction; 0x4770 is bx lr.
+    assert _layout(b"\xdf\xf8\x00\x00\x70\x47") == ({0: 4, 4: 2}, (), [])
+    assert _layout(b"\x70\x47\xdf\xf8")[2] == ["instruction at .text+0x2 is cut by a symbol or the section end"]
+    assert _layout(b"\x70\x47\xdf")[2] == ["instruction at .text+0x2 is cut by a symbol or the section end"]
+    assert _layout(b"\xdf\xf8\x00\x00\x70\x47", labels={2})[2] == [
+        "instruction at .text+0x0 is cut by a symbol or the section end"]
+    # Data cutting an instruction, and code winning a mark clash.
+    assert _layout(b"\xdf\xf8\x00\x00", marks={2: "d"})[2] == [
+        "instruction at .text+0x0 is cut by a symbol or the section end"]
+    assert _layout(b"\x70\x47\x00\x00", marks={0: "t", 2: "d"}) == ({0: 2}, ((2, 4),), [])
+    assert _layout(b"\x00\x00\x70\x47", marks={0: "d", 2: "t"}) == ({2: 2}, ((0, 2),), [])
+
+
+def test_landing_boundaries() -> None:
+    layout = ({0: 4, 4: 2}, ((6, 10),), [])
+    assert candidate_scan._landing(layout, 10, 0, True) is None
+    assert candidate_scan._landing(layout, 10, 1, True) is None
+    assert candidate_scan._landing(layout, 10, 5, True) is None
+    assert candidate_scan._landing(layout, 10, 10, True) is None
+    assert candidate_scan._landing(layout, 10, 2, False) == "inside an instruction"
+    assert candidate_scan._landing(layout, 10, 3, True) == "inside an instruction"
+    assert candidate_scan._landing(layout, 10, 6, False) is None
+    assert candidate_scan._landing(layout, 10, 6, True) == "in data"
+    assert candidate_scan._landing(layout, 10, 7, False) == "in data"
+    assert candidate_scan._landing(layout, 10, 9, False) == "in data"
+
+
 @needs_gcc
 @pytest.mark.parametrize(("body", "mnemonic"), [
     # A 32-bit prefix swallows the next halfword in a linear decode.
@@ -469,12 +586,13 @@ def test_object_scan_checks_calls_outside_the_kernels(tmp_path: Path, call: str,
 
 
 def test_external_hits_weak_only_checks_every_weak_definition() -> None:
-    clean = ((".text", 0, frozenset({0, 2, 4}), 6), True)
-    hidden = ((".text", 0, frozenset({0, 4}), 6), True)
+    clean = ((".text", 0, ({0: 2, 2: 2, 4: 2}, (), []), 6), True)
+    hidden = ((".text", 0, ({0: 4, 4: 2}, (), []), 6), True)
     results = [
         ("Source/a.c", ([], {"f": [clean]}, [])),
         ("Source/b.c", ([], {"f": [hidden]}, [])),
-        ("Source/c.c", ([], {}, [("f", 0, "R_ARM_THM_CALL at .text+0x0"), ("f", None, "R_ARM_CALL at .text+0x4")])),
+        ("Source/c.c", ([], {}, [("f", 0, "R_ARM_THM_CALL at .text+0x0", True),
+                                   ("f", None, "R_ARM_CALL at .text+0x4", True)])),
     ]
     assert [h["text"] for h in candidate_scan._external_hits(results)] == [
         "R_ARM_CALL at .text+0x4 into f (.text) is unchecked",
@@ -483,14 +601,15 @@ def test_external_hits_weak_only_checks_every_weak_definition() -> None:
 
 
 def test_external_hits_ignores_symbols_without_code() -> None:
-    results = [("Source/a.c", ([], {}, [("tab", 3, "R_ARM_ABS32 at .data+0x0")]))]
+    results = [("Source/a.c", ([], {}, [("tab", 3, "R_ARM_ABS32 at .data+0x0", False)]))]
     assert candidate_scan._external_hits(results) == []
 
 
 def test_external_hits_end_of_section_is_clean() -> None:
     results = [
-        ("Source/a.c", ([], {"f": [((".text", 0, frozenset({0, 4}), 6), False)]}, [])),
-        ("Source/b.c", ([], {}, [("f", 6, "R_ARM_ABS32 at .data+0x0"), ("f", 2, "R_ARM_ABS32 at .data+0x4")])),
+        ("Source/a.c", ([], {"f": [((".text", 0, ({0: 4, 4: 2}, (), []), 6), False)]}, [])),
+        ("Source/b.c", ([], {}, [("f", 6, "R_ARM_ABS32 at .data+0x0", False),
+                                   ("f", 2, "R_ARM_ABS32 at .data+0x4", False)])),
     ]
     assert [h["text"] for h in candidate_scan._external_hits(results)] == [
         "R_ARM_ABS32 at .data+0x4 enters f+0x2 (.text+0x2) inside an instruction"]

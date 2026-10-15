@@ -25,10 +25,16 @@ SysTick, SCB) in a literal pool, mov/movw/movt or data word. Addresses
 built at run time stay out of reach. No loaded section may hold a
 cps or an msr other than an APSR flag write at any halfword, and
 none, decoded as Thumb whether marked code or data, may hold wfi/wfe.
-Every symbol, relocation and direct branch into code must land on an
-instruction the disassembler decoded, so bytes inside an instruction
-are never entered by name. Jump-table entries, data reached by
-pointer, and addresses or code built at run time stay out of reach.
+Code sections are also decoded the way the core runs them: from the
+start of each code span (mapping symbols and function symbols) with
+exact Thumb sizes. No instruction may be cut by a label, data or the
+section end, and no code span may fall into data or off the end.
+Every symbol, relocation and direct branch into code must land on a
+decoded instruction start; a branch or odd address into data is
+refused, and in code only an instruction's own field may be
+relocated. So bytes inside an instruction or in data are never
+entered by name. Jump-table entries, data reached by pointer, and
+addresses or code built at run time stay out of reach.
 """
 
 from __future__ import annotations
@@ -488,6 +494,7 @@ _RELOC_SECTION = re.compile(r"^Relocation section '.*' at offset")
 _SYMBOL_ROW = re.compile(r"^\s*\d+:\s+([0-9a-f]+)\s+\d+\s+(\w+)\s+(\w+)\s+\w+\s+(\d+)\s+(\S+)")
 # Mapping symbols mark code: $t, $a.
 _CODE_SYMBOL = re.compile(r"^\$[ta](?:\.|$)")
+_MAPPING_SYMBOL = re.compile(r"^\$([adt])(?:\.|$)")
 _RELOC_ROW = re.compile(r"^([0-9a-f]{8})\s+[0-9a-f]{8}\s+(R_ARM_\w+)\s+[0-9a-f]{8}\s+(\S+)")
 _CALLS = frozenset(("R_ARM_THM_CALL", "R_ARM_THM_JUMP24", "R_ARM_THM_JUMP19", "R_ARM_CALL", "R_ARM_JUMP24"))
 # Kernel tables stay below 1 MiB.
@@ -646,17 +653,128 @@ def _reloc_addend(kind: str, data: memoryview, offset: int) -> Optional[int]:
     return None
 
 
-def _inside(starts: set[int], size: int, at: int) -> bool:
-    """`at` is neither an instruction start nor the section end."""
-    return at not in starts and at & ~1 not in starts and at != size
+# Relocations that rewrite a Thumb instruction, by the bytes they rewrite.
+_CODE_RELOCS = {
+    **dict.fromkeys(("R_ARM_THM_JUMP11", "R_ARM_THM_JUMP8", "R_ARM_THM_JUMP6", "R_ARM_THM_PC8"), 2),
+    **dict.fromkeys((*_BRANCH_RELOCS, *_MOVE_RELOCS, "R_ARM_THM_PC12", "R_ARM_THM_BF16", "R_ARM_THM_BF12",
+                     "R_ARM_THM_BF18"), 4),
+}
+# Relocations that set a branch target.
+_BRANCHES = _CALLS | {"R_ARM_THM_JUMP11", "R_ARM_THM_JUMP8", "R_ARM_THM_JUMP6", "R_ARM_THM_BF16",
+                      "R_ARM_THM_BF12", "R_ARM_THM_BF18"}
+
+# Code section layout: instruction starts with their sizes, data spans, problems.
+Layout = tuple[dict[int, int], tuple[tuple[int, int], ...], list[str]]
 
 
-# A global code symbol: section name, value, instruction starts, section size.
-Export = tuple[str, int, frozenset[int], int]
+def _halfword(data: memoryview, at: int) -> int:
+    return data[at] | data[at + 1] << 8
+
+
+def _ends_flow(first: int, second: Optional[int]) -> bool:
+    """An unconditional branch, return or trap: execution never reaches the next instruction.
+
+    A missed spelling only costs a false finding.
+    """
+    if second is None:
+        # b, bx, bxns, mov pc, add pc, pop {pc}, udf.
+        return (first & 0xF800 == 0xE000 or first & 0xFF87 in (0x4700, 0x4704, 0x4687, 0x4487)
+                or first & 0xFF00 in (0xBD00, 0xDE00))
+    # b.w, ldm/pop.w with pc, ldr pc, tbb/tbh, udf.w.
+    return (first & 0xF800 == 0xF000 and second & 0xD000 == 0x9000
+            or first & 0xFFD0 in (0xE890, 0xE910) and bool(second & 0x8000)
+            or first & 0xFF70 == 0xF850 and second >> 12 == 0xF
+            or first & 0xFFF0 == 0xE8D0 and second & 0xFFE0 == 0xF000
+            or first & 0xFFF0 == 0xF7F0 and second & 0xF000 == 0xA000)
+
+
+def _sleep_name(first: int, second: Optional[int]) -> Optional[str]:
+    """wfi/wfe in either encoding; should-be bits of the 32-bit hint are ignored."""
+    if second is None:
+        return {0xBF20: "wfe", 0xBF30: "wfi"}.get(first)
+    if first & 0xFFF0 == 0xF3A0 and second & 0xD700 == 0x8000:
+        return {2: "wfe", 3: "wfi"}.get(second & 0xFF)
+    return None
+
+
+def _thumb_layout(name: str, data: memoryview, marks: dict[int, str], labels: set[int]) -> Layout:
+    """Instruction starts, data spans and problems of a code section.
+
+    Mapping symbols split the section: $d starts data, $t or $a code, and
+    bytes before the first one are code. Code is decoded the way the core
+    runs it, from each code span's start with exact Thumb sizes, so a data
+    row or a label never counts as an instruction start. A code span must
+    not run into data or off the section end, and no instruction may be cut
+    by a label, by data or by the section end.
+    """
+    size = len(data)
+    points = sorted(marks.items())
+    if not points or points[0][0]:
+        points.insert(0, (0, "t"))
+    spans: list[list] = []
+    for number, (low, kind) in enumerate(points):
+        high = points[number + 1][0] if number + 1 < len(points) else size
+        code = kind != "d"
+        if high <= low or low >= size:
+            continue
+        if spans and spans[-1][2] == code:
+            spans[-1][1] = high
+        else:
+            spans.append([low, high, code])
+    starts: dict[int, int] = {}
+    problems = []
+    for low, high, code in spans:
+        if not code:
+            continue
+        at, conditional, ends = low, 0, False
+        while at < high:
+            width = 4 if at + 1 < size and data[at + 1] >> 3 >= 0x1D else 2
+            if at + width > high:
+                problems.append(f"instruction at {name}+{at:#x} is cut by a symbol or the section end")
+                break
+            starts[at] = width
+            first = _halfword(data, at)
+            second = _halfword(data, at + 2) if width == 4 else None
+            # nop padding keeps the state of the instruction before it.
+            if not (first == 0xBF00 or (first, second) == (0xF3AF, 0x8000)):
+                ends = not conditional and _ends_flow(first, second)
+            conditional = max(conditional - 1, 0)
+            if second is None and first & 0xFF00 == 0xBF00 and first & 0xF:
+                # it: 4 - trailing zeros of the mask instructions are conditional.
+                conditional = 4 - ((first & -first & 0xF).bit_length() - 1)
+            at += width
+        else:
+            if not ends:
+                into = "the section end" if high == size else f"data at {name}+{high:#x}"
+                problems.append(f"code at {name}+{low:#x} can run into {into}")
+    for label in labels:
+        for back in (1, 2, 3):
+            if starts.get(label - back, 0) > back:
+                problems.append(f"instruction at {name}+{label - back:#x} is cut by a symbol or the section end")
+    data_spans = tuple((low, high) for low, high, code in spans if not code)
+    return starts, data_spans, problems
+
+
+def _landing(layout: Layout, size: int, at: int, branch: bool) -> Optional[str]:
+    """Why code entered at `at` is unchecked, or None.
+
+    Branches into data are refused; data may still point at data, but
+    only at an even offset, which bx/blx cannot run.
+    """
+    starts, data_spans, _ = layout
+    if at in starts or at & ~1 in starts or at == size:
+        return None
+    if any(low <= at < high for low, high in data_spans):
+        return "in data" if branch or at & 1 else None
+    return "inside an instruction"
+
+
+# A global code symbol: section name, value, layout, section size.
+Export = tuple[str, int, Layout, int]
 # Every definition of a global code symbol, each with whether it is weak.
 Exports = dict[str, list[tuple[Export, bool]]]
-# A reference into another object: symbol, addend (None if unread), origin.
-External = tuple[str, Optional[int], str]
+# A reference into another object: symbol, addend (None if unread), origin, whether it branches.
+External = tuple[str, Optional[int], str, bool]
 
 
 def _object_hits(
@@ -681,6 +799,8 @@ def _object_hits(
 
     # Code outside .text, whatever its flags.
     homes, places = {}, {}
+    marks: dict[int, dict[int, str]] = {}
+    labels: dict[int, set[int]] = {}
     # Only global and weak definitions are visible to other objects.
     linked: dict[str, set[tuple[int, int, bool]]] = {}
     for row in run_binutil("arm-none-eabi-readelf", ["-sW", str(obj)], *limits).splitlines():
@@ -696,6 +816,13 @@ def _object_hits(
             if kind == "FUNC":
                 at &= ~1
             places.setdefault(symbol, set()).add((int(index), at))
+            labels.setdefault(int(index), set()).add(at)
+            mapping = _MAPPING_SYMBOL.match(symbol)
+            if mapping or kind == "FUNC":
+                # A function runs whatever marks its bytes carry. Code wins
+                # where marks clash: it is decoded and checked.
+                seen = marks.setdefault(int(index), {})
+                seen[at] = "d" if mapping and mapping.group(1) == "d" and seen.get(at, "d") == "d" else "t"
             if bind in ("GLOBAL", "WEAK"):
                 linked.setdefault(symbol, set()).add((int(index), at, bind == "WEAK"))
         code = kind == "FUNC" or _CODE_SYMBOL.match(symbol)
@@ -708,22 +835,22 @@ def _object_hits(
     def instruction(text: str) -> None:
         hits.append({"rule": "object_instruction", "path": source, "text": text[:200]})
 
-    # Instruction starts and direct branch targets per code section.
+    # Instruction starts per code section, as the core decodes them.
+    layouts = {index: _thumb_layout(entry[0], entry[3], marks.get(index, {}), labels.get(index, set()))
+               for index, entry in enumerate(table) if "X" in entry[2]}
+    for _, _, problems in layouts.values():
+        for text in problems:
+            instruction(text)
+    # Direct branch targets; data rows decode to none.
     by_name = {name: index for index, (name, *_) in enumerate(table)}
-    starts: dict[int, set[int]] = {index: set() for index, entry in enumerate(table) if "X" in entry[2]}
     direct: dict[tuple[int, int], int] = {}
     current = None
     for line in run_binutil("arm-none-eabi-objdump", ["-dz", "--no-show-raw-insn", str(obj)], *limits).splitlines():
         if heading := _DISASSEMBLY.match(line):
             current = by_name.get(heading.group(1))
             continue
-        if current in starts and (row := _INSN_LINE.match(line)):
+        if current in layouts and (row := _INSN_LINE.match(line)):
             at = int(row.group(1), 16)
-            starts[current].add(at)
-            # objdump restarts at every symbol, so a symbol inside an
-            # instruction shows up as a truncated decode before it.
-            if line.endswith("is out of bounds."):
-                instruction(f"instruction at {table[current][0]}+{at:#x} is cut by a symbol or the section end")
             if target := _DIRECT_TARGET.search(line):
                 direct[(current, at)] = int(target.group(1), 16)
         if not _ADDRESS_INSN.search(line):
@@ -734,23 +861,33 @@ def _object_hits(
             if SCS_LOW <= value <= SCS_HIGH or ("\tmovt" in line and SCS_LOW >> 16 <= value <= SCS_HIGH >> 16):
                 hit(line.strip())
 
-    def entry(origin: str, index: int, at: int) -> None:
+    def entry(origin: str, index: int, at: int, branch: bool) -> None:
         """Code entered at `at` must start a decoded instruction."""
-        if index in starts and _inside(starts[index], len(table[index][3]), at):
-            instruction(f"{origin} enters {table[index][0]}+{at:#x} inside an instruction")
+        if index in layouts and (problem := _landing(layouts[index], len(table[index][3]), at, branch)):
+            instruction(f"{origin} enters {table[index][0]}+{at:#x} {problem}")
 
-    for symbol, spots in places.items():
-        for index, value in spots:
-            entry(f"symbol {symbol}", index, value)
     # -D decodes data too: bytes behind a $d mapping symbol, in .rodata or
     # .data, can still be branched to. Odd names are already findings.
     loaded = [table[index][0] for index in sections if _PLAIN_NAME.fullmatch(table[index][0])]
+    slept: set[tuple[str, int]] = set()
     if loaded:
         selected = [arg for name in loaded for arg in ("-j", name)]
+        heading_name = ""
         for line in run_binutil("arm-none-eabi-objdump", ["-D", "--no-show-raw-insn", *selected, str(obj)],
                                 *limits).splitlines():
-            if _SLEEP_INSN.search(line):
+            if heading := _DISASSEMBLY.match(line):
+                heading_name = heading.group(1)
+            elif _SLEEP_INSN.search(line):
                 instruction(line.strip())
+                if row := _INSN_LINE.match(line):
+                    slept.add((heading_name, int(row.group(1), 16)))
+    # The same check on the code as the core decodes it.
+    for index, (code_starts, _, _) in layouts.items():
+        name, data = table[index][0], table[index][3]
+        for at, width in sorted(code_starts.items()):
+            second = _halfword(data, at + 2) if width == 4 else None
+            if (mnemonic := _sleep_name(_halfword(data, at), second)) and (name, at) not in slept:
+                instruction(f"{name}+{at:#x}: {mnemonic}")
     contents = {index: table[index][3] for index in sections}
     aligns = _section_aligns(obj)
     for index, data in contents.items():
@@ -775,7 +912,9 @@ def _object_hits(
             continue
         section = table[target][0]
         offset, kind, symbol = int(row.group(1), 16), row.group(2), row.group(3)
-        relocated.add((target, offset))
+        # Only a branch relocation replaces the target the bytes encode.
+        if kind in _BRANCHES:
+            relocated.add((target, offset))
         data = contents[target]
         # Symbol plus addend can reach any address.
         if kind == "R_ARM_ABS32":
@@ -783,24 +922,30 @@ def _object_hits(
             if not 0 <= addend < _ADDEND_MAX:
                 hit(f"{symbol}{addend:+#x} in {section}")
         origin = f"{kind} at {section}+{offset:#x}"
+        # The linker rewrites relocated bytes, so in code only instruction
+        # fields may be relocated.
+        if (target in layouts and kind != "R_ARM_NONE"
+                and not any(low <= offset < high for low, high in layouts[target][1])
+                and layouts[target][0].get(offset) != _CODE_RELOCS.get(kind)):
+            instruction(f"{origin} rewrites code it does not fit")
         addend = _reloc_addend(kind, data, offset)
         # A weak definition here may lose to another one at link time.
         own_weak = any(is_weak for _, _, is_weak in linked.get(symbol, ()))
         elsewhere = symbol not in places and symbol not in local
         if own_weak or (elsewhere and (symbol in defined or symbol in weak)):
             # Defined in another kernel object: checked once all are read.
-            externals.append((symbol, addend, origin))
+            externals.append((symbol, addend, origin, kind in _BRANCHES))
         elif elsewhere and kind in _CALLS and (addend is None or addend & ~1):
             # Harness code is not scanned, so only its symbol entries are known.
             reach = "" if addend is None else f"{addend:+#x}"
             instruction(f"{origin} into {symbol}{reach} outside the kernels is unchecked")
         for index, value in () if own_weak else places.get(symbol, ()):
-            if index not in starts:
+            if index not in layouts:
                 continue
             if addend is None:
                 instruction(f"{origin} into {table[index][0]} is unchecked")
             else:
-                entry(origin, index, value + addend)
+                entry(origin, index, value + addend, kind in _BRANCHES)
         home = homes.get(symbol, "")
         if kind in _CALLS and home and not home.startswith(".text"):
             hits.append({"rule": "object_section", "path": source, "text": f"branch to {symbol} in {home}"})
@@ -810,12 +955,12 @@ def _object_hits(
         raise ValueError(f"{obj.name}: read {seen_relocs} of {expected} reloc sections")
     for (index, at), goal in direct.items():
         if (index, at) not in relocated:
-            entry(f"branch at {table[index][0]}+{at:#x}", index, goal)
+            entry(f"branch at {table[index][0]}+{at:#x}", index, goal, True)
     exports: Exports = {}
     for symbol, spots in linked.items():
         for index, value, is_weak in spots:
-            if index in starts:
-                spot = (table[index][0], value, frozenset(starts[index]), len(table[index][3]))
+            if index in layouts:
+                spot = (table[index][0], value, layouts[index], len(table[index][3]))
                 exports.setdefault(symbol, []).append((spot, is_weak))
     return hits, exports, externals
 
@@ -833,18 +978,17 @@ def _external_hits(results: list[tuple[str, tuple[list[dict], Exports, list[Exte
             exports.setdefault(symbol, []).extend(spots)
     hits = []
     for source, (_, _, externals) in results:
-        for symbol, addend, origin in externals:
+        for symbol, addend, origin, branch in externals:
             spots = exports.get(symbol)
             if not spots:
                 continue
             strong = [spot for spot, is_weak in spots if not is_weak]
             texts = []
-            for section, value, starts, size in strong or [spot for spot, _ in spots]:
+            for section, value, layout, size in strong or [spot for spot, _ in spots]:
                 if addend is None:
                     texts.append(f"{origin} into {symbol} ({section}) is unchecked")
-                elif _inside(starts, size, value + addend):
-                    texts.append(f"{origin} enters {symbol}{addend:+#x} ({section}+{value + addend:#x}) "
-                                 "inside an instruction")
+                elif problem := _landing(layout, size, value + addend, branch):
+                    texts.append(f"{origin} enters {symbol}{addend:+#x} ({section}+{value + addend:#x}) {problem}")
             if not strong and (addend is None or addend & ~1):
                 reach = "" if addend is None else f"{addend:+#x}"
                 texts.append(f"{origin} into weak {symbol}{reach} is unchecked: another definition can replace it")
