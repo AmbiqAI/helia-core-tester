@@ -11,6 +11,18 @@ from helia_core_tester.generation.utils.template_context import TemplateContextB
 class OpDiv(BinaryBasicMathBase):
     """Generate flat and NHWC broadcast division for FP32 and FP16 storage."""
 
+    def validate_descriptor(self) -> None:
+        self._dtype()
+        shapes = [tuple(self.desc[key]) for key in ("input_1_shape", "input_2_shape")]
+        if any(not 1 <= len(shape) <= 4 or any(dim <= 0 for dim in shape) for shape in shapes):
+            raise ValueError("Div requires positive shapes of rank 1 through 4")
+        np.broadcast_shapes(*shapes)
+        dtype = self._dtype()
+        lo = dtype.type(self.desc.get("act_min", -1000))
+        hi = dtype.type(self.desc.get("act_max", 1000))
+        if not np.isfinite(lo) or not np.isfinite(hi) or lo > hi:
+            raise ValueError("Div requires finite ordered activation bounds")
+
     def needs_keras_model(self) -> bool:
         return False
 
@@ -27,7 +39,7 @@ class OpDiv(BinaryBasicMathBase):
         import ai_edge_litert.schema_py_generated as schema
         from helia_core_tester.generation.utils.litert_builder import build_binary_broadcast_op
 
-        self._dtype()
+        self.validate_descriptor()
         options = schema.DivOptionsT()
         options.fusedActivationFunction = schema.ActivationFunctionType.NONE
         # LiteRT executes FP32 division. Half tests first round the operands to
@@ -43,6 +55,7 @@ class OpDiv(BinaryBasicMathBase):
         self._write_tflite_bytes(out_path, data)
 
     def generate_c_files(self, output_dir: Path) -> None:
+        self.validate_descriptor()
         dtype = self._dtype()
         suffix = "f16" if dtype == np.dtype("float16") else "f32"
         c_type = "float16_t" if suffix == "f16" else "float"
@@ -71,9 +84,9 @@ class OpDiv(BinaryBasicMathBase):
         builder = TemplateContextBuilder()
         context = {
             "name": name,
-            "input1_dims": builder.nhwc_to_cmsis_dims(shape_a),
-            "input2_dims": builder.nhwc_to_cmsis_dims(shape_b),
-            "output_dims": builder.nhwc_to_cmsis_dims(shape_out),
+            "input1_dims": builder.nhwc_to_cmsis_dims((1,) * (4 - len(shape_a)) + shape_a),
+            "input2_dims": builder.nhwc_to_cmsis_dims((1,) * (4 - len(shape_b)) + shape_b),
+            "output_dims": builder.nhwc_to_cmsis_dims((1,) * (4 - len(shape_out)) + shape_out),
             "input1_data_array": builder.format_array_as_c_literal(a),
             "input2_data_array": builder.format_array_as_c_literal(b),
             "expected_output_array": builder.format_array_as_c_literal(expected),

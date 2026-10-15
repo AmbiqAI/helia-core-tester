@@ -49,7 +49,7 @@ def test_real_litert_generation(desc, tmp_path, monkeypatch):
 
 def test_catalog_and_descriptors():
     assert get_operator_spec("Div").descriptor_relpaths == ("BasicMathFunctions/div_float.yaml",)
-    assert len(DESCRIPTORS) == 22
+    assert len(DESCRIPTORS) == 26
     assert {d["tensor_dtypes"]["input"] for d in DESCRIPTORS} == {"FP16", "FP32"}
     assert all(d["comparison"] == {"atol": 0, "rtol": 0} for d in DESCRIPTORS)
 
@@ -70,3 +70,17 @@ def test_oracle_failure_is_not_hidden(tmp_path, monkeypatch):
     monkeypatch.setattr(op, "load_litert_interpreter", unavailable)
     with pytest.raises(RuntimeError, match="oracle unavailable"):
         op.generate_c_files(tmp_path)
+
+
+@pytest.mark.parametrize("shape", [[], [1, 1, 1, 1, 1], [2, 0], [-1, 3]])
+def test_invalid_rank_or_extent_rejected(shape):
+    desc = dict(DESCRIPTORS[0], input_1_shape=shape)
+    with pytest.raises(ValueError, match="positive shapes of rank 1 through 4"):
+        OpDiv(desc).validate_descriptor()
+
+
+@pytest.mark.parametrize("lo,hi", [(2, 1), (float("nan"), 1), (0, float("inf"))])
+def test_invalid_clamp_rejected(lo, hi):
+    desc = dict(DESCRIPTORS[0], act_min=lo, act_max=hi)
+    with pytest.raises(ValueError, match="finite ordered activation bounds"):
+        OpDiv(desc).validate_descriptor()
