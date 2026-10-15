@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional
 
+from helia_core_tester.core.path_layout import normalize_toolchain
 from helia_core_tester.fvp.env import call_setup_dependencies, detect_paths
 
 
@@ -27,6 +28,7 @@ def bootstrap_runtime_env(
     *,
     downloads_dir: Path,
     ensure_setup: bool,
+    toolchain: str = "gcc",
 ) -> RuntimeEnvContext:
     """Resolve dependency/toolchain/FVP paths once and return a locked context."""
     resolved_downloads = Path(downloads_dir).resolve()
@@ -37,7 +39,7 @@ def bootstrap_runtime_env(
         downloads_dir=resolved_downloads,
         ethos_path=None,
         cmsis5_path=None,
-        use_arm_compiler=False,
+        use_arm_compiler=normalize_toolchain(toolchain) == "armclang",
         no_gcc_from_download=False,
         no_fvp_from_download=False,
     )
@@ -54,7 +56,11 @@ def bootstrap_runtime_env(
     )
 
 
-def build_locked_fvp_flags(runtime_env: Optional[RuntimeEnvContext], fallback_downloads_dir: Path) -> list[str]:
+def build_locked_fvp_flags(
+    runtime_env: Optional[RuntimeEnvContext],
+    fallback_downloads_dir: Path,
+    toolchain: str = "gcc",
+) -> list[str]:
     """Return FVP flags that force deterministic dependency/path selection."""
     downloads_dir = Path(fallback_downloads_dir).resolve()
     ethos_path = downloads_dir / "ethos-u-core-platform"
@@ -65,7 +71,7 @@ def build_locked_fvp_flags(runtime_env: Optional[RuntimeEnvContext], fallback_do
         ethos_path = runtime_env.ethos_path
         cmsis5_path = runtime_env.cmsis5_path
 
-    return [
+    flags = [
         "--no-setup",
         "--downloads-dir",
         str(downloads_dir),
@@ -77,3 +83,6 @@ def build_locked_fvp_flags(runtime_env: Optional[RuntimeEnvContext], fallback_do
         "--no-gcc-from-download",
         "--no-fvp-from-download",
     ]
+    if normalize_toolchain(toolchain) == "armclang":
+        flags.append("--use-arm-compiler")
+    return flags

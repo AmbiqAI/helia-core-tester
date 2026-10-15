@@ -14,6 +14,24 @@
 #include "arm_nnfunctions.h"
 #include "benchmark_server_session.h"
 
+#ifdef HELIA_HARDWARE_BUILD
+#include "am_mcu_apollo.h"
+#elif defined(HCT_PLACEMENT_MRAM)
+/* Host harness: stubbed MRAM HAL. */
+#include "hct_mram_stub.h"
+#endif
+
+/* The Armv8.1-M PMU (8 x 16-bit event counters + 32-bit CCNTR on Cortex-M55) is only
+ * present when the device header says so; a Cortex-M4 hardware build or the host
+ * harness compile take the DWT-only path below. */
+#if defined(__PMU_PRESENT) && (__PMU_PRESENT == 1)
+#include "nsx_pmu_map.h"
+#include "nsx_pmu_utils.h"
+#define HCT_PMU_AVAILABLE 1
+#else
+#define HCT_PMU_AVAILABLE 0
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -233,6 +251,19 @@ extern "C" {
 #define HCT_KERNEL_ID_BATCH_MATMUL_F16 171u
 #define HCT_KERNEL_ID_CONVOLVE_F32 172u
 #define HCT_KERNEL_ID_CONVOLVE_F16 173u
+#define HCT_KERNEL_ID_EMPTY_CALL 174u
+#define HCT_KERNEL_ID_CONVOLVE_S8_SMALL_CIN 175u
+#define HCT_KERNEL_ID_CONVOLVE_S8_3X3_C16_S1 176u
+#define HCT_KERNEL_ID_CONVOLVE_1X1_S8_SHORT_K 177u
+#define HCT_KERNEL_ID_DEPTHWISE_CONV_S8_OPT_3X3 178u
+#define HCT_KERNEL_ID_DEPTHWISE_CONV_S8_OPT_3X3_C64_S1 179u
+#define HCT_KERNEL_ID_DEPTHWISE_CONV_S8_OPT_PLANAR 180u
+#define HCT_KERNEL_ID_DEPTHWISE_CONV_S8_OPT_CHANNELWISE 181u
+#define HCT_KERNEL_ID_FULLY_CONNECTED_PER_CHANNEL_PACKED_S8 182u
+#define HCT_KERNEL_ID_SVDF_S8 183u
+#define HCT_KERNEL_ID_SVDF_STATE_S16_S8 184u
+#define HCT_KERNEL_ID_LSTM_UNIDIRECTIONAL_S8 185u
+#define HCT_KERNEL_ID_TRANSPOSE_CONV_S16 186u
 
 static inline hct_server_blob_t *find_blob_by_role(hct_server_session_t *session, uint8_t role)
 {
@@ -249,7 +280,7 @@ static inline hct_server_blob_t *find_blob_by_role(hct_server_session_t *session
 
 static inline uint8_t *blob_ptr(hct_server_session_t *session, const hct_server_blob_t *blob)
 {
-    return &session->workspace[blob->arena_offset];
+    return blob->placed ? (uint8_t *)blob->placed : &session->workspace[blob->arena_offset];
 }
 
 static inline uint8_t *hct_output_ptr(hct_server_session_t *session)
@@ -267,16 +298,117 @@ static inline bool null_arg_requested(const hct_server_session_t *session, int32
     return (session->null_arg_mask & bit) != 0;
 }
 
+/* A timed sample counts kernel calls only. */
+typedef struct
+{
+    uint32_t pmu_mask;
+    uint32_t dwt_on;
+    uint32_t dwt_off;
+    bool armed;
+    /* Counter runs outside kernel calls. */
+    bool inverted;
+    /* MRAM ranges evicted before each call. */
+    const void *cold_addr[HCT_SERVER_MAX_BLOBS];
+    int32_t cold_bytes[HCT_SERVER_MAX_BLOBS];
+    uint8_t cold_count;
+} hct_window_t;
+
+extern hct_window_t hct_window;
+#if defined(HCT_PLACEMENT_MRAM)
+/* Rows programmed since boot. */
+extern volatile uint32_t hct_mram_rows_programmed;
+#endif
+
+/* Resume counting; PMU store goes last. */
+static inline bool hct_window_open(void)
+{
+    if (hct_window.armed)
+    {
+#if defined(HCT_PLACEMENT_MRAM)
+        /* Evict while no window counts. */
+        if (hct_window.inverted)
+        {
+#ifdef HELIA_HARDWARE_BUILD
+            DWT->CTRL = hct_window.dwt_on;
+#endif
+        }
+        /* Weights start cold, as in inference. */
+        for (uint8_t index = 0u; index < hct_window.cold_count; ++index)
+        {
+            SCB_InvalidateDCache_by_Addr((volatile void *)hct_window.cold_addr[index], hct_window.cold_bytes[index]);
+        }
+        if (hct_window.inverted)
+        {
+            return true;
+        }
+#endif
+#ifdef HELIA_HARDWARE_BUILD
+        DWT->CTRL = hct_window.dwt_on;
+#endif
+#if HCT_PMU_AVAILABLE
+        ARM_PMU_CNTR_Enable(hct_window.pmu_mask);
+#endif
+    }
+    return true;
+}
+
+/* Pause counting; PMU store goes first. */
+static inline void hct_window_close(bool *open)
+{
+    (void)open;
+#if HCT_PMU_AVAILABLE
+    ARM_PMU_CNTR_Disable(hct_window.pmu_mask);
+#endif
+#ifdef HELIA_HARDWARE_BUILD
+    if (hct_window.armed)
+    {
+        DWT->CTRL = hct_window.dwt_off;
+    }
+#endif
+}
+
+/* Counts `call` only; cleanup closes after it. */
+#define HCT_TIMED(call)                                    \
+    ({                                                     \
+        __attribute__((cleanup(hct_window_close), unused)) \
+        bool hct_open_ = hct_window_open();                \
+        call;                                              \
+    })
+
 
 /* The hand-written abs adapter (benchmark_server_session.c), dispatched like every
  * generated one. */
 arm_cmsis_nn_status hct_run_abs_once(hct_server_session_t *session);
+
+/* Times an empty call: the floor. */
+arm_cmsis_nn_status hct_run_empty_once(hct_server_session_t *session);
 
 /* Kernel-id dispatch: runs the adapter for session->expected_kernel_id, or returns
  * ARM_CMSIS_NN_ARG_ERROR for an id it does not know. Generated into
  * benchmark_server_adapters.gen.c from adapter_specs.py; the HCT_HOST_ABS_ONLY host
  * harness, which compiles without that file, defines an abs-only one instead. */
 arm_cmsis_nn_status hct_run_kernel_once(hct_server_session_t *session);
+
+/* Size of the read-only operand the case's adapter derives from its blobs (0: none),
+ * from CASE_META dims alone. Generated beside hct_run_kernel_once(). */
+uint32_t hct_derived_operand_bytes(hct_server_session_t *session);
+
+#ifdef HCT_HOST_ABS_ONLY
+/* Host harness knobs for the derived operand (benchmark_server_session.c). */
+#define HCT_HOST_DERIVED_MAX_BYTES 1024u
+typedef enum
+{
+    HCT_HOST_DERIVE_BUILD = 0,
+    HCT_HOST_DERIVE_FAIL = 1,
+    HCT_HOST_DERIVE_NOTHING = 2,
+    HCT_HOST_DERIVE_WRONG_SIZE = 3,
+} hct_host_derive_mode_t;
+extern uint32_t hct_host_derived_bytes;
+extern uint32_t hct_host_derive_mode;
+extern uint32_t hct_host_derive_seed;
+extern const uint8_t *hct_host_last_derived;
+extern uint8_t hct_host_derived_data[HCT_HOST_DERIVED_MAX_BYTES];
+#endif
 
 #ifdef __cplusplus
 }

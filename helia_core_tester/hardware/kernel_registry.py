@@ -9,6 +9,7 @@ stays centralized and testable against the firmware's `HCT_KERNEL_ID_*` defines 
 
 from __future__ import annotations
 
+import functools
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,6 +26,8 @@ class KernelEntry:
     dtype: str
     weight_dtype: str | None
     cmsis_function: str
+    # Reached only through a descriptor's `entry:`.
+    direct_entry: bool = False
 
 
 class UnknownKernelError(Exception):
@@ -46,10 +49,19 @@ def _registry_path(project_root: Path) -> Path:
     return project_root / _REGISTRY_RELATIVE_PATH
 
 
+_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+
+
 def load_kernel_registry(project_root: Path) -> list[KernelEntry]:
     path = _registry_path(project_root)
-    data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    return [
+    return list(_parse_registry(path.read_bytes()))
+
+
+@functools.lru_cache(maxsize=8)
+def _parse_registry(raw: bytes) -> tuple[KernelEntry, ...]:
+    """Parse once per distinct content."""
+    data = yaml.load(raw, Loader=_LOADER)
+    return tuple(
         KernelEntry(
             kernel_id=int(entry["kernel_id"]),
             family=entry.get("family"),
@@ -57,9 +69,10 @@ def load_kernel_registry(project_root: Path) -> list[KernelEntry]:
             dtype=str(entry["dtype"]),
             weight_dtype=(None if entry.get("weight_dtype") is None else str(entry["weight_dtype"])),
             cmsis_function=str(entry.get("cmsis_function", "")),
+            direct_entry=bool(entry.get("direct_entry", False)),
         )
         for entry in data.get("kernels", [])
-    ]
+    )
 
 
 def lookup_kernel_id(
@@ -79,7 +92,7 @@ def lookup_kernel_id(
     """
     candidates: list[KernelEntry] = []
     for entry in load_kernel_registry(project_root):
-        if entry.family == family and entry.operator == operator and entry.dtype == dtype:
+        if entry.family == family and entry.operator == operator and entry.dtype == dtype and not entry.direct_entry:
             candidates.append(entry)
 
     if weight_dtype is not None:
@@ -108,3 +121,11 @@ def lookup_kernel_id(
         f"No registered kernel_id for family={family!r} operator={operator!r} "
         f"dtype={dtype!r} weight_dtype={weight_dtype!r}"
     )
+
+
+def lookup_entry_id(project_root: Path, entry: str) -> int | None:
+    """The kernel_id that runs direct entry `entry`, if any."""
+    for kernel in load_kernel_registry(project_root):
+        if kernel.direct_entry and kernel.cmsis_function == entry:
+            return kernel.kernel_id
+    return None

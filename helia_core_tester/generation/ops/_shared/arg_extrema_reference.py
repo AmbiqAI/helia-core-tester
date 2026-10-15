@@ -1,7 +1,8 @@
-"""Independent CORE index contract: first NaN, else first numeric extremum.
+"""Independent index contract: first numeric extremum; a NaN never wins.
 
-NaN selection deliberately differs from observed LiteRT sequences. Operands
-are decoded as integers so subnormal ordering cannot depend on host FTZ/DAZ.
+As in LiteRT's reference comparator, a later number replaces a leading NaN and
+an all-NaN line selects index 0. Operands are decoded as integers so subnormal ordering
+cannot depend on host FTZ/DAZ.
 """
 
 import numpy as np
@@ -30,8 +31,7 @@ def arg_extrema_reference(bits, axis, kind):
             word = int(word)
             magnitude = word & (sign - 1)
             if magnitude > infinity:
-                winner = index
-                break
+                continue
             key = -magnitude if word & sign else magnitude
             if best is None or (key < best if kind == "min" else key > best):
                 winner, best = index, key

@@ -1,0 +1,155 @@
+operator: ResizeBilinear
+name: resize_bilinear_asymmetric_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+input_shape: [1, 2, 3, 3]
+size: [4, 6]
+align_corners: false
+half_pixel_centers: false
+hint:
+  kernel: arm_resize_bilinear_s8
+comparison: {tolerance: 0}
+---
+operator: ResizeBilinear
+name: resize_bilinear_halfpixel_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+input_shape: [1, 2, 3, 3]
+size: [4, 6]
+align_corners: false
+half_pixel_centers: true
+hint:
+  kernel: arm_resize_bilinear_s8
+comparison: {tolerance: 0}
+---
+operator: ResizeBilinear
+name: resize_bilinear_aligned_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+input_shape: [1, 3, 3, 3]
+size: [5, 5]
+align_corners: true
+half_pixel_centers: false
+hint:
+  kernel: arm_resize_bilinear_s8
+comparison: {tolerance: 0}
+---
+operator: ResizeBilinear
+name: resize_bilinear_singleton_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+input_shape: [1, 1, 2, 3]
+size: [3, 4]
+align_corners: false
+half_pixel_centers: true
+hint:
+  kernel: arm_resize_bilinear_s8
+comparison: {tolerance: 0}
+---
+operator: ResizeBilinear
+name: resize_bilinear_aligned_one_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+input_shape: [1, 3, 3, 3]
+size: [1, 1]
+align_corners: true
+half_pixel_centers: false
+hint:
+  kernel: arm_resize_bilinear_s8
+comparison: {tolerance: 0}
+---
+operator: ResizeBilinear
+name: resize_bilinear_downsample_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+input_shape: [1, 4, 4, 3]
+size: [2, 2]
+align_corners: false
+half_pixel_centers: true
+hint:
+  kernel: arm_resize_bilinear_s8
+comparison: {tolerance: 0}
+---
+operator: ResizeBilinear
+name: resize_bilinear_batch_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+input_shape: [2, 2, 3, 5]
+size: [4, 6]
+align_corners: false
+half_pixel_centers: true
+hint:
+  kernel: arm_resize_bilinear_s8
+comparison: {tolerance: 0}
+---
+operator: ResizeBilinear
+name: resize_bilinear_pow2_c1_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+input_shape: [1, 2, 3, 1]
+size: [4, 12]
+align_corners: false
+half_pixel_centers: true
+hint:
+  kernel: arm_resize_bilinear_s8_pow2
+comparison: {tolerance: 0}
+---
+operator: ResizeBilinear
+name: resize_bilinear_pow2_c2_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+input_shape: [1, 2, 3, 2]
+size: [8, 6]
+align_corners: false
+half_pixel_centers: true
+hint:
+  kernel: arm_resize_bilinear_s8_pow2
+comparison: {tolerance: 0}
+---
+operator: ResizeBilinear
+name: resize_bilinear_pow2_c3_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+input_shape: [1, 2, 3, 3]
+size: [4, 6]
+align_corners: false
+half_pixel_centers: true
+hint:
+  kernel: arm_resize_bilinear_s8_pow2
+comparison: {tolerance: 0}
+---
+operator: ResizeBilinear
+name: resize_bilinear_pow2_c17_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+input_shape: [1, 2, 3, 17]
+size: [16, 6]
+align_corners: false
+half_pixel_centers: true
+hint:
+  kernel: arm_resize_bilinear_s8_pow2
+comparison: {tolerance: 0}
+---
+operator: ResizeBilinear
+name: resize_bilinear_pow2_identity_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+input_shape: [1, 2, 3, 32]
+size: [2, 3]
+align_corners: false
+half_pixel_centers: true
+hint:
+  kernel: arm_resize_bilinear_s8_pow2
+comparison: {tolerance: 0}

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any, Iterable
 import zlib
 
 
@@ -91,6 +92,57 @@ class BlobAccumulator:
                 f"Blob {self._spec.blob_id} CRC mismatch: expected 0x{self._spec.expected_crc32:08x}, got 0x{actual_crc:08x}."
             )
         return payload
+
+
+# Mirror allocate_blob() MRAM row padding.
+MRAM_ROW_BYTES = 16
+MRAM_ROLES = frozenset({"weights", "bias"})
+
+
+# cmake/hardware/benchmark_server_mram.h: placement pool and cache line.
+MRAM_LINE_BYTES = 32
+MRAM_POOL_BYTES = 512 * 1024
+
+
+def mram_extent(role: str, byte_length: int, placement: str) -> int:
+    """MRAM pool bytes a blob takes (rows padded, from a cache line); 0 when it stays in SRAM."""
+    if placement != "mram" or role not in MRAM_ROLES:
+        return 0
+    padded = -(-byte_length // MRAM_ROW_BYTES) * MRAM_ROW_BYTES
+    return -(-padded // MRAM_LINE_BYTES) * MRAM_LINE_BYTES
+
+
+# HCT_KERNEL_ID_FULLY_CONNECTED_PER_CHANNEL_PACKED_S8: the one kernel with a derived operand.
+PACKED_FC_S8_KERNEL_ID = 182
+_INT32_MAX = 2**31 - 1
+
+
+def packed_fc_s8_size(k: int, n: int) -> int:
+    """arm_fully_connected_per_channel_packed_s8_get_packed_size() for depth k, n outputs; 0 when unsupported."""
+    if k <= 0 or n <= 0:
+        return 0
+    size = (n + 3) // 4 * (4 * (-(-k // 16) * 16) + 48)
+    return 0 if size > _INT32_MAX else size
+
+
+def derived_mram_extent(kernel_id: int, blobs: Iterable[Any], placement: str) -> int:
+    """MRAM pool bytes of the operand the adapter derives (hct_derived_operand_bytes()); 0 when none."""
+    if placement != "mram" or kernel_id != PACKED_FC_S8_KERNEL_ID:
+        return 0
+    weights = next((blob for blob in blobs if blob.role == "weights"), None)
+    if weights is None:
+        return 0
+    dims = tuple(weights.dimensions) + (0, 0)
+    return mram_extent("weights", packed_fc_s8_size(int(dims[1]), int(dims[0])), placement)
+
+
+def staged_extent(role: str, byte_length: int, alignment: int, placement: str) -> tuple[int, int]:
+    """Blob's firmware workspace length and alignment."""
+    alignment = max(alignment, 1)
+    if placement != "mram" or role not in MRAM_ROLES:
+        return byte_length, alignment
+    padded = -(-byte_length // MRAM_ROW_BYTES) * MRAM_ROW_BYTES
+    return padded, max(alignment, MRAM_ROW_BYTES)
 
 
 class ArenaTracker:

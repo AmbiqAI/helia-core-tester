@@ -6,7 +6,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+from neuralspotx.board_descriptors import load_board
 
+from helia_core_tester.hardware import nsx_cli
 from helia_core_tester.hardware.boards import (
     BoardSpec,
     UnknownBoardError,
@@ -20,7 +22,7 @@ from helia_core_tester.hardware.boards import (
 
 def test_board_table_seeds_apollo510_evb() -> None:
     table = load_board_table()
-    assert [b.id for b in table] == ["apollo510_evb"]
+    assert [b.id for b in table] == ["apollo510_evb", "apollo330mP_evb", "apollo3p_evb"]
     spec = resolve_board("apollo510_evb")
     assert spec == BoardSpec(
         id="apollo510_evb",
@@ -34,7 +36,37 @@ def test_board_table_seeds_apollo510_evb() -> None:
         workspace_bytes=114688,
         flash_region="MCU_MRAM",
         ram_region="MCU_TCM",
+        core_clock_hz=250_000_000,
+        has_mram=True,
+        blob_store_bytes=2 * 1024 * 1024,
     )
+
+
+def test_board_table_has_apollo330mP_evb() -> None:
+    assert resolve_board("apollo330mP_evb") == BoardSpec(
+        id="apollo330mP_evb",
+        nsx_board="apollo330mP_evb",
+        soc="apollo330P",
+        cpu="cortex-m55",
+        pmu_tier="armv8m",
+        has_mve=True,
+        jlink_device="Apollo330P_510L",
+        swd_speed_khz=4000,
+        workspace_bytes=112640,
+        flash_region="MCU_MRAM",
+        ram_region="MCU_TCM",
+        core_clock_hz=250_000_000,
+        has_mram=True,
+    )
+
+
+@pytest.mark.parametrize("spec", load_board_table(), ids=lambda spec: spec.id)
+def test_board_row_matches_nsx(spec: BoardSpec) -> None:
+    # NSX owns board, SoC and CPU facts.
+    descriptor = load_board(spec.nsx_board)
+    assert descriptor is not None, f"NSX has no board {spec.nsx_board}"
+    assert nsx_cli.starter_profile(spec.nsx_board) is not None
+    assert (descriptor.soc, descriptor.cpu.core) == (spec.soc, spec.cpu)
 
 
 def test_unknown_board_error_lists_known_ids() -> None:
@@ -78,3 +110,40 @@ def test_malformed_table_is_rejected(tmp_path: Path) -> None:
     missing.write_text("schema: hct.hardware_boards\nschema_version: 1\nboards:\n  - id: y\n", encoding="utf-8")
     with pytest.raises(ValueError, match="missing field"):
         load_board_table(missing)
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        "    blob_store_bytes: 96\n",
+        "    has_mram: true\n    blob_store_bytes: 48\n",
+        "    has_mram: true\n    blob_store_bytes: 64\n",
+        "    has_mram: true\n    blob_store_bytes: -32\n",
+    ],
+    ids=["no-mram", "misaligned", "below-minimum", "negative"],
+)
+def test_blob_store_needs_mram_and_lines(tmp_path: Path, extra: str) -> None:
+    bad = tmp_path / "boards.yaml"
+    bad.write_text(
+        "schema: hct.hardware_boards\nschema_version: 1\nboards:\n"
+        "  - id: x\n    nsx_board: x\n    soc: x\n    cpu: cortex-m55\n    pmu_tier: armv8m\n    has_mve: true\n"
+        "    jlink_device: X\n    swd_speed_khz: 1\n    workspace_bytes: 1\n"
+        "    flash_region: FLASH\n    ram_region: RAM\n" + extra,
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="blob_store_bytes"):
+        load_board_table(bad)
+
+
+@pytest.mark.parametrize("size", [0, 96])
+def test_blob_store_minimum_loads(tmp_path: Path, size: int) -> None:
+    good = tmp_path / "boards.yaml"
+    good.write_text(
+        "schema: hct.hardware_boards\nschema_version: 1\nboards:\n"
+        "  - id: x\n    nsx_board: x\n    soc: x\n    cpu: cortex-m55\n    pmu_tier: armv8m\n    has_mve: true\n"
+        "    jlink_device: X\n    swd_speed_khz: 1\n    workspace_bytes: 1\n"
+        f"    flash_region: FLASH\n    ram_region: RAM\n    has_mram: true\n    blob_store_bytes: {size}\n",
+        encoding="utf-8",
+    )
+    assert load_board_table(good)[0].blob_store_bytes == size
+

@@ -55,6 +55,13 @@ def test_entry_and_planar_rule_gate_the_case_on_the_checkout() -> None:
     assert _required_kernel_symbols(_descriptor("depthwise_conv_dilated_1d_k7_d2_c24_s8")) == []
 
 
+def test_3x3_entry_gates_on_its_sizer() -> None:
+    assert _required_kernel_symbols(_descriptor("depthwise_conv_entry_3x3_25x5_c64_s8")) == [
+        "arm_depthwise_conv_s8_opt_3x3",
+        "arm_depthwise_conv_s8_opt_3x3_get_buffer_size",
+    ]
+
+
 def test_entry_case_calls_the_entry_with_weight_sums_and_its_scratch_query(tmp_path: Path) -> None:
     name = "depthwise_conv_entry_3x3_25x5_c64_s8"
     source = _source(name, tmp_path)
@@ -66,8 +73,26 @@ def test_entry_case_calls_the_entry_with_weight_sums_and_its_scratch_query(tmp_p
     assert "HELIA_VALIDATE_OUTPUTS(" in source
 
 
+@pytest.mark.parametrize(
+    ("name", "calls_3x3_sizer"),
+    [
+        ("depthwise_conv_entry_3x3_28x28_c64_stride2_s8", True),
+        ("depthwise_conv_entry_3x3_c64_s1_14x28_s8", True),
+        ("depthwise_conv_entry_channelwise_25x5_c64_s8", False),
+    ],
+)
+def test_3x3_entries_also_query_their_own_size(tmp_path: Path, name: str, calls_3x3_sizer: bool) -> None:
+    source = _source(name, tmp_path)
+
+    assert re.search(r"arm_depthwise_conv_s8_opt_get_buffer_size\(", source)
+    assert bool(re.search(r"arm_depthwise_conv_s8_opt_3x3_get_buffer_size\(\s*&\w+_input_dims\s*\)", source)) == calls_3x3_sizer
+
+
 def test_declined_case_checks_the_status_and_an_untouched_output(tmp_path: Path) -> None:
-    source = _source("depthwise_conv_entry_3x3_declines_c62_s8", tmp_path)
+    name = "depthwise_conv_entry_3x3_declines_c15_s8"
+    desc = _descriptor(name)
+    assert desc["input_shape"][-1] == desc["filter_shape"][2] == 15
+    source = _source(name, tmp_path)
 
     assert "HELIA_GUARD_CHECK_UNTOUCHED(" in source
     assert re.search(r"HELIA_VALIDATE_EXPECTED_STATUS\([^;]*ARM_CMSIS_NN_NO_IMPL_ERROR", source)
@@ -98,3 +123,33 @@ def test_cases_without_an_entry_render_no_entry_code(name: str, tmp_path: Path) 
     assert DEPTHWISE_CONV_S8_PLANAR_RULE not in source
     assert "planar_supported" not in source
     assert "HELIA_GUARD_CHECK_UNTOUCHED(" not in source
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["depthwise_conv_entry_3x3_14x10_c36_stride2_s8", "depthwise_conv_entry_3x3_c64_s1_14x28_s8"],
+)
+def test_3x3_build_decline_uses_the_core_contract(name: str, tmp_path: Path) -> None:
+    source = _source(name, tmp_path)
+    blocks = re.findall(
+        r"#if defined\(HELIA_CMSIS_NN_INT_AUTOVECTORIZE\) && "
+        r"defined\(ARM_NN_DEPTHWISE_CONV_S8_OPT_3X3_AUTOVECTORIZE_DECLINES\)(.*?)#else(.*?)#endif",
+        source,
+        re.S,
+    )
+    assert len(blocks) == 2
+    assert "true /* the entry declines on this build: poison */" in blocks[0][0]
+    declined, full = blocks[1]
+    assert "ARM_CMSIS_NN_NO_IMPL_ERROR" in declined
+    assert "HELIA_GUARD_CHECK_UNTOUCHED(" in declined
+    assert "HELIA_VALIDATE_OUTPUTS(" not in declined
+    assert "HELIA_VALIDATE_STATUS(" in full and "HELIA_VALIDATE_OUTPUTS(" in full
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["depthwise_conv_entry_channelwise_25x5_c64_s8", "depthwise_conv_entry_planar_48x48_c8_s8",
+     "depthwise_conv_entry_3x3_declines_c15_s8"],
+)
+def test_other_entry_contracts_do_not_depend_on_the_3x3_build(name: str, tmp_path: Path) -> None:
+    assert "ARM_NN_DEPTHWISE_CONV_S8_OPT_3X3_AUTOVECTORIZE_DECLINES" not in _source(name, tmp_path)

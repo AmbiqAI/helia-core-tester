@@ -12,7 +12,14 @@ from helia_core_tester.hardware.case_bundle import (
     blob_numpy,
     load_case_bundle,
 )
-from helia_core_tester.hardware.fake_target import FakeAbsS8Adapter, FakeKernelAdapter, FakeTargetTransport
+from helia_core_tester.hardware.fake_target import (
+    FakeAbsS8Adapter,
+    FakeConvolveS8Adapter,
+    FakeKernelAdapter,
+    FakeTargetTransport,
+)
+from helia_core_tester.hardware.generated_test_bridge import build_case_bundle_from_generated_test
+from helia_core_tester.hardware.kernel_registry import load_kernel_registry
 from helia_core_tester.hardware.measurement import (
     MAX_CASES_PER_PLAN,
     MAX_PASSES_PER_PLAN,
@@ -26,7 +33,7 @@ from helia_core_tester.hardware.measurement import (
     plan_counter_passes,
     resolve_counter_selection,
 )
-from helia_core_tester.hardware.pmu_catalog import CPU_CYCLES_EVENT_ID, counter_by_name
+from helia_core_tester.hardware.pmu_catalog import CPU_CYCLES_EVENT_ID, CounterDescriptor, counter_by_name
 from helia_core_tester.hardware.session import (
     MAX_CASE_ID_BYTES,
     HostSession,
@@ -35,6 +42,7 @@ from helia_core_tester.hardware.session import (
     session_plan_for_bundles,
 )
 from helia_core_tester.hardware.wire import PlannedCase, SessionPlan, encode_session_plan, session_plan_size
+from helia_core_tester.tests.generated_inputs import discover_or_skip
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -88,7 +96,7 @@ def test_fake_abs_vertical_slice_end_to_end(tmp_path: Path) -> None:
     assert result.target_info.pmu_counter_slots == 8
     assert result.target_info.max_rx_payload == 2048 - 32
     assert result.target_info.max_cases_per_session == 32
-    assert result.target_info.max_passes == 16
+    assert result.target_info.max_passes == 32
     # Every sample leads with ARM_PMU_CPU_CYCLES from CCNTR, close to the DWT cycles,
     # and the remaining entries are the pass's counters named from the catalog (the
     # target sends empty names).
@@ -134,6 +142,30 @@ def test_fake_convolve_vertical_slice_end_to_end(tmp_path: Path) -> None:
 
 
 
+def test_fake_adapters_match_kernel_registry() -> None:
+    registry = {entry.kernel_id: entry.cmsis_function for entry in load_kernel_registry(PROJECT_ROOT)}
+    for adapter in (FakeAbsS8Adapter, FakeConvolveS8Adapter):
+        assert adapter.entry.canonical_name == registry[adapter.entry.kernel_id]
+
+
+# Offset+padding, OHWI weights, groups, dilation.
+@pytest.mark.parametrize(
+    "case_name",
+    [
+        "convolve_stride2pad1_s8",
+        "convolve_kernel_support_groups1_s8",
+        "convolve_grouped_conv_case_02_s8",
+        "convolve_2x2_dilation_s8",
+    ],
+)
+def test_fake_convolve_passes_generated_case(tmp_path: Path, case_name: str) -> None:
+    (case,) = (c for c in discover_or_skip(PROJECT_ROOT, name_filter=case_name) if c.name == case_name)
+    bundle = build_case_bundle_from_generated_test(PROJECT_ROOT, case, output_root=tmp_path, require_fvp_pass=False)
+    passes = counter_passes_for_selection({"cpu": "default"})
+    result = HostSession(FakeTargetTransport(), counter_passes=passes).run(load_case_bundle(bundle.manifest_path))
+    assert result.cases[0].comparison.mismatch_count == 0
+
+
 def test_multi_case_session_rewinds_arena(tmp_path: Path) -> None:
     abs_bundle = load_case_bundle(build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="abs_case_a").manifest_path)
     conv_bundle = load_case_bundle(build_convolve_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="conv_case_b").manifest_path)
@@ -151,6 +183,47 @@ def test_multi_case_session_rewinds_arena(tmp_path: Path) -> None:
         conv_bundle.workspace_bytes_required,
     )
     assert abs_bundle.workspace_bytes_required != conv_bundle.workspace_bytes_required
+
+
+def test_next_plan_follows_session_complete(tmp_path: Path) -> None:
+    abs_bundle = load_case_bundle(build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="abs_first").manifest_path)
+    conv_bundle = load_case_bundle(build_convolve_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="conv_second").manifest_path)
+    transport = FakeTargetTransport()
+    session = HostSession(transport, counter_passes=counter_passes_for_selection({"cpu": "default"}))
+
+    first = session.run_many([abs_bundle])
+    second = session.run_many([conv_bundle])
+
+    assert first.session_complete_cases == second.session_complete_cases == 1
+    assert transport.completed_case_count == 2
+    # Each result carries only its own plan's trace.
+    assert first.protocol_trace[:2] == ("RX:TARGET_INFO", "TX:TARGET_INFO_ACK")
+    assert second.protocol_trace[:2] == ("TX:SESSION_PLAN", "RX:REQUEST_CASE")
+    assert second.protocol_trace[-1] == "RX:SESSION_COMPLETE"
+    assert first.cases[0].comparison.passed and second.cases[0].comparison.passed
+
+
+@pytest.mark.parametrize("enabled", [True, False], ids=["on", "off"])
+def test_board_blob_store_skips_known_blobs(tmp_path: Path, enabled: bool) -> None:
+    abs_bundle = load_case_bundle(build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="abs_store").manifest_path)
+    conv_bundle = load_case_bundle(build_convolve_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="conv_store").manifest_path)
+    passes = counter_passes_for_selection({"cpu": "default"})
+    store: dict = {}
+    blobs = len(abs_bundle.streamable_blobs) + len(conv_bundle.streamable_blobs)
+
+    # Store outlives a reset.
+    runs = [
+        HostSession(FakeTargetTransport(blob_store=store), counter_passes=passes, blob_store=enabled).run_many([abs_bundle, conv_bundle])
+        for _ in range(2)
+    ]
+
+    cold, warm = runs
+    assert len(store) == (blobs if enabled else 0)
+    assert (cold.store_blobs, cold.store_hits) == ((blobs, 0) if enabled else (0, 0))
+    assert (warm.store_blobs, warm.store_hits) == ((blobs, blobs) if enabled else (0, 0))
+    assert warm.protocol_trace.count("RX:REQUEST_BLOB") == (0 if enabled else cold.protocol_trace.count("RX:REQUEST_BLOB"))
+    for before, after in zip(cold.cases, warm.cases):
+        assert after.comparison.passed and before.output_bytes == after.output_bytes
 
 
 def test_persistent_fake_target_multi_operator_session_without_reflash(tmp_path: Path) -> None:
@@ -195,35 +268,37 @@ def test_mve_all_plans_nine_passes_and_every_pass_reports_ccntr(tmp_path: Path) 
     assert len(case.statistics.unsupported_counters) == 34
 
 
-def test_every_group_all_exceeds_the_firmware_pass_limit_and_fails_before_session_plan(tmp_path: Path) -> None:
-    # Every value the --pmu-counters help advertises at once: 21 cpu + 15 memory + 34 mve
-    # events plan 5 + 4 + 9 = 18 passes, two over HCT_SERVER_MAX_PASSES. The firmware
-    # would answer the SESSION_PLAN with an ERROR frame after flash/TARGET_INFO/catalog; the host
-    # must refuse first (the parser does from MAX_PASSES_PER_PLAN; the session from the
-    # target-advertised max_passes), naming the passes and the limit, and never send a plan.
+def test_every_group_all_runs_in_one_session_and_the_pass_limit_holds(tmp_path: Path) -> None:
+    # The full catalog: 21 cpu + 15 memory + 34 mve events plan 5 + 4 + 9 = 18 passes,
+    # within HCT_SERVER_MAX_PASSES, so one session measures every counter.
     bundle = load_case_bundle(build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="abs_all_groups").manifest_path)
     passes = counter_passes_for_selection({"cpu": "all", "memory": "all", "mve": "all"})
-    assert len(passes) == 18 and MAX_PASSES_PER_PLAN == 16
+    assert len(passes) == 18 and MAX_PASSES_PER_PLAN == 32
+    result = HostSession(FakeTargetTransport(), counter_passes=passes).run(bundle)
+    assert list(dict.fromkeys(s.pass_name for s in result.samples)) == [p.name for p in passes]
+    assert len({c.name for s in result.samples for c in s.counters}) == 70
 
-    session = HostSession(FakeTargetTransport(), counter_passes=passes)
+    # Firmware that advertises a lower max_passes (an older build) is refused at the
+    # handshake, naming the passes and the limit, and never sent a plan.
+    session = HostSession(FakeTargetTransport(max_passes=16), counter_passes=passes)
     with pytest.raises(RuntimeError, match=r"18 PMU passes planned \(cpu_0, cpu_1, cpu_2, cpu_3, cpu_4, memory_0, .*mve_8\) but target 'fake_board' runs at most 16 per SESSION_PLAN \(TARGET_INFO max_passes\)"):
         session.run_many([bundle])
     assert "TX:SESSION_PLAN" not in session._trace and "TX:TARGET_INFO_ACK" not in session._trace
 
-    # Exactly the limit is accepted (16 x 4 chained counters would need 64 slots, so
-    # build it from single-counter passes) and the fake target runs every pass.
+    # Exactly the limit is accepted (build it from single-counter passes) and the fake
+    # target runs every pass.
     single = counter_by_name("ARM_PMU_INST_RETIRED")
-    sixteen = tuple(CounterPass("cpu", i, (single,)) for i in range(MAX_PASSES_PER_PLAN))
-    check_pass_count(sixteen)
-    result = HostSession(FakeTargetTransport(), counter_passes=sixteen).run(bundle)
+    at_limit = tuple(CounterPass("cpu", i, (single,)) for i in range(MAX_PASSES_PER_PLAN))
+    check_pass_count(at_limit)
+    result = HostSession(FakeTargetTransport(), counter_passes=at_limit).run(bundle)
     assert len({s.pass_name for s in result.samples}) == MAX_PASSES_PER_PLAN
 
-    # The fake target mirrors parse_pmu_passes(): a 17-pass plan is rejected on decode.
-    seventeen = sixteen + (CounterPass("cpu", 16, (single,)),)
-    with pytest.raises(TooManyPassesError, match="17 PMU passes planned"):
-        check_pass_count(seventeen)
-    with pytest.raises(ValueError, match="17 PMU passes; fake target accepts at most 16"):
-        FakeTargetTransport()._admit_session_plan(encode_session_plan(session_plan_for_bundles([bundle], seventeen)))
+    # The fake target mirrors parse_pmu_passes(): one pass over is rejected on decode.
+    over = at_limit + (CounterPass("cpu", MAX_PASSES_PER_PLAN, (single,)),)
+    with pytest.raises(TooManyPassesError, match="33 PMU passes planned"):
+        check_pass_count(over)
+    with pytest.raises(ValueError, match="33 PMU passes; fake target accepts at most 32"):
+        FakeTargetTransport()._admit_session_plan(encode_session_plan(session_plan_for_bundles([bundle], over)))
 
 
 def test_case_id_at_the_firmware_limit_runs_and_one_byte_over_fails_before_session_plan(tmp_path: Path) -> None:
@@ -312,15 +387,18 @@ def test_session_plan_over_target_rx_buffer_is_refused_before_sending(tmp_path: 
     HostSession(FakeTargetTransport(max_rx_payload=fits_everything), counter_passes=passes).run(bundle)
 
 
-def test_unknown_event_ids_are_reported_with_placeholder_names(tmp_path: Path) -> None:
+def test_unmapped_event_id_fails_the_plan(tmp_path: Path) -> None:
     bundle = load_case_bundle(build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="abs_unknown").manifest_path)
-    exotic = CounterPass("cpu", 0, (counter_by_name("ARM_PMU_INST_RETIRED"), type(counter_by_name("ARM_PMU_INST_RETIRED"))("vendor", 0x0C00, "cpu")))
-    result = HostSession(FakeTargetTransport(), counter_passes=(exotic,)).run(bundle)
-    assert [c.name for c in result.samples[0].counters] == ["ARM_PMU_CPU_CYCLES", "ARM_PMU_INST_RETIRED", "event_0x0c00"]
-    # A PMU-present target counts whatever it was programmed with: the fake reports the
-    # unknown id supported, exactly like firmware, rather than zeroing it.
-    unknown = [c for c in result.samples[0].counters if c.name == "event_0x0c00"][0]
-    assert unknown.supported is True
+    exotic = CounterPass("cpu", 0, (counter_by_name("ARM_PMU_INST_RETIRED"), CounterDescriptor("vendor", 0x0C00, "cpu")))
+    # pmu_event_known() rejects ids outside the module map.
+    session = HostSession(FakeTargetTransport(), counter_passes=(exotic,))
+    with pytest.raises(RuntimeError, match=r"^message_type=4 status=-1$"):
+        session.run(bundle)
+    assert session._trace[-2:] == ["TX:SESSION_PLAN", "RX:ERROR"]
+    # DWT-only firmware skips the map check.
+    plan = SessionPlan(1, 1, 1, 1, 1, (exotic,), (PlannedCase("case_0", 1),))
+    assert FakeTargetTransport()._unmapped_ids(plan) == [0x0C00]
+    assert FakeTargetTransport(pmu_present=False)._unmapped_ids(plan) == []
     # The bundle schema is seeded by event id too, so the caller's "vendor" label never
     # becomes a dead column next to the populated placeholder.
     assert counter_names_for_passes((exotic,)) == ["ARM_PMU_CPU_CYCLES", "ARM_PMU_INST_RETIRED", "event_0x0c00"]
@@ -353,6 +431,21 @@ def test_case_one_byte_over_advertised_workspace_fails_before_plan(tmp_path: Pat
         session.run(bundle)
 
     assert "TX:SESSION_PLAN" not in session._trace
+
+
+def test_mram_workspace_padding(tmp_path: Path) -> None:
+    # Firmware pads MRAM weights/bias to 16-byte rows.
+    bundle = load_case_bundle(build_convolve_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path).manifest_path)
+    required = bundle.workspace_bytes_for("mram")
+    assert required > bundle.workspace_bytes_required
+
+    session = HostSession(FakeTargetTransport(runtime_arena_capacity=required - 1, placement="mram"))
+    with pytest.raises(RuntimeError, match=rf"requires {required} workspace bytes"):
+        session.run(bundle)
+    assert "TX:SESSION_PLAN" not in session._trace
+
+    result = HostSession(FakeTargetTransport(runtime_arena_capacity=required, placement="mram")).run(bundle)
+    assert result.comparison.passed is True
 
 
 def test_large_correctness_output_exceeding_old_outbox_streams_in_order(tmp_path: Path) -> None:

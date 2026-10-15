@@ -83,6 +83,39 @@ def lock_is_current(app_dir: Path, board: str) -> bool:
     )
 
 
+def lock_digest(app_dir: Path) -> Optional[str]:
+    """sha256 of nsx.lock, if present."""
+    path = lock_path(app_dir)
+    return hash_file(path) if path.is_file() else None
+
+
+def locked_modules(app_dir: Path) -> Optional[list[dict[str, Any]]]:
+    """Each locked module's source, if readable."""
+    try:
+        lock = read_lock(app_dir)
+    except (NSXError, ValueError):
+        return None
+    if lock is None:
+        return None
+    return [
+        {
+            "name": name,
+            "project": entry.project or None,
+            "kind": str(entry.kind),
+            "revision": entry.constraint or None,
+            "tag": entry.tag,
+            "commit": entry.commit,
+            "url": entry.url,
+        }
+        for name, entry in lock.modules.items()
+    ]
+
+
+def tree_hash(root: Path) -> str:
+    """NSX's content hash of a tree."""
+    return hash_tree(root)
+
+
 def modules_present(app_dir: Path, board: str) -> bool:
     """Every locked module is on disk."""
     try:
@@ -98,9 +131,14 @@ def modules_present(app_dir: Path, board: str) -> bool:
     )
 
 
+def nsx_version() -> str:
+    """Installed neuralspotx version."""
+    return metadata.version("neuralspotx")
+
+
 def sync_stamp(app_dir: Path) -> str:
     """nsx.lock hash and neuralspotx version."""
-    return f"{hash_file(lock_path(app_dir))} {metadata.version('neuralspotx')}"
+    return f"{hash_file(lock_path(app_dir))} {nsx_version()}"
 
 
 def sync_app(

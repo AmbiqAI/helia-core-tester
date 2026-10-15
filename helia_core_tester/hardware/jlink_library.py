@@ -23,7 +23,7 @@ directory that holds `libjlinkarm.so`.
 exist the resolver raises `JLinkLibraryError` instead of quietly falling through
 to a different install.
 
-The CMake flash target (`nsx_add_segger_targets()` in cmake/nsx/nsx_helpers.cmake)
+NSX's flash target (`nsx_add_segger_targets()`, which NSX copies into the app)
 runs the `JLinkExe` *binary*, not the library. `find_jlink_exe()` resolves it in
 the same spirit so `doctor`, probe enumeration, RTT and flashing all agree on
 one install: `JLINK_PATH` (the binary or its directory), then the directory of

@@ -2,12 +2,15 @@
 FullyConnected operation implementation with dtype-aware quantization.
 """
 
+import math
 from typing import Dict, Any, Optional
 import numpy as np
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.ops._shared.fixed_batch import converter_for_batched_model
 from helia_core_tester.generation.ops._shared.bias_init import SignedMagnitudeUniform
+from helia_core_tester.generation.ops._shared.shape_checks import require_positive_int_dims
 from helia_core_tester.generation.kernel_dispatch import (
+    autovectorize_declines_if,
     check_entry_fault,
     resolve_direct_entry,
     resolve_fully_connected_kernel,
@@ -56,33 +59,57 @@ class OpFullyConnected(OperationBase):
 
     def needs_keras_model(self) -> bool:
         return str(self.desc.get("weight_dtype", "S8")).upper() != "S4"
-    
+
+    def declared_filter_shape(self) -> tuple:
+        """Validated descriptor filter_shape [OutCh, InFeatures].
+
+        A 4-D input is flattened to prod(input_shape[1:]) features and Dense takes
+        its input width from that, so a descriptor InFeatures that differs from the
+        flattened count would be silently replaced; reject it.
+        """
+        name = self.desc.get('name', '<unnamed>')
+        filter_shape = self.desc.get('filter_shape')
+        input_shape = self.desc.get('input_shape')
+        if not isinstance(input_shape, (list, tuple)) or len(input_shape) not in (2, 4):
+            raise ValueError(
+                f"{name}: FullyConnected input_shape must be [N, C] or [N, H, W, C], got {input_shape!r}"
+            )
+        if not isinstance(filter_shape, (list, tuple)) or len(filter_shape) != 2:
+            raise ValueError(
+                f"{name}: FullyConnected filter_shape must be [OutCh, InFeatures], got {filter_shape!r}"
+            )
+        require_positive_int_dims(name, "FullyConnected", input_shape=input_shape, filter_shape=filter_shape)
+        out_ch, in_features = (int(dim) for dim in filter_shape)
+        features = math.prod(int(dim) for dim in input_shape[1:])
+        if in_features != features:
+            shape = [int(dim) for dim in input_shape]
+            if len(shape) == 2:
+                raise ValueError(
+                    f"{name}: FullyConnected filter_shape InFeatures ({in_features}) must equal "
+                    f"input_shape[1] ({features}) of input_shape {shape}"
+                )
+            hint = ""
+            if in_features == shape[3]:
+                hint = f"; a 4-D input is flattened over H*W*C, did you mean [{out_ch}, {features}]?"
+            raise ValueError(
+                f"{name}: FullyConnected filter_shape InFeatures ({in_features}) must equal the "
+                f"flattened input feature count ({features}) of input_shape {shape}{hint}"
+            )
+        return out_ch, in_features
+
+    def validate_descriptor(self) -> None:
+        self.declared_filter_shape()
+
     def build_keras_model(self):
         """Build Keras model for FullyConnected operation."""
         input_shape = self.desc['input_shape']
-        filter_shape = self.desc['filter_shape']
-        
-        # Handle both 2D [batch, features] and 4D [batch, h, w, c] input shapes
-        if len(input_shape) == 2:
-            # 2D input: [batch, features]
-            input_features = input_shape[1]
-            batch_size = input_shape[0]
-            needs_flatten = False
-        else:
-            # 4D input: [batch, h, w, c]
-            # Calculate total features: h * w * c
-            input_features = input_shape[1] * input_shape[2] * input_shape[3]
-            batch_size = input_shape[0]
-            needs_flatten = True
-        
-        # Extract output units from filter_shape
-        if len(filter_shape) == 2:
-            output_units = filter_shape[0]
-        else:
-            output_units = filter_shape[0]
-        
+        output_units, input_features = self.declared_filter_shape()
+        batch_size = input_shape[0]
+        # A 4-D [batch, h, w, c] input is flattened to [batch, h*w*c].
+        needs_flatten = len(input_shape) == 4
+
         # Get activation and use_bias from descriptor
-        activation_str = self.desc.get('activation', 'NONE')
+        activation_str = self.activation_name()
         use_bias = self.desc.get('use_bias', True)
         
         # Build model with input layer matching descriptor shape
@@ -146,6 +173,7 @@ class OpFullyConnected(OperationBase):
 
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
         """Convert Keras model to TFLite with quantization."""
+        self.round_float16_weights(model)
         weight_dtype = str(self.desc.get("weight_dtype", "S8")).upper()
         if weight_dtype == "S4":
             from helia_core_tester.generation.utils.litert_builder import build_fully_connected_s4_op
@@ -158,8 +186,7 @@ class OpFullyConnected(OperationBase):
             output_zp = int(extras.get("output_zero_point", 0))
 
             input_shape = tuple(self.desc["input_shape"])
-            fs = tuple(self.desc["filter_shape"])  # O, I
-            filter_shape = fs
+            filter_shape = self.declared_filter_shape()
             out_ch = filter_shape[0]
 
             weights_int4 = self.rng.integers(-8, 8, size=filter_shape).astype(np.int8)
@@ -280,38 +307,11 @@ class OpFullyConnected(OperationBase):
     
     def _compute_activation_range(self, output_quant: Dict[str, Any], output_dtype: np.dtype) -> tuple[int, int]:
         """Compute activation min/max based on output quantization and dtype."""
-        activation_str = self.desc.get('activation', 'NONE')
-        output_zp = self._get_zero_point(output_quant)
-        output_scale = output_quant.get('scale', 1.0)
-        if isinstance(output_scale, (list, np.ndarray)):
-            output_scale = float(output_scale[0])
-        
-        if output_dtype == np.int16:
-            default_min, default_max = -32768, 32767
-        else:  # int8
-            default_min, default_max = -128, 127
-        
-        if activation_str == 'RELU':
-            activation_min = max(0, default_min)
-            activation_max = default_max
-        elif activation_str == 'RELU6':
-            # RELU6: clamp to [0, 6] in float, then quantize
-            relu6_max_float = 6.0
-            relu6_max_quantized = int(np.round(relu6_max_float / output_scale + output_zp))
-            activation_min = max(0, default_min)
-            activation_max = min(relu6_max_quantized, default_max)
-        else:  # NONE, TANH, SIGMOID, etc.
-            activation_min = default_min
-            activation_max = default_max
-        
-        # Override with descriptor values if present
-        if 'activation_min' in self.desc:
-            activation_min = int(self.desc['activation_min'])
-        if 'activation_max' in self.desc:
-            activation_max = int(self.desc['activation_max'])
-        
-        return activation_min, activation_max
-    
+        from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
+
+        act_dtype = 'S16' if output_dtype == np.int16 else 'S8'
+        return TemplateContextBuilder.activation_clamp(self.desc, act_dtype, output_quant)
+
     def _compute_weight_sum_size(self, weights: Optional[np.ndarray], output_dtype: np.dtype) -> int:
         """Compute the size of the weight sum tensor."""
         if weights is None:
@@ -433,6 +433,7 @@ class OpFullyConnected(OperationBase):
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
         
         name = self.desc['name']
+        declared = self.declared_filter_shape()
         tflite_path = output_dir / f"{name}.tflite"
         if not tflite_path.exists():
             raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
@@ -537,14 +538,18 @@ class OpFullyConnected(OperationBase):
 
         # Validate weights shape
         if weight_dtype == "S4":
-            fs = tuple(self.desc['filter_shape'])
-            if len(fs) != 2:
-                raise ValueError(f"Unsupported filter_shape in descriptor: {fs}")
+            # The dims come from the descriptor, so check them against the model's unpacked weights.
+            unpacked_shape = [int(dim) for dim in weights.shape] if weights is not None else None
+            if unpacked_shape != list(declared):
+                raise ValueError(
+                    f"{name}: converted FullyConnected S4 weights [OutCh, InFeatures]={unpacked_shape} "
+                    f"do not match the descriptor's filter_shape {list(declared)}"
+                )
             filter_dims = {
-                'n': int(fs[1]),  # input_features
+                'n': declared[1],  # input_features
                 'h': 1,
                 'w': 1,
-                'c': int(fs[0])   # output_units
+                'c': declared[0]   # output_units
             }
         elif weights is not None:
             filter_shape = tuple(weights.shape)
@@ -564,6 +569,12 @@ class OpFullyConnected(OperationBase):
             if len(filter_shape) != 2:
                 raise ValueError(f"Unsupported filter shape: {filter_shape}")
             
+            if tuple(int(dim) for dim in filter_shape) != declared:
+                raise ValueError(
+                    f"{name}: converted FullyConnected weights [OutCh, InFeatures]={list(filter_shape)} "
+                    f"do not match the descriptor's filter_shape {list(declared)}"
+                )
+
             if not float_kernel and weights.dtype != np.int8:
                 weights = weights.astype(np.int8)
             
@@ -575,16 +586,8 @@ class OpFullyConnected(OperationBase):
                 'c': int(filter_shape[0])   # output_units (row_dim)
             }
         else:
-            # Fallback: descriptor format
-            fs = tuple(self.desc['filter_shape'])
-            if len(fs) != 2:
-                raise ValueError(f"Unsupported filter_shape in descriptor: {fs}")
-            filter_dims = {
-                'n': int(fs[1]),  # input_features
-                'h': 1,
-                'w': 1,
-                'c': int(fs[0])   # output_units
-            }
+            # Unreachable today: without weights the quantization lookup above already failed.
+            raise RuntimeError(f"{name}: converted FullyConnected model has no weight tensor")
         
         builder = TemplateContextBuilder()
         
@@ -609,13 +612,12 @@ class OpFullyConnected(OperationBase):
         
         # Compute output dimensions - use weights shape to get correct output_units
         if weight_dtype == "S4":
-            fs = tuple(self.desc['filter_shape'])
             batch_size = int(output_shape[0]) if len(output_shape) >= 1 else int(input_shape[0])
             output_dims = {
                 'n': batch_size,
                 'h': 1,
                 'w': 1,
-                'c': int(fs[0])
+                'c': declared[0]
             }
         elif weights is not None and len(weights.shape) == 2:
             correct_output_units = int(weights.shape[0])
@@ -700,6 +702,7 @@ class OpFullyConnected(OperationBase):
                 ),
             )
 
+            self.reject_autovectorize_declines()
             context = {
                 'name': name,
                 'input_dims': input_dims,
@@ -1045,6 +1048,17 @@ class OpFullyConnected(OperationBase):
                     filter_dims,
                     output_dtype=activation_dtype
                 )
+        entry_family = kernel_info.get("entry_family")
+        if entry_family == "fully_connected_packed_s8":
+            if not quant_params_dict.get('per_channel', False):
+                raise ValueError(
+                    f"{name}: entry {kernel_info['kernel_fn']!r} takes per-channel quantization only; "
+                    "a single output channel is generated per-tensor"
+                )
+            # The buffer holds the packed weight stream, not scratch: a bound in whole words on
+            # ceil(C/4) blocks of four K-rows padded to 16 bytes plus 48 bytes of parameters. The
+            # run-time size query must fit it, and the slack past that answer is guarded.
+            buffer_size_max = ((filter_dims['c'] + 3) * (filter_dims['n'] + 27) + 3) // 4 * 4
         
         # Build template context
         context = {
@@ -1069,6 +1083,11 @@ class OpFullyConnected(OperationBase):
             'buffer_size_max': buffer_size_max,
             'weight_sum_array': weight_sum_array_str,
             'has_weight_sum': has_weight_sum,
+            'entry_family': entry_family,
+            'expected_status': self.expected_status(),
+            # The entry lives only on ns-cmsis-nn's MVE paths, so it declines on a build without them.
+            'autovectorize_declines': bool(self.desc.get("autovectorize_declines", False)),
+            'autovectorize_declines_if': autovectorize_declines_if(kernel_info["input_c_type"]),
         }
         fault = self.fault_kind()
         c_template = "FullyConnectedFunctions/fully_connected/fully_connected.c.j2"

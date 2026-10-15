@@ -1,0 +1,18 @@
+Sections:
+Idx Name          Size      VMA       LMA       File off  Algn
+  0 .text         00086bcc  0000c000  0000c000  00001000  2**6
+                  CONTENTS, ALLOC, LOAD, READONLY, CODE
+  1 .ARM.exidx    00000008  00092bcc  00092bcc  00087bcc  2**2
+                  CONTENTS, ALLOC, LOAD, READONLY, DATA
+  2 .data         00000760  10011000  00092bd4  00088000  2**3
+                  CONTENTS, ALLOC, LOAD, DATA
+  3 .tcm_bss      00000000  10000000  10000000  00088760  2**0
+                  CONTENTS
+  4 .tcm          00000000  10000000  10000000  00088760  2**0
+                  CONTENTS
+  5 .stack        00001000  10010000  10010000  00089000  2**2
+                  ALLOC
+  6 .bss          00028094  10011760  10011760  00088760  2**4
+                  ALLOC
+  7 .ARM.attributes 00000034  00000000  00000000  00088760  2**0
+                  CONTENTS, READONLY

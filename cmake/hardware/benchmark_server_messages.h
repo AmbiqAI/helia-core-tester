@@ -15,12 +15,23 @@ extern "C" {
 #define HCT_BENCHMARK_SERVER_OUTPUT_MODE_FULL 1u
 #define HCT_BENCHMARK_SERVER_TRANSPORT_RTT 1u
 
+/* Boot health; nsx_system_init() status, HAL clock. */
+typedef struct
+{
+    int32_t boot_status;
+    uint32_t core_clock_hz;
+    /* FPSCR at boot, then as pinned. */
+    uint32_t fpscr_boot;
+    uint32_t fpscr;
+} hct_boot_info_t;
+
 /* TARGET_INFO payload (HCTP v3): text build_id, 32-byte catalog hash,
  * u32 max_frame_payload, u32 runtime_arena_capacity, u8 transfer_mode, u8 output_mode,
  * text board_id, text target_cpu, u8 transport_kind, u32 capability_flags,
  * u8 pmu_counter_slots, u32 max_rx_payload (largest frame payload the target's receive
  * buffer holds), u16 max_cases_per_session (cases per SESSION_PLAN) and u8 max_passes
- * (PMU passes per SESSION_PLAN). The host sizes its batches from the last three. */
+ * (PMU passes per SESSION_PLAN). The host sizes its batches from the last three.
+ * Then i32 boot_status, u32 core_clock_hz, u32 fpscr_boot, u32 fpscr. */
 hctp_status_t hct_build_target_info_frame(uint32_t session_id,
                                           uint32_t sequence_id,
                                           uint32_t max_frame_payload,
@@ -28,6 +39,7 @@ hctp_status_t hct_build_target_info_frame(uint32_t session_id,
                                           uint32_t max_rx_payload,
                                           uint16_t max_cases_per_session,
                                           uint8_t max_passes,
+                                          const hct_boot_info_t *boot,
                                           uint8_t *frame_bytes,
                                           size_t frame_capacity,
                                           size_t *frame_length);

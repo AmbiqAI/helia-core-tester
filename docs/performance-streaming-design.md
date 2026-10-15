@@ -110,10 +110,11 @@ The protocol is target-driven after plan load:
 14. target streams raw sample results
 15. target sends `CASE_COMPLETE`
 16. loop until `SESSION_COMPLETE`
+17. host sends the next batch's `SESSION_PLAN`, or closes
 
-### Messages (HCTP v3)
+### Messages (HCTP v5)
 
-Protocol version 3 (`hctp.SUPPORTED_VERSION` / `HCTP_SUPPORTED_VERSION`); a peer on
+Protocol version 5 (`hctp.SUPPORTED_VERSION` / `HCTP_SUPPORTED_VERSION`); a peer on
 another version is refused at the header. Message ids are compact and in protocol
 order; every payload is encoded and decoded on the host by exactly one pair of
 functions in `helia_core_tester/hardware/wire.py`, which the host session and the
@@ -127,7 +128,7 @@ firmware byte for byte.
 | 3 | `KERNEL_CATALOG` | target -> host | one page of catalog entries; `HCTP_FLAG_MORE` on every non-final page |
 | 4 | `SESSION_PLAN` | host -> target | timing plan, PMU passes, case list (below) |
 | 5 | `REQUEST_CASE` | target -> host | `u16 case_index` |
-| 6 | `CASE_META` | host -> target | case id, kernel id, comparison config, scalars, blob descriptors, scratch bytes |
+| 6 | `CASE_META` | host -> target | case id, kernel id, comparison config, scalars, blob descriptors, scratch bytes, optional store keys (below) |
 | 7 | `REQUEST_BLOB` | target -> host | `u32 blob_id, u32 offset, u16 max_length` |
 | 8 | `BLOB_CHUNK` | host -> target | `u32 blob_id, u32 offset, raw data` |
 | 9 | `CASE_READY` | target -> host | `u32 blob_id, u32 bytes_received` |
@@ -139,26 +140,79 @@ firmware byte for byte.
 | 15 | `CORRECTNESS_ACK` | host -> target | `u8 passed` (informational) |
 | 16 | `RUN_PERFORMANCE` | host -> target | empty |
 | 17 | `SAMPLE_RESULT` | target -> host | one sample of one pass (below) |
-| 18 | `CASE_COMPLETE` | target -> host | `text case_id, u8, u8, u32 workspace_used_bytes` |
+| 18 | `CASE_COMPLETE` | target -> host | `text case_id, u8 correctness_ran, u8 performance_ran, u32 workspace_used_bytes, u32 prepare_cycles` (DWT cycles the correctness run spent outside the timed kernel calls: setup calls such as scratch sizing and weight sums, plus adapter glue; one cold sample), then `i32 kernel_status` only when `performance_ran` is 0 |
 | 19 | `SESSION_COMPLETE` | target -> host | `u16 case_count` |
 | 20 | `ERROR` | target -> host | `text message` |
 
 All integers are little-endian; `text` is `u16 length + UTF-8 bytes`; `raw` is
 `u32 length + bytes`.
 
+A kernel error during the correctness run or sampling (an adapter refusing a
+shape, say) ends only that case: the target sends `CASE_COMPLETE` with
+`performance_ran = 0` and the kernel status, then requests the next case. The host
+records the case as failed and rejected in the result bundle (`cases.json`
+`rejection`, `session_summary.json` `rejected_cases`, junit) and the run exits
+non-zero. Frames the target cannot decode or accept still get `ERROR`, which
+ends the run without a bundle.
+
+The target sends nothing during `RUN_PERFORMANCE` until every pass has run
+(`passes x (warmups + samples x iterations)` kernel calls), so the host waits one
+RTT read timeout (10 s) per pass for the first `SAMPLE_RESULT`. That bounds one
+kernel call at about 10 s x f_cpu / (warmups + samples x iterations): at the
+generated plan (2 + 5 x 4 = 22 calls per pass), about 114M cycles at 250 MHz
+(Apollo510, Apollo330P) or 22M at 48 MHz (Apollo3P), whatever the pass count.
+
 `TARGET_INFO` (target -> host): `text build_id`, 32-byte catalog SHA-256,
 `u32 max_frame_payload`, `u32 runtime_arena_capacity`, `u8 transfer_mode`,
 `u8 output_mode`, `text board_id`, `text target_cpu`, `u8 transport_kind`,
 `u32 capability_flags`, `u8 pmu_counter_slots`, `u32 max_rx_payload`,
-`u16 max_cases_per_session`, `u8 max_passes`.
+`u16 max_cases_per_session`, `u8 max_passes`, then an optional boot-health tail:
+`i32 boot_status` (the `nsx_system_init()` return) and `u32 core_clock_hz` (the clock
+the HAL reports: `am_hal_pwrctrl_mcu_mode_status()` mapped to Hz per part, or
+`am_hal_burst_mode_status()` on Apollo3; 0 when unknown). Firmware that predates
+the tail ends at `max_passes`; the host decodes it with both fields unset. Each board
+row in `assets/hardware_boards.yaml` declares the `core_clock_hz` its healthy boot
+reports (250 MHz on apollo510_evb and apollo330mP_evb, 48 MHz on apollo3p_evb). Before
+`TARGET_INFO_ACK`, the host refuses to stream when `boot_status` is non-zero, or when
+`core_clock_hz` differs from the row's value; an exact match is required, and 0 is
+refused. Firmware without the tail still streams ("not reported"), and a row without
+`core_clock_hz` skips the clock check. The host stamps both fields in
+`session_manifest.json` (`boot`) and the run summary.
+An optional FPSCR tail follows: `u32 fpscr_boot` (what the boot ROM left) and
+`u32 fpscr` (read back after the firmware pins it). After `nsx_system_init()` the
+firmware clears AHP, DN, FZ, RMode and FZ16 in FPDSCR, and sets FPSCR to its LTPSIZE
+field alone (control bits and sticky flags cleared): the reset FPDSCR value, IEEE with
+round to nearest. No NSX, HAL or runtime code sets these bits, so without
+the pin kernels inherit the secure boot ROM's state, which differs per SoC (Apollo510
+leaves FZ=0 DN=0; Apollo330P leaves FZ=1 DN=1 in FPSCR only, with FPDSCR control bits still 0),
+and `arm_reduce_sum_f32` takes its MVE path only when FZ=1. The host stamps both
+values and the decoded control bits (`fp_mode`) in the manifest `boot` record; the
+board matrix shows the pinned `fpscr`. Batches must report the same pinned `fpscr`.
+A build without an FPU reports 0 for both.
+`capability_flags` bit 8 is `HCT_CAP_BLOB_STORE`: the firmware keeps an on-board
+cache of case blobs at the top of MRAM (`blob_store_bytes` in the board row; 2 MiB
+at 0x600000-0x800000 on apollo510_evb, off elsewhere). When the bit is set, the host
+appends a tail to `CASE_META`: `u8 kind` (1), then a `u64` digest per blob (the first
+8 bytes of the blob's SHA-256, little-endian). The firmware looks each blob up by
+`(length, crc32, digest)`, checks the stored copy's CRC32, and copies it into the
+workspace instead of sending `REQUEST_BLOB`; the host counts the blobs it was never
+asked for as hits. After a streamed blob passes its CRC, the firmware programs it into
+the store (data, read back, then a header that commits it). A head record (magic,
+version, region, generation, CRC) guards the region: a foreign or stale head starts a
+new generation, and a full store starts a new generation (a wipe). The host sends
+the tail only to firmware with the bit, and the firmware reads nothing past it, so old
+hosts and old firmware keep working. The store sits past the image and the 512 KiB
+weights pool; a build whose pool would reach it leaves it unused. `HCT_BLOB_STORE=0`
+on the host turns it off (no keys, so the board neither reads nor writes the store).
+All store reads and writes happen while blobs stream, never in a timed window.
 `capability_flags` bit 6 is `HCT_CAP_PMU_ARMV8M`, set only when the firmware was
 built for a core whose device header declares `__PMU_PRESENT == 1`;
 `pmu_counter_slots` is `__PMU_NUM_EVENTCNT` (8 on Cortex-M55, 0 without a PMU).
 `max_rx_payload` is the largest frame payload the target's fixed receive buffer can
 hold (`HCT_SERVER_RX_BUFFER_BYTES - HCTP_HEADER_SIZE`, 2016 today);
 `max_cases_per_session` and `max_passes` are the firmware's `HCT_SERVER_MAX_CASES`
-(32) and `HCT_SERVER_MAX_PASSES` (16). After the handshake the advertised values are
-authoritative: the host derives its batching (`session.TargetLimits`) from every
+(32) and `HCT_SERVER_MAX_PASSES` (32). After the handshake the advertised values are
+authoritative: the host derives its batching (`session.TargetLimits`) from the
 session's `TARGET_INFO`, cuts each batch so the plan stays within all three, checks
 its chained-pair planning rule (four counters per pass) against `pmu_counter_slots / 2`,
 and refuses any later outbound payload (`CASE_META` included) larger than
@@ -173,9 +227,9 @@ bounds so `--pmu-counters` can fail at option parsing, before generate, build an
 `u8 counter_count`, `u16 event_id[counter_count]`, then per case `text case_id`,
 `u32 kernel_id`. The firmware rejects `pass_count > max_passes`, `counter_count > 4`,
 `case_count > max_cases_per_session` and (when it has a PMU) a pass needing more
-slots than it advertised (`chained ? 2 * counter_count : counter_count`); event ids
-are not validated against a list -- whatever the host asks for is programmed and
-reported back.
+slots than it advertised (`chained ? 2 * counter_count : counter_count`) or an
+event id the nsx-pmu-armv8m module does not know (its event map matches
+`assets/pmu/armv8m_pmu_events.json`).
 
 `SAMPLE_RESULT` (target -> host, one per sample per pass): `u16 sample_index`,
 `u32 iterations`, `u64 cycles`, `text pass_name`, `u8 counter_count`, then per
@@ -205,25 +259,29 @@ the case's warmups and samples with its counters programmed, so a selection like
 event-counter slot -- it is reported from `CCNTR` in every pass -- so it is stripped
 when planning and a cycles-only selection still yields one empty `cpu_0` pass.
 
-A plan carries at most `HCT_SERVER_MAX_PASSES` (16) passes. The target advertises
+A plan carries at most `HCT_SERVER_MAX_PASSES` (32) passes. The target advertises
 the limit in `TARGET_INFO` (`max_passes`) and `HostSession` refuses a longer pass
 list at the handshake, before `TARGET_INFO_ACK`; the host also mirrors the constant
 as `measurement.MAX_PASSES_PER_PLAN` so the `--pmu-counters` parser and
 `session_runner.run_case_bundles` can refuse the selection before generate/build/
 flash and before the probe is opened, and the fake target's `SESSION_PLAN` admission
 applies the same bound. Every error names the planned passes. Passes are never split
-across sessions, so `cpu:all memory:all mve:all` (5 + 4 + 9 = 18 passes) is an
-error; select fewer counters per run. An empty name list (`mve:,`) is rejected the
-same way instead of degrading to a cycles-only pass.
+across sessions; the full catalog (`cpu:all memory:all mve:all`, or the bare `all`
+shorthand) plans 5 + 4 + 9 = 18 passes and fits one plan. The firmware queues every
+`SAMPLE_RESULT` of a case in its 32 KiB outbox before flushing, about 127 bytes per
+frame, so passes x samples must stay under about 250 (18 x 5 = 90 today). An empty
+name list (`mve:,`) is rejected the same way instead of degrading to a cycles-only pass.
 
 Armv8.1-M event counters are 16 bits wide. Passes are chained by default: counter
 `i` is programmed into slot `2i` and slot `2i+1` is programmed with `ARM_PMU_CHAIN`
 (event `0x001E`), which increments on the even slot's overflow, so the pair reads as
 `(high << 16) | low`, a 32-bit counter. Four chained counters use all eight slots.
-Per sample the firmware disables the PMU, resets the event counters and `CCNTR`,
-clears the overflow status (`ARM_PMU_Set_CNTR_OVS(0xFFFFFFFF)`), enables the pass's
-slots plus `CCNTR`, runs the timed loop, disables the counters, reads the values and
-`ARM_PMU_Get_CNTR_OVS()`, and clears the bits that were set. A chained counter's
+The nsx-pmu-armv8m module programs each pass (`nsx_pmu_init`, with the overflow
+interrupts it arms turned back off). Per sample the firmware resets the counters,
+`CCNTR` and the overflow status (`nsx_pmu_reset_counters`), enables the PMU, runs the
+timed loop, disables every counter with one store, snapshots `CCNTR` and
+`ARM_PMU_Get_CNTR_OVS()`, then reads the values with `nsx_pmu_get_counters` (which
+resets them again) and parks the PMU. A chained counter's
 overflow is the odd slot's bit; an unchained counter's is its own slot's bit. Any
 overflow in any sample of a case sets `overflow_detected` and clears
 `valid_for_regression` for that case in the result bundle; the DWT cycle statistics
@@ -290,10 +348,10 @@ helia-profiler already provides useful patterns to reuse:
 
 The streaming implementation aligns with those semantics instead of inventing
 incompatible PMU naming or overflow behavior: the event catalog
-(`assets/pmu/armv8m_pmu_events.json`) is transcribed from heliaPROFILER, the
-`--pmu-counters GROUP:SELECTION` syntax is hpx's, and the firmware's per-sample
-reset/clear-OVS/read/clear-set-bits sequence mirrors the hpx PMU profiler. The
-firmware uses raw CMSIS `pmu_armv8.h` rather than the NSX PMU module.
+(`assets/pmu/armv8m_pmu_events.json`) is synced from the nsx-pmu-armv8m module,
+as in hpx; the `--pmu-counters GROUP:SELECTION` syntax is hpx's, and the
+firmware programs and reads the PMU through the same module, as hpx does; raw
+`ARM_PMU_*` calls only gate the window and snapshot CCNTR/OVS.
 
 ## Timing boundaries
 
@@ -339,12 +397,13 @@ Current examples:
 
 Two sizing checkpoints now exist:
 
-1. **Universal size probe** (`memory_report.build_size_probe`)
+1. **Universal size probe** (`memory_report.build_size_probe`, run as `python -m helia_core_tester.hardware.memory_report`)
    - goal: prove the whole retained ns-cmsis-nn library fits for a target profile
+   - build: the same NSX app as the server, rendered with the probe as its only target
    - artifact: `artifacts/hardware/size_probe/<board>/<variant>/memory_report.json`
 2. **Real benchmark-server firmware image** (`hardware memory-report`, `memory_report.generate_memory_report`)
    - goal: measure the actual streaming skeleton with protocol, RTT binding, catalog, session state, and adapters
-   - artifact: `artifacts/hardware/benchmark_server/memory_report.json`, copied into every result bundle
+   - artifact: `artifacts/hardware/benchmark_server/memory_report.json`; a `hardware run` writes `artifacts/hardware/benchmark_server/<board>/` and copies it into the result bundle
 
 Both reports come from one analysis (`helia_core_tester/hardware/memory_report.py`) of:
 
@@ -356,10 +415,14 @@ Both reports come from one analysis (`helia_core_tester/hardware/memory_report.p
   flash/RAM region names (`flash_region`, `ram_region`) come from the board's row in
   `assets/hardware_boards.yaml`
 
-Reported percentages are computed against:
+Sections are classified by address against those regions (`objdump -h` VMA/LMA):
 
-- `MCU_MRAM` for flash image bytes
-- `MCU_TCM` for static TCM usage before heap
+- flash image bytes: every loaded section whose load address is in `flash_region`
+  (`MCU_MRAM` on Apollo5, `ROMEM` on Apollo3), vector table and `.data` image included
+- static RAM before heap (`ram_*` keys): every allocated section other than `.heap`
+  placed in `ram_region` (`MCU_TCM` on Apollo5, `RWMEM` on Apollo3); the usage block
+  records both region names
+- both gates pass at <= 75 % of the region
 
 ## Result bundle
 
@@ -382,6 +445,27 @@ Key files:
 - `logs/host.log`
 - `logs/target.log`
 - `junit.xml`
+
+`session_manifest.json` (`hct.hardware.session_manifest`) records the build in
+`build`: kernel source, NSX version, `nsx.lock` digest, every locked module
+(`modules`: name, project, kind, revision, tag, commit, url) and the compiler that
+built the image (`toolchain`: `name` is `arm-none-eabi-gcc` or `atfe`, `version` its
+`-dumpversion`). `hardware run --json` prints
+`hct.hardware.nightly_run`: totals and cases plus `generated_at`, the build's
+`toolchain` (same shape, null when unknown), the
+`selection` the run used and the `github` run (null outside Actions); the nightly
+saves it as `hardware-nightly-run.json` beside the bundle. `selection` records
+values after defaults and board fitting: `precision` is the float precision
+generation resolves for the board's CPU (null when the run has no float cases),
+`fvp_gate` is `advisory` unless set, and `pmu_counters` is the group selection
+(`session_summary.json` lists the counters). Null `family` or `limit` means all.
+`ops`, `dtypes` and `case_ids` list the `--op`, `--dtype` and `--case-id`/
+`--cases-from` filters; empty means all. The bundle's `session_summary.json`
+carries the same `selection`, with or without `--json`.
+
+Schema versions: bump `schema_version` when a field changes meaning, type or
+goes away. New optional fields keep the version; readers must accept missing
+fields, since older files lack them.
 
 ## Real vs simulated status by layer
 
@@ -424,8 +508,8 @@ name, SEGGER device name, SWD speed and the `build/hardware/<board>` build dir;
 `--serial-no` is optional and falls back to `$HPX_JLINK_SERIAL`, then to the single
 connected J-Link probe enumerated through pylink).
 
-Cross-build the benchmark-server firmware for the board (fetches nsx-ambiq-sdk,
-neuralspotx and the toolchain file on first use):
+Cross-build the benchmark-server firmware for the board as an NSX app (fetches
+ARM GCC on first use; NSX syncs its modules into the app):
 
 ```bash
 uv run helia_core_tester hardware build --board apollo510_evb -j
@@ -468,7 +552,7 @@ the fake-target tests; it is no longer a CLI command.
   host session and the fake target.
 - `session.py`: `HostSession` (handshake, plan, per-case streaming) and `TargetLimits`,
   the batching limits derived from `TARGET_INFO`.
-- `session_runner.py`: one RTT session per batch on a `BoardSpec`, case discovery
+- `session_runner.py`: one RTT session for every batch on a `BoardSpec`, case discovery
   from the generated-test tree, result-bundle writing.
 - `hardware_pipeline.py`: generate -> build -> flash -> stream orchestration behind
   `hardware run` / `hardware stream`.

@@ -18,9 +18,8 @@ from helia_core_tester.generation.test_ops import (
 )
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_CONVOLVE_ENTRIES = [
-    name for name, spec in DIRECT_ENTRIES.items() if spec.family == "convolve_s8"
-]
+_CONVOLVE_ENTRIES = [name for name, spec in DIRECT_ENTRIES.items() if spec.family == "convolve_s8"]
+_CONVOLVE_1X1_ENTRIES = [name for name, spec in DIRECT_ENTRIES.items() if spec.family == "convolve_1x1_s8"]
 
 
 def _descriptor(name: str) -> dict:
@@ -85,9 +84,32 @@ def test_entry_case_calls_the_entry_with_arm_convolve_s8_arguments(
     assert "arm_convolve_wrapper_s8(" not in source
 
 
-def test_declined_case_checks_the_status_and_an_untouched_output(
-    tmp_path: Path,
-) -> None:
+def test_1x1_entries_resolve_to_the_arm_convolve_1x1_s8_fast_family() -> None:
+    assert _CONVOLVE_1X1_ENTRIES
+    for entry in _CONVOLVE_1X1_ENTRIES:
+        assert resolve_direct_entry("Convolve", entry, "S8", "S8") == {
+            "kernel_fn": entry,
+            "kernel_get_buffer_size_fn": "arm_convolve_1x1_s8_fast_get_buffer_size",
+            "entry_family": "convolve_1x1_s8",
+        }
+
+
+def test_1x1_entry_case_calls_the_entry_with_arm_convolve_1x1_s8_fast_arguments(tmp_path: Path) -> None:
+    name = "convolve_entry_1x1_short_k_c8_2x4_co16_s8"
+    assert _required_kernel_symbols(_descriptor(name)) == ["arm_convolve_1x1_s8_short_k"]
+    source = _source(name, tmp_path)
+
+    call = re.search(r"return (\w+)\(\s*&\w+_ctx,\s*&\w+_weight_sum_ctx,(.*?)\);", source, re.S)
+    assert call and call.group(1) == "arm_convolve_1x1_s8_short_k"
+    # arm_convolve_1x1_s8_fast's arguments: no upscale_dims between the bias and the output dims.
+    assert re.search(r"_biases,\s*&\w+_output_dims,", call.group(2))
+    assert "upscale_dims" not in source
+    assert re.search(r"arm_convolve_1x1_s8_fast_get_buffer_size\(&\w+_input_dims\)", source)
+    assert "arm_convolve_weight_sum(" in source
+    assert "arm_convolve_wrapper_s8(" not in source
+
+
+def test_declined_case_checks_the_status_and_an_untouched_output(tmp_path: Path) -> None:
     source = _source("convolve_entry_3x3_c16_declines_stride2_8x8_s8", tmp_path)
 
     assert "HELIA_GUARD_CHECK_UNTOUCHED(" in source
@@ -161,4 +183,19 @@ def test_grouped_f16_contract_faults_render_the_requested_mutation(
 
     assert mutation in source
     assert "arm_convolve_f16(" in source
-    assert "HELIA_VALIDATE_EXPECTED_STATUS(" in source
+    expected = _descriptor(name)["expected_status"]
+    assert re.search(r"HELIA_VALIDATE_EXPECTED_STATUS\(\s*\"[^\"]+\",\s*status,\s*" + expected, source)
+    assert "HELIA_GUARD_CHECK_UNTOUCHED(" in source
+    assert "HELIA_VALIDATE_OUTPUTS(" not in source
+
+
+@pytest.mark.parametrize("dtype", ["S8", "S16", "S4"])
+@pytest.mark.parametrize("fault", ["packed_grouped", "output_group_mismatch", "negative_batch", "batch_mismatch",
+                                   "zero_output_batch", "oversized_kernel_area", "oversized_patch"])
+def test_float_grouped_faults_reject_integer_kernels(dtype, fault):
+    from helia_core_tester.generation.ops.ConvolutionFunctions.convolve import OpConvolve
+    op = OpConvolve({"operator": "Convolve", "name": "invalid_grouped_fault", "activation_dtype": dtype,
+                     "fault": fault}, seed=1, target_cpu="cortex-m55")
+    with pytest.raises(ValueError, match="no such grouped-float guard"):
+        op._check_fault_reachable(fault, {"kernel_fn": "arm_convolve_wrapper_" + dtype.lower(),
+                                         "float_kernel": False})

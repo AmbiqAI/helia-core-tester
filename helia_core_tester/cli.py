@@ -5,6 +5,7 @@ Command-line interface for helia-core-tester.
 from __future__ import annotations
 
 import shutil
+import subprocess
 import sys
 from dataclasses import MISSING
 from pathlib import Path
@@ -20,7 +21,13 @@ from helia_core_tester.core.pipeline import FullTestPipeline
 from helia_core_tester.core.steps import BuildStep, CleanStep, GenerateStep, RunStep
 from helia_core_tester.reporting.coverage_merge import run_coverage_merge
 from helia_core_tester.hardware.cli import boards as boards_command
+from helia_core_tester.hardware.cli import explain as explain_command
 from helia_core_tester.hardware.cli import hardware_app, probes_app
+from helia_core_tester.hardware.candidate_check import candidate_app
+# Registers candidate baseline and eval.
+import helia_core_tester.hardware.candidate_eval  # noqa: F401
+from helia_core_tester.hardware.score import score as score_command
+from helia_core_tester.agent_loop.cli import agent_loop_app
 
 # Once, for every subcommand (including the hardware group's) for the lifetime of
 # this process -- see ensure_arm_toolchain_on_path()'s own docstring for why this
@@ -35,7 +42,11 @@ app = typer.Typer(
 
 app.add_typer(hardware_app, name="hardware")
 app.add_typer(probes_app, name="probes")
+app.add_typer(candidate_app, name="candidate")
+app.add_typer(agent_loop_app, name="agent-loop")
 app.command(name="boards")(boards_command)
+app.command(name="explain")(explain_command)
+app.command(name="score")(score_command)
 
 
 def _print_plan_item(plan_item) -> None:
@@ -118,15 +129,20 @@ def run_step_exit(step, config: Config, success_msg: str, failure_prefix: Option
 
 @app.command()
 def generate(
-    op: Optional[str] = typer.Option(None, help="Generate only specific operator"),
-    dtype: Optional[str] = typer.Option(None, help="Generate only specific dtype"),
-    name: Optional[str] = typer.Option(None, help="Generate only specific test by name"),
+    op: Optional[str] = typer.Option(None, help="Only these operators, comma-separated"),
+    dtype: Optional[str] = typer.Option(None, help="Only this case dtype: activations, or S4 weights"),
+    name: Optional[str] = typer.Option(None, help="Only these exact test names, comma-separated"),
     limit: Optional[int] = typer.Option(None, help="Limit number of models to generate"),
     seed: Optional[int] = typer.Option(None, help="Random seed for test generation"),
     cpu: str = typer.Option("cortex-m55", help="Target CPU(s), comma-separated (e.g. m0,m4,m55)"),
     suite: str = typer.Option("int", "--suite", help="Test suite selection: int, float, or both"),
     float_precision: str = typer.Option("both", "--float-precision", help="Float precision filter: f16, f32, or both"),
     force_generate: bool = typer.Option(False, "--force-generate", help="Regenerate every case even when its reuse stamp still matches"),
+    random_shapes: Optional[int] = typer.Option(None, "--random-shapes", help="Draw N random shapes per matching op"),
+    shape_seed: Optional[int] = typer.Option(None, "--shape-seed", help="Seed for --random-shapes, 0 to 2**32-1 (default 0)"),
+    hidden_dir: Optional[Path] = typer.Option(None, "--hidden-dir", help="Write secret-seeded shapes here, outside the tree"),
+    hidden_seed_file: Optional[Path] = typer.Option(None, "--hidden-seed-file", help="Secret seed file; else HCT_HIDDEN_SEED"),
+    cmsis_nn_root: Optional[Path] = typer.Option(None, "--cmsis-nn-root", help="Override the ns-cmsis-nn checkout used for the CMake build (defaults to CMakeLists.txt's ../.. sibling checkout)"),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help="Verbosity level (0-3)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be done"),
     plan: bool = typer.Option(False, "--plan", help="Print execution plan and exit"),
@@ -147,6 +163,11 @@ def generate(
         suite=suite,
         float_precision=float_precision,
         force_generate=force_generate,
+        random_shapes=random_shapes,
+        shape_seed=shape_seed,
+        hidden_dir=hidden_dir,
+        hidden_seed_file=hidden_seed_file,
+        cmsis_nn_root=cmsis_nn_root,
     )
     if config.plan:
         _print_plan_item(GenerateStep(config).plan())
@@ -163,12 +184,14 @@ def generate(
 def build(
     cpu: str = typer.Option("cortex-m55", help="Target CPU(s), comma-separated (e.g. m0,m4,m55)"),
     opt: str = typer.Option("-Ofast", help="Optimization level"),
+    toolchain: str = typer.Option("gcc", "--toolchain", help="Toolchain: gcc (default) or armclang (Arm Compiler 6 on PATH; not combinable with --coverage)"),
     jobs: Optional[int] = typer.Option(None, help="Parallel build jobs"),
     coverage: bool = typer.Option(False, "--coverage", help="Enable ns-cmsis-nn code coverage instrumentation"),
     coverage_mve_float: bool = typer.Option(False, "--coverage-mve-float", help="Enable Cortex-M55 float MVE paths during coverage builds"),
     coverage_mve_int: bool = typer.Option(False, "--coverage-mve-int", help="Enable Cortex-M55 integer MVE paths (no ARM_MATH_AUTOVECTORIZE) during coverage builds"),
     suite: str = typer.Option("int", "--suite", help="Test suite selection: int, float, or both"),
     float_precision: str = typer.Option("both", "--float-precision", help="Float precision selection for float suite: f16, f32, or both"),
+    cmsis_nn_root: Optional[Path] = typer.Option(None, "--cmsis-nn-root", help="Override the ns-cmsis-nn checkout used for the CMake build (defaults to CMakeLists.txt's ../.. sibling checkout)"),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help="Verbosity level (0-3)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be done"),
     plan: bool = typer.Option(False, "--plan", help="Print execution plan and exit"),
@@ -182,12 +205,14 @@ def build(
         plan=plan,
         project_root=project_root,
         optimization=opt,
+        toolchain=toolchain,
         jobs=jobs,
         coverage=coverage,
         coverage_mve_float=coverage_mve_float,
         coverage_mve_int=coverage_mve_int,
         suite=suite,
         float_precision=float_precision,
+        cmsis_nn_root=cmsis_nn_root,
     )
     if config.plan:
         _print_plan_item(BuildStep(config).plan())
@@ -210,6 +235,7 @@ def run(
     coverage_mve_float: bool = typer.Option(False, "--coverage-mve-float", help="Write MVE float coverage to the float-mve report lane"),
     coverage_mve_int: bool = typer.Option(False, "--coverage-mve-int", help="Write MVE integer coverage to the int-mve report lane"),
     suite: str = typer.Option("int", "--suite", help="Test suite selection: int, float, or both"),
+    toolchain: str = typer.Option("gcc", "--toolchain", help="Toolchain: gcc (default) or armclang (Arm Compiler 6 on PATH; not combinable with --coverage)"),
     no_report: bool = typer.Option(False, "--no-report", help="Disable test reporting"),
     report_formats: list[str] = typer.Option(["json"], help="Report formats (json, html, md, junit)"),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help="Verbosity level (0-3)"),
@@ -233,6 +259,7 @@ def run(
         coverage_mve_int=coverage_mve_int,
         run_jobs=run_jobs,
         suite=suite,
+        toolchain=toolchain,
     )
     if config.plan:
         _print_plan_item(RunStep(config).plan())
@@ -247,15 +274,16 @@ def run(
 
 @app.command()
 def full(
-    op: Optional[str] = typer.Option(None, help="Generate only specific operator"),
-    dtype: Optional[str] = typer.Option(None, help="Generate only specific dtype"),
-    name: Optional[str] = typer.Option(None, help="Generate only specific test by name"),
+    op: Optional[str] = typer.Option(None, help="Only these operators, comma-separated"),
+    dtype: Optional[str] = typer.Option(None, help="Only this case dtype: activations, or S4 weights"),
+    name: Optional[str] = typer.Option(None, help="Only these exact test names, comma-separated"),
     limit: Optional[int] = typer.Option(None, help="Limit number of models to generate"),
     seed: Optional[int] = typer.Option(None, help="Random seed for test generation"),
     cpu: str = typer.Option("cortex-m55", help="Target CPU(s), comma-separated (e.g. m0,m4,m55)"),
     suite: str = typer.Option("int", "--suite", help="Test suite selection: int, float, or both"),
     float_precision: str = typer.Option("both", "--float-precision", help="Float precision selection for float suite: f16, f32, or both"),
     opt: str = typer.Option("-Ofast", help="Optimization level"),
+    toolchain: str = typer.Option("gcc", "--toolchain", help="Toolchain: gcc (default) or armclang (Arm Compiler 6 on PATH; not combinable with --coverage)"),
     jobs: Optional[int] = typer.Option(None, help="Parallel build jobs"),
     timeout: Optional[float] = typer.Option(None, help=f"Per-case FVP timeout in seconds (default: {DEFAULT_TIMEOUT_SECONDS:g}; 0 disables it and lets a hung kernel block the run)"),
     run_jobs: Optional[int] = typer.Option(None, "--run-jobs", help=f"Parallel FVP run jobs (default: min(host cores, {DEFAULT_RUN_JOBS_CAP}); 0 = every host core). FVP boot dominates per-case time so parallelism is the lever, but unbounded jobs on a shared or metered runner is a cost risk"),
@@ -290,6 +318,7 @@ def full(
         suite=suite,
         float_precision=float_precision,
         optimization=opt,
+        toolchain=toolchain,
         jobs=jobs,
         timeout=timeout,
         run_jobs=run_jobs,
@@ -373,6 +402,14 @@ def clean_all(
     typer.echo("✓ Clean-all completed")
 
 
+def _tool_version(exe: str) -> str:
+    try:
+        out = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=10, check=False).stdout
+        return out.strip().splitlines()[0] if out.strip() else "version unknown"
+    except Exception:
+        return "version unknown"
+
+
 @app.command()
 def doctor(
     project_root: Optional[Path] = typer.Option(None, "--repo-root", help="Repository root directory"),
@@ -402,6 +439,17 @@ def doctor(
         else:
             typer.echo(f"✗ {tool} not found ({description})", err=True)
             all_ok = False
+
+    gcc = shutil.which("arm-none-eabi-gcc")
+    if gcc:
+        typer.echo(f"✓ arm-none-eabi-gcc found ({_tool_version(gcc)}) at {gcc}")
+    else:
+        typer.echo("⚠ arm-none-eabi-gcc not on PATH (run setup_dependencies.py; --toolchain gcc needs it)", err=True)
+    armclang = shutil.which("armclang")
+    if armclang:
+        typer.echo(f"✓ armclang found ({_tool_version(armclang)}) at {armclang}")
+    else:
+        typer.echo("⚠ armclang not on PATH (only needed for --toolchain armclang)")
 
     key_dirs = {
         "assets/descriptors": "Test descriptors",

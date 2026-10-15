@@ -12,7 +12,7 @@ import yaml
 from helia_core_tester.generation.io.descriptors import load_descriptor
 from helia_core_tester.generation.ops.BasicMathFunctions.abs import OpAbs
 from helia_core_tester.hardware.case_bundle import blob_numpy, load_case_bundle
-from helia_core_tester.hardware.comparison import compare_output
+from helia_core_tester.hardware.comparison import compare_output, strict_comparison
 from helia_core_tester.hardware.fake_target import (
     FakeKernelAdapter,
     FakeTargetTransport,
@@ -58,6 +58,31 @@ def test_finite_tolerance_and_other_modes():
         assert (
             compare_output(np.array(actual), np.array(expected), mode).passed == passed
         )
+
+
+def test_diffs_recorded_within_tolerance():
+    actual, expected = np.array([3, 5, -2], dtype=np.int8), np.array([3, 4, -1], dtype=np.int8)
+    tolerant = compare_output(actual, expected, {"mode": "tolerant_int", "tolerance": 1})
+    assert (tolerant.passed, tolerant.mismatch_count, tolerant.diff_count, tolerant.max_abs_diff) == (True, 0, 2, 1.0)
+    strict = compare_output(actual, expected, strict_comparison({"mode": "tolerant_int", "tolerance": 1}))
+    assert (strict.passed, strict.mismatch_count, strict.diff_count) == (False, 2, 2)
+    assert strict_comparison(FLOAT) == FLOAT
+    loose = compare_output(np.array([1.125, 2.0]), np.array([1.0, 2.0]), {"mode": "float", "atol": 0.125, "rtol": 0})
+    assert (loose.passed, loose.diff_count) == (True, 1)
+
+
+def test_s64_extremes_never_overflow():
+    lo, hi = np.iinfo(np.int64).min, np.iinfo(np.int64).max
+    actual, expected = np.array([lo, hi, 0], dtype=np.int64), np.array([0, lo, 0], dtype=np.int64)
+    for mode in ({"mode": "exact_int"}, {"mode": "tolerant_int", "tolerance": 1}):
+        result = compare_output(actual, expected, mode)
+        assert (result.passed, result.mismatch_count, result.diff_count) == (False, 2, 2)
+        assert result.max_abs_diff == float(2**64 - 1)
+
+
+def test_none_mode_reports_no_metrics():
+    result = compare_output(np.array([1]), np.array([2]), {"mode": "none"})
+    assert (result.passed, result.diff_count, np.isnan(result.max_abs_diff)) == (True, None, True)
 
 
 def test_mask_precedes_classification_and_metrics():
@@ -110,6 +135,8 @@ def _bridge(case, tmp_path):
     bundle = build_case_bundle_from_generated_test(
         ROOT, case, output_root=tmp_path, fvp_gate="off"
     )
+    # Float cases stage under the float suite.
+    assert bundle.manifest_path.relative_to(tmp_path).parts[:3] == ("artifacts", "stream_cases", "float")
     loaded = load_case_bundle(bundle.manifest_path)
     assert loaded.comparison == bundle.comparison
     return loaded
@@ -287,3 +314,164 @@ def test_invalid_generated_mask_fails_admission(generated_abs, tmp_path, damage)
     source.write_text(text)
     with pytest.raises(ValueError, match="mask"):
         _bridge(generated_abs, tmp_path)
+
+
+def test_size_mismatch_has_no_diff_count(tmp_path):
+    from helia_core_tester.hardware.session import _compare_output_bytes
+    from helia_core_tester.hardware.case_bundle import build_abs_s8_case_bundle
+
+    bundle = load_case_bundle(build_abs_s8_case_bundle(ROOT, output_root=tmp_path).manifest_path)
+    payload = blob_numpy(bundle.expected_output).tobytes() + b"\0"
+    result = _compare_output_bytes(bundle.case_id, payload, bundle)
+    assert (result.passed, result.diff_count) == (False, None)
+
+
+def test_tolerance_fraction_math():
+    # Exact binary values: 0.75 and 0.875 of atol.
+    atol = {"mode": "float", "atol": 0.25, "rtol": 0}
+    assert compare_output(np.array([1.1875]), np.array([1.0]), atol).tolerance_fraction == 0.75
+    assert compare_output(np.array([1.21875, 1.0]), np.array([1.0, 1.0]), atol).tolerance_fraction == 0.875
+    rtol = {"mode": "float", "atol": 0, "rtol": 0.125}
+    assert compare_output(np.array([2.25, -4.25]), np.array([2.0, -4.0]), rtol).tolerance_fraction == 1.0
+    zero = {"mode": "float", "atol": 0, "rtol": 0}
+    assert compare_output(np.array([0.0, 3.0]), np.array([0.0, 3.0]), zero).tolerance_fraction == 0.0
+    assert compare_output(np.array([1.0]), np.array([0.0]), zero).tolerance_fraction == np.inf
+    assert compare_output(np.array([]), np.array([]), atol).tolerance_fraction == 0.0
+    # Int modes report no fraction.
+    assert compare_output(np.array([2]), np.array([1]), {"mode": "exact_int"}).tolerance_fraction is None
+
+
+def test_tolerance_fraction_nonfinite():
+    atol = {"mode": "float", "atol": 0.25, "rtol": 0}
+    matched = compare_output(np.array([np.nan, np.inf, 1.125]), np.array([np.nan, np.inf, 1.0]), atol)
+    assert (matched.passed, matched.tolerance_fraction) == (True, 0.5)
+    lost = compare_output(np.array([np.nan, 1.0]), np.array([1.0, 1.0]), atol)
+    assert (lost.passed, lost.tolerance_fraction) == (False, np.inf)
+    masked = compare_output(np.array([123.0, 1.0625]), np.array([0.0, 1.0]), {**atol, "nonfinite_mask": [1, 0]})
+    assert (masked.passed, masked.tolerance_fraction) == (True, 0.25)
+
+
+@pytest.mark.parametrize("actual,ungated,gated", [
+    ([1.1875], True, True),
+    ([1.21875], True, False),
+    ([1.3], False, False),
+    ([np.nan], False, False),
+])
+def test_headroom_gate(actual, ungated, gated):
+    atol = {"mode": "float", "atol": 0.25, "rtol": 0}
+    expected = np.array([1.0])
+    assert compare_output(np.array(actual), expected, atol).passed == ungated
+    result = compare_output(np.array(actual), expected, {**atol, "headroom": 0.8})
+    assert (result.passed, result.mismatch_count) == (gated, int(not gated))
+
+
+def test_headroom_gate_edges():
+    # Exactly 0.8 passes; NaN pairs still match.
+    gate = {"mode": "float", "atol": 1.25, "rtol": 0, "headroom": 0.8}
+    assert compare_output(np.array([2.0]), np.array([1.0]), gate).passed
+    assert compare_output(np.array([np.nan, -np.inf]), np.array([np.nan, -np.inf]), gate).passed
+    assert not compare_output(np.array([np.inf]), np.array([-np.inf]), gate).passed
+
+
+def _int_bundle(tmp_path):
+    from helia_core_tester.hardware.case_bundle import build_abs_s8_case_bundle
+
+    return load_case_bundle(build_abs_s8_case_bundle(ROOT, output_root=tmp_path / "int", case_id="abs_int").manifest_path)
+
+
+def _write_golden(golden_dir, bundle, output, **record):
+    """A baseline run's output and record."""
+    from helia_core_tester.hardware.case_bundle import input_digest
+
+    (golden_dir / "outputs").mkdir(parents=True, exist_ok=True)
+    (golden_dir / "correctness").mkdir(exist_ok=True)
+    (golden_dir / "outputs" / f"{bundle.case_id}.bin").write_bytes(output.tobytes())
+    doc = {"passed": True, "input_digest": input_digest(bundle), **record}
+    (golden_dir / "correctness" / f"{bundle.case_id}.json").write_text(json.dumps(doc))
+
+
+def test_golden_from_splits_int_and_float(generated_abs, tmp_path):
+    import hashlib
+
+    from helia_core_tester.hardware.hardware_pipeline import StreamOptions, golden_bundles
+
+    float_bundle, int_bundle = _bridge(generated_abs, tmp_path), _int_bundle(tmp_path)
+    golden_dir = tmp_path / "past"
+    # Baseline outputs differ from the references.
+    past_float = blob_numpy(float_bundle.expected_output) + np.asarray(0.5, blob_numpy(float_bundle.expected_output).dtype)
+    past_int = blob_numpy(int_bundle.expected_output).copy()
+    past_int.flat[0] += 1
+    _write_golden(golden_dir, float_bundle, past_float)
+    _write_golden(golden_dir, int_bundle, past_int)
+    judged_float, judged_int = golden_bundles([float_bundle, int_bundle], golden_dir, allow_failed=False)
+    assert judged_float.expected_output == float_bundle.expected_output
+    assert judged_float.comparison == {**float_bundle.comparison, "headroom": 0.8}
+    assert judged_int.expected_output.sha256 == hashlib.sha256(past_int.tobytes()).hexdigest()
+    assert judged_int.comparison == {"mode": "exact_int"}
+    record = StreamOptions(golden_from=golden_dir).compare_record([judged_float, judged_int])
+    assert record["goldens"] == {"generator": [float_bundle.case_id], "baseline": ["abs_int"]}
+    # Nightly runs leave the float compare alone.
+    assert "headroom" not in float_bundle.comparison and "goldens" not in StreamOptions().compare_record([float_bundle])
+
+
+@pytest.mark.parametrize("record,message", [
+    ({"passed": False}, "Golden run failed these cases"),
+    ({"input_digest": "0" * 64}, "Golden run used other inputs for"),
+    ({"input_digest": None}, "Golden run has no input digest for"),
+    ({"tolerance_fraction": 0.81}, "Golden run spends over 0.8 of tolerance for"),
+])
+def test_golden_from_refusals_cover_float(generated_abs, tmp_path, record, message):
+    from helia_core_tester.hardware.hardware_pipeline import golden_bundles
+
+    bundle = _bridge(generated_abs, tmp_path)
+    golden_dir = tmp_path / "past"
+    _write_golden(golden_dir, bundle, blob_numpy(bundle.expected_output), **record)
+    with pytest.raises(RuntimeError, match=f"{message}: {bundle.case_id}$"):
+        golden_bundles([bundle], golden_dir, allow_failed=False)
+
+
+def test_golden_from_refuses_missing_float(generated_abs, tmp_path):
+    from helia_core_tester.hardware.hardware_pipeline import golden_bundles
+
+    bundle, int_bundle = _bridge(generated_abs, tmp_path), _int_bundle(tmp_path)
+    golden_dir = tmp_path / "past"
+    _write_golden(golden_dir, int_bundle, blob_numpy(int_bundle.expected_output))
+    with pytest.raises(RuntimeError, match=f"Golden run is missing these cases: {bundle.case_id}$"):
+        golden_bundles([bundle, int_bundle], golden_dir, allow_failed=False)
+
+
+@pytest.mark.parametrize("spend,passed", [(0.5, True), (0.95, False)])
+def test_gated_session_reports_fraction(generated_abs, tmp_path, spend, passed):
+    from helia_core_tester.hardware.case_bundle import golden_bundle
+
+    bundle = golden_bundle(_bridge(generated_abs, tmp_path), tmp_path / "unused")
+    expected = blob_numpy(bundle.expected_output)
+    flat = expected.reshape(-1).astype(np.float64)
+    mask = np.asarray(bundle.comparison["nonfinite_mask"])
+    # Smallest live lane: dtype spacing stays fine.
+    lane = int(np.argmin(np.where(mask == 0, np.abs(flat), np.inf)))
+    tol = bundle.comparison["atol"] + bundle.comparison["rtol"] * abs(flat[lane])
+    actual = expected.copy()
+    actual.reshape(-1)[lane] = flat[lane] + spend * tol
+    transport = AckTransport(OutputAdapter(bundle, actual))
+    result = HostSession(transport).run(bundle)
+    fraction = result.comparison.tolerance_fraction
+    assert transport.acks == [passed]
+    assert (fraction > 0.8) == (not passed)
+    reports = write_result_bundle(result, session_id="gate", output_root=tmp_path, memory_report={}, kernel_catalog=[])
+    correctness = json.loads((reports / "correctness" / f"{bundle.case_id}.json").read_text())
+    assert (correctness["passed"], correctness["tolerance_fraction"]) == (passed, fraction)
+    assert correctness["comparison"]["headroom"] == 0.8
+    with (reports / "case_summary.csv").open() as stream:
+        assert float(next(csv.DictReader(stream))["tolerance_fraction"]) == fraction
+
+
+def test_spent_baseline_allowed_when_asked(generated_abs, tmp_path):
+    from helia_core_tester.hardware.hardware_pipeline import golden_bundles
+
+    bundle = _bridge(generated_abs, tmp_path)
+    golden_dir = tmp_path / "past"
+    _write_golden(golden_dir, bundle, blob_numpy(bundle.expected_output), tolerance_fraction=0.8)
+    assert golden_bundles([bundle], golden_dir, allow_failed=False)
+    _write_golden(golden_dir, bundle, blob_numpy(bundle.expected_output), tolerance_fraction=0.9)
+    assert golden_bundles([bundle], golden_dir, allow_failed=True)

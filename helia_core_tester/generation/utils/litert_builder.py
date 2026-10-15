@@ -257,6 +257,7 @@ def build_unary_same_shape_op(
     output_dtype: Optional[str] = None,
     options=None,
     options_type=None,
+    input_scale: Optional[float] = None,
 ) -> bytes:
     _require_litert()
 
@@ -272,7 +273,7 @@ def build_unary_same_shape_op(
             shape=input_shape,
             tensor_type=input_tensor_type,
             is_input=True,
-            quantization=_default_quant(input_tensor_type),
+            quantization=_default_quant(input_tensor_type) if input_scale is None else ([input_scale], [0]),
         )
     )
 
@@ -922,8 +923,47 @@ def build_resize_nearest_neighbor_op(
     half_pixel_centers: bool = False,
     dtype: str = "int8",
 ) -> bytes:
+    return _build_resize_op(
+        input_shape=input_shape,
+        new_size=new_size,
+        align_corners=align_corners,
+        half_pixel_centers=half_pixel_centers,
+        dtype=dtype,
+        bilinear=False,
+    )
+
+
+def build_resize_bilinear_op(
+    *,
+    input_shape: Iterable[int],
+    new_size: Sequence[int],
+    align_corners: bool = False,
+    half_pixel_centers: bool = False,
+    dtype: str = "int8",
+) -> bytes:
+    return _build_resize_op(
+        input_shape=input_shape,
+        new_size=new_size,
+        align_corners=align_corners,
+        half_pixel_centers=half_pixel_centers,
+        dtype=dtype,
+        bilinear=True,
+    )
+
+
+def _build_resize_op(
+    *,
+    input_shape: Iterable[int],
+    new_size: Sequence[int],
+    align_corners: bool = False,
+    half_pixel_centers: bool = False,
+    dtype: str = "int8",
+    bilinear: bool = False,
+) -> bytes:
     if not LITERT_AVAILABLE:
-        raise ImportError("ai_edge_litert is not available. Install it with: pip install ai-edge-litert")
+        raise ImportError(
+            "ai_edge_litert is not available. Install it with: pip install ai-edge-litert"
+        )
 
     tensor_type = _DTYPE_MAP.get(dtype.lower())
     if tensor_type is None:
@@ -931,13 +971,14 @@ def build_resize_nearest_neighbor_op(
 
     input_shape = tuple(int(dim) for dim in input_shape)
     if len(input_shape) != 4:
-        raise ValueError("ResizeNearestNeighbor expects a 4D NHWC input shape.")
+        raise ValueError("Resize expects a 4D NHWC input shape.")
 
     new_h, new_w = int(new_size[0]), int(new_size[1])
     n, _, _, c = input_shape
     output_shape = (n, new_h, new_w, c)
 
-    builder = LiteRtSingleOpBuilder(op_name="RESIZE_NEAREST_NEIGHBOR")
+    op_name = "RESIZE_BILINEAR" if bilinear else "RESIZE_NEAREST_NEIGHBOR"
+    builder = LiteRtSingleOpBuilder(op_name=op_name)
 
     input_tensor_idx = builder.add_tensor(
         TensorSpec(
@@ -968,16 +1009,24 @@ def build_resize_nearest_neighbor_op(
         )
     )
 
-    options = litert.ResizeNearestNeighborOptionsT()
+    options = (
+        litert.ResizeBilinearOptionsT()
+        if bilinear
+        else litert.ResizeNearestNeighborOptionsT()
+    )
     options.alignCorners = bool(align_corners)
     options.halfPixelCenters = bool(half_pixel_centers)
 
     builder.add_operator(
-        "RESIZE_NEAREST_NEIGHBOR",
+        op_name,
         inputs=[input_tensor_idx, size_tensor_idx],
         outputs=[output_tensor_idx],
         options=options,
-        options_type=litert.BuiltinOptions.ResizeNearestNeighborOptions,
+        options_type=(
+            litert.BuiltinOptions.ResizeBilinearOptions
+            if bilinear
+            else litert.BuiltinOptions.ResizeNearestNeighborOptions
+        ),
     )
 
     return builder.build()
@@ -990,7 +1039,9 @@ def build_pad_op(
     dtype: str = "int8",
 ) -> bytes:
     if not LITERT_AVAILABLE:
-        raise ImportError("ai_edge_litert is not available. Install it with: pip install ai-edge-litert")
+        raise ImportError(
+            "ai_edge_litert is not available. Install it with: pip install ai-edge-litert"
+        )
 
     tensor_type = _DTYPE_MAP.get(dtype.lower())
     if tensor_type is None:

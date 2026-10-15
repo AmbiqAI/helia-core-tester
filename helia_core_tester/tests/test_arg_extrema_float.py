@@ -50,16 +50,18 @@ def test_emitted_arg_indices(tmp_path, desc):
         "memcpy(" in source and f"arm_arg{kind}_{'f16' if half else 'f32'}(" in source
     )
     if "special" in desc["name"]:
-        # Finite first tie, both zero orders, first/later/all NaN, infinity,
+        # Finite first tie, both zero orders, leading/inner/all NaN, infinity,
         # positive/negative subnormals. Literal indices, not the golden oracle.
+        # A NaN never wins: {NaN, -1, 1, NaN} and {1, -1, NaN, NaN} select a
+        # number; the all-NaN line selects 0.
         np.testing.assert_array_equal(
             expected,
             [
                 0,
                 0,
                 0,
-                0,
-                2,
+                1 if kind == "min" else 2,
+                1 if kind == "min" else 0,
                 0,
                 0 if kind == "min" else 1,
                 0 if kind == "min" else 1,

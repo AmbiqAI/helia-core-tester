@@ -15,12 +15,11 @@ of sync -- treat that as a real bug, not a flaky test.
 from pathlib import Path
 
 import pytest
-import yaml
 
 from helia_core_tester.hardware import generated_test_bridge as gtb
+from helia_core_tester.tests.generated_inputs import discover_or_skip
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_GEN_ROOT = _PROJECT_ROOT / "artifacts/generated_tests/int/cortex-m55"
 
 _CASES = [
     ("BasicMathFunctions", "abs_rescale_s8"),
@@ -44,13 +43,11 @@ def test_sidecar_and_regex_extraction_paths_agree(tmp_path, family, op_name):
     """For a real generated artifact with a sidecar, temporarily hide the
     sidecar and confirm the resulting CaseBundle's scalar parameters are
     identical to the sidecar-present run."""
-    case_dir = _GEN_ROOT / family / op_name
-    if not case_dir.is_dir():
-        pytest.skip(f"{case_dir} not present in this local artifacts tree (run generation first)")
-    desc = yaml.safe_load((case_dir / "descriptor.yaml").read_text())
-    generated_test = gtb.GeneratedTestCase(
-        name=op_name, cpu="cortex-m55", family=family, directory=case_dir, descriptor=desc
+    (generated_test,) = (
+        case for case in discover_or_skip(_PROJECT_ROOT, family=family, name_filter=op_name) if case.name == op_name
     )
+    case_dir = generated_test.directory
+    desc = generated_test.descriptor
     builder = gtb._BUILDERS[(family, desc["operator"])]
 
     bundle_with_sidecar = builder(_PROJECT_ROOT, generated_test, output_root=tmp_path / "with_sidecar")

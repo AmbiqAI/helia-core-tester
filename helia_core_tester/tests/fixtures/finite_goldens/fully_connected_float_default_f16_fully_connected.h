@@ -63,7 +63,7 @@ static const float16_t fully_connected_float_default_f16_input[] = {
 
 // Expected output (golden)
 static const float16_t fully_connected_float_default_f16_expected_output[] = {
-    (float16_t)0.150878906f, (float16_t)-0.185791016f, (float16_t)-0.840820312f, (float16_t)1.377929688f, (float16_t)-0.284179688f
+    (float16_t)0.150878906f, (float16_t)-0.185668945f, (float16_t)-0.841308594f, (float16_t)1.377929688f, (float16_t)-0.284179688f
 };
 
 #endif

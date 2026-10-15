@@ -13,19 +13,24 @@ from helia_core_tester.core.cpu_targets import get_cpu_profile, parse_cpu_list
 from helia_core_tester.core.discovery import find_repo_root
 from helia_core_tester.core.errors import ConfigurationError, PathNotFoundError
 from helia_core_tester.core.path_layout import (
+    VALID_TOOLCHAINS,
     artifacts_root,
     build_dir,
+    compiler_tag_for_toolchain,
     coverage_merged_dir,
     coverage_report_dir,
     generated_tests_dir,
     generated_tests_root,
     generation_report_dir,
     normalize_suite,
+    normalize_toolchain,
     reports_root,
     tests_report_dir,
 )
 
 ENV_PREFIX = "HELIA_CORE_TESTER_"
+# 32-bit seeds keep case ids short.
+MAX_SHAPE_SEED = 2**32 - 1
 TRUE_VALUES = {"1", "true", "yes", "on"}
 FALSE_VALUES = {"0", "false", "no", "off"}
 VALID_SUITE_MODES = {"int", "float", "both"}
@@ -54,6 +59,8 @@ PATH_KEYS = frozenset(
         "generated_tests_root",
         "reports_root",
         "cmsis_nn_root",
+        "hidden_dir",
+        "hidden_seed_file",
     }
 )
 
@@ -78,6 +85,7 @@ class Config:
     cpu: str = "cortex-m55"
     cpus: list[str] = field(default_factory=list)
     optimization: str = "-Ofast"
+    toolchain: str = "gcc"
     jobs: Optional[int] = None
     coverage: bool = False
     coverage_mve_float: bool = False
@@ -100,6 +108,16 @@ class Config:
     seed: Optional[int] = 500
 
     force_generate: bool = False
+    # Shared trees: keep other runs' cases.
+    keep_unselected: bool = False
+    # Held-out shapes: N per op, seeded.
+    random_shapes: Optional[int] = None
+    # None until precedence settles; then 0.
+    shape_seed: Optional[int] = None
+    # Secret-seeded shapes go here.
+    hidden_dir: Optional[Path] = None
+    # Else the secret comes from HCT_HIDDEN_SEED.
+    hidden_seed_file: Optional[Path] = None
     skip_generation: bool = False
     skip_build: bool = False
     skip_run: bool = False
@@ -202,7 +220,11 @@ class Config:
             self.reports_root = Path(self.reports_root).resolve()
 
         if self.cmsis_nn_root is not None:
-            self.cmsis_nn_root = Path(self.cmsis_nn_root).resolve()
+            self.cmsis_nn_root = Path(self.cmsis_nn_root).expanduser().resolve()
+        if self.hidden_dir is not None:
+            self.hidden_dir = Path(self.hidden_dir).resolve()
+        if self.hidden_seed_file is not None:
+            self.hidden_seed_file = Path(self.hidden_seed_file).resolve()
 
     def _parse_bool(self, key: str, value: str) -> bool:
         normalized = value.strip().lower()
@@ -218,7 +240,7 @@ class Config:
     def _parse_env_value(self, key: str, value: str) -> Any:
         if key in PATH_KEYS:
             return Path(value)
-        if key in {"jobs", "run_jobs", "limit", "seed", "verbosity"}:
+        if key in {"jobs", "run_jobs", "limit", "seed", "verbosity", "random_shapes", "shape_seed"}:
             return int(value)
         if key == "timeout":
             return float(value)
@@ -230,6 +252,7 @@ class Config:
             "dry_run",
             "plan",
             "force_generate",
+            "keep_unselected",
             "skip_generation",
             "skip_build",
             "skip_run",
@@ -276,9 +299,12 @@ class Config:
         self._validate_float_precision_cpu_compatibility()
         self._validate_coverage_mve_float()
         self._validate_coverage_mve_int()
+        self.toolchain = self._normalize_toolchain(self.toolchain)
+        self._validate_toolchain_coverage()
 
         if not 0 <= self.verbosity <= 3:
             raise ValueError(f"verbosity must be between 0 and 3, got {self.verbosity}")
+        self._validate_random_shapes()
 
         if self.jobs is None:
             self.jobs = os.cpu_count() or 4
@@ -293,6 +319,58 @@ class Config:
         self.downloads_dir.parent.mkdir(parents=True, exist_ok=True)
         self.generated_tests_root.mkdir(parents=True, exist_ok=True)
         self.reports_root.mkdir(parents=True, exist_ok=True)
+
+    def _validate_random_shapes(self) -> None:
+        # Any seed would be silently ignored.
+        if self.hidden_dir is not None and self.shape_seed is not None:
+            raise ConfigurationError("hidden_dir takes a secret, not shape_seed")
+        if self.shape_seed is None:
+            self.shape_seed = 0
+        # Seed sits in hardware case ids.
+        if not 0 <= self.shape_seed <= MAX_SHAPE_SEED:
+            raise ConfigurationError(f"shape_seed must be in 0..{MAX_SHAPE_SEED}, got {self.shape_seed}")
+        self._validate_hidden()
+        if self.random_shapes is None:
+            if self.hidden_dir is not None:
+                raise ConfigurationError("hidden_dir needs random_shapes")
+            return
+        if self.random_shapes < 1:
+            raise ConfigurationError(f"random_shapes must be >= 1, got {self.random_shapes}")
+        from helia_core_tester.generation.random_shapes import op_suites
+
+        try:
+            suites = op_suites(self.op_filter, self.dtype_filter)
+        except ValueError as exc:
+            raise ConfigurationError(str(exc)) from exc
+        if not suites & set(self.suites):
+            raise ConfigurationError(f"random_shapes needs the {' or '.join(sorted(suites))} suite")
+
+    def _validate_hidden(self) -> None:
+        if self.hidden_dir is None:
+            if self.hidden_seed_file is not None:
+                raise ConfigurationError("hidden_seed_file needs hidden_dir")
+            return
+        # Hidden outputs all derive from DIR.
+        moved = [
+            name for name, default in (
+                ("generated_tests_root", generated_tests_root(self.project_root)),
+                ("reports_root", reports_root(self.project_root)),
+            ) if getattr(self, name) != default
+        ]
+        if moved:
+            raise ConfigurationError(f"hidden_dir takes no {', '.join(moved)} override")
+        # The agent may read the tree; generation wipes DIR.
+        seed = self.hidden_seed_file
+        if seed is not None and (seed.is_relative_to(self.project_root) or seed.is_relative_to(self.hidden_dir)):
+            raise ConfigurationError(f"{seed} must sit outside the tester tree and hidden_dir")
+        from helia_core_tester.generation.random_shapes import check_hidden_paths
+
+        try:
+            for cpu in self.cpus:
+                for suite in self.suites:
+                    check_hidden_paths(self.hidden_dir, self.project_root, cpu, suite)
+        except ValueError as exc:
+            raise ConfigurationError(str(exc)) from exc
 
     def _normalize_suite_mode(self, suite: str) -> str:
         normalized = str(suite).strip().lower()
@@ -309,6 +387,21 @@ class Config:
                 f"Invalid float_precision: {float_precision!r} (expected one of: f16, f32, both)"
             )
         return normalized
+
+    def _normalize_toolchain(self, toolchain: str) -> str:
+        try:
+            return normalize_toolchain(toolchain)
+        except ValueError:
+            raise ConfigurationError(
+                f"Invalid toolchain: {toolchain!r} (expected one of: {', '.join(sorted(VALID_TOOLCHAINS))})"
+            ) from None
+
+    def _validate_toolchain_coverage(self) -> None:
+        # Mirrors the fvp orchestrator's guard: gcov instrumentation is GCC-only.
+        if self.coverage and self.toolchain != "gcc":
+            raise ConfigurationError(
+                f"--coverage is only supported with the gcc toolchain (got toolchain={self.toolchain!r})"
+            )
 
     def _validate_float_precision_cpu_compatibility(self) -> None:
         if "float" not in self.suites:
@@ -441,6 +534,27 @@ class Config:
         suite_name = normalize_suite(suite or self.default_suite())
         return generation_report_dir(self.project_root, cpu, suite=suite_name)
 
+    def cmsis_nn_root_error(self) -> Optional[str]:
+        """Why an explicit cmsis_nn_root is unusable, or None when it is unset or valid."""
+        if self.cmsis_nn_root is None:
+            return None
+        root = Path(self.cmsis_nn_root)
+        if not (root / "CMakeLists.txt").is_file():
+            return (
+                f"ns-cmsis-nn checkout not found: {root} (from {self._cmsis_nn_root_source()}) has no "
+                f"CMakeLists.txt. Set it with --cmsis-nn-root or {ENV_PREFIX}CMSIS_NN_ROOT "
+                "(a bare CMSIS_NN_ROOT is not read)."
+            )
+        return None
+
+    def _cmsis_nn_root_source(self) -> str:
+        # Mirrors __post_init__ precedence: explicit argument > env var > config file.
+        if "cmsis_nn_root" in (self._explicit_overrides or set()):
+            return "--cmsis-nn-root"
+        if os.environ.get(f"{ENV_PREFIX}CMSIS_NN_ROOT") is not None:
+            return f"{ENV_PREFIX}CMSIS_NN_ROOT"
+        return f"cmsis_nn_root in {self.config_file}" if self.config_file else "config"
+
     def tests_report_dir_for(self, cpu: str, suite: Optional[str] = None) -> Path:
         suite_name = normalize_suite(suite or self.default_suite())
         return tests_report_dir(self.project_root, cpu, suite=suite_name)
@@ -452,9 +566,13 @@ class Config:
     def coverage_merged_report_dir(self) -> Path:
         return coverage_merged_dir(self.project_root)
 
+    @property
+    def compiler_tag(self) -> str:
+        return compiler_tag_for_toolchain(self.toolchain)
+
     def build_dir_for(self, cpu: str, suite: Optional[str] = None) -> Path:
         suite_name = normalize_suite(suite or self.default_suite())
-        return build_dir(self.project_root, cpu, suite=suite_name)
+        return build_dir(self.project_root, cpu, self.compiler_tag, suite=suite_name)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -467,6 +585,7 @@ class Config:
             "cpu": self.cpu,
             "cpus": list(self.cpus),
             "optimization": self.optimization,
+            "toolchain": self.toolchain,
             "jobs": self.jobs,
             "coverage": self.coverage,
             "coverage_mve_float": self.coverage_mve_float,
@@ -486,6 +605,10 @@ class Config:
             "limit": self.limit,
             "seed": self.seed,
             "force_generate": self.force_generate,
+            "keep_unselected": self.keep_unselected,
+            "random_shapes": self.random_shapes,
+            "shape_seed": self.shape_seed,
+            "hidden_dir": str(self.hidden_dir) if self.hidden_dir else None,
             "skip_generation": self.skip_generation,
             "skip_build": self.skip_build,
             "skip_run": self.skip_run,

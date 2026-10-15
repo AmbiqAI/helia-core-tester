@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Any
 
 import numpy as np
@@ -16,6 +17,36 @@ class ComparisonResult:
     mismatch_count: int
     max_abs_diff: float
     mode: str
+    # Elements off the golden, tolerance aside.
+    diff_count: int | None = 0
+    # Worst |out - ref| / (atol + rtol*|ref|).
+    tolerance_fraction: float | None = None
+
+
+# Float error may spend this much tolerance.
+FLOAT_HEADROOM = 0.8
+
+
+def finite_or_none(value: float | None) -> float | None:
+    """The value, or None if not finite."""
+    return value if value is not None and math.isfinite(value) else None
+
+
+def strict_comparison(comparison: dict[str, Any]) -> dict[str, Any]:
+    """Drop the integer tolerance: exact match."""
+    if comparison.get("mode") == "tolerant_int":
+        return {"mode": "exact_int"}
+    return dict(comparison)
+
+
+def int_abs_diff(actual: np.ndarray, expected: np.ndarray) -> np.ndarray:
+    """|actual - expected| as uint64, overflow-free."""
+    a = actual.astype(np.int64)
+    b = expected.astype(np.int64)
+    # Wrapping uint64 subtraction gives the exact gap.
+    hi = np.maximum(a, b).view(np.uint64)
+    lo = np.minimum(a, b).view(np.uint64)
+    return hi - lo
 
 
 def compare_output(actual: np.ndarray, expected: np.ndarray, descriptor_or_comparison: dict[str, Any]) -> ComparisonResult:
@@ -29,13 +60,15 @@ def compare_output(actual: np.ndarray, expected: np.ndarray, descriptor_or_compa
         raise ValueError(f"Shape mismatch: actual {actual_np.shape}, expected {expected_np.shape}")
 
     mode = str(comparison["mode"])
-    if mode == "exact_int":
-        diffs = actual_np != expected_np
-        max_abs_diff = float(np.max(np.abs(actual_np.astype(np.int64) - expected_np.astype(np.int64)))) if actual_np.size else 0.0
-    elif mode == "tolerant_int":
-        tolerance = int(comparison.get("tolerance", 0))
-        abs_diff = np.abs(actual_np.astype(np.int64) - expected_np.astype(np.int64))
-        diffs = abs_diff > tolerance
+    diff_count = None
+    fraction = None
+    if mode in ("exact_int", "tolerant_int"):
+        abs_diff = int_abs_diff(actual_np, expected_np)
+        if mode == "exact_int":
+            diffs = actual_np != expected_np
+        else:
+            diffs = abs_diff > np.uint64(int(comparison.get("tolerance", 0)))
+        diff_count = int(np.count_nonzero(abs_diff))
         max_abs_diff = float(np.max(abs_diff)) if actual_np.size else 0.0
     elif mode == "float":
         atol = float(comparison.get("atol", 0.0))
@@ -58,14 +91,18 @@ def compare_output(actual: np.ndarray, expected: np.ndarray, descriptor_or_compa
         abs_diff = np.abs(actual_float[finite] - expected_float[finite])
         tol = atol + rtol * np.abs(expected_float[finite])
         max_abs_diff = float("inf") if np.any(diffs) else (float(np.max(abs_diff)) if abs_diff.size else 0.0)
-        diffs[finite] = abs_diff > tol
+        diff_count = int(np.count_nonzero(diffs) + np.count_nonzero(abs_diff))
+        ratio = tolerance_ratio(abs_diff, tol)
+        fraction = float("inf") if np.any(diffs) else (float(np.max(ratio)) if ratio.size else 0.0)
+        # Gated runs fail past the headroom.
+        headroom = comparison.get("headroom")
+        diffs[finite] = abs_diff > tol if headroom is None else ratio > float(headroom)
     elif mode == "bool":
         diffs = actual_np.astype(bool) != expected_np.astype(bool)
         max_abs_diff = float(np.max(diffs.astype(np.int32))) if actual_np.size else 0.0
     elif mode == "none":
-        # Intentionally unvalidated (HELIA_VALIDATE_OUTPUTS=NONE). Report a pass
-        # without diffing rather than crashing the session.
-        return ComparisonResult(passed=True, mismatch_count=0, max_abs_diff=0.0, mode=mode)
+        # Unvalidated: pass, metrics unknown.
+        return ComparisonResult(passed=True, mismatch_count=0, max_abs_diff=float("nan"), mode=mode, diff_count=None)
     else:
         raise ValueError(f"Unsupported comparison mode: {mode}")
 
@@ -75,7 +112,16 @@ def compare_output(actual: np.ndarray, expected: np.ndarray, descriptor_or_compa
         mismatch_count=mismatch_count,
         max_abs_diff=max_abs_diff,
         mode=mode,
+        diff_count=mismatch_count if diff_count is None else diff_count,
+        tolerance_fraction=fraction,
     )
+
+
+def tolerance_ratio(abs_diff: np.ndarray, tol: np.ndarray) -> np.ndarray:
+    """Per-element share of tolerance used."""
+    # Zero error spends nothing at zero tolerance.
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return np.where(abs_diff == 0, 0.0, abs_diff / tol)
 
 
 def compare_status(actual_status: int, descriptor_or_comparison: dict[str, Any]) -> ComparisonResult:
@@ -89,6 +135,8 @@ def compare_status(actual_status: int, descriptor_or_comparison: dict[str, Any])
     return ComparisonResult(
         passed=mismatch_count == 0,
         mismatch_count=mismatch_count,
-        max_abs_diff=float(abs(int(actual_status) - expected_status)),
+        # No output elements were compared.
+        max_abs_diff=float("nan"),
         mode=mode,
+        diff_count=None,
     )

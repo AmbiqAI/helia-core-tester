@@ -219,8 +219,9 @@ def extract_weights_biases_from_litert(model: Any, subgraph: Any, operator_index
                 tensor_shape = get_tensor_shape_from_litert(weights_tensor)
                 # Only use if it's multi-dimensional (weights, not bias) and not a small parameter tensor
                 # Skip tensors with shape [2], [2,2] or similar small shapes that are likely parameters
+                # Rank-4 filters may hold <= 4 values.
                 if (tensor_data is not None and tensor_shape is not None and len(tensor_shape) > 1 and
-                    np.prod(tensor_shape) > 4):  # Skip small parameter tensors
+                    (np.prod(tensor_shape) > 4 or len(tensor_shape) == 4)):
                     weights = tensor_data
         
         if len(op.inputs) > 2:

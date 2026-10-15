@@ -8,7 +8,7 @@
 static cmsis_nn_context transpose_float_default_f32_ctx = { .buf = NULL, .size = 0 };
 
 #define TRANSPOSE_FLOAT_DEFAULT_F32_OUTPUT_SIZE (1 * 3 * 2 * 4)
-static struct {
+static struct __attribute__((aligned(16))) {
     uint8_t head[HELIA_GUARD_BYTES];
     float body[TRANSPOSE_FLOAT_DEFAULT_F32_OUTPUT_SIZE];
     uint8_t tail[HELIA_GUARD_BYTES];

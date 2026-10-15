@@ -1,0 +1,902 @@
+"""Seeded held-out conv shapes."""
+
+from __future__ import annotations
+
+import hashlib
+import hmac
+import json
+import os
+import re
+import shutil
+from collections import Counter
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Callable, Optional
+
+import numpy as np
+import yaml
+
+from helia_core_tester.core.cpu_targets import get_cpu_profile, normalize_cpu
+from helia_core_tester.core.path_layout import artifacts_root
+from helia_core_tester.hardware.generated_test_bridge import (
+    _align_up,
+    _depthwise_s8_scratch_bytes,
+    _with_weight_sums,
+)
+from helia_core_tester.hardware.wrapper_route import FAST_S16_TAPS, conv_route, dw_route, dw_s16_route
+from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
+
+# Per-case cap; keeps a 50-case stream short.
+MAX_MACS = 1_500_000
+MAX_TRIES = 500
+PRIMES = (2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61)
+MVE_CONV_ROUTES = ("arm_convolve_1x1_out_s8", "arm_convolve_s8_small_cin", "arm_convolve_s8_3x3_c16_s1")
+CONV_ROUTES = (
+    "arm_convolve_1x1_s8_fast",
+    "arm_convolve_1x1_s8",
+    "arm_convolve_1_x_n_s8",
+    *MVE_CONV_ROUTES,
+    "arm_convolve_s8",
+)
+# One input channel runs as conv.
+DW_AS_CONV = "as_conv"
+DW16_ROUTES = ("arm_depthwise_conv_fast_s16", "arm_depthwise_conv_s16")
+# Direct entry; no wrapper.
+TC16_ROUTE = "arm_transpose_conv_s16"
+TC16_SYMBOLS = [TC16_ROUTE, "arm_transpose_conv_s16_get_buffer_size"]
+# Float entries, called directly.
+TCF_ROUTES = {"FP32": "arm_transpose_conv_f32", "FP16": "arm_transpose_conv_f16"}
+# MVE lanes per vector.
+TCF_LANES = {"FP32": 4, "FP16": 8}
+SECRET_ENV = "HCT_HIDDEN_SEED"
+# Short secrets fall to brute force.
+MIN_SECRET = 16
+HIDDEN_ID_HEX = 12
+
+
+@dataclass(frozen=True)
+class Generator:
+    """Random-shape source for one op and dtype."""
+
+    tag: str
+    descriptor_file: str
+    # RNG stream id; never reuse one.
+    stream: int
+    routes: Callable[[bool], list[str]]
+    draw: Callable
+    # Per-index targets; overrides route cycling.
+    plan: Optional[Callable[[int], list[str]]] = None
+    suite: str = "int"
+
+
+@dataclass
+class Layer:
+    """One sampled layer, NHWC."""
+
+    h: int
+    w: int
+    cin: int
+    cout: int
+    kh: int
+    kw: int
+    sh: int = 1
+    sw: int = 1
+    dh: int = 1
+    dw: int = 1
+    padding: str = "VALID"
+    mult: int = 1
+    transpose: bool = False
+    n: int = 1
+    # Knobs that replace the drawn ones.
+    knobs: dict = field(default_factory=dict)
+
+    def out_hw(self) -> tuple[int, int]:
+        """Output height and width."""
+        if self.transpose:
+            # Keras sizes; VALID adds kernel overhang.
+            extra = (0, 0) if self.padding == "SAME" else (max(self.kh - self.sh, 0), max(self.kw - self.sw, 0))
+            return self.h * self.sh + extra[0], self.w * self.sw + extra[1]
+        ekh, ekw = (self.kh - 1) * self.dh + 1, (self.kw - 1) * self.dw + 1
+        if self.padding == "SAME":
+            return -(-self.h // self.sh), -(-self.w // self.sw)
+        return -(-(self.h - ekh + 1) // self.sh), -(-(self.w - ekw + 1) // self.sw)
+
+    def pads(self) -> tuple[int, int]:
+        """TFLite pad_before, as CMSIS uses."""
+        if self.padding != "SAME":
+            return 0, 0
+        oh, ow = self.out_hw()
+        ekh, ekw = (self.kh - 1) * self.dh + 1, (self.kw - 1) * self.dw + 1
+        return max((oh - 1) * self.sh + ekh - self.h, 0) // 2, max((ow - 1) * self.sw + ekw - self.w, 0) // 2
+
+
+def _size(rng: np.random.Generator, lo: int, hi: int) -> int:
+    """A size biased to primes and odd values."""
+    pool = [p for p in PRIMES if lo <= p <= hi]
+    if pool and rng.random() < 0.4:
+        return int(rng.choice(pool))
+    return int(rng.integers(lo, hi + 1))
+
+
+def _channels(rng: np.random.Generator, lo: int, hi: int) -> int:
+    """Channels; mostly not a multiple of 4."""
+    roll = rng.random()
+    if roll < 0.15 and hi >= 16:
+        return int(16 * rng.integers(max(1, -(-lo // 16)), hi // 16 + 1))
+    if roll < 0.3 and hi >= 4:
+        return int(4 * rng.integers(max(1, -(-lo // 4)), hi // 4 + 1))
+    return _size(rng, lo, hi)
+
+
+def _kernel(rng: np.random.Generator) -> tuple[int, int]:
+    shape = rng.choice(["1xn", "nx1", "3x3", "square", "any"])
+    n = int(rng.integers(2, 8))
+    return {
+        "1xn": (1, n), "nx1": (n, 1), "3x3": (3, 3), "square": (n, n),
+        "any": (int(rng.integers(1, 8)), int(rng.integers(1, 8))),
+    }[str(shape)]
+
+
+def _stride(rng: np.random.Generator) -> tuple[int, int]:
+    return int(rng.integers(1, 4)), int(rng.integers(1, 4))
+
+
+def _padding(rng: np.random.Generator) -> str:
+    return "SAME" if rng.random() < 0.5 else "VALID"
+
+
+def _maybe_dilate(rng: np.random.Generator, layer: Layer, p: float = 0.5) -> Layer:
+    """Keras needs stride 1 to dilate."""
+    if rng.random() < p:
+        layer.sh = layer.sw = 1
+        layer.dh = int(rng.integers(1, 4))
+        layer.dw = int(rng.integers(2 if layer.dh == 1 else 1, 4))
+    return layer
+
+
+def _conv_layer(rng: np.random.Generator, route: str) -> Layer:
+    """A conv layer aimed at one route."""
+    pad = _padding(rng)
+    if route == "arm_convolve_1x1_s8_fast":
+        return Layer(_size(rng, 1, 24), _size(rng, 1, 24), _channels(rng, 1, 96), _channels(rng, 1, 64), 1, 1, padding=pad)
+    if route == "arm_convolve_1x1_s8":
+        sh, sw = _stride(rng)
+        return Layer(_size(rng, 2, 24), _size(rng, 2, 24), _channels(rng, 1, 96), _channels(rng, 1, 64), 1, 1, sh, sw, padding=pad)
+    if route == "arm_convolve_1_x_n_s8":
+        kw = int(rng.integers(2, 10))
+        return Layer(1, _size(rng, 8, 96), _channels(rng, 1, 48), _channels(rng, 1, 48), 1, kw, *_stride(rng), padding=pad)
+    if route == "arm_convolve_1x1_out_s8":
+        h, w = _size(rng, 1, 7), _size(rng, 1, 7)
+        return Layer(h, w, _channels(rng, 4, 64), _channels(rng, 1, 48), h, w, *_stride(rng), padding="VALID")
+    if route == "arm_convolve_s8_small_cin":
+        cin = int(rng.integers(1, 4))
+        kw = int(rng.integers(1, 16 // cin + 1))
+        kh = int(rng.integers(1, max(1, 48 // (kw * cin)) + 1))
+        return Layer(_size(rng, 3, 32), _size(rng, 3, 32), cin, 4 * int(rng.integers(1, 9)), kh, kw, *_stride(rng), padding=pad)
+    if route == "arm_convolve_s8_3x3_c16_s1":
+        return Layer(_size(rng, 3, 20), _size(rng, 3, 20), 16, _channels(rng, 1, 48), 3, 3, padding=pad)
+    kh, kw = _kernel(rng)
+    layer = Layer(_size(rng, 2, 24), _size(rng, 2, 24), _channels(rng, 1, 48), _channels(rng, 1, 48), kh, kw, *_stride(rng), padding=pad)
+    return _maybe_dilate(rng, layer)
+
+
+def _dw_layer(rng: np.random.Generator, route: str) -> Layer:
+    """A depthwise layer aimed at one route."""
+    pad = _padding(rng)
+    kh, kw = _kernel(rng)
+    if route == DW_AS_CONV:
+        mult = int(rng.integers(2, 5))
+        layer = Layer(_size(rng, 2, 24), _size(rng, 2, 24), 1, mult, kh, kw, *_stride(rng), padding=pad, mult=mult)
+        return _maybe_dilate(rng, layer)
+    if route in ("arm_depthwise_conv_s8_opt", "arm_depthwise_conv_3x3_s8"):
+        if route == "arm_depthwise_conv_3x3_s8" or rng.random() < 0.3:
+            # W*C > 1440 overruns 3x3 scratch (#375).
+            cin = _channels(rng, 24, 64)
+            w = int(rng.integers(1440 // cin + 1, 1440 // cin + 12))
+            return Layer(_size(rng, 3, 6), w, cin, cin, 3, 3, *_stride(rng), padding=pad)
+        cin = _channels(rng, 1, 96)
+        if rng.random() < 0.2:
+            # 1D dilation keeps the opt route.
+            return Layer(1, _size(rng, 8, 64), cin, cin, 1, kw, dw=int(rng.integers(2, 4)), padding=pad)
+        return Layer(_size(rng, 2, 24), _size(rng, 2, 24), cin, cin, kh, kw, *_stride(rng), padding=pad)
+    mult = int(rng.integers(1, 5))
+    cin = _channels(rng, 2, 48)
+    layer = Layer(_size(rng, 2, 24), _size(rng, 2, 24), cin, cin * mult, kh, kw, *_stride(rng), padding=pad, mult=mult)
+    return _off_fast_path(rng, layer)
+
+
+def _off_fast_path(rng: np.random.Generator, layer: Layer) -> Layer:
+    """Dilate so the generic route runs."""
+    if layer.mult == 1:
+        # 2D dilation forces the generic route.
+        layer.sh = layer.sw = 1
+        layer.dh, layer.dw = int(rng.integers(2, 4)), int(rng.integers(1, 4))
+        return layer
+    return _maybe_dilate(rng, layer)
+
+
+def _dw16_layer(rng: np.random.Generator, route: str) -> Layer:
+    """An s16 depthwise layer aimed at one route."""
+    pad = _padding(rng)
+    kh, kw = _kernel(rng)
+    fast = route == DW16_ROUTES[0]
+    mult = 1 if fast else int(rng.integers(1, 5))
+    roll = rng.random()
+    if roll < 0.15:
+        # Taps straddle the fast limit.
+        kh = int(rng.integers(8, 24))
+        kw = (FAST_S16_TAPS - 1) // kh if fast else -(-FAST_S16_TAPS // kh)
+        cin = _channels(rng, 1, 8)
+        h, w = kh + int(rng.integers(0, 3)), kw + int(rng.integers(0, 3))
+        return Layer(h, w, cin, cin * mult, kh, kw, padding="VALID", mult=mult)
+    cin = _channels(rng, 1, 64)
+    if fast and roll < 0.35:
+        # 1D dilation keeps the fast route.
+        return Layer(1, _size(rng, 8, 96), cin, cin, 1, kw, dw=int(rng.integers(2, 5)), padding=pad)
+    layer = Layer(_size(rng, 2, 24), _size(rng, 2, 24), cin, cin * mult, kh, kw, *_stride(rng), padding=pad, mult=mult)
+    return layer if fast else _off_fast_path(rng, layer)
+
+
+def _odd_channels(rng: np.random.Generator, lo: int, hi: int) -> int:
+    """Channels; mostly odd."""
+    if rng.random() < 0.7:
+        return int(rng.choice(np.arange(lo | 1, hi + 1, 2)))
+    return int(rng.integers(lo, hi + 1))
+
+
+def edge_count(n: int, kinds: int) -> int:
+    """Edge slots in an n-case draw.
+
+    max(ceil(n/3), min(kinds, floor(2n/3))): at least a third
+    (so one case is all edge), more so every category fits once
+    n >= 3 * kinds / 2, else at most two thirds. Slots take the
+    categories in order; each shape is still drawn.
+    """
+    return max(-(-n // 3), min(kinds, 2 * n // 3))
+
+
+def tc16_edge_count(n: int) -> int:
+    """Edge slots in an n-case tc16 draw."""
+    return edge_count(n, len(TC16_EDGES))
+
+
+def _edge_plan(n: int, route: str, edges: tuple[str, ...]) -> list[str]:
+    """Mixed draws, then edge categories."""
+    count = edge_count(n, len(edges))
+    return [route] * (n - count) + [edges[i % len(edges)] for i in range(count)]
+
+
+def _tc16_plan(n: int) -> list[str]:
+    return _edge_plan(n, TC16_ROUTE, TC16_EDGES)
+
+
+def _glorot_limit(layer: Layer) -> float:
+    """Keras Glorot uniform weight bound."""
+    return float(np.sqrt(6.0 / (layer.kh * layer.kw * (layer.cin + layer.cout))))
+
+
+def _tc16_requant(rng: np.random.Generator) -> Layer:
+    """Large multipliers: one LSB flips outputs."""
+    layer = Layer(_size(rng, 1, 6), _size(rng, 4, 24), _odd_channels(rng, 1, 15), int(rng.integers(1, 9)),
+                  int(rng.integers(1, 5)), int(rng.integers(1, 5)), int(rng.integers(1, 4)), int(rng.integers(1, 4)),
+                  padding=_padding(rng), transpose=True)
+    scale = float(rng.uniform(0.5, 2.0))
+    taps = layer.cin * -(-layer.kh // layer.sh) * -(-layer.kw // layer.sw)
+    # Accumulators near 6000 output steps.
+    amplitude = float(max(np.sqrt(3.0) * 6000.0 / (scale * 73.0 * np.sqrt(taps)), 2.0)) / 32767.0
+    calib = float(rng.uniform(2.0, 16.0))
+    # Bias near 3000 output steps.
+    bias = 3000.0 / scale * (calib / 32767.0) * (_glorot_limit(layer) / 127.0)
+    layer.knobs = {"activation": "NONE", "use_bias": True, "calibration_range": [-calib, calib],
+                   "input_range": [-calib * amplitude, calib * amplitude], "bias_range": [-2 * bias, 2 * bias],
+                   "min_effective_scale": scale}
+    return layer
+
+
+def _tc16_int64(rng: np.random.Generator) -> Layer:
+    """Bias and accumulators beyond int32."""
+    kh, kw = int(rng.integers(6, 9)), int(rng.integers(6, 9))
+    # Inputs cover the kernel: full-tap outputs.
+    h, w = kh + int(rng.integers(0, 3)), kw + int(rng.integers(0, 3))
+    layer = Layer(h, w, _odd_channels(rng, 45, 63), int(rng.integers(2, 4)), kh, kw, padding=_padding(rng),
+                  transpose=True)
+    # Positive data: ~2e6 per tap, 1600+ taps.
+    layer.knobs = {"activation": "NONE", "use_bias": True, "calibration_range": [0.0, 1.0],
+                   "input_range": [0.85, 1.0], "positive_weights": True,
+                   "wide_bias": [2.0**31, float(2 ** int(rng.integers(32, 37)))]}
+    return layer
+
+
+def _tc16_clamp(rng: np.random.Generator) -> Layer:
+    """Clamps hit on both sides."""
+    layer = _tc16_mixed(rng)
+    calib = float(rng.uniform(1.0, 32.0))
+    layer.knobs = {"activation": "NONE", "use_bias": bool(rng.random() < 0.7),
+                   "calibration_range": [-calib, calib], "input_range": [-calib, calib],
+                   "activation_min": -int(rng.integers(500, 5000)), "activation_max": int(rng.integers(500, 5000))}
+    return layer
+
+
+def _tc16_batch2(rng: np.random.Generator) -> Layer:
+    """Two images in one call."""
+    layer = _tc16_mixed(rng)
+    layer.n = 2
+    return layer
+
+
+def _tc16_fastenhancer(rng: np.random.Generator) -> Layer:
+    """FastEnhancer's 1xK, stride 4, VALID."""
+    cin, cout = _odd_channels(rng, 9, 40), int(rng.integers(1, 5))
+    return Layer(1, _size(rng, 32, 80), cin, cout, 1, int(rng.integers(4, 9)), 1, 4, transpose=True)
+
+
+def _tc16_gaps(rng: np.random.Generator) -> Layer:
+    """Stride beyond kernel: bias-only outputs."""
+    sh, sw = int(rng.integers(1, 5)), int(rng.integers(2, 5))
+    kh = int(rng.integers(1, sh)) if sh > 1 and rng.random() < 0.5 else 1
+    h = 1 if kh == 1 and sh == 1 else _size(rng, 2, 8)
+    return Layer(h, _size(rng, 4, 24), _odd_channels(rng, 1, 32), _odd_channels(rng, 1, 16), kh,
+                 int(rng.integers(1, sw)), sh, sw, padding=_padding(rng), transpose=True)
+
+
+def _tc16_overlap(rng: np.random.Generator) -> Layer:
+    """Kernel well beyond stride."""
+    kh, kw = int(rng.integers(5, 9)), int(rng.integers(5, 9))
+    return Layer(_size(rng, 2, 8), _size(rng, 2, 10), _odd_channels(rng, 1, 24), _odd_channels(rng, 1, 16),
+                 kh, kw, int(rng.integers(1, 3)), int(rng.integers(1, 3)), padding=_padding(rng), transpose=True)
+
+
+def _tc16_odd_tail(rng: np.random.Generator) -> Layer:
+    """Odd Cin and Cout."""
+    layer = _tc16_mixed(rng)
+    layer.cin, layer.cout = int(rng.choice(np.arange(3, 48, 2))), int(rng.choice(np.arange(3, 32, 2)))
+    return layer
+
+
+def _tc16_unit_tail(rng: np.random.Generator) -> Layer:
+    """One input, one output channel."""
+    return Layer(_size(rng, 1, 12), _size(rng, 4, 48), 1, 1, int(rng.integers(1, 9)), int(rng.integers(1, 9)),
+                 int(rng.integers(1, 5)), int(rng.integers(1, 5)), padding=_padding(rng), transpose=True)
+
+
+# Edge categories, highest priority first.
+TC16_DRAWS: dict[str, Callable[[np.random.Generator], Layer]] = {
+    "requant": _tc16_requant, "int64": _tc16_int64, "clamp": _tc16_clamp, "batch2": _tc16_batch2,
+    "fastenhancer": _tc16_fastenhancer, "gaps": _tc16_gaps, "overlap": _tc16_overlap,
+    "odd_tail": _tc16_odd_tail, "unit_tail": _tc16_unit_tail,
+}
+TC16_EDGES = tuple(TC16_DRAWS)
+
+
+def _tc16_layer(rng: np.random.Generator, target: str) -> Layer:
+    """An s16 transpose conv layer."""
+    return TC16_DRAWS.get(target, _tc16_mixed)(rng)
+
+
+def _tc16_mixed(rng: np.random.Generator) -> Layer:
+    """The normal mix."""
+    pad, roll = _padding(rng), rng.random()
+    if roll < 0.25:
+        # Near FastEnhancer's 1x8, stride 4.
+        sw = int(rng.integers(2, 5))
+        cin, cout = _odd_channels(rng, 9, 40), int(rng.integers(1, 5))
+        return Layer(1, _size(rng, 32, 80), cin, cout, 1, int(rng.integers(sw, 9)), 1, sw, padding=pad, transpose=True)
+    cin, cout = _odd_channels(rng, 1, 48), _odd_channels(rng, 1, 32)
+    if roll < 0.55:
+        # 1D: kernel and stride on W.
+        kw, sw = int(rng.integers(1, 9)), int(rng.integers(1, 5))
+        return Layer(1, _size(rng, 4, 96), cin, cout, 1, kw, 1, sw, padding=pad, transpose=True)
+    kh, kw = int(rng.integers(1, 9)), int(rng.integers(1, 9))
+    sh, sw = int(rng.integers(1, 5)), int(rng.integers(1, 5))
+    return Layer(_size(rng, 1, 16), _size(rng, 1, 16), cin, cout, kh, kw, sh, sw, padding=pad, transpose=True)
+
+
+def _tcf_rms(layer: Layer, data: float) -> float:
+    """Output RMS for Glorot weights, |x| <= data."""
+    taps = layer.cin * max(layer.kh / layer.sh, 1.0) * max(layer.kw / layer.sw, 1.0)
+    return float(np.sqrt(taps * (_glorot_limit(layer) * data) ** 2 / 9 + 0.25 / 3))
+
+
+def _tcf_long(rng: np.random.Generator, dtype: str) -> Layer:
+    """Thousands of terms per output."""
+    kh, kw = int(rng.integers(5, 9)), int(rng.integers(5, 9))
+    # Inputs cover the kernel: full-tap outputs.
+    layer = Layer(kh + int(rng.integers(0, 3)), kw + int(rng.integers(0, 3)), int(rng.integers(32, 97)),
+                  int(rng.integers(1, 5)), kh, kw, padding=_padding(rng), transpose=True)
+    # One-signed data never cancels.
+    low = 0.0 if rng.random() < 0.5 else -1.0
+    layer.knobs = {"activation": "NONE", "use_bias": True, "input_range": [low, 1.0]}
+    return layer
+
+
+def _tcf_nonfinite(rng: np.random.Generator, dtype: str) -> Layer:
+    """One NaN or Inf input."""
+    kh, kw = int(rng.integers(1, 5)), int(rng.integers(1, 5))
+    # Five rows beat a four-tap patch.
+    layer = Layer(_size(rng, 5, 10), _size(rng, 5, 14), _odd_channels(rng, 1, 24), _odd_channels(rng, 1, 16), kh, kw,
+                  int(rng.integers(1, 4)), int(rng.integers(1, 4)), padding=_padding(rng), transpose=True)
+    token, bias = str(rng.choice(["nan", "inf", "-inf"])), bool(rng.random() < 0.85)
+    position = int(rng.integers(0, layer.h * layer.w * layer.cin))
+    layer.knobs = {"activation": "NONE", "use_bias": bias, "input_mode": "nonfinite_sweep", "nonfinite_tokens": [token],
+                   "nonfinite_positions": [position], "nonfinite_policy": "mask"}
+    return layer
+
+
+def _tcf_clamp(rng: np.random.Generator, dtype: str) -> Layer:
+    """Clamps hit on both sides."""
+    layer = _tc16_mixed(rng)
+    rms, cast = _tcf_rms(layer, 1.0), np.float16 if dtype == "FP16" else np.float32
+    low, high = (float(cast(rms * sign * rng.uniform(0.1, 0.8))) for sign in (-1, 1))
+    layer.knobs = {"activation": "NONE", "use_bias": bool(rng.random() < 0.7), "activation_min": low,
+                   "activation_max": high}
+    return layer
+
+
+def _tcf_tail(rng: np.random.Generator, dtype: str) -> Layer:
+    """Channels past the last full vector."""
+    layer, lanes = _tc16_mixed(rng), TCF_LANES[dtype]
+    layer.cin = lanes * int(rng.integers(0, 4)) + int(rng.integers(1, lanes))
+    layer.cout = lanes * int(rng.integers(1, 4)) + int(rng.integers(1, lanes))
+    return layer
+
+
+def _tcf_wide(rng: np.random.Generator, dtype: str) -> Layer:
+    """Data far from unit scale."""
+    layer = _tc16_mixed(rng)
+    # At least 10x off unit scale.
+    scale = float(10 ** (rng.choice([-1, 1]) * rng.uniform(1, 2 if dtype == "FP16" else 3)))
+    if dtype == "FP16":
+        # Keep outputs well inside half range.
+        scale = min(scale, 1e4 / _tcf_rms(layer, 1.0))
+    layer.knobs = {"activation": "NONE", "use_bias": True, "input_range": [-scale, scale],
+                   "bias_range": [-scale / 2, scale / 2]}
+    return layer
+
+
+def _tcf_same_offset(rng: np.random.Generator, dtype: str) -> Layer:
+    """SAME with an odd total pad."""
+    sh, sw = int(rng.integers(1, 4)), int(rng.integers(1, 4))
+    # Kernel minus stride is odd.
+    kh, kw = sh + 2 * int(rng.integers(0, 3)) + 1, sw + 2 * int(rng.integers(0, 3)) + 1
+    return Layer(_size(rng, 1, 10), _size(rng, 2, 16), _odd_channels(rng, 1, 24), _odd_channels(rng, 1, 16),
+                 kh, kw, sh, sw, padding="SAME", transpose=True)
+
+
+# Float edge categories, highest priority first.
+TCF_DRAWS: dict[str, Callable[[np.random.Generator, str], Layer]] = {
+    "long_acc": _tcf_long, "nonfinite": _tcf_nonfinite, "clamp": _tcf_clamp, "odd_tail": _tcf_tail,
+    "batch2": lambda rng, dtype: _tc16_batch2(rng), "wide": _tcf_wide, "gaps": lambda rng, dtype: _tc16_gaps(rng),
+    "same_offset": _tcf_same_offset, "overlap": lambda rng, dtype: _tc16_overlap(rng),
+}
+TCF_EDGES = tuple(TCF_DRAWS)
+
+
+def _tcf_draw(dtype: str) -> Callable[[np.random.Generator, str], Layer]:
+    """A float transpose conv draw."""
+    def draw(rng: np.random.Generator, target: str) -> Layer:
+        edge = TCF_DRAWS.get(target)
+        return edge(rng, dtype) if edge else _tc16_mixed(rng)
+    return draw
+
+
+def _float_knobs(rng: np.random.Generator, layer: Layer) -> dict[str, Any]:
+    """Activation and data knobs, float."""
+    oh, ow = layer.out_hw()
+    # Few outputs flatten under clamps.
+    act = str(rng.choice(["NONE", "RELU", "RELU6"])) if oh * ow * layer.cout >= 64 else "NONE"
+    knobs: dict[str, Any] = {"activation": act, "use_bias": bool(rng.random() < 0.85)}
+    data = 1.0
+    if rng.random() < 0.3:
+        # Off-centre data shifts the mean.
+        data = float(rng.uniform(0.5, 2.0))
+        knobs["input_range"] = [-float(rng.uniform(0.0, 1.0)), data]
+    if act == "RELU6":
+        # Pre-activation RMS near 6.
+        knobs["weight_gain"] = (6.0 / _tcf_rms(layer, data)) ** 2 * float(rng.uniform(0.5, 2.0))
+    return knobs
+
+
+def _conv_routes(mve: bool) -> list[str]:
+    return [r for r in CONV_ROUTES if mve or r not in MVE_CONV_ROUTES]
+
+
+def _dw_routes(mve: bool) -> list[str]:
+    first = DW_AS_CONV if mve else "arm_depthwise_conv_3x3_s8"
+    return [first, "arm_depthwise_conv_s8_opt", "arm_depthwise_conv_s8"]
+
+
+def _dw16_routes(mve: bool) -> list[str]:
+    return list(DW16_ROUTES)
+
+
+def _tc16_routes(mve: bool) -> list[str]:
+    return [TC16_ROUTE]
+
+
+def _tcf_gen(dtype: str, stream: int) -> Generator:
+    """Float transpose conv generator."""
+    route = TCF_ROUTES[dtype]
+    return Generator(
+        f"tcf{dtype[2:]}", "ConvolutionFunctions/transpose_conv_float.yaml", stream, lambda mve: [route],
+        _tcf_draw(dtype), lambda n: _edge_plan(n, route, TCF_EDGES), "float",
+    )
+
+
+# Register new random-shape ops here.
+GENERATORS: dict[tuple[str, str], Generator] = {
+    ("Convolve", "S8"): Generator("conv", "ConvolutionFunctions/convolve.yaml", 0, _conv_routes, _conv_layer),
+    ("DepthwiseConv", "S8"): Generator("dw", "ConvolutionFunctions/depthwise_conv.yaml", 1, _dw_routes, _dw_layer),
+    ("DepthwiseConv", "S16"): Generator("dw16", "ConvolutionFunctions/depthwise_conv.yaml", 2, _dw16_routes, _dw16_layer),
+    ("TransposeConv", "S16"): Generator(
+        "tc16", "ConvolutionFunctions/transpose_conv.yaml", 3, _tc16_routes, _tc16_layer, _tc16_plan,
+    ),
+    ("TransposeConv", "FP32"): _tcf_gen("FP32", 4),
+    ("TransposeConv", "FP16"): _tcf_gen("FP16", 5),
+}
+# (op, dtype) keys, in draw order.
+OPS = tuple(GENERATORS)
+
+
+def _parts(value: str | None) -> list[str]:
+    return [part.strip() for part in str(value or "").split(",") if part.strip()]
+
+
+def _matches(op: str, gen: Generator, wanted: str) -> bool:
+    """Match --op as loaded descriptors do."""
+    from helia_core_tester.generation.io.descriptors import descriptor_matches_op
+
+    path = Path(gen.descriptor_file)
+    probe = {"name": "", "operator": op, "_source_stem": path.stem, "_source_relpath": str(path)}
+    # Names are drawn, so no case prefixes.
+    return descriptor_matches_op(probe, wanted)
+
+
+def random_case_pattern() -> re.Pattern:
+    """Names of drawn cases, any op."""
+    tags = "|".join(re.escape(gen.tag) for gen in GENERATORS.values())
+    return re.compile(rf"rs\d+_({tags})_\d+")
+
+
+def select_ops(op_filter: str | None = None, dtype_filter: str | None = None) -> tuple[tuple[str, str], ...]:
+    """Generator keys matching generate filters."""
+    from helia_core_tester.generation.io.dtypes import normalize_dtype
+
+    ops, dtypes = _parts(op_filter), [normalize_dtype(d) for d in _parts(dtype_filter)]
+    have = ", ".join(f"{op} {dtype}" for op, dtype in GENERATORS)
+    # Every token must name a generator.
+    unknown = [w for w in ops if not any(_matches(key[0], gen, w) for key, gen in GENERATORS.items())]
+    if unknown:
+        raise ValueError(f"No random shapes for {', '.join(unknown)}; have {have}")
+    picked = tuple(
+        key for key, gen in GENERATORS.items()
+        if (not ops or any(_matches(key[0], gen, wanted) for wanted in ops)) and (not dtypes or key[1] in dtypes)
+    )
+    if not picked:
+        raise ValueError(f"No random shapes for that op/dtype; have {have}")
+    return picked
+
+
+def op_suites(op_filter: str | None = None, dtype_filter: str | None = None) -> set[str]:
+    """Generated-test suites a draw writes."""
+    return {GENERATORS[key].suite for key in select_ops(op_filter, dtype_filter)}
+
+
+def layer_route(op: str, layer: Layer, mve: bool, dtype: str = "S8") -> str:
+    """The wrapper's direct callee."""
+    if op == "TransposeConv":
+        return TCF_ROUTES.get(dtype, TC16_ROUTE)
+    oh, ow = layer.out_hw()
+    i, o = (1, layer.h, layer.w, layer.cin), (1, oh, ow, layer.cout)
+    stride, dil, pad = (layer.sh, layer.sw), (layer.dh, layer.dw), layer.pads()
+    if op == "Convolve":
+        return conv_route(i, (layer.cout, layer.kh, layer.kw, layer.cin), o, stride, pad, dil, mve)
+    if dtype == "S16":
+        return dw_s16_route(i, (1, layer.kh, layer.kw, layer.cout), o, stride, pad, dil, layer.mult)
+    return dw_route(i, (1, layer.kh, layer.kw, layer.cout), o, stride, pad, dil, layer.mult, mve)
+
+
+def footprint(op: str, layer: Layer, dtype: str = "S8") -> int:
+    """Firmware workspace bytes, TCM placement."""
+    oh, ow = layer.out_hw()
+    idims = {"n": 1, "h": layer.h, "w": layer.w, "c": layer.cin}
+    odims = {"n": 1, "h": oh, "w": ow, "c": layer.cout}
+    if dtype in TCF_ROUTES:
+        return _float_footprint(layer, idims, odims, 4 if dtype == "FP32" else 2)
+    # Element and bias bytes.
+    item, bias = (2, 8) if dtype == "S16" else (1, 4)
+    if op == "Convolve":
+        fdims = {"h": layer.kh, "w": layer.kw, "c": layer.cin, "n": layer.cout}
+        scratch = TemplateContextBuilder.calculate_buffer_size_max(idims, fdims, odims, output_dtype="S8")
+        scratch = _with_weight_sums(scratch, layer.cout)
+        weights = layer.kh * layer.kw * layer.cin * layer.cout
+    elif op == "TransposeConv":
+        fdims = {"h": layer.kh, "w": layer.kw, "c": layer.cin, "n": layer.cout}
+        scratch = TemplateContextBuilder.calculate_transpose_conv_buffer_size_max(
+            idims, fdims, odims, output_dtype=dtype, stride_h=layer.sh, stride_w=layer.sw)
+        weights = layer.kh * layer.kw * layer.cin * layer.cout
+    elif dtype == "S16":
+        fdims = {"n": 1, "h": layer.kh, "w": layer.kw, "c": layer.cout}
+        scratch = TemplateContextBuilder.calculate_depthwise_buffer_size_max(idims, fdims, odims, output_dtype="S16")
+        weights = layer.kh * layer.kw * layer.cout
+    else:
+        fdims = {"n": 1, "h": layer.kh, "w": layer.kw, "c": layer.cout}
+        scratch = _depthwise_s8_scratch_bytes(idims, fdims, odims)
+        weights = layer.kh * layer.kw * layer.cout
+    used = 0
+    # input, weights, bias, multiplier, shift
+    blobs = ((item * layer.n * layer.h * layer.w * layer.cin, item), (weights, 1), (bias * layer.cout, bias),
+             *[(4 * layer.cout, 4)] * 2)
+    for size, align in blobs:
+        used = _align_up(used, align) + size
+    used = _align_up(used, 16) + scratch
+    return _align_up(used, 16) + item * layer.n * oh * ow * layer.cout
+
+
+def _float_footprint(layer: Layer, idims: dict, odims: dict, item: int) -> int:
+    """Float transpose conv workspace bytes."""
+    idims, odims = {**idims, "n": layer.n}, {**odims, "n": layer.n}
+    fdims = {"n": layer.cout, "h": layer.kh, "w": layer.kw, "c": layer.cin}
+    ctx, reverse = TemplateContextBuilder.float_transpose_conv_scratch(idims, fdims, odims)
+    used = 0
+    # input, weights, bias
+    for size, align in ((item * layer.n * layer.h * layer.w * layer.cin, item),
+                        (item * layer.kh * layer.kw * layer.cin * layer.cout, item), (item * layer.cout, item)):
+        used = _align_up(used, align) + size
+    used = _align_up(used, 16) + _align_up(_align_up(ctx, 16) + reverse, 16)
+    return _align_up(used, 16) + item * layer.n * odims["h"] * odims["w"] * layer.cout
+
+
+def layer_macs(op: str, layer: Layer) -> int:
+    if op == "TransposeConv":
+        # Each input scatters one kernel.
+        return layer.n * layer.h * layer.w * layer.cin * layer.cout * layer.kh * layer.kw
+    oh, ow = layer.out_hw()
+    depth = layer.cin if op == "Convolve" else 1
+    return oh * ow * layer.cout * layer.kh * layer.kw * depth
+
+
+def _second_moment(data: tuple[float, float], calib: tuple[float, float]) -> float:
+    """E[x^2] of data clipped to calibration."""
+    lo, hi = min(calib[0], 0.0), max(calib[1], 0.0)
+    x = np.clip(np.linspace(*data, 257), lo, hi)
+    return float(np.mean(x * x))
+
+
+def _relu6_gain(op: str, layer: Layer, data: tuple, calib: tuple) -> float:
+    """Gain putting pre-activation RMS near 6."""
+    taps = layer.kh * layer.kw
+    depth, outs = (layer.cin, layer.cout) if op in ("Convolve", "TransposeConv") else (1, layer.mult)
+    fan_avg = taps * (layer.cin + outs) / 2
+    # Strides spread a transpose kernel's taps.
+    terms = max(taps / (layer.sh * layer.sw), 1.0) if op == "TransposeConv" else taps
+    return 36.0 * fan_avg / (terms * depth * max(_second_moment(data, calib), 1e-6))
+
+
+def _quant(rng: np.random.Generator, op: str, layer: Layer, dtype: str = "S8") -> dict[str, Any]:
+    """Activation, clamp and quant knobs."""
+    act = str(rng.choice(["NONE", "RELU", "RELU6"]))
+    oh, ow = layer.out_hw()
+    # Few outputs flatten under clamps.
+    roomy = oh * ow * layer.cout >= 64
+    # Dilated graphs keep the activation outside.
+    act = act if roomy and (layer.dh, layer.dw) == (1, 1) else "NONE"
+    knobs: dict[str, Any] = {"activation": act, "use_bias": bool(rng.random() < 0.85)}
+    calib = (-32.0, 32.0)
+    if rng.random() < 0.5:
+        # Off-centre ranges give non-zero offsets.
+        calib = (-float(rng.integers(0, 64)), float(rng.integers(1, 64)))
+    data = calib
+    if rng.random() < 0.25:
+        # Wider data than calibration saturates.
+        spread = float(rng.uniform(1.2, 2.5))
+        data = (calib[0] * spread - 1.0, calib[1] * spread)
+    knobs["calibration_range"], knobs["input_range"] = list(calib), list(data)
+    if act == "RELU6":
+        knobs["weight_gain"] = _relu6_gain(op, layer, data, calib) * float(rng.uniform(0.7, 2.0))
+    elif rng.random() < 0.4:
+        knobs["weight_gain"] = float(10 ** rng.uniform(-2, 2))
+    qmax = 32767 if dtype == "S16" else 127
+    # Int16 fused activations clamp at zero.
+    floor = 0 if dtype == "S16" and act != "NONE" else -qmax - 1
+    span = qmax + 1 - floor
+    if rng.random() < 0.25 and roomy:
+        low = int(rng.integers(floor, floor + span // 2))
+        knobs["activation_min"] = low
+        knobs["activation_max"] = int(rng.integers(low + span // 4, qmax + 1))
+    elif floor == 0:
+        knobs["activation_min"] = 0
+    return knobs
+
+
+def _descriptor(
+    op: str, dtype: str, name: str, layer: Layer, knobs: dict, seed: int, route: str
+) -> dict[str, Any]:
+    desc: dict[str, Any] = {
+        "operator": op,
+        "name": name,
+        "activation_dtype": dtype,
+        "weight_dtype": dtype if dtype in TCF_ROUTES else "S8",
+        "input_shape": [layer.n, layer.h, layer.w, layer.cin],
+        "strides": [layer.sh, layer.sw],
+        "padding": layer.padding,
+        "dilation": [layer.dh, layer.dw],
+        "shape_seed": seed,
+        "expected_route": route,
+        **knobs,
+    }
+    if op == "Convolve":
+        desc["filter_shape"] = [layer.kh, layer.kw, layer.cin, layer.cout]
+    elif dtype in TCF_ROUTES:
+        desc["filter_shape"] = [layer.kh, layer.kw, layer.cout, layer.cin]
+        desc["suite"] = "float"
+        desc["tensor_dtypes"] = dict.fromkeys(("input", "output", "weights", "bias"), dtype)
+        # Tolerance scales with the summed terms.
+        desc["sum_bound"] = True
+    elif op == "TransposeConv":
+        desc["filter_shape"] = [layer.kh, layer.kw, layer.cout, layer.cin]
+        # Skip on kernels without the entry.
+        desc["required_kernel_symbols"] = list(TC16_SYMBOLS)
+    else:
+        desc["filter_shape"] = [layer.kh, layer.kw, layer.cin, layer.mult]
+        desc["depth_multiplier"] = layer.mult
+    return desc
+
+
+def sample_op(key: tuple[str, str], n: int, seed: int, cpu: str, workspace: int) -> list[dict[str, Any]]:
+    """N descriptors for one generator, cycling routes."""
+    mve = get_cpu_profile(cpu).has_mve
+    gen, (op, dtype) = GENERATORS[key], key
+    routes, draw = gen.routes(mve), gen.draw
+    targets = gen.plan(n) if gen.plan else routes
+    # One stream per op keeps ops independent.
+    rng = np.random.default_rng([seed, gen.stream])
+    cases = []
+    for index in range(n):
+        target = targets[index % len(targets)]
+        for _ in range(MAX_TRIES):
+            layer = draw(rng, target)
+            oh, ow = layer.out_hw()
+            if oh < 1 or ow < 1:
+                continue
+            route = layer_route(op, layer, mve, dtype)
+            # Planned edges keep the op's one route.
+            hit = route == target or (target == DW_AS_CONV and route in CONV_ROUTES) or (
+                gen.plan is not None and route in routes)
+            if hit and layer_macs(op, layer) <= MAX_MACS and footprint(op, layer, dtype) <= workspace:
+                break
+        else:
+            raise RuntimeError(f"No {op} {dtype} shape for route {target}")
+        name = f"rs{seed}_{gen.tag}_{index:03d}"
+        knobs = layer.knobs or (_float_knobs(rng, layer) if gen.suite == "float" else _quant(rng, op, layer, dtype))
+        case = _descriptor(op, dtype, name, layer, knobs, seed, route)
+        if target not in routes:
+            case["edge"] = target
+        cases.append(case)
+    return cases
+
+
+def min_workspace(cpu: str) -> int:
+    """Smallest board workspace for cpu."""
+    from helia_core_tester.hardware.boards import load_board_table
+
+    boards = load_board_table()
+    sizes = [b.workspace_bytes for b in boards if normalize_cpu(b.cpu) == normalize_cpu(cpu)]
+    # FVP-only CPUs: smallest of all.
+    return min(sizes or [b.workspace_bytes for b in boards])
+
+
+def sample_cases(
+    n: int, seed: int, cpu: str = "cortex-m55", ops: tuple[tuple[str, str], ...] = OPS
+) -> list[dict[str, Any]]:
+    """N descriptors per generator, deterministic in seed."""
+    workspace = min_workspace(cpu)
+    return [case for key in ops for case in sample_op(key, n, seed, cpu, workspace)]
+
+
+def route_counts(cases: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
+    """Cases per route, per op."""
+    counts: dict[str, Counter] = {}
+    for case in cases:
+        counts.setdefault(case["operator"], Counter())[case["expected_route"]] += 1
+    return {op: dict(sorted(c.items())) for op, c in sorted(counts.items())}
+
+
+def write_cases(root: Path, cases: list[dict[str, Any]], header: dict[str, Any], cpu: str) -> Path:
+    """Write descriptors and summary; return descriptors dir."""
+    shutil.rmtree(root, ignore_errors=True)
+    descriptors = root / "descriptors"
+    by_file: dict[str, list] = {}
+    for case in cases:
+        key = case["operator"], case["activation_dtype"]
+        by_file.setdefault(GENERATORS[key].descriptor_file, []).append(case)
+    for relpath, docs in by_file.items():
+        path = descriptors / relpath
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(yaml.safe_dump_all(docs, sort_keys=False))
+    dtypes: dict[str, dict[str, None]] = {}
+    for case in cases:
+        dtypes.setdefault(case["operator"], {})[case["activation_dtype"]] = None
+    ops = {op: ",".join(seen) for op, seen in dtypes.items()}
+    summary = {**header, "cpu": normalize_cpu(cpu), "cases": len(cases), "ops": dict(sorted(ops.items())),
+               "routes": route_counts(cases)}
+    (root / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+    print(f"Random shapes ({json.dumps(header)}): {json.dumps(summary['routes'])}")
+    return descriptors
+
+
+def prepare_shapes(repo_root: Path, n: int, seed: int, cpu: str, ops: tuple[tuple[str, str], ...] = OPS) -> Path:
+    """Sample and write cases; return descriptors dir."""
+    root = artifacts_root(repo_root) / "random_shapes" / f"s{seed}" / normalize_cpu(cpu)
+    return write_cases(root, sample_cases(n, seed, cpu, ops), {"shape_seed": seed}, cpu)
+
+
+def hidden_secret(raw: str | None = None) -> bytes:
+    """Secret seed, by default from the environment."""
+    secret = (os.environ.get(SECRET_ENV, "") if raw is None else raw).strip()
+    if len(secret) < MIN_SECRET:
+        raise ValueError(f"{SECRET_ENV} needs {MIN_SECRET}+ characters")
+    return secret.encode()
+
+
+def seed_commitment(secret: bytes) -> str:
+    """Public hash of the secret."""
+    return hashlib.sha256(b"hct-hidden-commit\0" + secret).hexdigest()
+
+
+def hidden_cases(n: int, secret: bytes, cpu: str, ops: tuple[tuple[str, str], ...] = OPS) -> list[dict[str, Any]]:
+    """Secret-seeded cases with opaque ids."""
+    seed = int.from_bytes(hashlib.sha256(b"hct-hidden-seed\0" + secret).digest(), "big")
+    cases = sample_cases(n, seed, cpu, ops)
+    for case in cases:
+        # Keyed hash hides seed and index.
+        case["name"] = "h" + hmac.new(secret, case["name"].encode(), "sha256").hexdigest()[:HIDDEN_ID_HEX]
+        del case["shape_seed"]
+    return cases
+
+
+def check_hidden_paths(hidden_dir: Path, repo_root: Path, cpu: str, suite: str = "int") -> None:
+    """Refuse hidden writes that could touch the checkout."""
+    from helia_core_tester.core.path_layout import generated_tests_dir, generation_report_dir
+
+    root, repo = Path(hidden_dir).resolve(), Path(repo_root).resolve()
+    # Deleting either would reach the other.
+    if root.is_relative_to(repo) or repo.is_relative_to(root):
+        raise ValueError(f"{root} must neither hold nor sit inside the checkout")
+    for target in (
+        generated_tests_dir(root, normalize_cpu(cpu), suite=suite),
+        hidden_root(root, cpu),
+        generation_report_dir(root, normalize_cpu(cpu), suite=suite),
+    ):
+        _refuse_links(root, target)
+
+
+def _refuse_links(root: Path, target: Path) -> None:
+    """Refuse any link from root through target."""
+    path = root
+    for part in target.relative_to(root).parts:
+        path = path / part
+        if path.is_symlink():
+            raise ValueError(f"{path} is a symlink; hidden trees allow none")
+    if not target.is_dir():
+        return
+    for dirpath, dirnames, filenames in os.walk(target, followlinks=False):
+        for name in (*dirnames, *filenames):
+            entry = Path(dirpath) / name
+            if entry.is_symlink():
+                raise ValueError(f"{entry} is a symlink; hidden trees allow none")
+            # In-place writes would reach the other name.
+            if entry.is_file() and entry.lstat().st_nlink > 1:
+                raise ValueError(f"{entry} is hard-linked; hidden trees allow none")
+
+
+def hidden_root(hidden_dir: Path, cpu: str) -> Path:
+    """Hidden descriptors and summary for cpu."""
+    # The hidden dir mirrors a tester root.
+    return artifacts_root(hidden_dir) / "random_shapes" / normalize_cpu(cpu)
+
+
+def prepare_hidden(hidden_dir: Path, n: int, cpu: str, ops: tuple[tuple[str, str], ...] = OPS) -> Path:
+    """Write hidden cases; return descriptors dir."""
+    secret = hidden_secret()
+    root = hidden_root(hidden_dir, cpu)
+    return write_cases(root, hidden_cases(n, secret, cpu, ops), {"seed_commitment": seed_commitment(secret)}, cpu)

@@ -68,6 +68,23 @@ static int32_t run_convolve(void)
 {% elif fault == "zero_output_batch" %}
     output_dims.n = 0;
 {% endif %}
+{% if fault == "zero_filter_depth" %}
+    filter_dims.c = 0;
+{% elif fault == "filter_deeper_than_input" %}
+    filter_dims.c = 2 * input_dims.c;
+{% elif fault == "partial_filter_group" %}
+    /* One filter depth plus one channel: input_ch / filter_ch = 1 group that leaves a channel over */
+    input_dims.c = filter_dims.c + 1;
+{% elif fault == "negative_output_depth" %}
+    output_dims.c = -output_dims.c;
+{% elif fault == "output_not_whole_groups" %}
+    /* One output channel past a whole number of groups */
+    output_dims.c = output_dims.c + 1;
+{% elif fault == "negative_input_depth" %}
+    input_dims.c = -input_dims.c;
+{% elif fault == "negative_filter_depth" %}
+    filter_dims.c = -filter_dims.c;
+{% endif %}
     const {{ input_dtype }} *input_arg = {% if fault == "null_input" %}NULL{% else %}{{ name }}_input{% endif %};
     {{ output_dtype }} *output_arg = {% if fault == "null_output" %}NULL{% else %}{{ name }}_output{% endif %};
 

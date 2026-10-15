@@ -9,6 +9,7 @@ wiring it into the main CLI is a one-line follow-up once that lands.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -16,9 +17,11 @@ from pathlib import Path
 from typing import Iterable, List, Optional, Set
 
 import typer
+import yaml
 
 from helia_core_tester.core.cpu_targets import get_cpu_profile, normalize_cpu
 from helia_core_tester.core.path_layout import VALID_SUITES
+from helia_core_tester.generation.io.descriptors import descriptor_matches_op
 from helia_core_tester.mutation.catalog import MUTANTS_V1, get_mutants
 from helia_core_tester.mutation.runner import run_mutation_scoring
 from helia_core_tester.mutation.host_build import discover_cases
@@ -104,9 +107,24 @@ def derive_corpus_cpu(roots: Iterable[Path], case_dirs: Iterable[Path]) -> Optio
     return found.pop() if found else None
 
 
-def _generate_cases(tester_root: Path, workdir: Path, ops: List[str], cpu: str, seed: int) -> List[Path]:
+def filter_cases_by_ops(case_dirs: Iterable[Path], ops: List[str]) -> List[Path]:
+    """Case dirs whose descriptor matches an op."""
+    kept: List[Path] = []
+    for case_dir in case_dirs:
+        descriptor_path = Path(case_dir) / "descriptor.yaml"
+        if not descriptor_path.is_file():
+            continue
+        desc = yaml.safe_load(descriptor_path.read_text()) or {}
+        if "name" in desc and any(descriptor_matches_op(desc, op) for op in ops):
+            kept.append(case_dir)
+    return kept
+
+
+def _generate_cases(tester_root: Path, workdir: Path, ops: List[str], cpu: str, seed: int, cmsis_nn_root: Path) -> List[Path]:
     """Generate int-suite cases per op via the generation pytest entry point."""
     gen_root = workdir / "gen"
+    # Generation reads the kernel tree from env.
+    env = {**os.environ, "CMSIS_NN_ROOT": str(cmsis_nn_root)}
     roots: List[Path] = []
     for op in ops:
         out_dir = gen_root / op
@@ -128,7 +146,7 @@ def _generate_cases(tester_root: Path, workdir: Path, ops: List[str], cpu: str, 
             "--generated-tests-dir",
             str(out_dir),
         ]
-        proc = subprocess.run(cmd, cwd=tester_root / "helia_core_tester" / "generation")
+        proc = subprocess.run(cmd, cwd=tester_root / "helia_core_tester" / "generation", env=env)
         if proc.returncode != 0:
             typer.echo(f"✗ generation failed for op {op}", err=True)
             raise typer.Exit(1)
@@ -147,11 +165,13 @@ def list_mutants():
 
 @app.command()
 def run(
-    cmsis_nn_root: Path = typer.Option(..., "--cmsis-nn-root", help="Path to an ns-cmsis-nn checkout (read-only; mutants are applied to a copy)"),
-    ops: str = typer.Option(DEFAULT_OPS, "--ops", help="Comma-separated operator filter (generation op names)"),
+    cmsis_nn_root: Path = typer.Option(..., "--cmsis-nn-root", resolve_path=True, help="Path to an ns-cmsis-nn checkout (read-only; mutants are applied to a copy)"),
+    ops: Optional[str] = typer.Option(
+        None, "--ops", help=f"Comma-separated op filter; also filters --cases-root (generation default: {DEFAULT_OPS})"
+    ),
     cases_root: Optional[Path] = typer.Option(None, "--cases-root", help="Reuse already-generated cases under this directory instead of generating"),
     mutants: Optional[str] = typer.Option(None, "--mutants", help="Comma-separated mutant ids (default: full v1 catalog)"),
-    workdir: Path = typer.Option(Path("artifacts/mutation"), "--workdir", help="Scratch + report directory"),
+    workdir: Path = typer.Option(Path("artifacts/mutation"), "--workdir", resolve_path=True, help="Scratch + report directory"),
     cpu: Optional[str] = typer.Option(
         None,
         "--cpu",
@@ -177,13 +197,15 @@ def run(
 
     mutant_list = get_mutants([m.strip() for m in mutants.split(",")] if mutants else None)
 
+    op_list = [o.strip() for o in (ops or DEFAULT_OPS).split(",") if o.strip()]
     if cases_root is not None:
         case_roots = [cases_root]
     else:
-        op_list = [o.strip() for o in ops.split(",") if o.strip()]
-        case_roots = _generate_cases(tester_root, workdir, op_list, cpu or DEFAULT_CPU, seed)
+        case_roots = _generate_cases(tester_root, workdir, op_list, cpu or DEFAULT_CPU, seed, cmsis_nn_root)
 
     case_dirs = discover_cases(case_roots)
+    if cases_root is not None and ops:
+        case_dirs = filter_cases_by_ops(case_dirs, op_list)
     if not case_dirs:
         typer.echo("✗ no generated cases found", err=True)
         raise typer.Exit(1)

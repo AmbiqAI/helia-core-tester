@@ -5,6 +5,8 @@ Every nsx_cli step is monkeypatched; nothing here runs NSX or CMake.
 
 from __future__ import annotations
 
+import dataclasses
+import hashlib
 import os
 import shutil
 from pathlib import Path
@@ -15,7 +17,7 @@ from typer.testing import CliRunner
 
 from helia_core_tester.cli import app
 from helia_core_tester.hardware import cli as hardware_cli
-from helia_core_tester.hardware import firmware_build, hardware_pipeline, nsx_app, nsx_cli
+from helia_core_tester.hardware import firmware_build, hardware_pipeline, nsx_app, nsx_cli, toolchain, transport
 from helia_core_tester.hardware.boards import resolve_board
 from helia_core_tester.hardware.hardware_pipeline import HardwareRunOutcome, StreamOptions
 from helia_core_tester.hardware.jlink_library import JLinkExecutable, JLinkLibraryError
@@ -64,13 +66,24 @@ def nsx(monkeypatch: pytest.MonkeyPatch) -> list[tuple]:
         calls.append(("configure", frozen))
         (build_dir / "build.ninja").write_text("", encoding="utf-8")
         (build_dir / "CMakeCache.txt").write_text(
-            f"CMAKE_HOME_DIRECTORY:INTERNAL={app_dir.resolve()}\nNSX_BOARD:STRING={board}\n", encoding="utf-8",
+            f"CMAKE_HOME_DIRECTORY:INTERNAL={app_dir.resolve()}\nNSX_BOARD:STRING={board}\n"
+            # What the NSX template sets for RTT channel 0.
+            f"NSX_SEGGER_RTT_BUFFER_SIZE_UP:STRING={nsx_app.RTT_BUFFER_SIZE_UP}\n"
+            f"NSX_SEGGER_RTT_BUFFER_SIZE_DOWN:STRING={nsx_app.RTT_BUFFER_SIZE_DOWN}\n",
+            encoding="utf-8",
         )
 
     def build_app(app_dir, *, board, build_dir, jobs=None, frozen=False):
         calls.append(("build", jobs, frozen))
 
     monkeypatch.setattr(firmware_build, "ensure_build_tools", lambda repo_root: None)
+    # The "ELF" carries the configured SEGGER channel-0 arrays.
+    monkeypatch.setattr(
+        transport, "elf_symbol_sizes",
+        lambda elf: {"_acUpBuffer": nsx_app.RTT_BUFFER_SIZE_UP, "_acDownBuffer": nsx_app.RTT_BUFFER_SIZE_DOWN},
+    )
+    # A host compiler on PATH must not leak in.
+    monkeypatch.setattr(toolchain.ToolchainSpec, "installed", lambda self: None)
     _use_jlink(monkeypatch, None)
     monkeypatch.setattr(nsx_cli, "starter_profile", lambda board: {"modules": ["nsx-core"]})
     monkeypatch.setattr(nsx_app, "render_app", render_app)
@@ -86,6 +99,13 @@ def _use_jlink(monkeypatch, path: str | None) -> None:
 
 def _steps(calls: list[tuple]) -> list[str]:
     return [call[0] for call in calls]
+
+
+def _cli(build_dir: Path, command: str, *flags: str) -> str:
+    serial = [] if command == "build" else ["--serial-no", str(SERIAL)]
+    result = runner.invoke(app, ["hardware", command, "--build-dir", str(build_dir), *serial, *flags])
+    assert result.exit_code == 0, result.output
+    return result.output
 
 
 def test_first_build_runs_every_step_in_order(tmp_path: Path, nsx: list[tuple]) -> None:
@@ -196,15 +216,53 @@ def test_force_reconfigure_resyncs(tmp_path: Path, nsx: list[tuple]) -> None:
     assert _steps(nsx) == ["render", "sync", "configure", "build"]
 
 
-def test_changed_options_warn(tmp_path: Path, nsx: list[tuple], capsys) -> None:
+def test_changed_options_are_named(tmp_path: Path, nsx: list[tuple]) -> None:
     firmware_build.build_firmware(BOARD, build_dir=tmp_path)
-    assert "WARNING" not in capsys.readouterr().err
+    assert nsx_app.saved_options(firmware_build.nsx_app_dir(tmp_path)) == AppOptions()
+    out = _cli(tmp_path, "build")
+    assert "Options changed" not in out and "inline asm on" in out
+    out = _cli(tmp_path, "build", "--no-inline-asm")
+    assert "Options changed, rebuilding: requantize inline asm on -> off" in out
+    assert f"Kernels: ns-cmsis-nn {nsx_app.CMSIS_NN_REF}, inline asm off" in out
+    assert nsx_app.saved_options(firmware_build.nsx_app_dir(tmp_path)) == AppOptions(requantize_inline_asm=False)
+
+
+def test_template_edit_is_not_an_options_change(tmp_path: Path, nsx: list[tuple]) -> None:
+    """Values, not rendered text, are compared."""
+    _cli(tmp_path, "build")
+    (firmware_build.nsx_app_dir(tmp_path) / "CMakeLists.txt").write_text("# older template\n", encoding="utf-8")
+    out = _cli(tmp_path, "build")
+    assert "Options changed" not in out and "No saved build options" not in out
+
+
+def test_failed_build_keeps_saved_options(tmp_path: Path, nsx: list[tuple], monkeypatch) -> None:
     firmware_build.build_firmware(BOARD, build_dir=tmp_path)
-    assert "WARNING" not in capsys.readouterr().err
-    firmware_build.build_firmware(BOARD, build_dir=tmp_path, options=AppOptions(requantize_inline_asm=False))
-    out = capsys.readouterr()
-    assert "build options changed since the last build (CMakeLists.txt)" in out.err
-    assert "inline asm off" in out.out
+
+    def broken(app_dir, **kwargs):
+        raise RuntimeError("compile error")
+
+    monkeypatch.setattr(nsx_cli, "build_app", broken)
+    stamp = firmware_build.nsx_app_dir(tmp_path) / firmware_build.BUILT_LOCK
+    built = stamp.read_text(encoding="utf-8")
+    monkeypatch.setattr(nsx_cli, "lock_digest", lambda _app: "relocked")
+    with pytest.raises(RuntimeError):
+        firmware_build.build_firmware(BOARD, build_dir=tmp_path, options=AppOptions(requantize_inline_asm=False))
+    assert nsx_app.saved_options(firmware_build.nsx_app_dir(tmp_path)) == AppOptions()
+    # Only a finished build moves it.
+    assert stamp.read_text(encoding="utf-8") == built
+
+
+def test_unsaved_build_dir_says_defaults(tmp_path: Path, nsx: list[tuple]) -> None:
+    """Build dirs from before saved options."""
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
+    (firmware_build.nsx_app_dir(tmp_path) / nsx_app.OPTIONS_FILE).unlink()
+    assert "No saved build options; using defaults." in _cli(tmp_path, "build")
+
+
+def test_options_round_trip_json(tmp_path: Path) -> None:
+    options = AppOptions(cmsis_nn_root=make_checkout(tmp_path / "k"), requantize_inline_asm=False)
+    assert AppOptions.from_json(options.to_json()) == options
+    assert AppOptions.from_json(AppOptions().to_json()) == AppOptions()
 
 
 def test_old_path_cache_is_dropped(tmp_path: Path, nsx: list[tuple]) -> None:
@@ -258,7 +316,7 @@ def _run(tmp_path: Path, monkeypatch, nsx: list[tuple], repo_root: Path, **kwarg
     """Pipeline with NSX, generate, flash, stream faked."""
     build_dir = tmp_path / "build"
 
-    def _generate(repo_root, spec, suite, float_precision=None, cmsis_nn_root=None):
+    def _generate(repo_root, spec, suite, float_precision=None, cmsis_nn_root=None, select=None):
         nsx.append(("generate", cmsis_nn_root))
 
     def _flash(spec, serial, *, force, **build_kwargs):
@@ -328,7 +386,7 @@ def test_build_flags_reach_app_options(tmp_path: Path, monkeypatch) -> None:
     assert seen["update_dependencies"] is True and seen["force_reconfigure"] is True and seen["jobs"] == 3
 
 
-def test_run_flags_reach_the_pipeline(monkeypatch) -> None:
+def test_run_flags_reach_the_pipeline(tmp_path: Path, monkeypatch) -> None:
     seen: dict = {}
 
     def _pipeline(*args, **kwargs):
@@ -337,9 +395,11 @@ def test_run_flags_reach_the_pipeline(monkeypatch) -> None:
 
     monkeypatch.setenv("HPX_JLINK_SERIAL", str(SERIAL))
     monkeypatch.setattr(hardware_pipeline, "run_hardware_pipeline", _pipeline)
-    result = runner.invoke(app, ["hardware", "run", "--skip-generate", "--cmsis-nn-ref", "v1.0.0"])
-    assert result.exit_code == 1
-    assert seen["app_options"] == AppOptions(cmsis_nn_ref="v1.0.0")
+    result = runner.invoke(app, [
+        "hardware", "run", "--skip-generate", "--cmsis-nn-ref", "v1.0.0", "--build-dir", str(tmp_path),
+    ])
+    assert result.exit_code == 5
+    assert seen["app_options"] == AppOptions(cmsis_nn_ref="v1.0.0", cmsis_nn_ref_explicit=True)
     assert seen["update_dependencies"] is False
 
 
@@ -362,10 +422,302 @@ def test_default_kernels_follow_layout(tmp_path: Path, monkeypatch, nested: bool
     assert seen["options"] == AppOptions(cmsis_nn_root=kernels.resolve() if nested else None)
     # An explicit ref still wins.
     runner.invoke(app, ["hardware", "build", "--build-dir", str(tmp_path / "b"), "--cmsis-nn-ref", "v1"])
-    assert seen["options"] == AppOptions(cmsis_nn_ref="v1")
+    assert seen["options"] == AppOptions(cmsis_nn_ref="v1", cmsis_nn_ref_explicit=True)
 
 
 def test_kernel_ref_and_root_are_exclusive(tmp_path: Path) -> None:
     result = runner.invoke(app, ["hardware", "build", "--cmsis-nn-ref", "v1", "--cmsis-nn-root", str(tmp_path)])
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     assert "not both" in result.output
+
+
+# --- saved options: flash what was built --------------------------------------------
+
+
+@pytest.fixture
+def bench(tmp_path: Path, nsx: list[tuple], monkeypatch) -> dict:
+    """Fake image per render; fake board."""
+    board: dict = {}
+
+    def build_app(app_dir, *, board, build_dir, jobs=None, frozen=False):
+        nsx.append(("build", jobs, frozen))
+        image = (app_dir / "CMakeLists.txt").read_bytes()
+        firmware_build.elf_path(build_dir).parent.mkdir(parents=True, exist_ok=True)
+        firmware_build.elf_path(build_dir).write_bytes(image)
+        firmware_build.build_id_path(build_dir).write_text(f"hct-{hashlib.sha256(image).hexdigest()[:8]}\n", encoding="utf-8")
+
+    def flash_app(app_dir, *, build_dir, **kwargs):
+        board["id"] = firmware_build.read_build_id(build_dir)
+
+    def reader(spec, serial, build_dir):
+        return board["id"]
+
+    real_flash = firmware_build.flash_firmware
+    monkeypatch.setattr(nsx_cli, "build_app", build_app)
+    monkeypatch.setattr(nsx_cli, "flash_app", flash_app)
+    monkeypatch.setattr(
+        firmware_build, "flash_firmware", lambda *a, **k: real_flash(*a, board_build_id_reader=reader, **k),
+    )
+    return board
+
+
+def test_flash_flashes_what_was_built(tmp_path: Path, nsx: list[tuple], bench: dict) -> None:
+    build_dir = tmp_path / "build"
+    _cli(build_dir, "build", "--no-inline-asm")
+    built = firmware_build.read_build_id(build_dir)
+
+    nsx.clear()
+    out = _cli(build_dir, "flash", "--no-inline-asm")
+    assert "inline asm off" in out and "Options changed" not in out
+    assert "Firmware flashed successfully" in out and bench["id"] == built
+    # No relock, resync or reconfigure.
+    assert _steps(nsx) == ["render", "build"] and nsx[0][1].requantize_inline_asm is False
+
+    out = _cli(build_dir, "flash", "--no-inline-asm")
+    assert f"board confirmed build id {built}" in out and "already up to date" in out
+
+    # Unpassed switches reset to defaults.
+    out = _cli(build_dir, "flash")
+    assert "Options changed, rebuilding: requantize inline asm off -> on" in out
+    assert "Firmware flashed successfully" in out and bench["id"] != built
+    assert nsx_app.saved_options(firmware_build.nsx_app_dir(build_dir)).requantize_inline_asm is True
+
+
+def test_flags_override_saved_options(tmp_path: Path) -> None:
+    app_dir = firmware_build.nsx_app_dir(tmp_path)
+    kernels = make_checkout(tmp_path / "kernels")
+    app_dir.mkdir(parents=True)
+    nsx_app.save_options(app_dir, AppOptions(cmsis_nn_root=kernels, requantize_inline_asm=False))
+    resolve = lambda **flags: nsx_app.resolve_options(app_dir, tmp_path, **flags)  # noqa: E731
+    # Kernel source stays; switches reset.
+    assert resolve() == AppOptions(cmsis_nn_root=kernels)
+    assert resolve(cmsis_nn_ref="v2") == AppOptions(cmsis_nn_ref="v2", cmsis_nn_ref_explicit=True)
+    assert resolve(inline_asm=False) == AppOptions(cmsis_nn_root=kernels, requantize_inline_asm=False)
+    assert resolve(follow_pin=False) == AppOptions(cmsis_nn_root=kernels, requantize_inline_asm=False)
+
+
+def test_defaulted_ref_follows_the_pin(tmp_path: Path, nsx: list[tuple]) -> None:
+    """A pin bump rebuilds default build dirs."""
+    app_dir = firmware_build.nsx_app_dir(tmp_path)
+    app_dir.mkdir(parents=True)
+    # Written before refs were marked explicit.
+    (app_dir / nsx_app.OPTIONS_FILE).write_text('{"cmsis_nn_ref": "v7.35.1"}', encoding="utf-8")
+    out = _cli(tmp_path, "build")
+    pin = nsx_app.CMSIS_NN_REF
+    assert f"Options changed, rebuilding: kernels ns-cmsis-nn v7.35.1 -> ns-cmsis-nn {pin}" in out
+    assert nsx_app.saved_options(app_dir) == AppOptions()
+
+
+def test_passed_ref_stays_after_pin_bump(tmp_path: Path) -> None:
+    """Even the pin itself, once passed."""
+    app_dir = firmware_build.nsx_app_dir(tmp_path)
+    app_dir.mkdir(parents=True)
+    resolve = lambda **flags: nsx_app.resolve_options(app_dir, tmp_path, **flags)  # noqa: E731
+    passed = resolve(cmsis_nn_ref=nsx_app.CMSIS_NN_REF)
+    assert passed.cmsis_nn_ref_explicit is True
+    nsx_app.save_options(app_dir, dataclasses.replace(passed, cmsis_nn_ref="v0.old"))
+    assert resolve().cmsis_nn_ref == "v0.old"
+    # Older records kept any non-pin ref.
+    (app_dir / nsx_app.OPTIONS_FILE).write_text('{"cmsis_nn_ref": "abc123"}', encoding="utf-8")
+    assert resolve().cmsis_nn_ref == "abc123"
+    # A defaulted ref stays only when asked.
+    nsx_app.save_options(app_dir, AppOptions(cmsis_nn_ref="v0.old"))
+    assert resolve().cmsis_nn_ref == nsx_app.CMSIS_NN_REF
+    assert resolve(follow_pin=False).cmsis_nn_ref == "v0.old"
+
+
+def test_no_saved_options_use_defaults(tmp_path: Path) -> None:
+    kernels, tester = _nested_layout(tmp_path)
+    app_dir = firmware_build.nsx_app_dir(tmp_path / "build")
+    assert nsx_app.resolve_options(app_dir, tester) == AppOptions(cmsis_nn_root=kernels.resolve())
+    # A corrupt file counts as absent.
+    app_dir.mkdir(parents=True)
+    (app_dir / nsx_app.OPTIONS_FILE).write_text("{not json", encoding="utf-8")
+    assert nsx_app.resolve_options(app_dir, tester, inline_asm=False) == AppOptions(
+        cmsis_nn_root=kernels.resolve(), requantize_inline_asm=False,
+    )
+
+
+def test_missing_saved_root_fails_clearly(tmp_path: Path) -> None:
+    app_dir = firmware_build.nsx_app_dir(tmp_path)
+    app_dir.mkdir(parents=True)
+    nsx_app.save_options(app_dir, AppOptions(cmsis_nn_root=tmp_path / "moved"))
+    result = runner.invoke(app, ["hardware", "build", "--build-dir", str(tmp_path)])
+    assert result.exit_code == 3
+    assert "kernel root is gone" in result.output and "--cmsis-nn-root" in result.output
+
+
+def test_failed_save_keeps_the_last_record(tmp_path: Path, monkeypatch) -> None:
+    """A torn write never replaces it."""
+    nsx_app.save_options(tmp_path, AppOptions(requantize_inline_asm=False))
+
+    def _torn(self, text, encoding=None):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(Path, "write_text", _torn)
+    with pytest.raises(OSError):
+        nsx_app.save_options(tmp_path, AppOptions())
+    monkeypatch.undo()
+    assert nsx_app.saved_options(tmp_path) == AppOptions(requantize_inline_asm=False)
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        '{"requantize_inline_asm": "false"}',
+        '{"cmsis_nn_ref": 7}',
+        '{"cmsis_nn_ref": ""}',
+        '{"cmsis_nn_root": ["x"]}',
+        '{"enable_f16": 1}',
+        '["not", "an", "object"]',
+    ],
+)
+def test_malformed_saved_options_count_as_absent(tmp_path: Path, record: str) -> None:
+    """Wrong types never pick build settings."""
+    (tmp_path / nsx_app.OPTIONS_FILE).write_text(record, encoding="utf-8")
+    assert nsx_app.saved_options(tmp_path) is None
+
+
+def test_saved_options_round_trip(tmp_path: Path) -> None:
+    options = AppOptions(cmsis_nn_ref="v9", cmsis_nn_root=tmp_path, requantize_inline_asm=False)
+    nsx_app.save_options(tmp_path, options)
+    assert nsx_app.saved_options(tmp_path) == options
+
+
+@pytest.fixture
+def gcc_version(monkeypatch: pytest.MonkeyPatch, nsx: list[tuple]) -> dict[str, str]:
+    """Configure writes a compiler probe; -dumpversion answers from `state`."""
+    state = {"version": "14.2.1"}
+    configure = nsx_cli.configure_app
+
+    def configure_app(app_dir, board, *, build_dir, frozen=False):
+        configure(app_dir, board, build_dir=build_dir, frozen=frozen)
+        probe = build_dir / "CMakeFiles" / "3.31.0" / "CMakeCCompiler.cmake"
+        probe.parent.mkdir(parents=True, exist_ok=True)
+        probe.write_text('set(CMAKE_C_COMPILER "/dl/arm_gcc_download/bin/arm-none-eabi-gcc")\n', encoding="utf-8")
+
+    monkeypatch.setattr(nsx_cli, "configure_app", configure_app)
+    monkeypatch.setattr(toolchain, "compiler_version", lambda compiler: compiler and state["version"])
+    monkeypatch.setattr(toolchain.ToolchainSpec, "installed", lambda self: self.record("arm-none-eabi-gcc"))
+    return state
+
+
+def _built_version(build_dir: Path) -> str:
+    return firmware_build.built_record(firmware_build.nsx_app_dir(build_dir))["toolchain"]["version"]
+
+
+def test_compiler_swap_at_same_path_rebuilds_from_scratch(
+    tmp_path: Path, nsx: list[tuple], gcc_version: dict[str, str]
+) -> None:
+    """Ninja ignores a new binary at the configured path, so old objects must go."""
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
+    stale = tmp_path / "modules" / "CMakeFiles" / "kernel.dir" / "arm_conv.c.obj"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("14.2 object", encoding="utf-8")
+    gcc_version["version"] = "14.3.1"
+    nsx.clear()
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
+    assert _steps(nsx) == ["render", "configure", "build"]
+    assert not stale.exists()
+    assert (firmware_build.nsx_app_dir(tmp_path) / "nsx.yml").is_file()
+    assert _built_version(tmp_path) == "14.3.1"
+
+
+def test_unchanged_compiler_keeps_build_outputs(
+    tmp_path: Path, nsx: list[tuple], gcc_version: dict[str, str]
+) -> None:
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
+    kept = tmp_path / "modules" / "lib.a"
+    kept.parent.mkdir()
+    kept.write_text("", encoding="utf-8")
+    nsx.clear()
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
+    assert _steps(nsx) == ["render", "build"]
+    assert kept.is_file() and _built_version(tmp_path) == "14.2.1"
+
+
+def test_outputs_without_a_build_record_are_removed(
+    tmp_path: Path, nsx: list[tuple], gcc_version: dict[str, str]
+) -> None:
+    """A configured dir no good build recorded: unknown compiler, fail closed."""
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
+    (firmware_build.nsx_app_dir(tmp_path) / firmware_build.BUILT_INFO).unlink()
+    flashed = tmp_path / f".flashed-{SERIAL}.sha256"
+    flashed.write_text("0" * 64, encoding="utf-8")
+    nsx.clear()
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
+    assert "configure" in _steps(nsx)
+    assert not flashed.exists()
+    assert _built_version(tmp_path) == "14.2.1"
+
+
+def test_unknown_installed_compiler_counts_as_changed(
+    tmp_path: Path, nsx: list[tuple], gcc_version: dict[str, str], monkeypatch
+) -> None:
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
+    monkeypatch.setattr(toolchain.ToolchainSpec, "installed", lambda self: None)
+    nsx.clear()
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
+    assert "configure" in _steps(nsx)
+
+
+def test_fresh_build_dir_is_left_alone(tmp_path: Path, nsx: list[tuple], gcc_version: dict[str, str]) -> None:
+    """No CMake outputs: nothing is deleted, even without a record."""
+    keep = tmp_path / "notes.txt"
+    keep.write_text("mine", encoding="utf-8")
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
+    assert keep.read_text(encoding="utf-8") == "mine"
+
+
+def test_foreign_cmake_build_dir_keeps_its_outputs(
+    tmp_path: Path, nsx: list[tuple], gcc_version: dict[str, str]
+) -> None:
+    """A --build-dir another project configured loses only its cache, never its other files."""
+    (tmp_path / "CMakeCache.txt").write_text(
+        f"CMAKE_HOME_DIRECTORY:INTERNAL={tmp_path / 'elsewhere'}\n", encoding="utf-8"
+    )
+    (tmp_path / "build.ninja").write_text("", encoding="utf-8")
+    theirs = tmp_path / "app" / "main.c.obj"
+    theirs.parent.mkdir()
+    theirs.write_text("theirs", encoding="utf-8")
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
+    assert theirs.read_text(encoding="utf-8") == "theirs"
+    assert "configure" in _steps(nsx)
+
+
+def test_build_records_the_lock_and_kernels(tmp_path: Path, nsx: list[tuple], monkeypatch) -> None:
+    import json
+
+    monkeypatch.setattr(nsx_cli, "lock_digest", lambda _app: "abc123")
+    monkeypatch.setattr(nsx_cli, "tree_hash", lambda _root: "tree456")
+    app_dir = firmware_build.nsx_app_dir(tmp_path)
+    nsx_app.kernel_dir(app_dir, AppOptions()).mkdir(parents=True)
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
+    stamp = app_dir / firmware_build.BUILT_LOCK
+    assert json.loads(stamp.read_text(encoding="utf-8")) == {"lock": "abc123", "kernels": "tree456"}
+
+
+@pytest.mark.parametrize("other", [True, False])
+def test_probe_stamp_skips_useless_confirm(tmp_path: Path, monkeypatch, other: bool) -> None:
+    """Another ELF on the probe: flash, no asking."""
+    monkeypatch.setattr(firmware_build, "build_firmware", lambda board, **kwargs: None)
+    flashed = []
+    monkeypatch.setattr(nsx_cli, "flash_app", lambda app_dir, **kwargs: flashed.append(app_dir))
+    _use_jlink(monkeypatch, "/opt/a/JLinkExe")
+    tcm, mram = tmp_path / "b-eval-tcm", tmp_path / "b-eval-mram"
+    for build_dir, image in ((tcm, b"tcm"), (mram, b"mram")):
+        elf = firmware_build.elf_path(build_dir)
+        elf.parent.mkdir(parents=True)
+        elf.write_bytes(image)
+        firmware_build.build_id_path(build_dir).write_text(image.decode())
+    firmware_build.record_flash(tcm, SERIAL, firmware_build.elf_sha256(firmware_build.elf_path(tcm)))
+    if other:
+        firmware_build.record_flash(mram, SERIAL, firmware_build.elf_sha256(firmware_build.elf_path(mram)))
+    asked = []
+
+    def reader(board, serial, build_dir):
+        asked.append(build_dir)
+        return "tcm"
+
+    decision = firmware_build.flash_firmware(BOARD, SERIAL, build_dir=tcm, board_build_id_reader=reader)
+    assert (decision.needed, bool(asked), bool(flashed)) == ((True, False, True) if other else (False, True, False))

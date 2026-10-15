@@ -7,6 +7,8 @@ import subprocess
 
 import pytest
 
+from helia_core_tester.hardware.transfer import staged_extent
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 # The ns-cmsis-nn checkout: $CMSIS_NN_ROOT (what `generate` and the firmware build use),
 # else the tester's conventional location two levels up.
@@ -14,7 +16,20 @@ CMSIS_NN_ROOT = Path(os.environ.get("CMSIS_NN_ROOT") or PROJECT_ROOT.parent.pare
 
 
 
-def test_c_firmware_session_loop_executes_abs_correctness_flow(tmp_path: Path) -> None:
+# Stubbed nsx-pmu-armv8m API and PMU registers.
+PMU_STUB_DIR = PROJECT_ROOT / "helia_core_tester" / "tests" / "fixtures" / "pmu_stub"
+PMU_STUB_FLAGS = [
+    "-DHCT_HOST_PMU_STUB",
+    "-D__PMU_PRESENT=1",
+    "-D__PMU_NUM_EVENTCNT=8",
+    "-I",
+    str(PMU_STUB_DIR),
+    str(PMU_STUB_DIR / "pmu_stub.c"),
+]
+
+
+@pytest.mark.parametrize("pmu", [False, True], ids=["dwt-only", "pmu-stub"])
+def test_c_firmware_session_loop_executes_abs_correctness_flow(tmp_path: Path, pmu: bool) -> None:
     cc = shutil.which("cc")
     if cc is None:
         pytest.skip("host C compiler not available")
@@ -30,6 +45,9 @@ def test_c_firmware_session_loop_executes_abs_correctness_flow(tmp_path: Path) -
             "-Wextra",
             "-Werror",
             "-DHCT_HOST_ABS_ONLY",
+            # Target ABI: one-byte status enums.
+            "-fshort-enums",
+            *(PMU_STUB_FLAGS if pmu else []),
             "-I",
             str(PROJECT_ROOT / "cmake" / "hardware"),
             "-I",
@@ -39,6 +57,7 @@ def test_c_firmware_session_loop_executes_abs_correctness_flow(tmp_path: Path) -
             str(PROJECT_ROOT / "cmake" / "hardware" / "benchmark_server_messages.c"),
             str(PROJECT_ROOT / "cmake" / "hardware" / "benchmark_server_adapter.c"),
             str(PROJECT_ROOT / "cmake" / "hardware" / "benchmark_server_session.c"),
+            str(PROJECT_ROOT / "cmake" / "hardware" / "benchmark_server_mram.c"),
             str(PROJECT_ROOT / "cmake" / "hardware" / "benchmark_server_session_host_main.c"),
             str(CMSIS_NN_ROOT / "Source" / "BasicMathFunctions" / "arm_abs_s8.c"),
             "-o",
@@ -48,13 +67,30 @@ def test_c_firmware_session_loop_executes_abs_correctness_flow(tmp_path: Path) -
         cwd=PROJECT_ROOT,
     )
 
-    result = subprocess.run([str(binary)], check=True, capture_output=True, text=True)
+    result = subprocess.run([str(binary)], capture_output=True, text=True)
+    assert result.returncode == 0, f"harness exit {result.returncode}"
     assert "chunks=" in result.stdout
     assert "bytes=12" in result.stdout
     # v2: the harness continues through CORRECTNESS_ACK/RUN_PERFORMANCE with two PMU
-    # passes (3 samples each) and checks every SAMPLE_RESULT leads with the CCNTR entry
-    # and reports the event counters unsupported on this PMU-less host build.
+    # passes (3 samples each) and checks every SAMPLE_RESULT leads with the CCNTR entry.
+    # DWT-only: event counters come back unsupported. PMU stub: the harness also checks
+    # an unmapped event id fails SESSION_PLAN, chained vs 16-bit setup, CCNTR/OVS read
+    # before the module's read resets them, and each counter's overflow slot.
     assert "samples=6 passes=2" in result.stdout
+    # Refusals end one case; the next runs.
+    # 2 passes x 3 samples x 4 calls.
+    assert "input_moves=24" in result.stdout
+    assert "misaligned=0" in result.stdout
+    # Skipped timed calls fail the output check.
+    for line in (
+        "rejected correctness samples_dropped=0",
+        "rejected warmup samples_dropped=0",
+        "rejected sampling samples_dropped=3",
+        "rejected memoized samples_dropped=0",
+        "rejected memoized-late samples_dropped=5",
+        "rejected mutated samples_dropped=6",
+    ):
+        assert line in result.stdout
 
 
 def test_shared_c_validation_rejects_range_and_shape_overflow(tmp_path: Path) -> None:
@@ -91,3 +127,76 @@ int main(void) {
         check=True,
     )
     subprocess.run([str(binary)], check=True)
+
+
+MRAM_STUB_DIR = PROJECT_ROOT / "helia_core_tester" / "tests" / "fixtures" / "mram_stub"
+
+
+def _build_mram_harness(tmp_path: Path, *defines: str) -> Path:
+    """Compile the MRAM stub harness."""
+    cc = shutil.which("cc")
+    if cc is None:
+        pytest.skip("host C compiler not available")
+    if not (CMSIS_NN_ROOT / "Include" / "arm_nnfunctions.h").is_file():
+        pytest.skip(f"no real ns-cmsis-nn checkout found at {CMSIS_NN_ROOT}")
+    hardware = PROJECT_ROOT / "cmake" / "hardware"
+    binary = tmp_path / "mram_harness"
+    subprocess.run(
+        [
+            cc, "-std=c99", "-Wall", "-Wextra", "-Werror", "-DHCT_HOST_ABS_ONLY", *defines,
+            "-I", str(MRAM_STUB_DIR), "-I", str(hardware), "-I", str(CMSIS_NN_ROOT / "Include"),
+            *(str(hardware / name) for name in (
+                "hctp_protocol.c", "benchmark_server_catalog.c", "benchmark_server_messages.c",
+                "benchmark_server_adapter.c", "benchmark_server_session.c", "benchmark_server_mram.c",
+            )),
+            str(MRAM_STUB_DIR / "mram_stub.c"),
+            str(MRAM_STUB_DIR / "mram_harness.c"),
+            str(CMSIS_NN_ROOT / "Source" / "BasicMathFunctions" / "arm_abs_s8.c"),
+            "-o", str(binary),
+        ],
+        check=True,
+        cwd=PROJECT_ROOT,
+    )
+    return binary
+
+
+@pytest.mark.parametrize("placement", [[], ["-DHCT_PLACEMENT_MRAM"]], ids=["tcm", "mram"])
+def test_c_blob_store(tmp_path: Path, placement: list[str]) -> None:
+    binary = _build_mram_harness(tmp_path, "-DHCT_BLOB_STORE_BYTES=16384u", *placement)
+    result = subprocess.run([str(binary)], capture_output=True, text=True)
+    # The harness prints "FAILED check <id>"; the exit code is only 0 or 1.
+    assert result.returncode == 0, f"harness exit {result.returncode}: {result.stdout.strip().splitlines()[-1:]}"
+    for line in ("store hits", "store wiped", "store exact fill", "store overlap refused"):
+        assert line in result.stdout
+
+
+@pytest.mark.parametrize("size", ["64u", "48u"], ids=["below-minimum", "misaligned"])
+def test_c_blob_store_rejects_bad_size(tmp_path: Path, size: str) -> None:
+    cc = shutil.which("cc")
+    if cc is None:
+        pytest.skip("host C compiler not available")
+    hardware = PROJECT_ROOT / "cmake" / "hardware"
+    result = subprocess.run(
+        [cc, "-std=c99", "-c", "-DHCT_HOST_ABS_ONLY", f"-DHCT_BLOB_STORE_BYTES={size}", "-I", str(MRAM_STUB_DIR),
+         "-I", str(hardware), str(hardware / "benchmark_server_mram.c"), "-o", str(tmp_path / "mram.o")],
+        capture_output=True, text=True,
+    )
+    assert result.returncode != 0 and "store" in result.stderr
+
+
+def test_c_mram_placement(tmp_path: Path) -> None:
+    binary = _build_mram_harness(tmp_path, "-DHCT_PLACEMENT_MRAM")
+    result = subprocess.run([str(binary)], capture_output=True, text=True)
+    # The harness prints "FAILED check <id>"; the exit code is only 0 or 1.
+    assert result.returncode == 0, f"harness exit {result.returncode}: {result.stdout.strip().splitlines()[-1:]}"
+    # Host preflight mirrors the firmware allocator.
+    used = 0
+    for role, length, alignment in (("input_0", 12, 1), ("weights", 13, 1), ("bias", 8, 4), ("output", 12, 16)):
+        length, alignment = staged_extent(role, length, alignment, "mram")
+        used = -(-used // alignment) * alignment + length
+    assert f"workspace={used}" in result.stdout
+    assert "placed reused" in result.stdout
+    assert "rows skipped" in result.stdout
+    assert "pool limits refused" in result.stdout
+    assert "pool fit placed" in result.stdout
+    assert "derived placed" in result.stdout

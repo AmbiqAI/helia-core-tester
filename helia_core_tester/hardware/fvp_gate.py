@@ -124,6 +124,8 @@ def lookup_fvp_case_status(
 
 
 GATE_POLICIES = ("off", "advisory", "strict")
+# Applies when --fvp-gate is omitted.
+DEFAULT_GATE = "advisory"
 
 
 @dataclass(frozen=True)

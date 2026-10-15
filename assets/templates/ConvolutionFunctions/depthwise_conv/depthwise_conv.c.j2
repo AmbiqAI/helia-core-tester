@@ -47,6 +47,15 @@ int32_t {{ name }}_run(
         &{{ name }}_input_dims,
         &{{ name }}_filter_dims
     );
+    {% if entry_buffer_size_fn %}
+    // Take the larger of both sizes.
+    {
+        const int32_t entry_buffer_size = {{ entry_buffer_size_fn }}(&{{ name }}_input_dims);
+        if (required_buffer_size >= 0 && (entry_buffer_size < 0 || entry_buffer_size > required_buffer_size)) {
+            required_buffer_size = entry_buffer_size;
+        }
+    }
+    {% endif %}
     {% else %}
     int32_t required_buffer_size = {{ kernel_get_buffer_size_fn }}(
         &{{ name }}_dw_conv_params,
@@ -164,7 +173,13 @@ int32_t {{ name }}_run(
 
 int32_t {{ name }}_test_case_run(void)
 {
-    {% if expected_status | default("ARM_CMSIS_NN_SUCCESS") != "ARM_CMSIS_NN_SUCCESS" %}
+    {% if autovectorize_declines %}
+#if {{ autovectorize_declines_if }}
+    HELIA_GUARD_ARM({{ name }}_output, true /* the entry declines on this build: poison */);
+#else
+    HELIA_GUARD_ARM({{ name }}_output, false /* real output, not scratch: don't poison */);
+#endif
+    {% elif expected_status | default("ARM_CMSIS_NN_SUCCESS") != "ARM_CMSIS_NN_SUCCESS" %}
     HELIA_GUARD_ARM({{ name }}_output, true /* a declined call must not write it: poison */);
     {% else %}
     HELIA_GUARD_ARM({{ name }}_output, false /* real output, not scratch: don't poison */);
@@ -189,7 +204,20 @@ int32_t {{ name }}_test_case_run(void)
     HELIA_GUARD_CHECK({{ name }}_weight_sum_runtime, "{{ validation_label | default("Depthwise convolution") }} weight_sum", failures);
     {% endif %}
     HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("Depthwise convolution") }} output", failures);
-    {% if expected_status | default("ARM_CMSIS_NN_SUCCESS") != "ARM_CMSIS_NN_SUCCESS" %}
+    {% if autovectorize_declines %}
+#if {{ autovectorize_declines_if }}
+    HELIA_GUARD_CHECK_UNTOUCHED({{ name }}_output, "{{ validation_label | default("Depthwise convolution") }} output", failures);
+    HELIA_VALIDATE_EXPECTED_STATUS(
+        "{{ validation_label | default("Depthwise convolution") }}",
+        status,
+        ARM_CMSIS_NN_NO_IMPL_ERROR
+    );
+#else
+    HELIA_VALIDATE_STATUS("{{ validation_label | default("Depthwise convolution") }}", status);
+
+{{ validation_outputs(validation_mode_token | default("TOLERANT_INT"), validation_tolerance | default(1)) }}
+#endif
+    {% elif expected_status | default("ARM_CMSIS_NN_SUCCESS") != "ARM_CMSIS_NN_SUCCESS" %}
     HELIA_GUARD_CHECK_UNTOUCHED({{ name }}_output, "{{ validation_label | default("Depthwise convolution") }} output", failures);
     HELIA_VALIDATE_EXPECTED_STATUS(
         "{{ validation_label | default("Depthwise convolution") }}",

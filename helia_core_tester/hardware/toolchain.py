@@ -1,8 +1,8 @@
 """Where the ARM GCC binutils come from for host-side ELF inspection.
 
 The hardware commands fetch ARM GCC lazily into artifacts/downloads/ (see
-`firmware_build.ensure_build_tools`). CMake is pointed at it through
-the toolchain file, but the host also runs `arm-none-eabi-nm` (RTT block
+`firmware_build.ensure_build_tools`), which puts it on PATH for the NSX
+toolchain file. The host also runs `arm-none-eabi-nm` (RTT block
 address, memory report) and `-size`/`-objdump` (memory report) itself. Those
 go through `arm_tool()` so a fresh clone that only just downloaded the
 toolchain resolves them without the user editing PATH, and
@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional
 
 DOWNLOADS_DIR = "artifacts/downloads"
 
@@ -41,6 +43,11 @@ def arm_tool(name: str, repo_root: Optional[Path] = None) -> str:
     return shutil.which(name) or name
 
 
+def run_tool(tool: str, args: Iterable[str], repo_root: Optional[Path] = None) -> str:
+    """Stdout of an ARM binutil; raises on failure."""
+    return subprocess.run([arm_tool(tool, repo_root), *args], capture_output=True, text=True, check=True).stdout
+
+
 def add_toolchain_to_path(repo_root: Optional[Path] = None) -> bool:
     """Prepend the downloaded toolchain's bin/ to this process's PATH once.
 
@@ -55,3 +62,91 @@ def add_toolchain_to_path(repo_root: Optional[Path] = None) -> bool:
         return False
     os.environ["PATH"] = os.pathsep.join([str(bin_dir), *entries]) if entries != [""] else str(bin_dir)
     return True
+
+
+GCC_NAME = "arm-none-eabi-gcc"
+
+
+@dataclass(frozen=True)
+class ToolchainSpec:
+    """One firmware compiler and its names."""
+
+    key: str
+    # nsx.yml and provenance name.
+    name: str
+    # Compiler basename CMake configures.
+    compiler: str
+    # Default build dir suffix.
+    dir_suffix: str
+
+    def build_dir(self, base: Path) -> Path:
+        """Default build dir for this toolchain."""
+        return base.with_name(base.name + self.dir_suffix)
+
+    def record(self, compiler: Optional[str]) -> Optional[dict[str, str]]:
+        """Provenance for a configured compiler."""
+        version = compiler_version(compiler)
+        return {"name": self.name, "version": version} if version else None
+
+    def installed(self) -> Optional[dict[str, str]]:
+        """Provenance of the compiler on hand."""
+        if self.key != "atfe":
+            return self.record(arm_tool(self.compiler))
+        # Only ATFE_ROOT clang counts.
+        clang = atfe_clang()
+        return self.record(str(clang)) if clang and clang.is_file() else None
+
+    def objdump(self) -> str:
+        """llvm-objdump for atfe, else GNU."""
+        if self.key != "atfe":
+            return "arm-none-eabi-objdump"
+        self.require()
+        return str(atfe_clang().with_name("llvm-objdump"))
+
+    def require(self) -> None:
+        """Fail fast without ATfE clang."""
+        clang = atfe_clang()
+        if self.key == "atfe" and not (clang and clang.is_file() and os.access(clang, os.X_OK)):
+            raise FileNotFoundError(f"ATFE_ROOT has no bin/clang: {os.environ.get('ATFE_ROOT') or 'unset'}")
+
+    def matches(self, compiler: Optional[str]) -> bool:
+        """The configured compiler is this toolchain's."""
+        if compiler is None:
+            return True
+        clang = atfe_clang()
+        # A new ATFE_ROOT means a new clang.
+        if self.key == "atfe" and clang:
+            return Path(compiler).resolve() == clang.resolve()
+        return Path(compiler).stem == self.compiler
+
+
+def atfe_clang() -> Optional[Path]:
+    """$ATFE_ROOT/bin/clang, or None."""
+    root = os.environ.get("ATFE_ROOT")
+    return Path(root) / "bin" / "clang" if root else None
+
+
+DEFAULT_TOOLCHAIN = "gcc"
+TOOLCHAINS = {
+    "gcc": ToolchainSpec("gcc", GCC_NAME, GCC_NAME, ""),
+    "atfe": ToolchainSpec("atfe", "atfe", "clang", "-atfe"),
+}
+
+
+def toolchain_spec(key: Optional[str] = None) -> ToolchainSpec:
+    """Spec for key; None means gcc."""
+    try:
+        return TOOLCHAINS[key or DEFAULT_TOOLCHAIN]
+    except KeyError:
+        raise ValueError(f"toolchain must be one of: {', '.join(TOOLCHAINS)}") from None
+
+
+def compiler_version(compiler: Optional[str]) -> Optional[str]:
+    """A compiler's -dumpversion, or None."""
+    if compiler is None:
+        return None
+    try:
+        done = subprocess.run([compiler, "-dumpversion"], capture_output=True, text=True, timeout=30, check=True)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return done.stdout.strip() or None

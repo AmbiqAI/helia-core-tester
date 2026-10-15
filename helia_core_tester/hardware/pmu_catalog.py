@@ -15,6 +15,10 @@ from typing import Dict, Optional, Tuple
 
 _CATALOG_RELATIVE_PATH = Path("assets/pmu/armv8m_pmu_events.json")
 
+# Upstream: AmbiqAI/nsx-pmu-armv8m at this tag.
+PMU_MODULE_REF = "v0.2.0"
+_MODULE_CATALOG = "modules/nsx-pmu-armv8m/data/armv8m_pmu_events.json"
+
 CPU_CYCLES_NAME = "ARM_PMU_CPU_CYCLES"
 CPU_CYCLES_EVENT_ID = 0x0011
 
@@ -69,6 +73,12 @@ def load_pmu_events(path: Optional[Path] = None) -> Tuple[CounterDescriptor, ...
     return tuple(descriptors)
 
 
+def synced_module_catalogs(repo_root: Optional[Path] = None) -> Tuple[Path, ...]:
+    """Module catalogs in synced hardware apps."""
+    build = (repo_root or _repo_root()) / "build" / "hardware"
+    return tuple(sorted(build.glob(f"*/nsx_app/{_MODULE_CATALOG}")))
+
+
 def counters_in_group(group: str) -> Tuple[CounterDescriptor, ...]:
     return tuple(counter for counter in load_pmu_events() if counter.group == group)
 
@@ -89,7 +99,8 @@ def counter_by_event_id(event_id: int) -> Optional[CounterDescriptor]:
 
 def counter_name_for_event_id(event_id: int) -> str:
     """Catalog name for an event id, or a stable placeholder for ids the catalog does
-    not know (firmware reports whatever it was asked to count)."""
+    not know (PMU firmware rejects ids outside the nsx-pmu-armv8m map at SESSION_PLAN;
+    only DWT-only builds accept any id)."""
     counter = counter_by_event_id(event_id)
     return counter.name if counter is not None else f"event_0x{event_id:04x}"
 

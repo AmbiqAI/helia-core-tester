@@ -18,11 +18,13 @@ class TestResultParser:
     # capture keeps them even when the per-element body is cut.
     SUMMARY_LINE_PREFIXES = (
         'HELIA_FLOAT_MAXDIFF',
+        'HELIA_FLOAT_INTERVAL',
         'HELIA_MASKED_LANES',
         'HELIA_NONFINITE_MISMATCHES',
         'GuardBreach[',
         'HELIA_SIZER_INVALID[',
         'HELIA_SIZER_OVER_CAPACITY[',
+        'HELIA_F16_NAN_RULE',
     )
     failure_count_line_pattern = re.compile(r'^\d+\s+Failures$', re.IGNORECASE)
 

@@ -12,8 +12,9 @@ function(helia_coverage_autovectorize_sources out_var)
     get_filename_component(_name "${_s}" NAME)
     # A float token anywhere in the file name marks a float source, so float-input
     # integer-output files (arm_quantize_f32_s8.c) and integer-input float-output files
-    # (arm_dequantize_s8_f32.c) are both treated as float.
-    if(_name MATCHES "_(f16|f32|fp16|flt)(_|\\.c$)")
+    # (arm_dequantize_s8_f32.c) are both treated as float, as is "half"
+    # (arm_dequantize_half_bits.c, whose MVE path converts float16).
+    if(_name MATCHES "_(f16|f32|fp16|flt|half)(_|\\.c$)")
       if(NOT ENABLE_COVERAGE_MVE_FLOAT)
         list(APPEND _selected "${_s}")
       endif()

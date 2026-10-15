@@ -21,6 +21,10 @@ uv run helia_core_tester --help
 - `uv run helia_core_tester coverage-merge`
 - `uv run helia_core_tester boards` / `probes list` / `probes match`
 - `uv run helia_core_tester hardware run|build|flash|stream|memory-report`
+- `uv run helia_core_tester explain <bundle> [--case ID] [--op OP] [--json]`
+- `uv run helia_core_tester score <baseline...> --candidate <bundle> --check <check.json>` (`--no-check` instead, for humans scoring harness changes; `candidate eval` runs this for you)
+- `uv run helia_core_tester candidate check <tree> --base <sha>`, `candidate baseline`, `candidate eval` (see [Agent loop](#agent-loop))
+- `uv run helia_core_tester agent-loop init|selftest|launch|status|stop` (see [Running an agent campaign](#running-an-agent-campaign))
 
 Removed interfaces:
 - `gap-check` subcommand
@@ -30,6 +34,15 @@ Removed interfaces:
 - report-dir override flags
 - `--include-float` (replaced by `--suite float` or `--suite both`)
 - the `perf-stream` command group and `scripts/run_hardware_perf_suite.sh` (replaced by `hardware run`, see below)
+
+INT32 predicate tests are available through the FVP pipeline with
+`generate --op Comparison,SelectV2 --dtype s32`. They cover all six
+comparisons and SELECT_V2, including scalar operands, broadcasting, tails and
+signed integer boundaries. S32 references come from LiteRT and use exact output
+validation; generation fails if that reference cannot run. These descriptors
+require their corresponding `arm_*_s32` declarations and are reported as
+capability skips with an older Core checkout. This adds generated FVP tests;
+hardware streaming adapters for these S32 operators are not added here.
 
 ## Hardware CLI
 
@@ -46,11 +59,86 @@ unless the board already confirms (via its TARGET_INFO build id) that it runs th
 build, streams every bridged case,
 writes the result bundle under `artifacts/reports/hardware/<session-id>/`,
 and prints the pass/fail summary (`--json` prints one JSON document on stdout
-instead, with the human output on stderr; the exit code is non-zero on any
-correctness failure). Useful narrowing flags: `--suite int|float|both`,
+instead, with the human output on stderr). Exit codes match `score`: 0 pass,
+1 a case failed correctness, 2 bad flags, 3 refused before running (dirty
+tester, a `--skip-flash` or `--golden-from` mismatch, no case matches the
+selection), 5 error (cmake, J-Link, transport, probe, or a tester bug), 130 interrupted (Ctrl-C). Useful narrowing flags: `--suite int|float|both`,
 `--family`, `--test-name`, `--limit`, `--precision fp16|fp32` (float-only shortcut,
 not combinable with `--suite both` or `--test-name`), `--fvp-gate off|advisory|strict`,
-`--skip-generate`, `--skip-flash`, `--force-flash`. The steps are also available individually as
+`--op`/`--dtype` (repeatable, matched like `generate --op/--dtype`; a case's dtype is its
+activation dtype, or `S4` for s4-weight cases),
+`--case-id`/`--cases-from <file>` (exact case ids, e.g. a rerun list; not combinable with `--limit`;
+with `--suite int` or `float`, `--op`/`--dtype`/`--case-id` also narrow generation; other cases stay in the tree),
+`--skip-generate`, `--skip-flash`, `--force-flash`.
+
+Held-out shapes: `generate --random-shapes N --shape-seed S` draws N s8
+Convolve, N s8 DepthwiseConv and N s16 DepthwiseConv cases (`rs<S>_conv_*`,
+`rs<S>_dw_*`, `rs<S>_dw16_*`) instead of the `assets/` descriptors. `--op`/`--dtype`
+limit the draw to matching generators (e.g. `--op Convolve` draws only
+`rs<S>_conv_*`, the same cases as an unfiltered draw; `--op DepthwiseConv --dtype S16`
+draws only `rs<S>_dw16_*`). Every `--op` token must name a registered op by operator,
+descriptor stem or path; case-name prefixes such as `rs7_conv` are refused,
+since drawn names (and hidden ids) cannot be filtered. Each op draws
+from its own seeded stream, cycling through every wrapper route and sized to fit
+the smallest board workspace. The descriptors, the drawn ops (`ops`) and a per-route count land in
+`artifacts/random_shapes/s<S>/<cpu>/`; the cases join the generated tree beside
+the fixed ones. Run them with
+`hardware run --skip-generate --test-name rs<S>_`. A draw with a flat golden is
+dropped and counted as `skipped_degenerate`. To add an op, register its route
+list and layer sampler in `GENERATORS` (`generation/random_shapes.py`), keyed by
+(op, dtype), with a new stream id and tag, and teach the op-specific helpers
+(`layer_route`, `footprint`, `layer_macs`, `_relu6_gain`, `_descriptor`) its layout.
+
+Hidden shapes: `generate --random-shapes N --hidden-dir DIR` draws the same
+kind of cases from a secret seed instead (env `HCT_HIDDEN_SEED`, or
+`--hidden-seed-file F`; 16+ characters, e.g. `python -c "import secrets; print(secrets.token_hex(16))"`). DIR and
+F must sit outside the tester tree. DIR mirrors a tester root: descriptors in
+`DIR/artifacts/random_shapes/<cpu>/`, cases in `DIR/artifacts/generated_tests/`,
+reports in `DIR/artifacts/reports/`. Case ids are opaque keyed hashes
+(`h<12 hex>`), and summaries record only `seed_commitment`, a SHA-256 of the secret.
+`hardware run --hidden-set DIR` adds every DIR case for the board's CPU to
+the run, whatever the other filters; it needs only DIR, not the secret. Pass the
+same DIR to baseline and candidate runs. The bundle marks them with a `hidden`
+column (`true`/`false`) in `case_summary.csv` and cases.json, and records
+`selection.hidden_set` (`seed_commitment`, `cases`) in session_summary.json. A DIR
+with no set for the board's CPU, or with a case that cannot run, is refused.
+
+Correctness: int cases use the per-operator LSB tolerance in
+`generation/io/dtypes.py`, and every case records `max_abs_diff` and `diff_count`
+(elements differing at all) in `case_summary.csv` and `cases.json`; both are null
+when unknown (unvalidated outputs, wrong output size).
+`--strict-compare` drops the tolerance so int outputs must match the golden
+exactly. `--golden-from <bundle dir>` judges each int case against that past
+run's `outputs/` instead, bit for bit, which pins the current kernels' rounding
+where the TFLite golden differs by design. Float cases (FP32/FP16 outputs, float
+compare mode) keep the generated TFLite golden and their tolerance, so a
+candidate's error never stacks on the baseline's; under `--golden-from` they
+also fail when the error spends more than 0.8 of the tolerance (the headroom
+rule in `assets/descriptors/ConvolutionFunctions/convolve_float.yaml`). Every
+float case records `tolerance_fraction`, the worst
+`|out - ref| / (atol + rtol * |ref|)`, in `case_summary.csv`, `cases.json` and
+`correctness/<case>.json`; the nightly run records it without the 0.8 gate.
+
+`--golden-from` is the compare mode for kernel changes: run the baseline
+kernels once, then judge the changed kernels against that bundle. Strict
+compare against the generated goldens does not work there, because 40 of 131
+s8 conv/depthwise cases differ from the TFLite goldens by 1 LSB on apollo510
+(ns-cmsis-nn v7.39.3; issue #220).
+
+Every bundle records a per-case `input_digest` in `cases.json` and
+`correctness/<case>.json` (also in each `case_manifest.json`): the sha256 of
+everything streamed to the board except the expected output (input, weight,
+bias and quant blobs, scalar parameters, kernel id). Before flashing,
+`--golden-from` refuses a case that the baseline lacks, that the baseline run
+failed (unless `--golden-allow-failed`, which also skips the next check), that
+is a float case whose baseline `tolerance_fraction` is over 0.8 (no candidate
+could pass it), whose baseline `input_digest` differs
+or is absent (bundles from before this field must be rerun), or whose output is
+missing or wrong-sized. The session manifest's `compare` block records which
+mode ran, plus the baseline path (`golden_from`), `golden_session_id` and
+`goldens` (case ids per golden: `baseline`, `generator` or `status`); each
+case's `expected_output_sha256` is the digest of the output it was compared
+against. The steps are also available individually as
 `hardware build`, `hardware flash [--force]`, `hardware stream` and
 `hardware memory-report`.
 
@@ -58,9 +146,8 @@ The firmware builds as a neuralspotx (NSX) app rendered into
 `build/hardware/<board>/nsx_app`. Which kernels it builds:
 
 - Nested layout (the tester at `ns-cmsis-nn/Tests/helia-core-tester`): the
-  enclosing ns-cmsis-nn checkout, working-tree edits included, as the old CMake
-  path did.
-- Standalone clone: the pinned ns-cmsis-nn release (`v7.35.1`).
+  enclosing ns-cmsis-nn checkout, working-tree edits included.
+- Standalone clone: the pinned ns-cmsis-nn release (`v7.43.0`).
 - `--cmsis-nn-ref REF` builds another tag or commit; `--cmsis-nn-root PATH`
   builds another local checkout.
 
@@ -72,11 +159,44 @@ there are overwritten. Other files under `nsx/` are not used.
 `hardware run` generates the tests from the same kernel tree: the local
 checkout, or for a ref the clone NSX syncs into `nsx_app/modules/ns-cmsis-nn`.
 
-`--no-inline-asm` builds requantize without inline assembly;
-`--update-dependencies` re-resolves the NSX modules into `nsx.lock`. Every build
-prints the kernel source and warns when the build options changed since the last
-build in that build dir. `hardware flash` and `hardware run` rebuild with their
-own flags, so pass the same kernel flags you built with.
+`--no-inline-asm` builds requantize without inline assembly (`--inline-asm`
+turns it back on); `--update-dependencies` re-resolves the NSX modules into
+`nsx.lock`. Each build saves its kernel options in `nsx_app/.hct-options.json`.
+`hardware build`, `flash` and `run` reuse the saved kernel source
+(`--cmsis-nn-root` or `--cmsis-nn-ref`) when you leave it out. Switches
+(`--inline-asm`, `--placement`) do not persist: an unpassed switch builds its
+default, so pass the same switches to `build`, `flash` and `run`. An option that
+differs from the saved build rebuilds and prints one line naming the change.
+`--skip-flash` keeps the flashed build's options and refuses a different flag. A
+saved ref you did not pass with `--cmsis-nn-ref` follows the pinned release, so
+a pin bump rebuilds those build dirs the same way. Every build, flash, run and
+stream prints the kernel source, inline asm setting, placement and toolchain.
+
+`--toolchain atfe` builds with Arm Toolchain for Embedded clang (from
+`$ATFE_ROOT/bin`) instead of `gcc`, the default. Like placement it is a switch.
+Each toolchain has its own default build dir (`build/hardware/<board>-atfe` for
+atfe), and a build dir whose CMake cache holds the other compiler drops that
+cache and reconfigures. The bundle records the compiler in
+`session_manifest.json` `build.toolchain`.
+
+`--placement` picks where operands live. `tcm` (the default) keeps every operand
+in one workspace: DTCM on Apollo510 and Apollo330P, and SRAM (`RWMEM`) on
+Apollo3P, whose 64 KiB TCM can't hold it. Neither path touches a D-cache, so it
+measures kernel-only cost. `mram` (Apollo510, Apollo330P)
+programs each case's weights and bias into a reserved MRAM pool past the image
+and evicts them from the D-cache before every timed call, as a large model's
+layer sees them; activations, scratch, multipliers and shifts stay in DTCM, as
+hpx places a TCM-sized arena. The packed fully-connected kernel reads a stream
+packed from its weights, so that stream is packed on the device once per case,
+before any timing, and placed in the pool after the bias; the per-call pack
+still runs, so `prepare_cycles` matches `tcm`. Neither programming nor eviction counts toward
+the timed cycles or `prepare_cycles`. Give each placement its own `--build-dir`. The
+bundle records it in `session_manifest.json` `target.placement`.
+
+On boards with `blob_store_bytes` in `assets/hardware_boards.yaml` (apollo510_evb),
+the firmware caches every streamed blob in MRAM and skips blobs it already holds,
+across runs, placements and reflashes; the timing line reports `store hits`.
+`HCT_BLOB_STORE=0` turns it off. See `docs/performance-streaming-design.md`.
 
 PMU counters are selected with `--pmu-counters GROUP:SELECTION` (repeatable, on
 `hardware run` and `hardware stream`; hpx syntax). `GROUP` is `cpu`, `memory` or
@@ -91,11 +211,20 @@ uv run helia_core_tester hardware stream --pmu-counters mve:ARM_PMU_MVE_STALL,AR
 
 The default is every group at its default selection. Each group runs in passes of
 up to four chained 32-bit event counters (the Cortex-M55 PMU has eight 16-bit slots),
-so `mve:all` costs nine passes per case, and one run takes at most 16 passes (the
-firmware's `HCT_SERVER_MAX_PASSES`; `cpu:all memory:all mve:all` would be 18 and is
-refused before anything is built or flashed); `ARM_PMU_CPU_CYCLES` is always reported
-from the PMU cycle counter alongside the DWT cycles. `case_summary.csv` gets one column per
-counter (median per invocation) plus `overflow_detected` and `valid_for_regression`;
+so `mve:all` costs nine passes per case. One run takes up to 32 passes (the firmware's
+`HCT_SERVER_MAX_PASSES`), so the full catalog (`--pmu-counters all`, i.e.
+`cpu:all memory:all mve:all`, 18 passes) fits one run and one bundle.
+`ARM_PMU_CPU_CYCLES` is always reported from the PMU cycle counter alongside the DWT
+cycles. `case_summary.csv` gets one column per counter (median per invocation) plus
+`overflow_detected`, `valid_for_regression` and `timing_status`. `valid_for_regression`
+is true only when the output matched and `timing_status` is `valid` or
+`degenerate_output`; the other statuses are `error_path` (expects any non-success status, such as an argument or no-impl error), `overflow`,
+`zero_cycles`, `below_floor` (median under 3x the board's empty-call floor, which
+`session_manifest.json` records as `timing_floor`). `degenerate_output` is
+informational only: the golden is constant, has at most two values, or is at
+least 90 % saturated, which weakens the correctness check, not the cycles.
+Goldens under 8 elements are never judged, BOOL goldens are degenerate only when
+constant, and a descriptor's `degenerate_golden_reason` marks the shape as intended.
 `session_summary.json` records the passes, counters and per-stage/per-case timing.
 `--pmu-groups a,b` still works as a deprecated alias for `--pmu-counters a:default
 --pmu-counters b:default`.
@@ -108,6 +237,13 @@ Identity resolution rules:
   `hardware memory-report` measures against all come from the row in
   `assets/hardware_boards.yaml` (`helia_core_tester boards` lists it). Default:
   `$HPX_BOARD`, else `apollo510_evb`.
+- DWT-only boards (`pmu_tier: dwt`, such as the Cortex-M4 `apollo3p_evb`) report DWT
+  cycles only: the counter default becomes cycles only and event counters are refused.
+  Cortex-M4 runs the int suite and FP32; FP16 cases are skipped and `--precision fp16`
+  is refused.
+- The apollo330mP_evb J-Link device `Apollo330P_510L` is an Ambiq-supplied entry,
+  not in SEGGER's stock database; install it under `~/.config/SEGGER/JLinkDevices/`
+  (NSX flashes through it too).
 - Session sizing comes from the target: every RTT session starts with the firmware's
   `TARGET_INFO` (cases and PMU passes per plan, receive-buffer bytes, PMU width) and
   the host batches the bridged cases from it, so a board with different firmware
@@ -123,9 +259,413 @@ Identity resolution rules:
   `/opt/SEGGER`). These are the same variables the lab runners export for hpx;
   `helia_core_tester doctor` prints which one resolved the library.
 
+### Board matrix
+
+Run one selection on several boards and get one summary:
+
+```bash
+uv run python -m helia_core_tester.scripts.board_matrix run \
+  --board apollo510_evb:1160003180 --board apollo330mP_evb:1160003409 \
+  --suite int --limit 2 --pmu-counters mve:default [--family F] [--precision fp16|fp32] \
+  [-- <hardware run args>]
+uv run python -m helia_core_tester.scripts.board_matrix summarize <bundle>... --out <dir>
+```
+
+Each board gets its own `hardware run` and its usual result bundle. Boards run in
+parallel when every `--board` names a distinct probe serial, else one at a time
+(`--sequential` forces that). A DWT-only board runs its default counters when
+`--pmu-counters` asks for events, and its summary row says so. Both commands write
+`board_matrix.json` (schema `hct.hardware.board_matrix` v1: per-board status,
+golden passed/failed/rejected, boot status and clock, build id, kernel source,
+bundle; per shared case, `median_cycles` and `ARM_PMU_MVE_INST_RETIRED` per board)
+and `board_matrix.md` into `artifacts/reports/hardware/matrix-<UTC stamp>` (or
+`--out`), and exit 1 unless every board passed (2 for bad input, a
+matrix-owned option such as `--build-dir` after `--`, or an unreadable bundle). Concurrent runs from one checkout
+stage their cases under `artifacts/stream_cases/<suite>/<board>` and take turns
+generating into a shared CPU tree.
+
 `helia_core_tester doctor` reports the hardware toolchain (arm-none-eabi-gcc,
 cmake, ninja, the neuralspotx version, the J-Link library) as
 informational checks; missing hardware tools do not fail doctor.
+
+`.github/workflows/hardware-nightly.yml` runs `hardware run --suite both` over
+the full catalog every night at 05:00 UTC on the lab runners, one job per board
+(default `apollo510_evb`, `apollo330mP_evb`, `apollo3p_evb`; `--pmu-counters all`
+on PMU boards), and uploads each board's result bundle with the `--json`
+document as `hardware-nightly-run.json` (schemas and version policy:
+`docs/performance-streaming-design.md`, "Result bundle").
+Under the same board lock each job then runs an MRAM-placement leg (MRAM
+boards; `hct-mram-<board>-...`) and a kernel leg built from ns-cmsis-nn `main`,
+resolved to one SHA at plan time (`hct-main-<board>-...`, session
+`nightly-main-<run>-<board>`). `-f cmsis_nn_ref=<branch, tag or full SHA>` swaps the
+ref; any ref but `main` uploads as `hct-ref-<board>-...`. The kernel leg does not
+gate the run: its failures show only in the summary table. A last leg builds
+the TCM suite with `--toolchain atfe` (pinned kernels, `$ATFE_ROOT` from the
+runner) and uploads `hct-atfe-<board>-...` in the `hct-hardware-*` layout; it
+does not gate the run either.
+The summary job also lists, per board, the TCM leg's skipped cases per family
+and its untimed deployed entry points (`scripts/nightly_skip_report.py`). Each
+board is compared with the newest of the last three non-cancelled scheduled runs
+on `main` that has a readable result with the same selection (`limit`, `suite`,
+...); `nightly_skip_report.py select-baselines` pages the run history until it
+has three earlier runs (also on a rerun), at most 10 pages. A family whose skip count grew, or a newly untimed entry point, gets a
+workflow warning, as does a board whose growth went unchecked: no current result,
+an unreadable result, or no baseline because the earlier runs left no result.
+`gh workflow run hardware-nightly.yml -f boards=apollo510_evb -f limit=2` runs
+it by hand.
+
+### PMU feedback
+
+`helia_core_tester explain <bundle>` reads a hardware bundle (or a directory of
+bundles) and prints at most four lines per MAC case: cycles/MAC against a ceiling
+from `assets/scoring/ceilings.yaml`, where the cycles go (IPC, MVE share, MVE MAC
+instructions against the ideal count, stall shares, L1D refills, prepare share), a
+diagnosis and up to three ranked hints. `--op` takes conv, depthwise or fc. `--json` emits schema `hct.pmu_explain`
+v3: `bundles` (board, cpu, placement per bundle) and one flat `cases` list,
+each case naming its `bundle` and its `pct_of_peak` (0-100); `pmu_explain.explain_case` gives the same result for one case row. Rules live
+in `helia_core_tester/hardware/pmu_explain.py` (`_rule_*`); each ranks by the share
+of cycles it explains. Cycles-only bundles (Cortex-M4) get % of peak only.
+
+The nightly captures the full catalog (`all`, 18 passes). For a tuning loop, request
+only what the rules read (4 passes, `pmu_explain.AGENT_PMU_SELECTION`):
+
+```
+--pmu-counters cpu:ARM_PMU_INST_RETIRED,ARM_PMU_STALL_FRONTEND,ARM_PMU_STALL_BACKEND
+--pmu-counters memory:ARM_PMU_L1D_CACHE_REFILL
+--pmu-counters mve:ARM_PMU_MVE_INST_RETIRED,ARM_PMU_MVE_INT_MAC_RETIRED,ARM_PMU_MVE_FP_MAC_RETIRED,ARM_PMU_MVE_PRED,ARM_PMU_MVE_STALL_RESOURCE_MEM,ARM_PMU_MVE_STALL_DEPENDENCY
+```
+
+## Agent loop
+
+An optimization agent edits ns-cmsis-nn kernels. It submits each candidate
+with one command and gets one JSON verdict back. Everything trusted (this
+tester, the baseline bundles, hidden cases and their seed) stays outside
+the agent's view.
+
+### Trust boundary
+
+- The agent runs in a sandbox where only its own ns-cmsis-nn worktree is
+  writable. It cannot read this tester tree, the baseline dir, the hidden
+  set, its seed file, result bundles or logs.
+- The evaluator runs `candidate eval` as the human user, outside the
+  sandbox, and hands the agent only stdout and the exit code.
+  - On the bench host, wrap it in `bench-agent run`. The command runs in
+    `$HOME`, so use absolute paths:
+
+    ```bash
+    bench-agent run apollo510_evb --reason <sha> -- timeout 30m \
+      uv --directory /abs/helia-core-tester run helia_core_tester \
+      candidate eval --kernels /abs/agent-tree --baseline /abs/baseline
+    ```
+
+  - From elsewhere, use the `hct-run` client from nixos-config (its
+    `candidate eval` mode is a follow-up).
+- `candidate eval` reads the agent's tree as plain files and never runs git
+  in it. It copies `Source/`, `Include/`, `cmake/` and `nsx/` into a fresh
+  checkout of the base commit, then checks and builds that copy. Edits made
+  after the copy, and anything in the agent's `.git`, do not reach the
+  build. The copy walks by directory handle and never follows a symlink:
+  symlinks are copied as links, and the check rejects them. FIFOs, sockets
+  and devices are skipped. The copy refuses past 4 MiB per file (sparse
+  files count at their full size), 64 MiB copied in total, 5000 files and
+  dirs, or 64 levels of dirs; the real trees are about 4.4 MiB in 448
+  files. Bytes count as they are read, so a file that grows mid-copy is
+  caught. `--max-file-bytes`, `--max-total-bytes` and `--max-files` change
+  the limits.
+- `hardware run` stderr names every case, so it goes to
+  `<baseline>/logs/`, never to the agent.
+- Hidden case ids never print. Hidden cases still count in the verdict and
+  in the family totals.
+- The tester must be committed: `candidate baseline` and `candidate eval`
+  refuse a dirty or unknown tester (exit 3, stage `tester`) before any
+  check or run, with no opt-out.
+- Run one eval at a time per baseline dir: each eval rebuilds
+  `<baseline>/snapshot`.
+
+### Flow
+
+1. Baseline, once per base commit, by the human. Use a clean checkout at
+   that commit:
+
+   ```bash
+   uv run helia_core_tester candidate baseline --kernels ~/ns-cmsis-nn \
+     --board apollo510_evb --out ~/hct-eval/dw-s8 --repeats 3 \
+     --op DepthwiseConv --dtype S8
+   ```
+
+   - The first run generates, builds, flashes and streams. The other runs
+     stream the same build again, so the scorer gets a noise band.
+   - Every eval reuses the baseline's placement and inline asm (defaults
+     `tcm` and on), the agent PMU counters (see [PMU feedback](#pmu-feedback);
+     none on DWT boards) and `--fvp-gate off`.
+   - `--out` receives the bundles, `baseline.json` (base commit and run
+     options), `code_graph.json` (a digest and references per kernel
+     function and data object, from the built objects), `kernels.git` (the
+     base commit, fetched from the clean tree) and `logs/`.
+   - Hidden cases (`--hidden-set DIR`, made by `generate --hidden-dir DIR
+     --hidden-seed-file F`) need the hidden-set PRs; until they merge, the
+     flag fails the first run. Keep DIR and F outside the sandbox.
+2. Candidate, as often as needed, one at a time. The agent edits `Source/` and `Include/`
+   in its worktree, and the evaluator runs:
+
+   ```bash
+   uv run helia_core_tester candidate eval --kernels <agent worktree> \
+     --baseline ~/hct-eval/dw-s8
+   ```
+
+   It does five things:
+   1. Snapshot the agent's trees.
+   2. Run `candidate check` against the base commit.
+   3. Run `hardware run` with the baseline's options, `--golden-from` its first
+      run (bit-exact) and `--skip-generate`.
+   4. Run `score` against every baseline repeat.
+   5. Print the verdict.
+
+   On apollo330mP, 50 DW s8 cases took about 1 minute per eval and the
+   two-repeat baseline about 2 minutes (measured).
+
+The verdict (schema `hct.candidate_eval` v3) has these fields:
+
+- `verdict`, `exit_code`, and `stage`: `tester` (dirty tester),
+  `baseline` (unusable baseline dir), `check`, `run`, `objects` (once
+  `candidate check` scans built objects), `score`, or `eval` for an
+  unexpected error.
+- `findings`: the check's findings, on rejection.
+- `score`, `families` and `failures`. Prepare cycles move with code layout,
+  so `prepare_regression` fires only when they go missing, pass
+  `prepare_max_ratio` times the baseline, or grow enough to pay for the
+  case's timed gain (`prepare_share_pct` of the cycles saved; see
+  `assets/scoring/noise_floors.yaml`). Under case gate scope `touched`,
+  untouched cases fail only on missing prepare cycles.
+- `cases`: one entry per public case, with cycles, speedup, delta, noise
+  band and `touched`: whether code reachable from the case's inner symbol,
+  or its timed symbol itself, changed in the built objects.
+- `case_gate`: `{scope, reason}`. Code layout moves untouched kernels by
+  a few percent, so with scope `touched` only touched cases face the
+  case and family regression gates and count in the score and family
+  geomeans. Untouched drift shows per family as `untouched_cases` and
+  `untouched_geomean` and never fails; correctness gates still cover
+  every case. Scope `all` (with a reason) when the baseline predates
+  `code_graph.json` or the candidate objects are unreadable.
+- `hints`: `pct_of_peak` (0-100), a diagnosis and ranked hints for each public MAC case
+  (from `explain`).
+- `hidden`: null without hidden cases; otherwise case, touched and failure counts,
+  plus the scorer's hidden `subscores` when it reports them. `failed` lists
+  each hidden failure as `{kind, symbol, via, touched, count}`: the inner
+  kernel, the timed symbol when it differs, and how many cases share the
+  entry. It never names a case, shape or cycle count.
+
+| Exit | Verdict | Meaning |
+|---|---|---|
+| 0 | `pass` | Correct, no regression, score above `--min-score` |
+| 1 | `fail` | Output mismatch, regression, lost timing or changed inputs |
+| 2 | | Bad flags, such as a non-finite `--min-score` or a file as `--out` |
+| 3 | `rejected` | The diff leaves `Source/`/`Include/` or uses a banned construct |
+| 3 | `refused` / `not_comparable` | Bad baseline dir, oversized candidate, dirty tester, golden misfit, moved cases, other build |
+| 4 | `no_gain` | Correct but not faster |
+| 5 | `error` | Build, board, transport or tester error; see `<baseline>/logs/` |
+
+### `--skip-generate`
+
+- `candidate eval` always passes `--skip-generate`. The baseline generated
+  the cases into this tester's `artifacts/generated_tests`, and
+  `--golden-from` refuses any case whose inputs changed.
+- Do not regenerate between the baseline and its evals, for example with a
+  plain `hardware run` on the same tester. A baseline case that disappears
+  makes eval refuse (`missing_case`, exit 3); rerun `candidate baseline`.
+
+## Running an agent campaign
+
+`agent-loop` wraps the [agent loop](#agent-loop) into one campaign: a
+headless Claude agent edits one kernel family in its own ns-cmsis-nn tree,
+and three wrapper scripts are its only way to build, disassemble and run
+on a board. Every eval runs `candidate eval` once per leg (`tcm`, `mram`)
+and appends a row to the campaign ledger.
+
+Needs, on the bench host: `uv`, `git`, `patch`, `bench-agent`, the
+`claude` CLI (logged in), the Arm toolchain (`arm-none-eabi-size`,
+`arm-none-eabi-objdump`), and a committed tester checkout.
+
+### 1. Write a campaign file
+
+Start from `assets/campaigns/conv-s8.example.yaml`, `dw-s8.example.yaml` or `dw-s16.example.yaml`:
+
+```yaml
+name: conv-s8                  # lowercase, digits, dashes
+board: apollo510_evb           # tester board id
+bench_id: apollo510_evb        # bench-agent board id (default: board)
+legs: [tcm, mram]              # default: both when the board has MRAM
+toolchains: [gcc]              # or [gcc, atfe]; atfe needs ATFE_ROOT
+target:
+  op: Convolve                 # `hardware run --op`
+  dtype: S8                    # `hardware run --dtype`
+  case_ids: []                 # optional `--case-id` filters
+kernels:
+  repo: ~/ns-cmsis-nn          # any checkout that has the ref
+  ref: v7.43.0                 # tag, branch or SHA
+evals: 12                      # charged board evals
+cost_usd: 25                   # claude --max-budget-usd
+model: claude-opus-5-5
+hidden_shapes: 12              # random target-op shapes; 0 for none
+repeats: 3                     # baseline runs per leg
+secrets_dir: ~/hct-secrets/conv-s8   # outside the workspace
+# start_patch: ~/campaigns/conv-s8-1/ledger/007.diff
+# start_notes: |
+#   - 1x1 path vectorized; generic path untouched.
+```
+
+Optional: `min_score` (passed to `candidate eval`), `lock_timeout_s`
+(board lock wait, default 600), `eval_timeout_s` (per leg, default 300),
+`submit_deadline_s` (whole submit, default 540, at most 570, under the
+agent's 10 minute Bash limit), `retries` (per leg, default 1) and `max_infra_errors` (busy or
+failing board results in a row, default 5) and `size_evals` (the last evals,
+which go to cutting code size once something passed; default a third of
+`evals`, below `evals`, 0 for none). The hidden set holds only the
+target op and dtype. Hidden shapes exist for `Convolve` S8 and `DepthwiseConv`
+S8 and S16 only; set `hidden_shapes: 0` for other targets.
+With `toolchains: [gcc, atfe]` every placement runs once per compiler:
+gcc legs keep their names (`tcm`, `mram`), atfe legs are `tcm-atfe` and
+`mram-atfe`. Each atfe leg has its own baseline, build dir and size
+reference (`W/size-ref-atfe.json`), and `pass` needs every leg.
+`agent-loop validate FILE` checks a file without side effects.
+
+### 2. Initialize the workspace
+
+```bash
+uv run helia_core_tester agent-loop init conv-s8.yaml -w ~/campaigns/conv-s8
+```
+
+`init` refuses a dirty tester. It then:
+
+1. Adds a detached worktree of this tester's HEAD at `W/tester`, and links
+   `artifacts/downloads` to save a toolchain download. Every later command
+   runs from that worktree, so the campaign stays on one tester commit
+   while you keep working here.
+2. Clones `W/base` (clean) and `W/agent` (tagged `base`) as standalone
+   one-commit repos with no remote, so git commands in the agent's tree
+   cannot reach other repos. `start_patch` (a ledger diff, or any unified
+   diff of `Source/`/`Include/`) is applied to `W/agent`. It is parsed
+   strictly: every header pair must name a path under `Source/` or
+   `Include/`, and any line outside a counted hunk is refused.
+3. Writes a fresh secret seed and hidden set in `secrets_dir` (mode 0700,
+   seed 0600). The dir must be new or empty. The workspace records that
+   it owns the dir, and only that workspace's rerun reuses its seed.
+4. Records one `candidate baseline` per leg under `bench-agent run`.
+5. Builds the base kernel library once per toolchain and saves per-object
+   code sizes (`W/size-ref.json`, `W/size-ref-atfe.json`). It records each
+   compiler's version; a baseline recorded with another version is
+   re-recorded, and submit refuses, uncharged, once a compiler changes.
+6. Renders `W/prompt.md` from a template filled with the routes seen in
+   the first leg's baseline (timed and inner symbols, median and best
+   cycles per MAC) and the ceiling from `assets/scoring/ceilings.yaml`.
+   Writes `W/agent-settings.json` (absolute paths) and `W/bin/{submit,check,disasm}`.
+
+Init saves the campaign first, skips any step whose output exists, and
+marks the workspace ready at the end; the other commands refuse a
+workspace that is not ready. After a failure rerun the same command (a rerun reuses the campaign's
+seed). To change the campaign file, start a new workspace. On apollo330mP, a DepthwiseConv S8 campaign (50 public and 24
+hidden cases, `repeats: 2`) took about 6 minutes to initialize, and each
+`submit` about 3.5 minutes for both legs (measured).
+
+The baselines are tied to the tester commit through the harness digest:
+moving `W/tester` to another commit makes every eval `not_comparable`.
+
+### 3. Check the permissions
+
+```bash
+uv run helia_core_tester agent-loop selftest -w ~/campaigns/conv-s8
+```
+
+A cheap model (`--model haiku`, no saved session, $1 cap) tries a fixed
+list of tool calls. It should be allowed to read the agent tree, write
+`Source/`, and run `bin/disasm`. It should be denied ledger, campaign,
+baseline, tester and secrets reads, writes outside `Source/`/`Include/`,
+and `cat`, `touch`, `curl` and git outside the agent tree in the shell.
+Exit 0 when every call matches.
+
+### 4. Launch, watch, stop
+
+```bash
+uv run helia_core_tester agent-loop launch -w ~/campaigns/conv-s8
+uv run helia_core_tester agent-loop status -w ~/campaigns/conv-s8 [--tail 20] [--json]
+uv run helia_core_tester agent-loop stop -w ~/campaigns/conv-s8
+```
+
+- `launch` starts `claude -p` in `W/agent` in its own process session with
+  `--permission-mode dontAsk`, only the Read, Edit, Write, Glob, Grep and
+  Bash tools, `--setting-sources project`, `--strict-mcp-config`,
+  `--max-budget-usd cost_usd` and a fixed `--session-id`. Each run writes
+  its own stream log under `W/logs/`; `W/agent-run.json` holds the real
+  claude pid, the session id and the logs.
+- `launch --resume` continues that session with the same flags and caps
+  it at `cost_usd` minus the cost of the finished runs. A run killed
+  before its `result` event counts as $0, so set the cap with margin.
+- `status` prints the ledger, whether the pid is alive, recent tool calls
+  from the newest log, its cost and turns once it has a `result` event,
+  and the cost of all finished runs.
+- `stop` sends SIGTERM to the agent's process group.
+
+### What the agent sees
+
+- `W/bin/check`: copies the agent's `Source/`, `Include/`, `cmake/` and
+  `nsx/` into a fresh clone of the base, runs `candidate check`, builds
+  the kernels with `hardware build` and reports code size against the
+  base, once per toolchain. No board, no eval.
+- `W/bin/disasm FN [--toolchain gcc|atfe]`: one function from the last
+  check build, up to 600 lines (`llvm-objdump` from `$ATFE_ROOT/bin` for
+  atfe).
+- `W/bin/submit`: stages a copy of the agent's trees in `W/submit/tree`
+  and runs check on it. A tree that fails, or a check that runs past the
+  deadline, is rejected and costs no eval.
+  Every leg then judges that frozen copy, so edits made during a submit
+  wait for the next one. Each leg runs under `bench-agent run --timeout`
+  and `timeout`, both cut to fit `submit_deadline_s`. Once a leg ends
+  below stage `score` or with a verdict worse than `no_gain`, later legs
+  are skipped. An `mram` leg runs only after the `tcm` leg on the same
+  toolchain passes; other toolchains still run. Skipped legs show as
+  `{"verdict": "skipped", "reason": ...}` in the view and the ledger. The
+  overall verdict is the worst leg that ran, and `pass` needs every leg.
+  - A submit that cannot take the submit lock in time (another submit is
+    running) returns a free `error` and a ledger row without an id.
+  - No verdict at all (board busy past the lock wait, bench-agent or
+    tester failure, `refused` at stage `tester` or `baseline`) is retried,
+    then recorded with `infra: true`. It costs no eval, and the view hides
+    any earlier leg's scores. After `max_infra_errors` such submits in a
+    row, submit tells the agent to stop.
+  - Verdict `error` from `candidate eval` (often a kernel fault) is
+    retried once, then charged, even when the retry finds the board busy. A leg killed by `timeout` (a hang) is
+    charged without a retry.
+  - The printed view keeps touched case rows only, a count and speedup
+    range for untouched cases, and hints for the ten slowest touched cases
+    (first leg only). The same text goes to `W/agent-results/NNN.json`,
+    since Claude Code truncates long Bash output.
+  - Exit codes follow `candidate eval`; 6 means the budget is spent.
+
+### After the run
+
+`W/ledger/` holds, per eval `NNN`: the diff of the judged copy (`NNN.diff`),
+each leg attempt's full verdict (`NNN.<leg>.<attempt>.json`, may name hidden cases' kernels
+but never their shapes) and stderr. `ledger.jsonl` has one row per submit
+with verdict, charged and infra flags, per-family geomeans and code size
+delta. Ids come from a counter under the submit lock. To continue from the
+best eval, start a new campaign with `start_patch: W/ledger/NNN.diff` and
+a few lines of `start_notes`.
+
+### Containment limits
+
+- The permission rules are not an OS sandbox. The agent runs as you, and
+  `dontAsk` denies only what Claude Code recognizes. Read-only shell
+  commands inside the agent tree (cwd) are auto-allowed, and so is git in
+  that tree; the standalone clone keeps them from reaching other repos.
+- Deny rules cover the workspace's trusted entries, `secrets_dir`, the
+  source ns-cmsis-nn and tester checkouts, and `~/.claude`. Paths outside
+  these are not listed. Do not run a campaign on a host with secrets you
+  would not show the agent.
+- The trusted side runs as you too. `candidate eval` copies the agent's
+  trees into a fresh checkout and never runs git in them, but a compiled
+  kernel still runs on the board.
+- `bench-agent` serializes board use by flock; it does not reserve a board
+  for the whole campaign.
 
 ## Suite-Based Runs
 
@@ -146,6 +686,33 @@ Run both suites as separate flows:
 ```bash
 uv run helia_core_tester full --cpu cortex-m0,cortex-m4,cortex-m55 --suite both
 ```
+
+## Toolchain Selection
+
+### GCC release (`setup_dependencies.py`)
+
+`helia_core_tester/scripts/setup_dependencies.py` installs one Arm GNU toolchain release into `artifacts/downloads/arm_gcc_download`; the default is 14.3.rel1.
+
+- `--gcc-version 13.2.rel1` (or `HELIA_GCC_VERSION=13.2.rel1`; flag wins over env) selects the release. Case-insensitive, must match `<major>.<minor>.rel<N>`. `full`/`build`/`run` call the script with the inherited environment, so exporting `HELIA_GCC_VERSION` before them is enough.
+- SHA-256 pins ship for 13.2, 13.3, 14.2, 14.3, 15.2 and 15.3.rel1 (both x86_64 and aarch64). Releases up to 15.2.rel1 download from `developer.arm.com`; 15.3.rel1 and later come from Arm's GitLab package registry (`gitlab.arm.com`), where Arm moved them. For any other release the digest comes from `--gcc-sha256 <hex>` / `HELIA_GCC_SHA256`, or, failing that, from Arm's published `<archive>.sha256asc` sidecar (same origin as the archive, so it guards against corruption but is not an independent pin; the script says so when it does this).
+- The installed release is recorded in `arm_gcc_download/.hct-arm-gcc-version`. An install of another release, or one with no marker, is replaced: the new release is downloaded, verified and extracted next to it first, so a failed download leaves the old install in place. `--force` reinstalls the same release.
+
+```bash
+uv run python -m helia_core_tester.scripts.setup_dependencies --gcc-version 13.2.rel1
+HELIA_GCC_VERSION=15.2.rel1 uv run helia_core_tester full --cpu cortex-m55
+```
+
+### Source dependencies (CMSIS-5, Ethos-U core platform)
+
+`setup_dependencies.py` fetches CMSIS-5 and ethos-u-core-platform at the fixed commits listed in `SOURCE_PINS` in that script and checks `git rev-parse HEAD` after checkout. Run directly, it moves an existing clean checkout at another commit to the pin. It rejects a checkout with local changes (edits, untracked files, or assume-unchanged/skip-worktree entries) or a directory that is not a git checkout; `--force` replaces it, and the old checkout is restored if the replacement fails. The setup that `build`, `run` and `full` start enforces the pins the same way, so a run fails on a modified checkout until it is cleaned or replaced. Run directly with `--source-pins warn`, setup fetches missing sources at the pin but only reports an existing checkout that is off its pin. Bumping a pin means editing `SOURCE_PINS`.
+
+### Compiler (`--toolchain`)
+
+`build`, `run` and `full` take `--toolchain gcc|armclang` (default `gcc`; also `toolchain` in `helia_core_tester.toml` and `HELIA_CORE_TESTER_TOOLCHAIN`). `armclang` selects ethos-u-core-platform's `armclang.cmake` and needs Arm Compiler 6 (`armclang`) on `PATH`; it is not fetched by `setup_dependencies.py`. Build output goes to `artifacts/build-<suite>-<cpu>-arm-compiler/`. `--toolchain armclang` is mutually exclusive with `--coverage` (gcov instrumentation is GCC-only). `doctor` reports which of `arm-none-eabi-gcc` / `armclang` it finds.
+
+### ns-cmsis-nn checkout (`--cmsis-nn-root`)
+
+The FVP build compiles the ns-cmsis-nn checkout two levels up (`../..`, the nested layout) by default. `generate`, `build` and `full` take `--cmsis-nn-root <path>` to use another checkout; the environment form is `HELIA_CORE_TESTER_CMSIS_NN_ROOT` (also `cmsis_nn_root` in `helia_core_tester.toml`). A bare `CMSIS_NN_ROOT` environment variable does not reach the build. A path with no `CMakeLists.txt` fails before CMake runs.
 
 ## Canonical Artifacts
 
@@ -176,6 +743,16 @@ Use `tensor_dtypes` for new float-aware descriptors. Legacy `activation_dtype` a
 still work, but the loader now normalizes both styles into `resolved_tensor_dtypes` and
 `resolved_comparison`.
 
+Every descriptor document read from YAML (`load_descriptor` / `load_all_descriptors`), and every
+base+variation merge in it, is validated against
+`helia_core_tester/generation/descriptors/schema.json`; a violation fails the load with the
+descriptor name, file and JSON path. Descriptors built as dicts in code skip the schema and rely on
+the loader's and operators' own checks. Every document needs a `name`. An unusable schema raises
+`DescriptorSchemaError` once, even with `best_effort=True`. The operator and `required_capabilities`
+enums are taken from the op catalog and `known_capabilities()` when the validator is built.
+Integer-suite descriptors (no `suite: float` and no `_float` file stem) must give
+`act_min`/`act_max` as integers.
+
 Example:
 
 ```yaml
@@ -190,6 +767,11 @@ input_shape: [1, 4]
 Reference ops for float infrastructure:
 - `Quantize` is the source of truth for `FP32 -> S8/S16`
 - `Dequantize` is the source of truth for `S8/S16 -> FP32`
+- `Dequantize` with `entry: arm_dequantize_f16_bits_f32` widens binary16 bit patterns and checks
+  every output bit against the NaN rule its build compiles. Tag the input `FP16` to run it on the f16
+  legs or `U16` (binary16 storage, accepted for this entry only) to run it on the f32 legs. A case
+  holds 1 to 65536 halves: the special classes, random patterns, then three NaNs so the vector and
+  scalar tails meet the NaN rule. Keys its path would not use are refused.
 
 Future ops should consume resolved tensor roles rather than raw legacy dtype fields:
 - `self.tensor_dtype("input")`
@@ -266,8 +848,8 @@ at flat index 72 of a `[1, 5, 5, 3]` input, the one real element of the bottom-r
 non-finite output may be pinned is a per-kernel question.
 
 - `strict` asserts the reference value on every lane. It is only legitimate where ns-cmsis-nn
-  documents the behaviour -- the elementwise family, the standalone hard swish, the
-  RELU/RELU6/LEAKY_RELU activations, `arm_reduce_sum_*` and `arm_nn_mean_*`, and
+  documents the behaviour -- the elementwise family, the standalone hard swish,
+  `arm_nn_gelu_f32`/`_f16`, the RELU/RELU6/LEAKY_RELU activations, `arm_reduce_sum_*` and `arm_nn_mean_*`, and
   `arm_gru_unidirectional_f32`/`_f16`, whose public declarations carry a NaN contract for a
   token in the input, the previous state or the candidate gate's weight or bias, and state that
   Inf follows the arithmetic (a token confined to the update or reset gate's weight or bias is
@@ -314,9 +896,9 @@ strict bundles need no migration. Matching NaNs and same-sign infinities pass st
 comparison; other non-finite pairings fail. This does not impose NaN-payload or signed-zero
 bit equality.
 
-`nonfinite_policy` is required by `OperationBase.nonfinite_policy()`, not by the schema: the
-`if`/`then` gate in `schema.json` is documentation until the descriptor loader validates the whole
-schema (#100).
+`nonfinite_policy` is required whenever `input_mode` is `nonfinite_sweep`: the descriptor loader
+enforces the `if`/`then` gate in `schema.json`, and `OperationBase.nonfinite_policy()` checks it
+again at generation time.
 
 To scaffold a new tester op, start from `helia_core_tester/scripts/scaffold_operator.py`.
 
@@ -330,8 +912,8 @@ element is classified before that tolerance is computed. A NaN or infinite opera
 run through the tolerance, because `rtol * |Inf|` is `Inf` and `0 * |Inf|` is `NaN`, and
 `diff > tol` is false against either. Matched non-finite operands pass: NaN against NaN, or
 two infinities of the same sign. For the families whose ns-cmsis-nn header notes state it
-(elementwise add/sub/mul, `arm_nn_activation` RELU/RELU6/LEAKY_RELU, hard_swish, and
-mean/reduce_sum), `Include/arm_nnfunctions_flt.h` guarantees the NaN-ness of an element and not
+(elementwise add/sub/mul, `arm_nn_activation` RELU/RELU6/LEAKY_RELU, hard_swish,
+`arm_nn_gelu_f32`/`_f16`, and mean/reduce_sum), `Include/arm_nnfunctions_flt.h` guarantees the NaN-ness of an element and not
 its payload, so a matched NaN passes regardless of sign or payload (see AmbiqAI/ns-cmsis-nn#333).
 Minimum and maximum are documented as unspecified for non-finite inputs, so a matched NaN there
 is a property of the implementation rather than a guarantee. Every other pairing fails, including
@@ -371,6 +953,20 @@ classify-after-widening validator actually loses lanes, so it is what holds the 
 smaller probes stay correct on the same compiler either way. The Arm targets are compiled and
 their classification call sites counted, not executed, with the toolchains and results recorded
 in the pull request.
+
+### Contract intervals
+
+Where ns-cmsis-nn states a numerical contract of the form `|out - ref| <= rtol * |ref| + atol`, a
+descriptor can assert it directly with `contract_interval: {rtol, atol}` (Gelu only today). The
+generator turns the float64 reference into the lowest and highest output bit patterns the contract
+allows for each element, deciding candidates near the edge in exact rational arithmetic and
+refusing any that stay within the reference's own error, and `helia_test_float_interval` compares
+the output's bits against them in sign-magnitude order. There is no golden rounding term to derive,
+an input zero must keep its sign, and NaN and infinite results are classified by their bits. Two
+companion keys serve these cases: `input_bits` lists `[start, stop)` bit-pattern ranges to use as
+inputs instead of uniform draws (the float16 GELU cases sweep every finite input this way), and
+`fpscr_fz16` sets FPSCR.FZ16 around the kernel call on targets with half-precision arithmetic,
+where a result whose reference is float16-subnormal may also be a zero of the reference's sign.
 
 ## Operand sign span
 
@@ -426,8 +1022,8 @@ operand_sign_span_exempt:
 The reason is required, and the key must name an operand the operator actually submits to the
 rule: each wired operator declares those labels as `SIGN_SPAN_OPERANDS`, and a waiver on
 anything else fails generation instead of silently waiving nothing. `operand_sign_span_exempt`
-is also declared in `helia_core_tester/generation/descriptors/schema.json`, but that schema is
-not enforced at load time (#100), so the rule lives in code.
+is also declared in `helia_core_tester/generation/descriptors/schema.json`, which the loader
+enforces, but the operand check needs the operator's labels, so it lives in code.
 
 ## Mutation scoring
 
@@ -444,6 +1040,13 @@ this bug class"), while `NOT_APPLICABLE` says the run never sampled the question
 `--fail-on-survivor` fires only on a real survivor. `requantize_tail_drop` is the current
 example -- its only killers are the MVE-gated chunked-equivalence requantize cases, so
 `--cpu cortex-m4` reports it not applicable.
+
+The host kernel library is the DSP build (`ARM_MATH_DSP`, no `ARM_MATH_MVEI`), so a cortex-m55
+case's `*_get_buffer_size_mve` call is compiled as the plain sizer, which answers for the build it
+runs in. Otherwise the DSP kernel gets MVE-sized scratch, and the 1xN convolve cases (whose MVE
+route needs less) overrun it. Cases that assert an MVE-only guard, such as the
+`null_weight_sum_ctx` faults, still fail the host baseline (the DSP kernel never reads that
+context and returns success) and are excluded from scoring; the board and FVP runs cover them.
 
 With `--cases-root`, the corpus CPU is read from the tree on disk (its `manifest.json`, or an
 `artifacts/generated_tests/<suite>/<cpu>/` path) rather than from `--cpu`, so a `--cpu` that
@@ -476,6 +1079,7 @@ Compiler cache (opt-in):
 - `HELIA_CORE_TESTER_COMPILER_LAUNCHER` names a specific tool; a name that is not on `PATH` fails the configure rather than building uncached. Set it to `none` (or empty) to build without a launcher even where one is installed, which is what a reproducibility build wants.
 - no image ships either tool; a host without one builds exactly as before.
 - With `ENABLE_COVERAGE=ON` (including `--coverage`), the instrumented `cmsis-nn` target bypasses `CMAKE_C_COMPILER_LAUNCHER`: cached objects can contain another build's profile-output paths. Uninstrumented harness targets and non-coverage builds retain their launcher. This does not bypass caches hidden inside compiler wrappers or custom compile rules.
+- A coverage build compiles `cmsis-nn` at `-O0` whatever `--opt` asks for, because the last `-O` wins. The run report's metadata and the JUnit `<properties>` record both levels: `optimization` is the requested `CMSIS_OPTIMIZATION_LEVEL`, and `cmsis_nn_optimization` is the level the kernels were compiled at. `coverage` records whether the build was instrumented (`true`/`false` in both JSON and JUnit). All three are read from the build directory's `CMakeCache.txt`, falling back to the run's own flags when there is no cache.
 
 ## Coverage Merge
 
@@ -493,7 +1097,7 @@ Behavior:
 - for a single suite (`--suite int` or `--suite float`), merge is strict and fails if any requested CPU input is missing.
 - for `--suite both`, merge requires both int and float inputs for every requested CPU; missing pairs are named in the failure output and reports.
 - `--include-mve-float` adds optional cortex-m55 float-MVE coverage; it cannot replace a missing required int/float input. Reports are still written when required inputs are missing.
-- `--include-mve-int` adds optional cortex-m55 integer-MVE coverage from a `--coverage --coverage-mve-int` run (`artifacts/reports/coverage/int-mve`), under the same rules. The default coverage build defines `ARM_MATH_AUTOVECTORIZE`, which compiles out integer MVE paths guarded by `!ARM_MATH_AUTOVECTORIZE`; `--coverage-mve-int` builds integer sources without it, except `arm_nn_mat_mul_core_4x_s8.c`.
+- `--include-mve-int` adds optional cortex-m55 integer-MVE coverage from a `--coverage --coverage-mve-int` run (`artifacts/reports/coverage/int-mve`), under the same rules. The default coverage build defines `ARM_MATH_AUTOVECTORIZE`, which compiles out integer MVE paths guarded by `!ARM_MATH_AUTOVECTORIZE`; `--coverage-mve-int` builds integer sources without it, except `arm_nn_mat_mul_core_4x_s8.c`. Float sources get the same define unless the run adds `--coverage-mve-float`; such a build sets `HELIA_CMSIS_NN_FLOAT_AUTOVECTORIZE` for the harness, and a float case marked `autovectorize_declines` then expects `ARM_CMSIS_NN_NO_IMPL_ERROR`, as it does on a core without MVE float.
 
 ## Clean Contract
 

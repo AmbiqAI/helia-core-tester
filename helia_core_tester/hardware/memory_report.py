@@ -8,7 +8,8 @@ script memory regions) feeds two reports:
   contains.
 - `build_size_probe(board, variant)`: the universal size probe, which links the whole
   retained ns-cmsis-nn library for one integer/F16/F32 feature set to prove it fits
-  the board before any firmware work.
+  the board before any firmware work. It builds as the same NSX app as the server,
+  rendered with the probe as its only target.
 
 Everything board-specific -- the SoC directory the linker script lives in and the
 names of the flash and RAM regions in it -- comes from the board table.
@@ -17,7 +18,6 @@ names of the flash and RAM regions in it -- comes from the board table.
 from __future__ import annotations
 
 import json
-import os
 import re
 import subprocess
 from dataclasses import dataclass
@@ -25,12 +25,19 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 from .boards import DEFAULT_BOARD_ID, BoardSpec, repo_root, resolve_board
-from .firmware_build import SERVER_TARGET, bin_path, elf_path, map_path, nsx_app_dir
+from .firmware_build import (
+    SERVER_TARGET,
+    _drop_foreign_cache,
+    _jobs,
+    bin_path,
+    elf_path,
+    ensure_build_tools,
+    map_path,
+    nsx_app_dir,
+    stage_kernels,
+)
 from .pathutil import display_path, write_text_lf
-from .toolchain import arm_tool, toolchain_bin_dir
-from ..scripts.setup_dependencies import nsx_ambiq_sdk_dir
-
-SIZE_PROBE_TARGET = "hct_universal_size_probe"
+from .toolchain import arm_tool
 
 # Catalog kernels whose symbols are checked for retention in the linked server image.
 _SELECTED_ADAPTERS = (
@@ -46,6 +53,9 @@ _SELECTED_ADAPTERS = (
 _MEMORY_RE = re.compile(
     r"^\s*([A-Za-z0-9_]+)\s*\([^)]*\)\s*:\s*ORIGIN\s*=\s*(0x[0-9A-Fa-f]+|\d+)\s*,\s*LENGTH\s*=\s*(0x[0-9A-Fa-f]+|\d+)"
 )
+# `objdump -h`: idx, name, size, VMA, LMA.
+_HEADER_RE = re.compile(r"^\s*\d+\s+(\S+)\s+([0-9a-fA-F]+)\s+([0-9a-fA-F]+)\s+([0-9a-fA-F]+)\s")
+_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
 _SYMBOL_RE = re.compile(r"^[0-9a-fA-F]+\s+[A-Za-z]\s+(arm_[A-Za-z0-9_]+)$")
 
 
@@ -56,11 +66,14 @@ def linker_script_path(board: BoardSpec, sdk_root: Path) -> Path:
     exports it to the CMake cache, so the same default path is rebuilt here from the
     board's SoC directory.
     """
-    return sdk_root / "modules" / "nsx-core" / "src" / board.soc / "gcc" / "linker_script_sbl.ld"
+    gcc_dir = sdk_root / "modules" / "nsx-core" / "src" / board.soc / "gcc"
+    sbl, plain = gcc_dir / "linker_script_sbl.ld", gcc_dir / "linker_script.ld"
+    # Apollo3/4 ship one script, no SBL.
+    return plain if plain.is_file() and not sbl.is_file() else sbl
 
 
-def app_linker_script(board: BoardSpec, build_dir: Path, project_root: Path) -> Path:
-    """The linker script the server was linked with."""
+def app_linker_script(board: BoardSpec, build_dir: Path) -> Path:
+    """The linker script the app was linked with."""
     from . import nsx_cli
 
     app_dir = nsx_app_dir(build_dir)
@@ -70,20 +83,15 @@ def app_linker_script(board: BoardSpec, build_dir: Path, project_root: Path) -> 
         # A failed first sync leaves none.
         if nsx_script.is_file():
             return nsx_script
-    # Build dir predates NSX: legacy SDK.
-    legacy = linker_script_path(board, nsx_ambiq_sdk_dir(project_root))
-    if legacy.is_file():
-        return legacy
     raise FileNotFoundError(f"No linker script for {build_dir}; rerun hardware build.")
 
 
 def parse_memory_regions(linker_script: Path) -> list[dict[str, int | str]]:
     """`NAME (attrs) : ORIGIN = ..., LENGTH = ...` rows of the linker script's MEMORY block."""
     regions: list[dict[str, int | str]] = []
-    for line in linker_script.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("/*") or stripped.startswith("*"):
-            continue
+    # Drop block comments that span lines.
+    text = _COMMENT_RE.sub("", linker_script.read_text(encoding="utf-8"))
+    for line in text.splitlines():
         match = _MEMORY_RE.match(line)
         if match is None:
             continue
@@ -92,16 +100,42 @@ def parse_memory_regions(linker_script: Path) -> list[dict[str, int | str]]:
     return regions
 
 
-def _parse_size_a(output: str) -> dict[str, int]:
-    sections: dict[str, int] = {}
-    for line in output.splitlines():
-        parts = line.split()
-        if len(parts) >= 2 and parts[0].startswith("."):
-            try:
-                sections[parts[0]] = int(parts[1])
-            except ValueError:
-                continue
-    return sections
+@dataclass(frozen=True)
+class SectionHeader:
+    name: str
+    size: int
+    vma: int
+    lma: int
+    flags: frozenset[str]
+
+
+def parse_section_headers(output: str) -> list[SectionHeader]:
+    """`objdump -h` rows with their flags."""
+    lines = output.splitlines()
+    rows: list[SectionHeader] = []
+    for line, flags in zip(lines, lines[1:]):
+        match = _HEADER_RE.match(line)
+        if match is None:
+            continue
+        name, size, vma, lma = match.groups()
+        rows.append(SectionHeader(
+            name, int(size, 16), int(vma, 16), int(lma, 16),
+            frozenset(flag.strip() for flag in flags.split(",")),
+        ))
+    return rows
+
+
+def _in_region(address: int, region: dict[str, int | str]) -> bool:
+    origin = int(region["origin"])
+    return origin <= address < origin + int(region["capacity"])
+
+
+def _section_totals(headers: list[SectionHeader]) -> dict[str, int]:
+    # NSX scripts emit two `.text` sections.
+    totals: dict[str, int] = {}
+    for header in headers:
+        totals[header.name] = totals.get(header.name, 0) + header.size
+    return totals
 
 
 def _parse_top_symbols(output: str, *, limit: int = 20) -> list[dict[str, int | str]]:
@@ -179,12 +213,10 @@ def analyze_elf(elf: Path, board: BoardSpec, linker_script: Path, project_root: 
     nm_symbols = _probe_binary("arm-none-eabi-nm", [str(elf)], project_root)
     objdump_headers = _probe_binary("arm-none-eabi-objdump", ["-h", str(elf)], project_root)
 
-    sections = _parse_size_a(size_sections)
+    headers = parse_section_headers(objdump_headers)
+    sections = _section_totals(headers)
     memory_regions = parse_memory_regions(linker_script)
-    region_map = {str(row["name"]): int(row["capacity"]) for row in memory_regions}
-    flash_image_bytes = sections.get(".text", 0) + sections.get(".itcm_text", 0) + sections.get(".data", 0)
-    tcm_static_bytes = sections.get(".stack", 0) + sections.get(".data", 0) + sections.get(".bss", 0)
-    heap_available_bytes = sections.get(".heap", 0)
+    region_map = {str(row["name"]): row for row in memory_regions}
     # Fail closed: a missing or mistyped board region is a configuration error, not a
     # zero-capacity region that the gates below would wave through.
     missing = [name for name in (board.flash_region, board.ram_region) if name not in region_map]
@@ -193,20 +225,30 @@ def analyze_elf(elf: Path, board: BoardSpec, linker_script: Path, project_root: 
             f"Linker script for board {board.id!r} defines no memory region(s) {missing}; "
             f"available regions: {sorted(region_map)}. Check flash_region/ram_region in the board table."
         )
-    flash_capacity = region_map[board.flash_region]
-    tcm_capacity = region_map[board.ram_region]
+    flash, ram = region_map[board.flash_region], region_map[board.ram_region]
+    # Flash holds every loaded section's image.
+    flash_image_bytes = sum(h.size for h in headers if "LOAD" in h.flags and _in_region(h.lma, flash))
+    # RAM counts allocated sections placed there.
+    ram_static_bytes = sum(
+        h.size for h in headers if "ALLOC" in h.flags and h.name != ".heap" and _in_region(h.vma, ram)
+    )
+    heap_available_bytes = sections.get(".heap", 0)
+    flash_capacity = int(flash["capacity"])
+    ram_capacity = int(ram["capacity"])
     usage = {
+        "flash_region": board.flash_region,
         "flash_image_bytes": flash_image_bytes,
         "flash_capacity_bytes": flash_capacity,
         "flash_free_bytes": max(0, flash_capacity - flash_image_bytes),
         "flash_percent_used": round((flash_image_bytes / flash_capacity) * 100, 2) if flash_capacity else None,
-        "tcm_static_bytes": tcm_static_bytes,
-        "tcm_capacity_bytes": tcm_capacity,
-        "tcm_free_bytes_before_heap": max(0, tcm_capacity - tcm_static_bytes),
-        "tcm_percent_used_before_heap": round((tcm_static_bytes / tcm_capacity) * 100, 2) if tcm_capacity else None,
+        "ram_region": board.ram_region,
+        "ram_static_bytes": ram_static_bytes,
+        "ram_capacity_bytes": ram_capacity,
+        "ram_free_bytes_before_heap": max(0, ram_capacity - ram_static_bytes),
+        "ram_percent_used_before_heap": round((ram_static_bytes / ram_capacity) * 100, 2) if ram_capacity else None,
         "heap_available_bytes": heap_available_bytes,
         "flash_gate_pass": flash_image_bytes <= int(flash_capacity * 0.75),
-        "tcm_gate_pass": tcm_static_bytes <= int(tcm_capacity * 0.75),
+        "ram_gate_pass": ram_static_bytes <= int(ram_capacity * 0.75),
     }
     return ElfAnalysis(
         sections=sections,
@@ -237,14 +279,14 @@ def generate_memory_report(
     elf = elf_path(build_root)
     if not elf.is_file():
         raise FileNotFoundError(f"Built firmware ELF not found: {elf} -- run `hardware build` for this board/build dir first.")
-    analysis = analyze_elf(elf, board, app_linker_script(board, build_root, project_root), project_root)
+    analysis = analyze_elf(elf, board, app_linker_script(board, build_root), project_root)
     symbols = analysis.symbols
     retained = {name: name in symbols for name in _SELECTED_ADAPTERS}
     catalog = json.loads((project_root / "cmake" / "hardware" / "kernel_catalog.json").read_text(encoding="utf-8"))
 
     report = {
         "schema": "hct.memory_report",
-        "schema_version": 1,
+        "schema_version": 2,
         "artifact": SERVER_TARGET,
         "target": {"board": board.id, "cpu": board.cpu},
         # Repo-relative for the default in-tree build dir, absolute for an external --build-dir.
@@ -287,61 +329,41 @@ SIZE_PROBE_VARIANTS: tuple[SizeProbeVariant, ...] = (
 )
 
 
-def _toolchain_env(project_root: Path) -> dict[str, str]:
-    """The child environment for a size-probe configure/build: the checkout's downloaded
-    ARM GCC `bin/` first on PATH. The CMake build runs generate_kernel_symbol_refs.py,
-    whose `arm-none-eabi-nm` lookup is bare, so the toolchain must be reachable through
-    PATH and not only through the toolchain file."""
-    env = os.environ.copy()
-    bin_dir = str(toolchain_bin_dir(project_root).resolve())
-    env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
-    return env
-
-
-def _run(cmd: list[str], *, cwd: Path, env: Optional[dict[str, str]] = None) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=True, env=env)
-
-
-def _configure_size_probe(project_root: Path, build_dir: Path, board: BoardSpec, variant: SizeProbeVariant) -> None:
-    toolchain = project_root / "cmake" / "nsx" / "toolchains" / "arm-none-eabi-gcc.cmake"
-    cmd = [
-        "cmake",
-        "-S",
-        str(project_root),
-        "-B",
-        str(build_dir),
-        f"-DCMAKE_TOOLCHAIN_FILE={toolchain}",
-        "-DHELIA_HARDWARE_BUILD=ON",
-        "-DHELIA_BUILD_GENERATED_TESTS=OFF",
-        "-DHELIA_BUILD_UNIVERSAL_SIZE_PROBE=ON",
-        f"-DHELIA_HARDWARE_BOARD={board.nsx_board}",
-        f"-DTARGET_CPU={board.cpu}",
-        f"-DARM_NN_ENABLE_F32={'ON' if variant.enable_f32 else 'OFF'}",
-        f"-DARM_NN_ENABLE_F16={'ON' if variant.enable_f16 else 'OFF'}",
-    ]
-    _run(cmd, cwd=project_root, env=_toolchain_env(project_root))
-
-
 def build_size_probe(board: BoardSpec, variant: SizeProbeVariant, *, project_root: Optional[Path] = None) -> Path:
     """Configure, build and measure one size-probe variant for `board`; returns the
     directory holding its `memory_report.json` and raw tool outputs."""
+    from . import nsx_cli
+    from .nsx_app import SIZE_PROBE_TARGET, AppOptions, nested_kernel_root
+
     project_root = project_root or repo_root()
     # Board-keyed so two boards' probes in one checkout never share a CMake cache or
     # overwrite each other's report and raw tool outputs.
     probe_root = project_root / "artifacts" / "hardware" / "size_probe" / board.id / variant.name
     build_dir = probe_root / "build"
-    build_dir.mkdir(parents=True, exist_ok=True)
-    _configure_size_probe(project_root, build_dir, board, variant)
-    _run(["cmake", "--build", str(build_dir), "--target", SIZE_PROBE_TARGET], cwd=project_root, env=_toolchain_env(project_root))
+    # Same kernel default as hardware build.
+    options = AppOptions(
+        cmsis_nn_root=nested_kernel_root(project_root),
+        enable_f32=variant.enable_f32,
+        enable_f16=variant.enable_f16,
+        build_size_probe=True,
+    )
+    ensure_build_tools(project_root)
+    stage_kernels(board, build_dir=build_dir, options=options, repo_root=project_root)
+    app_dir = nsx_app_dir(build_dir)
+    # Pre-NSX probe caches name the repo.
+    _drop_foreign_cache(build_dir, app_dir)
+    nsx_cli.configure_app(app_dir, board.nsx_board, build_dir=build_dir, frozen=True)
+    nsx_cli.build_app(
+        app_dir, board=board.nsx_board, build_dir=build_dir, target=SIZE_PROBE_TARGET, jobs=_jobs(None), frozen=True,
+    )
 
     out_dir = build_dir / "probe"
     elf = out_dir / f"{SIZE_PROBE_TARGET}.elf"
-    # Probe still uses the old SDK.
-    analysis = analyze_elf(elf, board, linker_script_path(board, nsx_ambiq_sdk_dir(project_root)), project_root)
+    analysis = analyze_elf(elf, board, app_linker_script(board, build_dir), project_root)
 
     report = {
         "schema": "hct.memory_report",
-        "schema_version": 1,
+        "schema_version": 2,
         "variant": variant.name,
         "target": {"board": board.id, "cpu": board.cpu},
         "feature_set": {

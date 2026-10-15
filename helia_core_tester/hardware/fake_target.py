@@ -9,12 +9,13 @@ disagree about a payload layout without a round-trip test noticing.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any
+from typing import Any, Mapping
 
 import numpy as np
 
 from helia_core_tester.generation.utils.tflite_utils import requantize_np
 
+from .boards import DEFAULT_BOARD_ID, resolve_board
 from .hctp import HEADER_SIZE, Frame, FrameDecoder, MessageType, SessionFrameValidator, encode_frame
 from .measurement import (
     MAX_CASES_PER_PLAN,
@@ -26,16 +27,19 @@ from .measurement import (
     RawSample,
     auto_calibrate_iterations,
 )
-from .pmu_catalog import CPU_CYCLES_EVENT_ID, CPU_CYCLES_NAME
-from .transfer import ArenaTracker, BlobAccumulator, BlobTransferSpec, CaseTooLargeError
+from .pmu_catalog import CPU_CYCLES_EVENT_ID, CPU_CYCLES_NAME, counter_by_event_id
+from . import transfer
+from .transfer import ArenaTracker, BlobAccumulator, BlobTransferSpec, CaseTooLargeError, derived_mram_extent, mram_extent, staged_extent
 from .wire import (
     CAP_ABS_S8,
+    CAP_BLOB_STORE,
     CAP_CASE_STREAMING,
     CAP_CORRECTNESS,
     CAP_KERNEL_CATALOG,
     CAP_PERFORMANCE,
     CAP_PMU_ARMV8M,
     CAP_RTT_TRANSPORT,
+    CAP_WEIGHTS_MRAM,
     BlobDescriptor,
     CaseComplete,
     CaseMeta,
@@ -81,6 +85,8 @@ FAKE_MAX_RX_PAYLOAD = FAKE_RX_BUFFER_BYTES - HEADER_SIZE
 EVENT_COUNTER_MASK = 0xFFFF  # one 16-bit slot
 CHAINED_COUNTER_MASK = 0xFFFFFFFF  # two slots chained
 CCNTR_MASK = 0xFFFFFFFF
+HCTP_STATUS_INVALID_ARGUMENT = -1  # hctp_protocol.h
+HCTP_STATUS_NO_SPACE = -8  # hctp_protocol.h
 
 
 class _TargetState(str, Enum):
@@ -141,10 +147,8 @@ class FakeKernelAdapter:
                     )
                 ]
                 for counter in counter_pass.counters:
-                    # A PMU-present target counts whatever event id it was programmed with
-                    # and reports it supported=1, catalog-known or not; only the fake's
-                    # deliberately unsupported groups (and DWT-only targets) clear it.
-                    supported = counter.group in self.supported_groups or counter.group == "unknown"
+                    # Only unsupported groups clear the flag.
+                    supported = counter.group in self.supported_groups
                     value = self._counter_value(counter, blobs, iterations, sample_index)
                     # Honour the real counter widths so tests can provoke an overflow:
                     # a 16-bit slot wraps unless the pass chains slot pairs into 32 bits.
@@ -186,46 +190,42 @@ class FakeAbsS8Adapter(FakeKernelAdapter):
 
 
 class FakeConvolveS8Adapter(FakeKernelAdapter):
-    entry = CatalogEntry(2, "arm_convolve_s8", "ConvolutionFunctions", 1, "S8", 1, True, True, False, 64)
+    entry = CatalogEntry(2, "arm_convolve_wrapper_s8", "ConvolutionFunctions", 1, "S8", 1, True, True, False, 64)
     supported_groups = ("cpu", "memory")
     base_cycles_per_iteration = 19
 
     def invoke(self, blobs: dict[str, np.ndarray], scalar_parameters: dict[str, Any]) -> np.ndarray:
-        input_data = blobs["input_0"].astype(np.int32)
-        weights = blobs["weights"].astype(np.int32)
+        # Mirror the firmware: host sends pads and dims.
+        params = {key: int(value) for key, value in scalar_parameters.items() if key != "padding"}
+        input_data = blobs["input_0"].astype(np.int32) + params.get("input_offset", 0)
+        # Dims read HWIO; data sits OHWI, like CMSIS.
+        filt_h, filt_w, filt_c, out_c = blobs["weights"].shape
+        weights = blobs["weights"].reshape(out_c, filt_h, filt_w, filt_c).astype(np.int32)
+        # Firmware rejects a missing bias too.
         bias = blobs["bias"].astype(np.int32)
         multiplier = blobs["multiplier"].astype(np.int32)
         shift = blobs["shift"].astype(np.int32)
-        stride_h = int(scalar_parameters["stride_h"])
-        stride_w = int(scalar_parameters["stride_w"])
-        padding = str(scalar_parameters["padding"])
         batch, in_h, in_w, in_c = input_data.shape
-        filt_h, filt_w, filt_c, out_c = weights.shape
-        assert batch == 1 and filt_c == in_c
-        pad_top = pad_bottom = pad_left = pad_right = 0
-        if padding == "SAME":
-            out_h = (in_h + stride_h - 1) // stride_h
-            out_w = (in_w + stride_w - 1) // stride_w
-            pad_h = max((out_h - 1) * stride_h + filt_h - in_h, 0)
-            pad_w = max((out_w - 1) * stride_w + filt_w - in_w, 0)
-            pad_top = pad_h // 2
-            pad_bottom = pad_h - pad_top
-            pad_left = pad_w // 2
-            pad_right = pad_w - pad_left
-        padded = np.pad(input_data, ((0, 0), (pad_top, pad_bottom), (pad_left, pad_right), (0, 0)), mode="constant")
-        out_h = ((padded.shape[1] - filt_h) // stride_h) + 1
-        out_w = ((padded.shape[2] - filt_w) // stride_w) + 1
-        activation_min = int(scalar_parameters.get("activation_min", -128))
-        activation_max = int(scalar_parameters.get("activation_max", 127))
-        output_offset = int(scalar_parameters.get("output_offset", 0))
+        assert batch == 1 and in_c % filt_c == 0
+        group_out = out_c // (in_c // filt_c)
+        stride_h, stride_w = params["stride_h"], params["stride_w"]
+        dil_h, dil_w = params.get("dilation_h", 1), params.get("dilation_w", 1)
+        pad_h, pad_w = params.get("pad_h", 0), params.get("pad_w", 0)
+        out_h, out_w = params["output_h"], params["output_w"]
+        # Padding taps add zero after offset.
+        padded = np.zeros((in_h + 2 * pad_h + filt_h * dil_h, in_w + 2 * pad_w + filt_w * dil_w, in_c), dtype=np.int32)
+        padded[pad_h : pad_h + in_h, pad_w : pad_w + in_w] = input_data[0]
         output = np.zeros((batch, out_h, out_w, out_c), dtype=np.int8)
         for oy in range(out_h):
             for ox in range(out_w):
-                window = padded[0, oy * stride_h : oy * stride_h + filt_h, ox * stride_w : ox * stride_w + filt_w, :]
+                y, x = oy * stride_h, ox * stride_w
+                window = padded[y : y + filt_h * dil_h : dil_h, x : x + filt_w * dil_w : dil_w]
                 for oc in range(out_c):
-                    acc = int(np.sum(window * weights[:, :, :, oc])) + int(bias[oc])
+                    first = (oc // group_out) * filt_c
+                    acc = int(np.sum(window[:, :, first : first + filt_c] * weights[oc])) + int(bias[oc])
                     value = int(requantize_np(np.array([acc], dtype=np.int32), int(multiplier[oc]), int(shift[oc]))[0])
-                    output[0, oy, ox, oc] = np.int8(np.clip(value + output_offset, activation_min, activation_max))
+                    value += params.get("output_offset", 0)
+                    output[0, oy, ox, oc] = np.clip(value, params.get("activation_min", -128), params.get("activation_max", 127))
         return output
 
 
@@ -244,8 +244,21 @@ class FakeTargetTransport:
         max_rx_payload: int = FAKE_MAX_RX_PAYLOAD,
         max_cases_per_session: int = MAX_CASES_PER_PLAN,
         max_passes: int = MAX_PASSES_PER_PLAN,
+        rejections: Mapping[str, tuple[str, int]] | None = None,
+        boot_status: int | None = 0,
+        core_clock_hz: int | None = None,
+        placement: str = "tcm",
+        blob_store: dict[tuple[int, int, int], bytes] | None = None,
     ) -> None:
         self.build_id = build_id
+        # (length, crc32, digest) -> bytes; None: no store.
+        self.blob_store = blob_store
+        # Non-zero: failed init. None: old firmware.
+        self._boot_status = boot_status
+        # Default: the default board row's clock.
+        self._core_clock_hz = resolve_board(DEFAULT_BOARD_ID).core_clock_hz if core_clock_hz is None else core_clock_hz
+        # case_id -> (stage, kernel status) to refuse.
+        self._rejections = dict(rejections or {})
         self._session_id = 0xC0DE1234
         self._pmu_present = pmu_present
         self._pmu_counter_slots = pmu_counter_slots if pmu_present else 0
@@ -260,6 +273,7 @@ class FakeTargetTransport:
         self._max_frame_payload = max_frame_payload
         self._read_chunk_size = read_chunk_size
         self._runtime_arena_capacity = runtime_arena_capacity
+        self._placement = placement
         self._arena = ArenaTracker(runtime_arena_capacity)
         self._flash_count = 1
         self._rewind_count = 0
@@ -329,6 +343,10 @@ class FakeTargetTransport:
         flags = CAP_CASE_STREAMING | CAP_CORRECTNESS | CAP_PERFORMANCE | CAP_RTT_TRANSPORT | CAP_KERNEL_CATALOG | CAP_ABS_S8
         if self._pmu_present:
             flags |= CAP_PMU_ARMV8M
+        if self._placement == "mram":
+            flags |= CAP_WEIGHTS_MRAM
+        if self.blob_store is not None:
+            flags |= CAP_BLOB_STORE
         info = TargetInfo(
             build_id=self.build_id,
             catalog_hash=kernel_catalog_hash(self._catalog),
@@ -344,6 +362,11 @@ class FakeTargetTransport:
             max_rx_payload=self._max_rx_payload,
             max_cases_per_session=self._max_cases_per_session,
             max_passes=self._max_passes,
+            boot_status=self._boot_status,
+            core_clock_hz=None if self._boot_status is None else self._core_clock_hz,
+            # Apollo330P boot FPSCR, then pinned.
+            fpscr_boot=None if self._boot_status is None else 0x03040000,
+            fpscr=None if self._boot_status is None else 0x00040000,
         )
         self._queue(MessageType.TARGET_INFO, encode_target_info(info))
 
@@ -382,6 +405,15 @@ class FakeTargetTransport:
                 raise ValueError(f"SESSION_PLAN case id {case.case_id!r} does not fit the fake target's {FAKE_MAX_CASE_ID}-byte case-id storage (with NUL).")
         return plan
 
+    def _unmapped_ids(self, plan: SessionPlan) -> list[int]:
+        """Plan ids the firmware's PMU map lacks."""
+        # DWT-only firmware accepts any id.
+        if not self._pmu_present:
+            return []
+        ids = (counter.event_id for counter_pass in plan.passes for counter in counter_pass.counters)
+        # test_catalog_matches_the_synced_module guards this.
+        return [event_id for event_id in ids if counter_by_event_id(event_id) is None]
+
     def _handle_frame(self, frame: Frame) -> None:
         if frame.header.message_type == MessageType.TARGET_INFO_ACK:
             self._state = _TargetState.WAIT_PLAN
@@ -389,6 +421,11 @@ class FakeTargetTransport:
             return
         if frame.header.message_type == MessageType.SESSION_PLAN:
             self._plan = self._admit_session_plan(frame.payload)
+            if self._unmapped_ids(self._plan):
+                # Same ERROR frame as queue_error_frame().
+                self._queue_error(f"message_type={int(MessageType.SESSION_PLAN)} status={HCTP_STATUS_INVALID_ARGUMENT}")
+                return
+            self._current_case_index = 0
             self._state = _TargetState.WAIT_CASE_META
             self._request_case()
             return
@@ -403,12 +440,16 @@ class FakeTargetTransport:
                 self._queue_error(str(exc))
                 return
             self._state = _TargetState.WAIT_BLOB_CHUNK
-            self._request_blob()
+            self._next_blob()
             return
         if frame.header.message_type == MessageType.BLOB_CHUNK:
             self._handle_blob_chunk(frame.payload)
             return
         if frame.header.message_type == MessageType.RUN_CORRECTNESS:
+            status = self._rejected_status("correctness")
+            if status is not None:
+                self._finish_case(correctness_ran=False, status=status)
+                return
             self._run_correctness()
             self._state = _TargetState.WAIT_CORRECTNESS_ACK
             return
@@ -451,13 +492,22 @@ class FakeTargetTransport:
             for blob_id, spec in self._blob_specs.items()
         }
         for spec in self._case_meta.blobs:
-            self._arena.reserve_aligned(spec.byte_length, max(1, spec.alignment))
+            self._arena.reserve_aligned(*staged_extent(spec.role, spec.byte_length, spec.alignment, self._placement))
         scratch_bytes = self._case_meta.scratch_bytes
         output_bytes = int(self._scalar_parameters()["output_capacity_bytes"])
         if scratch_bytes:
             self._arena.reserve_aligned(scratch_bytes, 16)
         if output_bytes:
             self._arena.reserve_aligned(output_bytes, 16)
+        # plan_mram() runs after the workspace allocation in handle_case_meta(), so a
+        # workspace overflow is reported first; then an over-pool case is refused.
+        blobs = self._case_meta.blobs
+        mram = sum(mram_extent(spec.role, spec.byte_length, self._placement) for spec in blobs)
+        mram += derived_mram_extent(self._case_meta.kernel_id, blobs, self._placement)
+        if mram > transfer.MRAM_POOL_BYTES:
+            raise CaseTooLargeError(
+                f"message_type={int(MessageType.CASE_META)} status={HCTP_STATUS_NO_SPACE} MRAM pool full"
+            )
 
     def _request_blob(self) -> None:
         assert self._current_blob_id is not None
@@ -478,14 +528,38 @@ class FakeTargetTransport:
         if self._pending_offset < self._blob_specs[chunk.blob_id].byte_length:
             self._request_blob()
             return
-        self._accumulators[chunk.blob_id].finish()
+        data = self._accumulators[chunk.blob_id].finish()
+        key = self._store_key(chunk.blob_id)
+        if key is not None:
+            self.blob_store[key] = data
         self._blob_index += 1
-        if self._blob_index < len(self._blob_order):
-            self._current_blob_id = self._blob_order[self._blob_index]
-            self._pending_offset = 0
-            self._request_blob()
-            return
-        self._queue(MessageType.CASE_READY, encode_case_ready(CaseReady(blob_id=chunk.blob_id, bytes_received=self._pending_offset)))
+        self._next_blob()
+
+    def _store_key(self, blob_id: int) -> tuple[int, int, int] | None:
+        """Store key, when the store and keys exist."""
+        assert self._case_meta is not None
+        if self.blob_store is None or self._case_meta.store_keys is None:
+            return None
+        index = self._blob_order.index(blob_id)
+        spec = self._blob_specs[blob_id]
+        return (spec.byte_length, spec.crc32, self._case_meta.store_keys[index])
+
+    def _next_blob(self) -> None:
+        """Copy stored blobs; request a miss."""
+        while self._blob_index < len(self._blob_order):
+            blob_id = self._blob_order[self._blob_index]
+            key = self._store_key(blob_id)
+            stored = self.blob_store.get(key) if key is not None else None
+            if stored is None:
+                self._current_blob_id = blob_id
+                self._pending_offset = 0
+                self._request_blob()
+                return
+            self._accumulators[blob_id].add_chunk(0, stored)
+            self._blob_index += 1
+        last = self._blob_order[-1]
+        ready = CaseReady(blob_id=last, bytes_received=self._blob_specs[last].byte_length)
+        self._queue(MessageType.CASE_READY, encode_case_ready(ready))
         self._state = _TargetState.WAIT_RUN_CORRECTNESS
 
     def _case_blobs(self) -> dict[str, np.ndarray]:
@@ -543,6 +617,10 @@ class FakeTargetTransport:
             counter_passes=passes,
         )
         self._last_iterations = iterations
+        status = self._rejected_status("performance")
+        if status is not None:
+            # Like firmware: queued samples precede the refusal.
+            samples = samples[: len(samples) // 2]
         for sample in samples:
             reported = RawSample(
                 sample_index=sample.sample_index,
@@ -552,7 +630,25 @@ class FakeTargetTransport:
                 pass_name=sample.pass_name,
             )
             self._queue(MessageType.SAMPLE_RESULT, encode_sample_result(reported))
-        complete = CaseComplete(case_id=self._case_meta.case_id, workspace_used_bytes=self._arena.used_bytes)
+        self._finish_case(correctness_ran=True, status=status)
+
+    def _rejected_status(self, stage: str) -> int | None:
+        """Kernel status when this stage refuses."""
+        assert self._case_meta is not None
+        rejection = self._rejections.get(self._case_meta.case_id)
+        return rejection[1] if rejection is not None and rejection[0] == stage else None
+
+    def _finish_case(self, *, correctness_ran: bool, status: int | None) -> None:
+        """CASE_COMPLETE, then the next case, like finish_case()."""
+        assert self._plan is not None
+        assert self._case_meta is not None
+        complete = CaseComplete(
+            case_id=self._case_meta.case_id,
+            workspace_used_bytes=self._arena.used_bytes,
+            correctness_ran=correctness_ran,
+            performance_ran=status is None,
+            kernel_status=status or 0,
+        )
         self._queue(MessageType.CASE_COMPLETE, encode_case_complete(complete))
         self._case_workspace_history.append(self._arena.used_bytes)
         self._arena.rewind()
@@ -563,5 +659,5 @@ class FakeTargetTransport:
             self._state = _TargetState.WAIT_CASE_META
             self._request_case()
             return
-        self._queue(MessageType.SESSION_COMPLETE, encode_session_complete(SessionComplete(self._completed_case_count)))
+        self._queue(MessageType.SESSION_COMPLETE, encode_session_complete(SessionComplete(len(self._plan.cases))))
         self._state = _TargetState.COMPLETE

@@ -10,15 +10,19 @@ from helia_core_tester.generation.utils.template_context import TemplateContextB
 
 def test_resolve_comparison_preserves_prior_per_operator_overrides():
     cases = [
-        ("PReLU", "S8", {"mode": "tolerant_int", "tolerance": 2}),
+        ("PReLU", "S8", {"mode": "exact_int"}),
         ("LeakyRelu", "S8", {"mode": "tolerant_int", "tolerance": 1}),
         ("HardSwishCompat", "S8", {"mode": "tolerant_int", "tolerance": 1}),
         ("DepthwiseConv", "S8", {"mode": "exact_int"}),
-        ("Abs", "S16", {"mode": "tolerant_int", "tolerance": 2}),
+        ("Abs", "S16", {"mode": "exact_int"}),
         ("Abs", "S8", {"mode": "exact_int"}),
-        ("Add", "S16", {"mode": "tolerant_int", "tolerance": 3}),
-        ("SquaredDifference", "S16", {"mode": "tolerant_int", "tolerance": 3}),
+        ("Add", "S16", {"mode": "exact_int"}),
+        ("SquaredDifference", "S16", {"mode": "exact_int"}),
         ("Convolve", "S8", {"mode": "tolerant_int", "tolerance": 1}),
+        ("Convolve", "S16", {"mode": "exact_int"}),
+        ("FullyConnected", "S8", {"mode": "exact_int"}),
+        ("FullyConnected", "S16", {"mode": "tolerant_int", "tolerance": 1}),
+        ("AvgPool", "S8", {"mode": "exact_int"}),
         ("Reshape", "S8", {"mode": "exact_int"}),
         ("Concatenation", "S8", {"mode": "exact_int"}),
         ("Split", "S8", {"mode": "exact_int"}),

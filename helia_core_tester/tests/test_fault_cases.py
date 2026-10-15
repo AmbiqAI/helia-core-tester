@@ -275,7 +275,6 @@ def test_fault_descriptors_expect_their_contract_status_and_follow_the_naming_co
         seen += 1
         expected_status = {
             "packed_grouped": "ARM_CMSIS_NN_NO_IMPL_ERROR",
-            "zero_output_batch": "ARM_CMSIS_NN_SUCCESS",
         }.get(desc["fault"], "ARM_CMSIS_NN_ARG_ERROR")
         assert desc["expected_status"] == expected_status, desc["name"]
         assert re.fullmatch(

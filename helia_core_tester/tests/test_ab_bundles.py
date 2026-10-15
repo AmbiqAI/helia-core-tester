@@ -78,11 +78,43 @@ def test_limits_relax_and_gate_cycles(capsys: pytest.CaptureFixture[str]) -> Non
     assert "drifted_case ARM_PMU_CPU_CYCLES 2010.000 -> 2210.000 +9.950% > 5%" in out
 
 
-def test_missing_cases_listed_not_fatal(capsys: pytest.CaptureFixture[str]) -> None:
-    status, out = _run(capsys, "--counter", "median_cycles")
-    assert status == 0
+_ONLY_IN_A = "only_in_a,4,true,0,50,4000.0,0.5,4001.0,4002.0,absent,4010.0,3500.0,300.0,20.0,false,true\n"
+
+
+def _with_dropped_case(tmp_path: Path) -> str:
+    """Fixture A plus a case B lacks."""
+    return _copy(tmp_path, "a", ("partial_case,6,", _ONLY_IN_A + "partial_case,6,"))
+
+
+def test_dropped_case_fails(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    a = _with_dropped_case(tmp_path)
+    status, out = _run(capsys, "--counter", "median_cycles", a=a)
+    assert status == 1
     assert "== cases only in A (1)\n  only_in_a" in out
     assert "== cases only in B (1)\n  only_in_b" in out
+    assert "== FAIL: 1 cases regressed in B\n  only_in_a missing in B" in out
+    # Harness-only work opts out.
+    status, out = _run(capsys, "--counter", "median_cycles", "--allow-regressions", a=a)
+    assert status == 0
+    assert "regressed" not in out
+
+
+def test_new_mismatch_fails(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    # Candidate breaks identical_case at -99% cycles.
+    b = _copy_b(tmp_path, ("identical_case,1,true,0,50,1000.0", "identical_case,1,false,7,50,10.0"))
+    status, out = _run(capsys, "--counter", "median_cycles", a=_with_dropped_case(tmp_path), b=b)
+    assert status == 1
+    assert "  identical_case mismatch in B only\n  only_in_a missing in B" in out
+    status, _ = _run(capsys, "--counter", "median_cycles", "--allow-regressions", b=b)
+    assert status == 0
+
+
+def test_mismatch_on_both_sides_not_regression(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    a = _copy(tmp_path, "a", ("identical_case,1,true,0", "identical_case,1,false,7"))
+    b = _copy_b(tmp_path, ("identical_case,1,true,0", "identical_case,1,false,7"))
+    status, out = _run(capsys, "--counter", "median_cycles", a=a, b=b)
+    assert status == 0
+    assert "regressed" not in out
 
 
 def test_overflow_case_flagged_not_gated(capsys: pytest.CaptureFixture[str]) -> None:
@@ -175,3 +207,11 @@ def test_select_counters_dedupes_and_validates() -> None:
     assert select_counters(a, b, ["median_cycles", "median_cycles"]) == ["median_cycles"]
     with pytest.raises(SystemExit, match="ARM_PMU_NOPE"):
         select_counters(a, b, ["median_cycles", "ARM_PMU_NOPE"])
+
+
+def test_regressions_listed_when_all_flagged(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    b = _copy_b(tmp_path, (",true,0,50,", ",false,1,50,"))
+    status, out = _run(capsys, "--counter", "median_cycles", b=b)
+    assert status == 1
+    assert "== FAIL: 4 cases regressed in B" in out
+    assert "== FAIL: every shared case is flagged" in out

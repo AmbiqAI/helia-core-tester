@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
 import numpy as np
 
-from .case_bundle import CaseBundle, blob_numpy, build_abs_s8_case_bundle, build_convolve_s8_case_bundle, load_case_bundle
+from .case_bundle import BlobInfo, CaseBundle, blob_numpy, build_abs_s8_case_bundle, build_convolve_s8_case_bundle, load_case_bundle
 from .comparison import ComparisonResult, compare_output, compare_status
 from .fake_target import FakeTargetTransport
 from .hctp import HCTP_FLAG_MORE, Frame, FrameDecoder, MessageType, SessionFrameValidator, encode_frame
@@ -23,7 +23,8 @@ from .measurement import (
     counter_passes_for_selection,
     normalize_samples,
 )
-from .transport import Transport
+from .transfer import MRAM_POOL_BYTES
+from .transport import Transport, TransportStall
 from .wire import (
     COMPARISON_MODE_CODES,
     BlobChunk,
@@ -34,6 +35,8 @@ from .wire import (
     PlannedCase,
     SessionPlan,
     TargetInfo,
+    boot_line,
+    clock_mhz,
     decode_case_complete,
     decode_correctness_result,
     decode_error,
@@ -86,6 +89,27 @@ def check_case_ids_unique(case_ids: Sequence[str]) -> None:
         raise ValueError(f"Duplicate case id(s) in one run: {duplicates}. Every case id must be unique.")
 
 
+# HCT_STATUS_* in benchmark_server_session.h.
+OUTPUT_CHANGED_STATUS = -1000
+OPERAND_CHANGED_STATUS = -1001
+
+
+@dataclass(frozen=True)
+class CaseRejection:
+    """The kernel refused the case on the target."""
+
+    kernel_status: int
+    stage: str  # "correctness" or "performance"
+
+    @property
+    def reason(self) -> str:
+        if self.kernel_status == OUTPUT_CHANGED_STATUS:
+            return "timed output differs from first call"
+        if self.kernel_status == OPERAND_CHANGED_STATUS:
+            return "kernel changed a read-only operand"
+        return f"kernel returned {self.kernel_status} in {self.stage} run"
+
+
 @dataclass(frozen=True)
 class CaseRunResult:
     case_bundle: CaseBundle
@@ -94,6 +118,9 @@ class CaseRunResult:
     samples: tuple[RawSample, ...]
     normalized_samples: tuple[NormalizedSample, ...]
     statistics: SampleStatistics
+    rejection: CaseRejection | None = None
+    # Untimed adapter cycles, correctness run.
+    prepare_cycles: int | None = None
 
 
 @dataclass(frozen=True)
@@ -111,6 +138,9 @@ class SessionResult:
     # from these (plus every counter any sample reported), so the schema follows the
     # selection rather than which counters the target happened to support.
     counter_passes: tuple[CounterPass, ...] = ()
+    # Keyed blobs sent; store hits among them.
+    store_blobs: int = 0
+    store_hits: int = 0
 
     @property
     def case_bundle(self) -> CaseBundle:
@@ -246,7 +276,12 @@ def session_plan_for_bundles(case_bundles: Sequence[CaseBundle], counter_passes:
     )
 
 
-def case_meta_for_bundle(case_bundle: CaseBundle) -> CaseMeta:
+def store_digest(blob: BlobInfo) -> int:
+    """First 8 SHA-256 bytes, little-endian."""
+    return int.from_bytes(bytes.fromhex(blob.sha256)[:8], "little")
+
+
+def case_meta_for_bundle(case_bundle: CaseBundle, *, store_keys: bool = False) -> CaseMeta:
     comparison = case_bundle.comparison
     scalar_parameters = dict(case_bundle.manifest.get("serialized_scalar_parameters", {}))
     scalar_parameters["output_capacity_bytes"] = case_bundle.expected_output.byte_length
@@ -273,6 +308,7 @@ def case_meta_for_bundle(case_bundle: CaseBundle) -> CaseMeta:
             for blob in case_bundle.streamable_blobs
         ),
         scratch_bytes=int(case_bundle.manifest.get("scratch_buffer", {}).get("bytes", 0)),
+        store_keys=tuple(store_digest(blob) for blob in case_bundle.streamable_blobs) if store_keys else None,
     )
 
 
@@ -283,13 +319,23 @@ def _encode_scalar(value: Any) -> int:
 
 
 class HostSession:
-    def __init__(self, transport: Transport, *, counter_passes: Sequence[CounterPass] | None = None) -> None:
+    def __init__(
+        self,
+        transport: Transport,
+        *,
+        counter_passes: Sequence[CounterPass] | None = None,
+        blob_store: bool = True,
+    ) -> None:
         self._transport = transport
+        # Send store keys when the board caches.
+        self._blob_store = blob_store
         self._decoder = FrameDecoder(max_payload=4096)
         self._session_id: int | None = None
         self._incoming_validator: SessionFrameValidator | None = None
         self._outgoing_sequence_id = 0
         self._trace: list[str] = []
+        # Trace not yet in a result.
+        self._trace_start = 0
         self._frames: list[Frame] = []
         self._counter_passes: tuple[CounterPass, ...] = (
             tuple(counter_passes) if counter_passes is not None else default_counter_passes()
@@ -297,6 +343,7 @@ class HostSession:
         self._last_sent_message_type: str | None = None
         self._target_info: TargetInfo | None = None
         self._catalog: tuple[CatalogEntry, ...] = ()
+        self._case_id: str | None = None
 
     @property
     def counter_passes(self) -> tuple[CounterPass, ...]:
@@ -316,7 +363,12 @@ class HostSession:
     def run(self, case_bundle: CaseBundle) -> SessionResult:
         return self.run_many([case_bundle])
 
-    def handshake(self, *, expected_build_id: str | None = None) -> TargetInfo:
+    @property
+    def kernel_ids(self) -> frozenset[int]:
+        """Kernel ids the target's catalog lists."""
+        return frozenset(entry.kernel_id for entry in self._catalog)
+
+    def handshake(self, *, expected_build_id: str | None = None, expected_clock_hz: int | None = None) -> TargetInfo:
         """TARGET_INFO -> TARGET_INFO_ACK -> KERNEL_CATALOG: learn the target's limits and
         catalog, refusing PMU passes it cannot run before any plan is sent.
 
@@ -328,6 +380,8 @@ class HostSession:
         target_info = decode_target_info(target_info_frame.payload)
         self._target_info = target_info
         check_build_id(target_info.build_id, expected_build_id)
+        check_boot_status(target_info)
+        check_core_clock(target_info, expected_clock_hz)
         self._session_id = target_info_frame.header.session_id
         self._incoming_validator = SessionFrameValidator(session_id=self._session_id, next_sequence_id=1)
         check_counter_passes(self._counter_passes, target_info)
@@ -376,12 +430,19 @@ class HostSession:
                     f"Case {bundle.case_id!r} references kernel_id {bundle.kernel_id}, "
                     "which is not present in the target's advertised catalog."
                 )
-            required = bundle.workspace_bytes_required
+            required = bundle.workspace_bytes_for(target_info.placement)
             available = int(target_info.runtime_arena_capacity)
             if required > available:
                 raise RuntimeError(
                     f"Case {bundle.case_id!r} requires {required} workspace bytes, "
                     f"but the target advertises only {available} bytes."
+                )
+            mram = bundle.mram_bytes_for(target_info.placement)
+            if mram > MRAM_POOL_BYTES:
+                # The firmware would refuse the CASE_META (status=-8 MRAM pool full).
+                raise RuntimeError(
+                    f"Case {bundle.case_id!r} needs {mram} bytes of MRAM for its weights, bias and packed operands, "
+                    f"but the placement pool holds {MRAM_POOL_BYTES} bytes."
                 )
 
         limits = self.limits
@@ -402,12 +463,15 @@ class HostSession:
 
         case_map = {bundle.case_id: bundle for bundle in case_bundles}
         results: dict[str, CaseRunResult] = {}
-        current_case_id: str | None = None
+        self._case_id = None
         actual_output_bytes = bytearray()
         samples: list[RawSample] = []
         comparison_result: ComparisonResult | None = None
         reported_status: int | None = None
         session_complete_cases = 0
+        keyed = self._blob_store and target_info.has_blob_store
+        store_blobs = store_hits = 0
+        unrequested: set[int] = set()
 
         while True:
             frame = self._recv_any()
@@ -416,12 +480,19 @@ class HostSession:
                 continue
             if message_type == MessageType.REQUEST_CASE:
                 bundle = case_bundles[decode_request_case(frame.payload).case_index]
-                current_case_id = bundle.case_id
+                self._case_id = bundle.case_id
                 samples = []
                 comparison_result = None
                 actual_output_bytes = bytearray()
                 reported_status = None
-                case_meta = encode_case_meta(case_meta_for_bundle(bundle))
+                case_meta = encode_case_meta(case_meta_for_bundle(bundle, store_keys=keyed))
+                if keyed and len(case_meta) > self.limits.max_plan_bytes:
+                    # Keys are optional; drop them first.
+                    case_meta = encode_case_meta(case_meta_for_bundle(bundle))
+                    unrequested = set()
+                elif keyed:
+                    unrequested = {blob.blob_id for blob in bundle.streamable_blobs}
+                store_blobs += len(unrequested)
                 if len(case_meta) > self.limits.max_plan_bytes:
                     raise RuntimeError(
                         f"CASE_META for case {bundle.case_id!r} is {len(case_meta)} bytes, over the target's "
@@ -431,10 +502,12 @@ class HostSession:
                     )
                 self._send(MessageType.CASE_META, case_meta)
             elif message_type == MessageType.REQUEST_BLOB:
-                if current_case_id is None:
+                if self._case_id is None:
                     raise RuntimeError("Target requested a blob before selecting a case.")
-                self._handle_blob_request(frame.payload, case_map[current_case_id])
+                unrequested.discard(self._handle_blob_request(frame.payload, case_map[self._case_id]))
             elif message_type == MessageType.CASE_READY:
+                store_hits += len(unrequested)
+                unrequested = set()
                 self._send(MessageType.RUN_CORRECTNESS, b"")
             elif message_type == MessageType.CORRECTNESS_RESULT:
                 reported_status = decode_correctness_result(frame.payload).status
@@ -452,23 +525,23 @@ class HostSession:
                     )
                 actual_output_bytes.extend(chunk.data)
             elif message_type == MessageType.OUTPUT_END:
-                if current_case_id is None:
+                if self._case_id is None:
                     raise RuntimeError("Received OUTPUT_END without an active case.")
                 output_end = decode_output_end(frame.payload)
                 actual_checksum = output_checksum(bytes(actual_output_bytes))
                 if output_end.length != len(actual_output_bytes) or output_end.checksum != actual_checksum:
                     raise RuntimeError(
-                        f"Invalid OUTPUT_END for {current_case_id!r}: declared length/checksum "
+                        f"Invalid OUTPUT_END for {self._case_id!r}: declared length/checksum "
                         f"{output_end.length}/{output_end.checksum}, received "
                         f"{len(actual_output_bytes)}/{actual_checksum}."
                     )
-                bundle = case_map[current_case_id]
+                bundle = case_map[self._case_id]
                 if bundle.comparison["mode"] == "exact_status":
                     if reported_status is None:
                         raise RuntimeError("Received OUTPUT_END before CORRECTNESS_RESULT status payload.")
                     comparison_result = compare_status(reported_status, bundle.comparison)
                 else:
-                    comparison_result = _compare_output_bytes(current_case_id, bytes(actual_output_bytes), bundle)
+                    comparison_result = _compare_output_bytes(self._case_id, bytes(actual_output_bytes), bundle)
                 self._send(MessageType.CORRECTNESS_ACK, encode_correctness_ack(CorrectnessAck(passed=comparison_result.passed)))
                 # The target always advances to WAIT_RUN_PERFORMANCE after CORRECTNESS_ACK
                 # regardless of the pass/fail byte (it's informational only, for reporting).
@@ -480,20 +553,35 @@ class HostSession:
             elif message_type == MessageType.SAMPLE_RESULT:
                 samples.append(decode_sample_result(frame.payload))
             elif message_type == MessageType.CASE_COMPLETE:
-                if current_case_id is None or comparison_result is None:
+                complete = decode_case_complete(frame.payload)
+                # Only a correctness-stage rejection skips the comparison.
+                if self._case_id is None or (comparison_result is None and (complete.correctness_ran or complete.performance_ran)):
                     raise RuntimeError("CASE_COMPLETE arrived before correctness finished.")
-                decode_case_complete(frame.payload)
+                bundle = case_map[self._case_id]
+                rejection = None
+                if not complete.performance_ran:
+                    stage = "performance" if complete.correctness_ran else "correctness"
+                    rejection = CaseRejection(kernel_status=complete.kernel_status, stage=stage)
+                    # Drop samples from a partial measurement.
+                    samples = []
+                    comparison_result = replace(comparison_result, passed=False) if comparison_result else ComparisonResult(
+                        passed=False, mismatch_count=0, max_abs_diff=float("nan"), mode=str(bundle.comparison["mode"]),
+                        diff_count=None,
+                    )
                 raw_samples = tuple(samples)
                 normalized_samples = tuple(normalize_samples(raw_samples))
                 case_result = CaseRunResult(
-                    case_bundle=case_map[current_case_id],
+                    case_bundle=bundle,
                     comparison=comparison_result,
                     output_bytes=bytes(actual_output_bytes),
                     samples=raw_samples,
                     normalized_samples=normalized_samples,
                     statistics=compute_sample_statistics(normalized_samples),
+                    rejection=rejection,
+                    prepare_cycles=complete.prepare_cycles,
                 )
-                results[current_case_id] = case_result
+                results[self._case_id] = case_result
+                self._case_id = None
                 if on_case_complete is not None:
                     on_case_complete(case_result)
             elif message_type == MessageType.SESSION_COMPLETE:
@@ -501,7 +589,7 @@ class HostSession:
                 break
             elif message_type == MessageType.ERROR:
                 error_text = decode_error(frame.payload).message
-                case_context = f" (while running case_id={current_case_id!r})" if current_case_id is not None else ""
+                case_context = f" (while running case_id={self._case_id!r})" if self._case_id is not None else ""
                 raise RuntimeError(f"{error_text}{case_context}")
             else:
                 raise ValueError(f"Unhandled frame type: {message_type}")
@@ -509,12 +597,20 @@ class HostSession:
         ordered = tuple(results[bundle.case_id] for bundle in case_bundles)
         return SessionResult(
             cases=ordered,
-            protocol_trace=tuple(self._trace),
+            protocol_trace=self._take_trace(),
             session_complete_cases=session_complete_cases,
             build_id=target_info.build_id,
             target_info=self._target_info,
             counter_passes=self._counter_passes,
+            store_blobs=store_blobs,
+            store_hits=store_hits,
         )
+
+    def _take_trace(self) -> tuple[str, ...]:
+        """Trace since the last result."""
+        trace = tuple(self._trace[self._trace_start:])
+        self._trace_start = len(self._trace)
+        return trace
 
     def _recv_catalog(self, expected_hash: bytes) -> tuple[CatalogEntry, ...]:
         """Accumulate one or more paginated KERNEL_CATALOG chunks (each chunk carries
@@ -540,20 +636,29 @@ class HostSession:
             )
         return entries
 
-    def _handle_blob_request(self, payload: bytes, case_bundle: CaseBundle) -> None:
+    def _handle_blob_request(self, payload: bytes, case_bundle: CaseBundle) -> int:
+        """Send the chunk; return its blob id."""
         request = decode_request_blob(payload)
         blob = next(blob for blob in case_bundle.streamable_blobs if blob.blob_id == request.blob_id)
         chunk = blob.path.read_bytes()[request.offset : request.offset + request.max_length]
         self._send(MessageType.BLOB_CHUNK, encode_blob_chunk(BlobChunk(blob_id=request.blob_id, offset=request.offset, data=chunk)))
+        return request.blob_id
 
     def _recv_any(self) -> Frame:
+        # Sampling is silent until every pass ends.
+        sampling = self._trace[-1:] == ["TX:RUN_PERFORMANCE"]
+        reads_left = max(1, len(self._counter_passes)) if sampling else 1
         while not self._frames:
             chunk = self._transport.read()
             if not chunk:
-                raise RuntimeError(
+                reads_left -= 1
+                if reads_left > 0:
+                    continue
+                running = f" (while running case_id={self._case_id!r})" if self._case_id else ""
+                raise TransportStall(
                     "Transport stalled without a complete frame. "
                     f"Last message sent to target: {self._last_sent_message_type or '<none>'}. "
-                    f"{len(self._trace)} frame(s) exchanged so far; last few: {self._trace[-6:]}."
+                    f"{len(self._trace)} frame(s) exchanged so far; last few: {self._trace[-6:]}.{running}"
                 )
             self._frames.extend(self._decoder.feed(chunk))
         frame = self._frames.pop(0)
@@ -598,6 +703,24 @@ def check_build_id(actual: str, expected: str | None) -> None:
         "stale); rerun with `hardware run --force-flash` / `hardware flash --force`, or "
         "point --build-dir at the build that is actually on the board."
     )
+
+
+class BootFailure(RuntimeError):
+    """The target booted unhealthy."""
+
+
+def check_boot_status(info: TargetInfo) -> None:
+    """Refuse failed nsx_system_init(); old firmware passes."""
+    if info.boot_status:
+        raise BootFailure(f"Board init failed: nsx_system_init {boot_line(info)}.")
+
+
+def check_core_clock(info: TargetInfo, expected_hz: int | None) -> None:
+    """Refuse a wrong or unknown clock; old firmware passes."""
+    if expected_hz is None or info.core_clock_hz is None or info.core_clock_hz == expected_hz:
+        return
+    actual = clock_mhz(info.core_clock_hz) if info.core_clock_hz else "unknown"
+    raise BootFailure(f"Board core clock {actual}, expected {clock_mhz(expected_hz)}.")
 
 
 def read_target_info(transport: Transport) -> TargetInfo:
@@ -648,6 +771,7 @@ def _compare_output_bytes(case_id: str, actual_output_bytes: bytes, bundle: Case
             mismatch_count=abs(actual_size - expected_size),
             max_abs_diff=float("nan"),
             mode=str(bundle.comparison.get("mode", "unknown")),
+            diff_count=None,
         )
     actual = np.frombuffer(actual_output_bytes, dtype=expected_output.dtype).reshape(expected_output.shape)
     return compare_output(actual, expected_output, bundle.comparison)
