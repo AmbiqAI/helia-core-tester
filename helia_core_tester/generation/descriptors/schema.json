@@ -553,6 +553,7 @@
               "Add",
               "BatchMatMul",
               "Comparison",
+              "Div",
               "Maximum",
               "Minimum",
               "Mul",
