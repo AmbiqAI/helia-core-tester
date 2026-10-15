@@ -404,3 +404,168 @@ def test_baseline_runs_order_numerically(tmp_path: Path) -> None:
     assert [run.name for run in report.baseline_runs(tmp_path)] == ["10", "9"]
     assert report.baseline_runs(tmp_path / "absent") == []
     assert report.baseline_runs(None) == []
+
+
+def _pages(*pages):
+    """fetch_page over fixed pages of (id, conclusion); a page past the end is empty."""
+    calls: list[int] = []
+
+    def fetch(page: int):
+        calls.append(page)
+        runs = pages[page - 1] if page <= len(pages) else []
+        return [{"id": run_id, "conclusion": conclusion} for run_id, conclusion in runs]
+
+    return fetch, calls
+
+
+def test_select_skips_newer_and_cancelled_runs_across_pages() -> None:
+    # A rerun of 50: the first page is all newer or cancelled runs.
+    fetch, calls = _pages([(60, "success"), (55, "failure"), (49, "cancelled")],
+                          [(48, "success"), (47, "cancelled"), (46, "failure")],
+                          [(45, "success"), (44, "success")])
+
+    assert report.select_baseline_runs(fetch, 50, 3, 10, per_page=3) == ([48, 46, 45], False)
+    assert calls == [1, 2, 3]
+
+
+def test_select_stops_at_the_end_of_history() -> None:
+    fetch, calls = _pages([(9, "success"), (8, "cancelled"), (7, "failure")], [(6, "success")])
+
+    assert report.select_baseline_runs(fetch, 10, 3, 10, per_page=3) == ([9, 7, 6], False)
+    fetch, calls = _pages([(9, "success"), (8, "cancelled"), (7, "cancelled")], [(6, "cancelled")])
+    assert report.select_baseline_runs(fetch, 10, 3, 10, per_page=3) == ([9], True)
+    assert calls == [1, 2]
+
+
+def test_select_full_last_page_needs_one_more_empty_page() -> None:
+    fetch, calls = _pages([(9, "cancelled"), (8, "cancelled")])
+
+    assert report.select_baseline_runs(fetch, 10, 3, 10, per_page=2) == ([], True)
+    assert calls == [1, 2]
+
+
+def test_select_page_cap_bounds_the_search() -> None:
+    fetch, calls = _pages(*[[(1000 - page, "cancelled")] for page in range(50)])
+
+    assert report.select_baseline_runs(fetch, 2000, 3, 4, per_page=1) == ([], False)
+    assert calls == [1, 2, 3, 4]
+
+
+def test_select_ignores_duplicates_from_shifting_pages() -> None:
+    fetch, _ = _pages([(9, "success"), (8, "success")], [(8, "success"), (7, "success")], [])
+
+    assert report.select_baseline_runs(fetch, 10, 3, 10, per_page=2) == ([9, 8, 7], False)
+
+
+@pytest.mark.parametrize("page", [None, {}, "x", [None], [{}], [{"id": "9"}], [{"id": True}], [{"id": 1.5}]])
+def test_select_refuses_malformed_pages(page) -> None:
+    with pytest.raises(report.ReportError, match="page 1"):
+        report.select_baseline_runs(lambda _: page, 10, 3, 10)
+
+
+@pytest.mark.parametrize(("count", "max_pages", "per_page"), [(0, 1, 1), (1, 0, 1), (1, 1, 0)])
+def test_select_rejects_non_positive_bounds(count: int, max_pages: int, per_page: int) -> None:
+    with pytest.raises(report.ReportError, match="positive"):
+        report.select_baseline_runs(lambda _: [], 10, count, max_pages, per_page)
+
+
+def _select(tmp_path: Path, fetch, *extra: str) -> tuple[int, str]:
+    out = tmp_path / "github_output"
+    code = report.select_main(["--repo", "o/r", "--before", "50", "--output", str(out), *extra], fetch)
+    return code, out.read_text() if out.exists() else ""
+
+
+def test_select_main_writes_runs(tmp_path: Path, capsys) -> None:
+    pages = {1: [{"id": 51, "conclusion": "success"}, {"id": 49, "conclusion": "success"}]}
+    code, output = _select(tmp_path, lambda repo, page: pages.get(page, []))
+
+    assert code == 0 and output == "runs=49\n"
+    assert capsys.readouterr().out == ""
+
+
+def test_select_main_notes_an_empty_history(tmp_path: Path, capsys) -> None:
+    code, output = _select(tmp_path, lambda repo, page: [{"id": 51, "conclusion": "success"}])
+
+    assert code == 0 and output == "runs=\nnote=no earlier scheduled run\n"
+    assert capsys.readouterr().out == ""
+
+
+def test_select_main_warns_when_the_page_cap_hits(tmp_path: Path, capsys) -> None:
+    full = [{"id": 60, "conclusion": "success"}] * report.PER_PAGE
+    code, output = _select(tmp_path, lambda repo, page: full, "--max-pages", "2")
+
+    assert code == 0 and output == "runs=\n"
+    assert capsys.readouterr().out == "::warning::baseline run selection stopped after 2 page(s) with 0 of 3 run(s)\n"
+
+
+def test_select_main_fails_loudly_on_api_errors(tmp_path: Path, capsys) -> None:
+    def fetch(repo: str, page: int):
+        raise report.ReportError(f"gh api page {page} failed: HTTP 502")
+
+    code, output = _select(tmp_path, fetch)
+
+    assert code == 1 and output == ""
+    assert capsys.readouterr().out == "::error::baseline run selection failed: gh api page 1 failed: HTTP 502\n"
+
+
+def test_main_dispatches_select_baselines(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(report, "_gh_runs_page", lambda repo, page: [{"id": 7, "conclusion": "success"}])
+
+    code = report.main(["select-baselines", "--repo", "o/r", "--before", "8", "--output", str(tmp_path / "o")])
+
+    assert code == 0 and (tmp_path / "o").read_text() == "runs=7\n"
+
+
+@pytest.mark.parametrize("args", [
+    ["--repo", "o/r", "--before", "0"], ["--repo", "o/r", "--before", "x"], ["--repo", "o r", "--before", "5"],
+    ["--repo", "o/r/x", "--before", "5"], ["--repo", "o/r", "--before", "5", "--max-pages", "0"], ["--before", "5"],
+])
+def test_select_main_rejects_bad_arguments(tmp_path: Path, args: list[str]) -> None:
+    with pytest.raises(SystemExit) as exc:
+        report.select_main([*args, "--output", str(tmp_path / "o")], lambda repo, page: [])
+    assert exc.value.code == 2
+
+
+class _Done:
+    def __init__(self, returncode: int, stdout: str = "", stderr: str = "") -> None:
+        self.returncode, self.stdout, self.stderr = returncode, stdout, stderr
+
+
+def test_gh_runs_page_queries_the_nightly(monkeypatch) -> None:
+    seen = {}
+
+    def run(command, **kwargs):
+        seen["command"], seen["timeout"] = command, kwargs["timeout"]
+        return _Done(0, json.dumps({"workflow_runs": [{"id": 3}]}))
+
+    monkeypatch.setattr(report.subprocess, "run", run)
+
+    assert report._gh_runs_page("o/r", 2) == [{"id": 3}]
+    assert seen["command"][4] == "repos/o/r/actions/workflows/hardware-nightly.yml/runs"
+    assert {"event=schedule", "branch=main", "status=completed", "per_page=100", "page=2"} <= set(seen["command"])
+    assert seen["timeout"] == report.GH_TIMEOUT_S
+
+
+@pytest.mark.parametrize(("outcome", "message"), [
+    (_Done(1, stderr="HTTP 502"), "failed: HTTP 502"),
+    (_Done(0, "{not json"), "gh api page 1"),
+    (OSError("no gh"), "no gh"),
+    (report.subprocess.TimeoutExpired("gh", 1), "timed out"),
+])
+def test_gh_runs_page_raises_on_failure(monkeypatch, outcome, message: str) -> None:
+    def run(command, **kwargs):
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(report.subprocess, "run", run)
+
+    with pytest.raises(report.ReportError, match=message):
+        report._gh_runs_page("o/r", 1)
+
+
+def test_gh_runs_page_without_runs_is_refused_by_the_selection(monkeypatch) -> None:
+    monkeypatch.setattr(report.subprocess, "run", lambda command, **kwargs: _Done(0, json.dumps({"message": "x"})))
+
+    with pytest.raises(report.ReportError, match="not a list of runs"):
+        report.select_baseline_runs(lambda page: report._gh_runs_page("o/r", page), 10, 3, 1)

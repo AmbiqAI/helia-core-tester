@@ -395,23 +395,26 @@ jobs:
               done
             done
           } >> "${GITHUB_STEP_SUMMARY}"
-      # Baselines: the three latest earlier scheduled runs on main that were not cancelled.
-      # The report picks, per board, the newest one with a comparable result.
-      - name: Download the baseline runs
-        id: baseline
+      # Baselines: the three latest earlier scheduled runs on main that were not cancelled,
+      # paged until found or the history ends. The report picks, per board, the newest one
+      # with a comparable result. A failed selection leaves no baseline, which the report warns about.
+      - name: Select the baseline runs
+        id: select
         if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          runs="$(gh run list -R "${GITHUB_REPOSITORY}" --workflow hardware-nightly.yml --event schedule \
-            --branch main --status completed --limit 20 --json databaseId,conclusion \
-            --jq "map(select(.databaseId < ${GITHUB_RUN_ID} and .conclusion != \"cancelled\")) | .[:3] | .[].databaseId")"
-          if [[ -z "${runs}" ]]; then
-            echo "note=no earlier scheduled run" >> "${GITHUB_OUTPUT}"
-            exit 0
-          fi
-          for run in ${runs}; do
+          python3 scripts/nightly_skip_report.py select-baselines --repo "${GITHUB_REPOSITORY}" \
+            --before "${GITHUB_RUN_ID}" --output "${GITHUB_OUTPUT}"
+      - name: Download the baseline runs
+        if: ${{ !cancelled() && steps.select.outputs.runs != '' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNS: ${{ steps.select.outputs.runs }}
+        run: |
+          for run in ${RUNS}; do
             if ! gh run download "${run}" -R "${GITHUB_REPOSITORY}" -p 'hct-hardware-*' -D "baseline/${run}"; then
               echo "::notice::baseline run ${run} has no downloadable hct-hardware artifacts"
               rm -rf "baseline/${run}"
@@ -420,7 +423,7 @@ jobs:
       - name: Report skipped cases and untimed entry points
         if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
         env:
-          BASELINE_NOTE: ${{ steps.baseline.outputs.note }}
+          BASELINE_NOTE: ${{ steps.select.outputs.note }}
         run: |
           python3 scripts/nightly_skip_report.py --current bundles --previous baseline --boards "${BOARDS}" \
             --out "${GITHUB_STEP_SUMMARY}" ${BASELINE_NOTE:+--baseline-note "${BASELINE_NOTE}"}

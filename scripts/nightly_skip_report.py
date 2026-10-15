@@ -13,7 +13,13 @@ unchecked.
 
 Stdlib only: the summary job runs it with the runner's python3, without uv.
 
+`select-baselines` picks those earlier runs: the newest --count completed, non-cancelled
+scheduled runs on main older than --before, paging the Actions API (via `gh api`) until
+it has them or the history ends, at most --max-pages pages. It appends `runs=` (and
+`note=` when the history holds none) to --output; an API error exits 1.
+
 Usage: nightly_skip_report.py --current DIR [--previous DIR] --boards JSON --out FILE
+       nightly_skip_report.py select-baselines --repo OWNER/NAME --before RUN_ID --output FILE
 """
 
 from __future__ import annotations
@@ -21,14 +27,18 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 ARTIFACT_PREFIX = "hct-hardware"
 RUN_JSON = "hardware-nightly-run.json"
 UNKNOWN_FAMILY = "(unknown)"
+WORKFLOW_FILE = "hardware-nightly.yml"
+PER_PAGE = 100
+GH_TIMEOUT_S = 120
 
 
 class ReportError(Exception):
@@ -238,11 +248,98 @@ def render(current_root: Path, previous_root: Optional[Path], boards: list[str],
     return "\n".join(lines) + "\n", warnings
 
 
+def select_baseline_runs(fetch_page: Callable[[int], Any], before: int, count: int,
+                         max_pages: int, per_page: int = PER_PAGE) -> tuple[list[int], bool]:
+    """The newest count non-cancelled run ids below before, and whether the history was exhausted.
+
+    fetch_page(n) returns page n (from 1) of completed runs, newest first. A short page ends
+    the history; max_pages bounds the search. ReportError on a malformed page.
+    """
+    if count < 1 or max_pages < 1 or per_page < 1:
+        raise ReportError("count, max_pages and per_page must be positive")
+    chosen: list[int] = []
+    for page in range(1, max_pages + 1):
+        runs = fetch_page(page)
+        if not isinstance(runs, list):
+            raise ReportError(f"page {page}: not a list of runs")
+        for run in runs:
+            run_id = run.get("id") if isinstance(run, dict) else None
+            if isinstance(run_id, bool) or not isinstance(run_id, int):
+                raise ReportError(f"page {page}: run without an integer id")
+            if run_id < before and run.get("conclusion") != "cancelled" and run_id not in chosen:
+                chosen.append(run_id)
+                if len(chosen) == count:
+                    return chosen, False
+        if len(runs) < per_page:
+            return chosen, True
+    return chosen, False
+
+
+def _gh_runs_page(repo: str, page: int, per_page: int = PER_PAGE) -> Any:
+    """One page of completed scheduled runs of the nightly on main, newest first."""
+    command = ["gh", "api", "-X", "GET", f"repos/{repo}/actions/workflows/{WORKFLOW_FILE}/runs",
+               "-f", "event=schedule", "-f", "branch=main", "-f", "status=completed",
+               "-f", f"per_page={per_page}", "-f", f"page={page}"]
+    try:
+        done = subprocess.run(command, capture_output=True, text=True, timeout=GH_TIMEOUT_S, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ReportError(f"gh api page {page}: {exc}") from exc
+    if done.returncode != 0:
+        raise ReportError(f"gh api page {page} failed: {done.stderr.strip() or done.returncode}")
+    try:
+        body = json.loads(done.stdout)
+    except ValueError as exc:
+        raise ReportError(f"gh api page {page}: {exc}") from exc
+    return body.get("workflow_runs") if isinstance(body, dict) else None
+
+
+def _positive_int(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not an integer: {text!r}") from None
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"must be positive: {value}")
+    return value
+
+
+def select_main(argv: list[str], fetch_page: Optional[Callable[[str, int], Any]] = None) -> int:
+    parser = argparse.ArgumentParser(prog="nightly_skip_report.py select-baselines",
+                                     description="Pick the earlier scheduled runs to compare with")
+    parser.add_argument("--repo", required=True, help="OWNER/NAME")
+    parser.add_argument("--before", type=_positive_int, required=True, help="This run's id")
+    parser.add_argument("--count", type=_positive_int, default=3)
+    parser.add_argument("--max-pages", type=_positive_int, default=10)
+    parser.add_argument("--output", type=Path, required=True, help="GITHUB_OUTPUT file to append to")
+    args = parser.parse_args(argv)
+    if not re.fullmatch(r"[\w.-]+/[\w.-]+", args.repo):
+        parser.error(f"--repo is not OWNER/NAME: {args.repo!r}")
+    fetch = fetch_page or _gh_runs_page
+    try:
+        runs, exhausted = select_baseline_runs(lambda page: fetch(args.repo, page), args.before,
+                                               args.count, args.max_pages)
+    except ReportError as exc:
+        print(f"::error::baseline run selection failed: {_escape_command(str(exc))}")
+        return 1
+    lines = [f"runs={' '.join(str(run) for run in runs)}"]
+    if not runs and exhausted:
+        lines.append("note=no earlier scheduled run")
+    elif len(runs) < args.count and not exhausted:
+        print(f"::warning::baseline run selection stopped after {args.max_pages} page(s) "
+              f"with {len(runs)} of {args.count} run(s)")
+    with args.output.open("a", encoding="utf-8") as handle:
+        handle.write("\n".join(lines) + "\n")
+    return 0
+
+
 def _escape_command(text: str) -> str:
     return text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
 
 
 def main(argv: Optional[list[str]] = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["select-baselines"]:
+        return select_main(argv[1:])
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--current", type=Path, required=True, help="Downloaded artifacts of this run")
     parser.add_argument("--previous", type=Path, help="Earlier runs' artifacts, one <run id>/ directory each")
