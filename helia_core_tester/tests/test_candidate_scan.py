@@ -368,6 +368,120 @@ def test_object_scan_cross_object_boundaries_are_clean(tmp_path: Path) -> None:
     assert [f for f in findings if not f["text"].endswith("wfi")] == [] and summary["count"] == 2
 
 
+WEAK_VICTIM = VICTIM.replace(".global victim", ".weak victim")
+# victim+2 starts an instruction here.
+PLAIN_VICTIM = """.syntax unified
+.thumb
+.text
+{bind}
+.type victim, %function
+.thumb_func
+victim:
+  nop
+  nop
+  bx lr
+"""
+OVERRIDE = "R_ARM_THM_CALL at .text+0x0 into weak victim+0x2 is unchecked: another definition can replace it"
+ENTERS = "R_ARM_THM_CALL at .text+0x0 enters victim+0x2 (.text+0x2) inside an instruction"
+
+
+def _entry_hits(build: Path) -> list[tuple[str, str]]:
+    findings, summary, _ = candidate_scan.object_findings(build)
+    assert summary["count"] >= 2
+    return sorted((f["path"], f["text"]) for f in findings
+                  if f["rule"] == "object_instruction" and not f["text"].endswith("wfi"))
+
+
+@needs_gcc
+@pytest.mark.parametrize(("victim", "call", "expected"), [
+    # The weak definition is the one linked when nothing overrides it.
+    (WEAK_VICTIM, "bl victim + 2", [ENTERS, OVERRIDE]),
+    (WEAK_VICTIM, "b.w victim + 2", [ENTERS.replace("THM_CALL", "THM_JUMP24"),
+                                     OVERRIDE.replace("THM_CALL", "THM_JUMP24")]),
+    # A boundary of the weak body proves nothing about an override.
+    (WEAK_VICTIM, "bl victim + 4", [OVERRIDE.replace("+0x2", "+0x4")]),
+    (PLAIN_VICTIM.format(bind=".weak victim"), "bl victim + 2", [OVERRIDE]),
+    (WEAK_VICTIM, "bl victim", []),
+], ids=["bl_hidden", "bw_hidden", "bl_boundary", "bl_plain", "bl_entry"])
+def test_object_scan_checks_calls_into_weak_code(tmp_path: Path, victim: str, call: str, expected: list[str]) -> None:
+    build = _build_units(tmp_path, {"v.S": victim, "c.S": CALLER.format(call=call, data="")})
+    assert _entry_hits(build) == [("Source/c.S", text) for text in sorted(expected)]
+
+
+@needs_gcc
+def test_object_scan_checks_own_weak_code(tmp_path: Path) -> None:
+    own = WEAK_VICTIM + ".text\n.global caller\n.type caller, %function\n.thumb_func\ncaller:\n  bl victim + 2\n  bx lr\n"
+    build = _build_units(tmp_path, {"v.S": own, "o.S": PLAIN_VICTIM.format(bind=".global other")})
+    hits = _entry_hits(build)
+    assert ("Source/v.S", OVERRIDE.replace(".text+0x0", ".text+0x6")) in hits
+    assert any(path == "Source/v.S" and "victim+0x2 (.text+0x2) inside an instruction" in text for path, text in hits)
+
+
+@needs_gcc
+@pytest.mark.parametrize("order", ["strong_first", "weak_first"])
+@pytest.mark.parametrize(("strong", "weak", "expected"), [
+    # A strong definition always wins, so only it is checked.
+    (VICTIM, PLAIN_VICTIM.format(bind=".weak victim"), [ENTERS]),
+    (PLAIN_VICTIM.format(bind=".global victim"), WEAK_VICTIM, []),
+], ids=["strong_hidden", "weak_hidden"])
+def test_object_scan_strong_definition_beats_weak(
+    tmp_path: Path, order: str, strong: str, weak: str, expected: list[str],
+) -> None:
+    units = {"s.S": strong, "w.S": weak}
+    if order == "weak_first":
+        units = dict(reversed(units.items()))
+    build = _build_units(tmp_path, {**units, "c.S": CALLER.format(call="bl victim + 2", data="")})
+    assert _entry_hits(build) == [("Source/c.S", text) for text in expected]
+
+
+@needs_gcc
+@pytest.mark.parametrize("order", ["local_first", "global_first"])
+def test_object_scan_ignores_local_name_collisions(tmp_path: Path, order: str) -> None:
+    # A local victim with a boundary at +2 must not stand in for the global one.
+    units = {"l.S": PLAIN_VICTIM.format(bind=""), "g.S": VICTIM}
+    if order == "global_first":
+        units = dict(reversed(units.items()))
+    build = _build_units(tmp_path, {**units, "c.S": CALLER.format(call="bl victim + 2", data="")})
+    assert _entry_hits(build) == [("Source/c.S", ENTERS)]
+
+
+@needs_gcc
+@pytest.mark.parametrize("order", ["local_first", "global_first"])
+def test_object_scan_local_name_collision_boundary_is_clean(tmp_path: Path, order: str) -> None:
+    units = {"l.S": VICTIM.replace(".global victim\n", ""), "g.S": PLAIN_VICTIM.format(bind=".global victim")}
+    if order == "global_first":
+        units = dict(reversed(units.items()))
+    build = _build_units(tmp_path, {**units, "c.S": CALLER.format(call="bl victim + 2", data="")})
+    assert _entry_hits(build) == []
+
+
+@needs_gcc
+@pytest.mark.parametrize(("call", "expected"), [
+    ("bl ext + 2", ["R_ARM_THM_CALL at .text+0x0 into ext+0x2 outside the kernels is unchecked"]),
+    ("b.w ext + 4", ["R_ARM_THM_JUMP24 at .text+0x0 into ext+0x4 outside the kernels is unchecked"]),
+    ("bl ext", []),
+    ("b.w ext", []),
+])
+def test_object_scan_checks_calls_outside_the_kernels(tmp_path: Path, call: str, expected: list[str]) -> None:
+    build = _build_units(tmp_path, {"o.S": PLAIN_VICTIM.format(bind=".global other"),
+                                    "c.S": CALLER.format(call=call, data="")})
+    assert _entry_hits(build) == [("Source/c.S", text) for text in expected]
+
+
+def test_external_hits_weak_only_checks_every_weak_definition() -> None:
+    clean = ((".text", 0, frozenset({0, 2, 4}), 6), True)
+    hidden = ((".text", 0, frozenset({0, 4}), 6), True)
+    results = [
+        ("Source/a.c", ([], {"f": [clean]}, [])),
+        ("Source/b.c", ([], {"f": [hidden]}, [])),
+        ("Source/c.c", ([], {}, [("f", 0, "R_ARM_THM_CALL at .text+0x0"), ("f", None, "R_ARM_CALL at .text+0x4")])),
+    ]
+    assert [h["text"] for h in candidate_scan._external_hits(results)] == [
+        "R_ARM_CALL at .text+0x4 into f (.text) is unchecked",
+        "R_ARM_CALL at .text+0x4 into f (.text) is unchecked",
+        "R_ARM_CALL at .text+0x4 into weak f is unchecked: another definition can replace it"]
+
+
 def test_external_hits_ignores_symbols_without_code() -> None:
     results = [("Source/a.c", ([], {}, [("tab", 3, "R_ARM_ABS32 at .data+0x0")]))]
     assert candidate_scan._external_hits(results) == []
@@ -375,7 +489,7 @@ def test_external_hits_ignores_symbols_without_code() -> None:
 
 def test_external_hits_end_of_section_is_clean() -> None:
     results = [
-        ("Source/a.c", ([], {"f": (".text", 0, frozenset({0, 4}), 6)}, [])),
+        ("Source/a.c", ([], {"f": [((".text", 0, frozenset({0, 4}), 6), False)]}, [])),
         ("Source/b.c", ([], {}, [("f", 6, "R_ARM_ABS32 at .data+0x0"), ("f", 2, "R_ARM_ABS32 at .data+0x4")])),
     ]
     assert [h["text"] for h in candidate_scan._external_hits(results)] == [

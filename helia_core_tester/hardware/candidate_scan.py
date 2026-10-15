@@ -485,7 +485,7 @@ _DISASSEMBLY = re.compile(r"^Disassembly of section (\S+):$")
 _INSN_LINE = re.compile(r"^\s*([0-9a-f]+):\t")
 _DIRECT_TARGET = re.compile(r"\t(?:[^@\t]*[ ,])?([0-9a-f]+) <[^>]*>$")
 _RELOC_SECTION = re.compile(r"^Relocation section '.*' at offset")
-_SYMBOL_ROW = re.compile(r"^\s*\d+:\s+([0-9a-f]+)\s+\d+\s+(\w+)\s+\w+\s+\w+\s+(\d+)\s+(\S+)")
+_SYMBOL_ROW = re.compile(r"^\s*\d+:\s+([0-9a-f]+)\s+\d+\s+(\w+)\s+(\w+)\s+\w+\s+(\d+)\s+(\S+)")
 # Mapping symbols mark code: $t, $a.
 _CODE_SYMBOL = re.compile(r"^\$[ta](?:\.|$)")
 _RELOC_ROW = re.compile(r"^([0-9a-f]{8})\s+[0-9a-f]{8}\s+(R_ARM_\w+)\s+[0-9a-f]{8}\s+(\S+)")
@@ -653,17 +653,22 @@ def _inside(starts: set[int], size: int, at: int) -> bool:
 
 # A global code symbol: section name, value, instruction starts, section size.
 Export = tuple[str, int, frozenset[int], int]
+# Every definition of a global code symbol, each with whether it is weak.
+Exports = dict[str, list[tuple[Export, bool]]]
 # A reference into another object: symbol, addend (None if unread), origin.
 External = tuple[str, Optional[int], str]
 
 
 def _object_hits(
-    source: str, obj: Path, defined: frozenset[str], limits: tuple[float, str],
-) -> tuple[list[dict], dict[str, Export], list[External]]:
-    """Section, SCS and reference hits, global code symbols, references to other objects."""
+    source: str, obj: Path, defined: frozenset[str], weak: frozenset[str], limits: tuple[float, str],
+) -> tuple[list[dict], Exports, list[External]]:
+    """Section, SCS and reference hits, global code symbols, references to other objects.
+
+    `defined` and `weak` are the strong and weak global definitions of all kernel objects.
+    """
     hits, sections, names = [], {}, {}
     # Locals resolve only inside this object.
-    local = _defined_symbols([obj], local=True, limits=limits)
+    local = _defined_symbols([obj], kinds="bdrt", limits=limits)
     table = elf_sections(obj)
     for index, (name, kind, flags, _, _) in enumerate(table):
         names[str(index)] = name
@@ -676,11 +681,13 @@ def _object_hits(
 
     # Code outside .text, whatever its flags.
     homes, places = {}, {}
+    # Only global and weak definitions are visible to other objects.
+    linked: dict[str, set[tuple[int, int, bool]]] = {}
     for row in run_binutil("arm-none-eabi-readelf", ["-sW", str(obj)], *limits).splitlines():
         match = _SYMBOL_ROW.match(row)
         if not match:
             continue
-        value, kind, index, symbol = match.groups()
+        value, kind, bind, index, symbol = match.groups()
         home = names.get(index, "")
         homes[symbol] = home
         if index.isdigit() and int(index) < len(table):
@@ -689,6 +696,8 @@ def _object_hits(
             if kind == "FUNC":
                 at &= ~1
             places.setdefault(symbol, set()).add((int(index), at))
+            if bind in ("GLOBAL", "WEAK"):
+                linked.setdefault(symbol, set()).add((int(index), at, bind == "WEAK"))
         code = kind == "FUNC" or _CODE_SYMBOL.match(symbol)
         if code and not home.startswith(".text"):
             hits.append({"rule": "object_section", "path": source, "text": f"code {symbol} in {home}"})
@@ -774,13 +783,20 @@ def _object_hits(
             if not 0 <= addend < _ADDEND_MAX:
                 hit(f"{symbol}{addend:+#x} in {section}")
         origin = f"{kind} at {section}+{offset:#x}"
-        if symbol not in places and symbol not in local and symbol in defined:
+        addend = _reloc_addend(kind, data, offset)
+        # A weak definition here may lose to another one at link time.
+        own_weak = any(is_weak for _, _, is_weak in linked.get(symbol, ()))
+        elsewhere = symbol not in places and symbol not in local
+        if own_weak or (elsewhere and (symbol in defined or symbol in weak)):
             # Defined in another kernel object: checked once all are read.
-            externals.append((symbol, _reloc_addend(kind, data, offset), origin))
-        for index, value in places.get(symbol, ()):
+            externals.append((symbol, addend, origin))
+        elif elsewhere and kind in _CALLS and (addend is None or addend & ~1):
+            # Harness code is not scanned, so only its symbol entries are known.
+            reach = "" if addend is None else f"{addend:+#x}"
+            instruction(f"{origin} into {symbol}{reach} outside the kernels is unchecked")
+        for index, value in () if own_weak else places.get(symbol, ()):
             if index not in starts:
                 continue
-            addend = _reloc_addend(kind, data, offset)
             if addend is None:
                 instruction(f"{origin} into {table[index][0]} is unchecked")
             else:
@@ -795,43 +811,55 @@ def _object_hits(
     for (index, at), goal in direct.items():
         if (index, at) not in relocated:
             entry(f"branch at {table[index][0]}+{at:#x}", index, goal)
-    exports: dict[str, Export] = {}
-    for symbol, spots in places.items():
-        for index, value in spots:
-            if symbol in defined and index in starts:
-                exports[symbol] = (table[index][0], value, frozenset(starts[index]), len(table[index][3]))
+    exports: Exports = {}
+    for symbol, spots in linked.items():
+        for index, value, is_weak in spots:
+            if index in starts:
+                spot = (table[index][0], value, frozenset(starts[index]), len(table[index][3]))
+                exports.setdefault(symbol, []).append((spot, is_weak))
     return hits, exports, externals
 
 
-def _external_hits(results: list[tuple[str, tuple[list[dict], dict[str, Export], list[External]]]]) -> list[dict]:
-    """References that enter another kernel object's code inside an instruction."""
-    exports: dict[str, Export] = {}
+def _external_hits(results: list[tuple[str, tuple[list[dict], Exports, list[External]]]]) -> list[dict]:
+    """References that enter another kernel object's code inside an instruction.
+
+    A strong definition wins the link. With only weak ones, any of them
+    may be linked or a harness definition may replace them all, so each
+    weak body is checked and only the symbol's own entry is accepted.
+    """
+    exports: Exports = {}
     for _, (_, found, _) in results:
-        for symbol, spot in found.items():
-            exports.setdefault(symbol, spot)
+        for symbol, spots in found.items():
+            exports.setdefault(symbol, []).extend(spots)
     hits = []
     for source, (_, _, externals) in results:
         for symbol, addend, origin in externals:
-            if symbol not in exports:
+            spots = exports.get(symbol)
+            if not spots:
                 continue
-            section, value, starts, size = exports[symbol]
-            if addend is None:
-                text = f"{origin} into {symbol} ({section}) is unchecked"
-            elif _inside(starts, size, value + addend):
-                text = f"{origin} enters {symbol}{addend:+#x} ({section}+{value + addend:#x}) inside an instruction"
-            else:
-                continue
-            hits.append({"rule": "object_instruction", "path": source, "text": text[:200]})
+            strong = [spot for spot, is_weak in spots if not is_weak]
+            texts = []
+            for section, value, starts, size in strong or [spot for spot, _ in spots]:
+                if addend is None:
+                    texts.append(f"{origin} into {symbol} ({section}) is unchecked")
+                elif _inside(starts, size, value + addend):
+                    texts.append(f"{origin} enters {symbol}{addend:+#x} ({section}+{value + addend:#x}) "
+                                 "inside an instruction")
+            if not strong and (addend is None or addend & ~1):
+                reach = "" if addend is None else f"{addend:+#x}"
+                texts.append(f"{origin} into weak {symbol}{reach} is unchecked: another definition can replace it")
+            hits += [{"rule": "object_instruction", "path": source, "text": text[:200]} for text in texts]
     return hits
 
 
 def _defined_symbols(
-    objects: list[Path], local: bool = False, limits: tuple[float, str] = (math.inf, ""),
+    objects: list[Path], kinds: str = "BDRT", limits: tuple[float, str] = (math.inf, ""),
 ) -> frozenset[str]:
-    """Strong global (or local) definitions."""
+    """Definitions whose nm type is in `kinds`: strong global by default.
+
+    Weak and common can lose to harness, so they are asked for apart.
+    """
     out = run_binutil("arm-none-eabi-nm", ["--defined-only", *map(str, objects)], *limits)
-    # Weak and common can lose to harness.
-    kinds = "bdrt" if local else "BDRT"
     return frozenset(parts[2] for parts in map(str.split, out.splitlines()) if len(parts) == 3 and parts[1] in kinds)
 
 
@@ -868,8 +896,10 @@ def object_findings(build_dir: Path, deadline_s: float = SCAN_DEADLINE_S) -> tup
             too_big = _size_error([(source, obj) for source, obj, _ in units])
             if too_big:
                 return error(too_big)
-            defined = _defined_symbols([obj for _, obj, _ in units], limits=limits)
-            jobs = [pool.submit(_object_hits, source, obj, defined, limits) for source, obj, _ in units]
+            objects = [obj for _, obj, _ in units]
+            defined = _defined_symbols(objects, limits=limits)
+            weak = _defined_symbols(objects, kinds="VW", limits=limits)
+            jobs = [pool.submit(_object_hits, source, obj, defined, weak, limits) for source, obj, _ in units]
             done, late = wait(jobs, timeout=max(0.0, deadline - time.monotonic()))
             if late:
                 return error(f"object scan passed its {deadline_s:g} s deadline")
