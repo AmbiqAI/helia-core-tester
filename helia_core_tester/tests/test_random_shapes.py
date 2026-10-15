@@ -22,6 +22,7 @@ from helia_core_tester.hardware.generated_test_bridge import HW_CASE_SUFFIX
 SEEDS = (0, 1, 7, 12345)
 CONV, DW, DW16, TC16 = ("Convolve", "S8"), ("DepthwiseConv", "S8"), ("DepthwiseConv", "S16"), ("TransposeConv", "S16")
 TCF32, TCF16 = ("TransposeConv", "FP32"), ("TransposeConv", "FP16")
+SM8 = ("Softmax", "S8")
 
 
 def _layer(case: dict) -> rs.Layer:
@@ -51,14 +52,16 @@ def test_ops_draw_independently() -> None:
 
 
 @pytest.mark.parametrize(("op", "dtype", "picked"), [
-    (None, None, (CONV, DW, DW16, TC16, TCF32, TCF16)),
+    (None, None, (CONV, DW, DW16, TC16, TCF32, TCF16, SM8)),
+    ("Softmax", "S8", (SM8,)),
+    ("softmax", None, (SM8,)),
     ("TransposeConv", "S16", (TC16,)),
     ("transpose_conv", None, (TC16,)),
     ("Convolve", None, (CONV,)),
     ("DepthwiseConv", "s8", (DW,)),
     ("DepthwiseConv", "S16", (DW16,)),
     ("depthwise_conv", None, (DW, DW16)),
-    (None, "S8", (CONV, DW)),
+    (None, "S8", (CONV, DW, SM8)),
     (None, "s16", (DW16, TC16)),
 ])
 def test_select_ops_matches_filters(op, dtype, picked) -> None:
@@ -67,14 +70,14 @@ def test_select_ops_matches_filters(op, dtype, picked) -> None:
 
 @pytest.mark.parametrize(("op", "dtype"), [
     ("FullyConnected", None), ("Convolve", "S16"), (None, "S4"), ("rs", None), ("DepthwiseConv", "S4"),
-    ("TransposeConv", "S8"),
+    ("TransposeConv", "S8"), ("Softmax", "S16"),
     # A typo fails even beside a match.
-    ("Convolve,Softmax", "S8"),
+    ("Convolve,Pad", "S8"),
     # Drawn names cannot be filtered.
     ("rs7_conv", None),
 ])
 def test_select_ops_refuses_unknown(op, dtype) -> None:
-    with pytest.raises(ValueError, match="TransposeConv S16, TransposeConv FP32, TransposeConv FP16$"):
+    with pytest.raises(ValueError, match="TransposeConv FP32, TransposeConv FP16, Softmax S8$"):
         rs.select_ops(op, dtype)
 
 
@@ -108,7 +111,7 @@ def test_random_filter_refused_early() -> None:
     from helia_core_tester.core.errors import ConfigurationError
 
     with pytest.raises(ConfigurationError, match="No random shapes"):
-        Config(project_root=Path.cwd(), random_shapes=2, op_filter="Softmax")
+        Config(project_root=Path.cwd(), random_shapes=2, op_filter="Pad")
 
 
 @pytest.mark.parametrize("cpu", ["cortex-m55", "cortex-m4"])
@@ -116,7 +119,7 @@ def test_random_filter_refused_early() -> None:
 def test_cases_fit_the_board(cpu: str, seed: int) -> None:
     workspace = rs.min_workspace(cpu)
     mve = cpu == "cortex-m55"
-    for case in rs.sample_cases(50, seed, cpu):
+    for case in rs.sample_cases(50, seed, cpu, rs.OPS[:-1]):
         op, dtype, layer = case["operator"], case["activation_dtype"], _layer(case)
         assert min(layer.out_hw()) >= 1
         assert rs.footprint(op, layer, dtype) <= workspace
@@ -181,6 +184,96 @@ def test_s16_edges_covered() -> None:
     assert any(case.get("activation_min", 0) < -128 for case in cases)
 
 
+@pytest.mark.parametrize("cpu", ["cortex-m55", "cortex-m4"])
+@pytest.mark.parametrize("seed", SEEDS)
+def test_softmax_cases_fit(cpu: str, seed: int) -> None:
+    cases = rs.sample_cases(12, seed, cpu, (SM8,))
+    assert rs.route_counts(cases) == {"Softmax": {rs.SOFTMAX_ROUTE: 12}}
+    edges = [c.get("edge") for c in cases]
+    count = rs.edge_count(12, len(rs.SOFTMAX_EDGES))
+    assert count == 4 and edges == [None] * 8 + list(rs.SOFTMAX_EDGES)
+    for case in cases:
+        one, rows, size = case["input_shape"]
+        assert one == 1 and rows * size <= rs.SOFTMAX_MAX
+        assert case["name"].startswith(f"rs{seed}_sm8_") and case["shape_seed"] == seed
+        lo, hi = case["calibration_range"]
+        assert lo <= 0 < hi
+        # Only edges may have flat goldens.
+        assert ("degenerate_golden_reason" in case) == ("edge" in case)
+
+
+def test_softmax_edges_covered() -> None:
+    cases = [c for seed in SEEDS for c in rs.sample_cases(30, seed, ops=(SM8,))]
+    sizes = [c["input_shape"][2] for c in cases]
+    rows = {c["input_shape"][1] for c in cases}
+    # Steps per e-fold: 255 over the span.
+    steps = [255 / (c["calibration_range"][1] - c["calibration_range"][0]) for c in cases]
+    assert {1, 2, 3} <= set(sizes) and max(sizes) >= 3072
+    assert any(s > 16 and s % 4 for s in sizes) and any(s > 16 and s % 16 and not s % 4 for s in sizes)
+    assert 1 in rows and max(rows) > 16
+    assert {c.get("input_pattern") for c in cases} == {None, *rs.SOFTMAX_PATTERNS}
+    assert min(steps) < 1.5 and max(steps) > 500
+    assert all(s <= 1.5 for c, s in zip(cases, steps) if c.get("edge") == "diff_min")
+
+
+def test_softmax_edges_vary_by_seed() -> None:
+    draws = [[c for c in rs.sample_cases(12, seed, ops=(SM8,)) if "edge" in c] for seed in SEEDS]
+    assert len({str(d) for d in draws}) == len(SEEDS)
+    assert len({tuple(c["input_shape"][2] for c in d) for d in draws}) == len(SEEDS)
+
+
+@pytest.mark.parametrize("pattern", rs.SOFTMAX_PATTERNS)
+def test_softmax_patterns(pattern: str) -> None:
+    from helia_core_tester.generation.ops.SoftmaxFunctions.softmax import OpSoftmax
+
+    op = OpSoftmax({"name": "p", "operator": "Softmax", "activation_dtype": "S8", "input_pattern": pattern}, seed=3)
+    data = op._shape_rows(np.random.default_rng(0).integers(-128, 128, size=(1, 5, 9), dtype=np.int8))
+    rows = data.reshape(5, 9)
+    if pattern == "equal":
+        assert (rows == rows[:, :1]).all()
+        return
+    assert (rows.max(axis=1) == 127).all() and ((rows == 127).sum(axis=1) == 1).all()
+    if pattern != "peak":
+        assert (rows.argmax(axis=1) == {"max_first": 0, "max_last": 8}[pattern]).all()
+    else:
+        assert (np.sort(rows, axis=1)[:, -2] < 0).all()
+
+
+def test_softmax_golden_is_tflite(tmp_path: Path) -> None:
+    import re
+
+    from helia_core_tester.generation.ops.SoftmaxFunctions.softmax import OpSoftmax
+
+    # Coarse scale: most values below diff_min.
+    desc = {"operator": "Softmax", "name": "sm", "activation_dtype": "S8", "weight_dtype": "S8",
+            "activation": "NONE", "hint": {"call_style": "per_tensor"}, "input_shape": [1, 3, 37],
+            "calibration_range": [-200.0, 300.0]}
+    op = OpSoftmax(desc, seed=500)
+    op.convert_to_tflite(op.build_keras_model(), str(tmp_path / "sm.tflite"), 500)
+    op.generate_c_files(tmp_path)
+    source, header = (tmp_path / "sm_softmax.c").read_text(), (tmp_path / "includes" / "sm_softmax.h").read_text()
+    args = {k: int(re.search(rf"(-?\d+),\s*// {k}\b", source).group(1)) for k in ("mult", "shift", "diff_min")}
+    arrays = {k: np.array([int(v) for v in re.findall(r"-?\d+", re.search(rf"sm_{k}\[[^\]]*\]\s*=\s*\{{([^}}]*)", header).group(1))])
+              for k in ("input", "expected_output")}
+    x = arrays["input"].reshape(3, 37)
+    assert args["diff_min"] > -64 and np.mean(x - x.max(axis=1, keepdims=True) < args["diff_min"]) > 0.5
+    ref = OpSoftmax._softmax_common_s8(arrays["input"].astype(np.int8), 3, 37, args["mult"], args["shift"],
+                                      args["diff_min"], False)
+    assert (ref.reshape(-1) == arrays["expected_output"]).all()
+
+
+@pytest.mark.parametrize("cpu", ["cortex-m55", "cortex-m4"])
+def test_sm8_hidden_set_pinned(cpu: str) -> None:
+    import hashlib
+
+    import yaml
+
+    # Pinned when sm8 joined.
+    cases = rs.hidden_cases(8, SECRET.encode(), cpu, (SM8,))
+    digest = hashlib.sha256(yaml.safe_dump_all(cases, sort_keys=False).encode()).hexdigest()
+    assert digest == "ee0df1bd22640a2ac23757a7d08af1de39349fd655409bc874d083de3d709907"
+
+
 def test_streams_and_tags_unique() -> None:
     assert len({gen.stream for gen in rs.GENERATORS.values()}) == len(rs.GENERATORS)
     assert len({gen.tag for gen in rs.GENERATORS.values()}) == len(rs.GENERATORS)
@@ -196,7 +289,7 @@ def test_s8_hidden_sets_unchanged(cpu: str, digest: str) -> None:
     import yaml
 
     # Digests pinned before s16 joined.
-    cases = rs.hidden_cases(8, SECRET.encode(), cpu, rs.select_ops(None, "S8"))
+    cases = rs.hidden_cases(8, SECRET.encode(), cpu, (CONV, DW))
     assert hashlib.sha256(yaml.safe_dump_all(cases, sort_keys=False).encode()).hexdigest() == digest
 
 
