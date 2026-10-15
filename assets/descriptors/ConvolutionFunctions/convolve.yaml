@@ -3849,8 +3849,8 @@ use_bias: true
 bias_dtype: S32
 groups: 4
 ---
-# SAME padding: output_x = 9 (two batches + remainder 1) with a padded column at
-# each end of the batched range.
+# SAME padding: output_x = 9 with leading padding 1 in both axes. Exercises the
+# grouped scalar fallback; the batched MVE path requires zero leading padding.
 operator: Convolve
 name: convolve_int32_bias_group_ch_mult1_k3x3_w9_same_s16
 activation_dtype: S16
