@@ -7,7 +7,9 @@ Reads the TCM leg's `hct-hardware-<board>-<date>-<run>` artifacts: the bundle's
 `::warning::` per family whose skip count grew and per newly untimed entry point.
 The baseline for each board is the newest earlier run (one `<run id>/` directory
 each under --previous) with a readable result and the same selection, so a night
-that left no result does not hide growth.
+that left no result does not hide growth. A board with no current result, or with
+no baseline because earlier runs left no result, also gets a warning: growth went
+unchecked.
 
 Stdlib only: the summary job runs it with the runner's python3, without uv.
 
@@ -96,7 +98,12 @@ def load_leg(root: Path, board: str) -> Optional[LegSkips]:
     coverage_path = bundle / "coverage.json"
     if coverage_path.is_file():
         coverage = _read_json(coverage_path)
-        missing = ((coverage.get("deployed") or {}).get("missing")) if isinstance(coverage, dict) else None
+        if not isinstance(coverage, dict):
+            raise ReportError("coverage.json: not an object")
+        deployed = coverage.get("deployed")
+        if not isinstance(deployed, dict):
+            raise ReportError("coverage.json: deployed is not an object")
+        missing = deployed.get("missing")
         if not isinstance(missing, list) or not all(isinstance(name, str) for name in missing):
             raise ReportError("coverage.json: deployed.missing is not a list of names")
         untimed = sorted(set(missing))
@@ -172,43 +179,60 @@ def baseline_runs(previous_root: Optional[Path]) -> list[Path]:
 
 
 def find_baseline(runs: list[Path], board: str, current: LegSkips,
-                  errors: list[str]) -> tuple[Optional[LegSkips], str]:
-    """The newest readable leg with current's selection, else None and why."""
-    unreadable = other_selection = 0
+                  errors: list[str]) -> tuple[Optional[LegSkips], str, int]:
+    """The newest readable leg with current's selection, else None and why; plus how many runs had no result."""
+    unreadable = other_selection = no_result = 0
     for run in runs:
         leg, bad = _safe_load(run, board, f"baseline run {run.name}", errors)
         unreadable += bad
         if leg is None:
+            no_result += not bad
             continue
         if leg.selection != current.selection:
             other_selection += 1
             continue
-        return leg, ""
+        return leg, "", no_result
     if not runs:
-        return None, ""
+        return None, "", 0
     reasons = []
+    if no_result:
+        reasons.append(f"{no_result} had no result")
     if other_selection:
         reasons.append(f"{other_selection} used a different selection")
     if unreadable:
         reasons.append(f"{unreadable} unreadable")
     detail = f" ({', '.join(reasons)})" if reasons else ""
-    return None, f"none of the {len(runs)} earlier run(s) searched has a comparable result for this board{detail}"
+    return (None, f"none of the {len(runs)} earlier run(s) searched has a comparable result for this board{detail}",
+            no_result)
 
 
 def render(current_root: Path, previous_root: Optional[Path], boards: list[str],
            baseline_note: Optional[str] = None) -> tuple[str, list[str]]:
-    """The whole Markdown section and every workflow warning."""
+    """The whole Markdown section and every workflow warning.
+
+    previous_root given without baseline_note and holding no run means every baseline
+    download failed, which is warned like a baseline search that found only missing results.
+    """
     lines = ["### Skipped cases and untimed entry points (TCM leg)", ""]
     warnings: list[str] = []
     runs = baseline_runs(previous_root)
+    nothing_downloaded = previous_root is not None and not runs and not baseline_note
+    if nothing_downloaded:
+        baseline_note = "no earlier run's artifacts were downloaded"
     for board in boards:
         errors: list[str] = []
         current, current_bad = _safe_load(current_root, board, "current", errors)
         if current_bad:
             section, board_warnings = [f"#### {board}", "", "TCM-leg result unreadable; see warnings.", ""], []
+        elif current is None:
+            section, board_warnings = board_section(board, None, None, None)
+            errors.append(f"{board}: no current TCM-leg result; skip growth not checked")
         else:
-            previous, why = find_baseline(runs, board, current, errors) if current is not None else (None, "")
+            previous, why, no_result = find_baseline(runs, board, current, errors)
             section, board_warnings = board_section(board, current, previous, why or baseline_note)
+            if previous is None and (no_result or nothing_downloaded):
+                errors.append(f"{board}: no baseline because earlier runs left no result; "
+                              f"skip growth not checked ({why or baseline_note})")
         lines += section
         warnings += errors + board_warnings
     return "\n".join(lines) + "\n", warnings
@@ -232,10 +256,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         parser.error(f"--boards is not JSON: {exc}")
     if not isinstance(boards, list) or not boards or not all(isinstance(board, str) and board for board in boards):
         parser.error("--boards must be a non-empty JSON list of non-empty strings")
-    note = args.baseline_note
-    if args.previous is not None and not baseline_runs(args.previous) and not note:
-        note = "no earlier run's artifacts were downloaded"
-    markdown, warnings = render(args.current, args.previous, boards, note)
+    markdown, warnings = render(args.current, args.previous, boards, args.baseline_note)
     with args.out.open("a", encoding="utf-8") as handle:
         handle.write(markdown)
     for warning in warnings:
