@@ -322,13 +322,26 @@ jobs:
     needs: [plan, run]
     if: always() && needs.plan.result == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
+    # actions: read lists and downloads the baseline runs.
+    permissions:
+      contents: read
+      actions: read
     env:
       BOARDS: ${{ needs.plan.outputs.boards }}
       RUN_TAG: ${{ needs.plan.outputs.date }}-${{ github.run_id }}
       KERNEL_LEG: ${{ needs.plan.outputs.kernel_leg }}
       KERNEL_SHA: ${{ needs.plan.outputs.kernel_sha }}
     steps:
+      # Before the download: checkout cleans the workspace.
+      - name: Checkout the skip report
+        id: checkout
+        # Optional: the per-board table needs only the artifacts.
+        continue-on-error: true
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts/nightly_skip_report.py
+          sparse-checkout-cone-mode: false
       # No artifacts: boards show "no result".
       - uses: actions/download-artifact@v4
         id: download
@@ -382,3 +395,35 @@ jobs:
               done
             done
           } >> "${GITHUB_STEP_SUMMARY}"
+      # Baselines: the three latest earlier scheduled runs on main that were not cancelled,
+      # paged until found or the history ends. The report picks, per board, the newest one
+      # with a comparable result. A failed selection leaves no baseline, which the report warns about.
+      - name: Select the baseline runs
+        id: select
+        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/nightly_skip_report.py select-baselines --repo "${GITHUB_REPOSITORY}" \
+            --before "${GITHUB_RUN_ID}" --output "${GITHUB_OUTPUT}"
+      - name: Download the baseline runs
+        if: ${{ !cancelled() && steps.select.outputs.runs != '' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNS: ${{ steps.select.outputs.runs }}
+        run: |
+          for run in ${RUNS}; do
+            if ! gh run download "${run}" -R "${GITHUB_REPOSITORY}" -p 'hct-hardware-*' -D "baseline/${run}"; then
+              echo "::notice::baseline run ${run} has no downloadable hct-hardware artifacts"
+              rm -rf "baseline/${run}"
+            fi
+          done
+      - name: Report skipped cases and untimed entry points
+        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
+        env:
+          BASELINE_NOTE: ${{ steps.select.outputs.note }}
+        run: |
+          python3 scripts/nightly_skip_report.py --current bundles --previous baseline --boards "${BOARDS}" \
+            --out "${GITHUB_STEP_SUMMARY}" ${BASELINE_NOTE:+--baseline-note "${BASELINE_NOTE}"}

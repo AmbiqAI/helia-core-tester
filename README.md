@@ -303,6 +303,14 @@ gate the run: its failures show only in the summary table. A last leg builds
 the TCM suite with `--toolchain atfe` (pinned kernels, `$ATFE_ROOT` from the
 runner) and uploads `hct-atfe-<board>-...` in the `hct-hardware-*` layout; it
 does not gate the run either.
+The summary job also lists, per board, the TCM leg's skipped cases per family
+and its untimed deployed entry points (`scripts/nightly_skip_report.py`). Each
+board is compared with the newest of the last three non-cancelled scheduled runs
+on `main` that has a readable result with the same selection (`limit`, `suite`,
+...); `nightly_skip_report.py select-baselines` pages the run history until it
+has three earlier runs (also on a rerun), at most 10 pages. A family whose skip count grew, or a newly untimed entry point, gets a
+workflow warning, as does a board whose growth went unchecked: no current result,
+an unreadable result, or no baseline because the earlier runs left no result.
 `gh workflow run hardware-nightly.yml -f boards=apollo510_evb -f limit=2` runs
 it by hand.
 
