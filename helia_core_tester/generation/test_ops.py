@@ -284,6 +284,11 @@ def _reused_manifest_entry(
     )
 
 
+def _write_descriptor(path: Path, desc: Dict[str, Any]) -> None:
+    with open(path, 'w') as f:
+        yaml.dump(desc, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+
+
 def generate_test(
     desc: Dict[str, Any],
     out_dir: str,
@@ -339,8 +344,8 @@ def generate_test(
 
     # Save the complete descriptor as YAML in the test directory
     descriptor_path = test_dir / "descriptor.yaml"
-    with open(descriptor_path, 'w') as f:
-        yaml.dump(desc, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+    _write_descriptor(descriptor_path, desc)
+    comparison = desc.get("resolved_comparison")
 
     # Build Keras model (skip for ops that generate LiteRT models directly)
     if op.needs_keras_model():
@@ -401,6 +406,9 @@ def generate_test(
         op.generate_c_files(test_dir)
         op.assert_input_mode_consumed()
         check_case_golden(test_dir, desc)
+        if desc.get("resolved_comparison") != comparison:
+            # The data set the tolerance.
+            _write_descriptor(descriptor_path, desc)
     except NotImplementedError:
         # Operator doesn't support C file generation yet
         print(f"INFO: {name} - C file generation not implemented")
