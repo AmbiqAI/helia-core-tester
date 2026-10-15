@@ -63,7 +63,7 @@ def test_bound_scales_with_terms() -> None:
     scale = np.sqrt(np.square(terms).sum(axis=1) + np.square(rows))
     assert atol == pytest.approx(sb.SUM_BOUND * float(np.max(np.sqrt(count + 1) * np.finfo(np.float32).eps * scale)))
     golden = ref.astype(np.float64).ravel()
-    drift = np.abs(sb.reordered_sums(terms, rows, np.float32)["reversed"] - golden)
+    drift = np.abs(sb.reordered_sums(terms, rows)["reversed"] - golden)
     # The fixed tolerance fails this order.
     assert np.any(drift > base["atol"] + base["rtol"] * np.abs(golden))
     assert np.all(drift <= sb.DRAW_SHARE * (atol + base["rtol"] * np.abs(golden)))
@@ -118,11 +118,21 @@ def test_zero_output_still_fails(dtype) -> None:
     assert (golden / (atol + base["rtol"] * golden)).max() > 5
 
 
-def test_f16_checks_f16_sums() -> None:
-    x, w, b = _case(np.random.default_rng(4), (1, 4, 4, 16), (3, 3), 4, 1.0, np.float16)
-    terms, _ = sb.tconv_terms(x, w, PARAMS, (6, 6))
-    sums = sb.reordered_sums(terms, np.tile(b.astype(np.float64), 36), np.float16)
-    assert set(sums) == {"reversed", "pairwise", "f16_reversed"} and sums["f16_reversed"].dtype == np.float16
+def test_f16_bound_assumes_f32() -> None:
+    # The f16 policy stays open.
+    x, w, b = _case(np.random.default_rng(4), (1, 6, 6, 32), (5, 5), 4, 300.0, np.float16)
+    terms, count = sb.tconv_terms(x, w, PARAMS, (10, 10))
+    rows = np.tile(b.astype(np.float64), 100)
+    assert set(sb.reordered_sums(terms, rows)) == {"reversed", "pairwise"}
+    ref = (terms.sum(axis=1) + rows).astype(np.float16).reshape(1, 10, 10, 4)
+    atol = sb.tconv_tolerance(x, w, b, PARAMS, ref, 1e-3, 1e-3)
+    scale = np.sqrt(np.square(terms).sum(axis=1) + np.square(rows))
+    bound = sb.SUM_BOUND * float(np.max(np.sqrt(count + 1) * scale)) * float(np.finfo(np.float32).eps)
+    assert atol == pytest.approx(max(1e-3, bound))
+    # f16 accumulation would spend more.
+    f16 = sb._running_sum(terms[:, ::-1], rows, np.float16).astype(np.float64)
+    golden = ref.astype(np.float64).ravel()
+    assert np.max(np.abs(f16 - golden) / (atol + 1e-3 * np.abs(golden))) > sb.DRAW_SHARE
 
 
 def test_drift_refuses_tolerance() -> None:
@@ -172,7 +182,7 @@ def test_descriptor_records_tolerance(tmp_path: Path, key: tuple) -> None:
         desc = yaml.safe_load((directory / "descriptor.yaml").read_text())
         resolved = desc["resolved_comparison"]
         assert resolved["atol"] >= base["atol"] and resolved["rtol"] == base["rtol"]
-        if edge == "long_acc" and key == TCF16:
+        if "comparison" in desc:
             assert resolved == {"mode": "float", **desc["comparison"]} and resolved["atol"] > base["atol"]
         source = next(directory.glob("*_transpose_conv.c")).read_text()
         assert _comparison_from_generated_source(source)["atol"] == pytest.approx(resolved["atol"], rel=1e-6)

@@ -242,7 +242,7 @@
       "enum": ["strict", "mask"]
     },
     "sum_bound": {
-      "description": "Float TransposeConv only: set atol from the data, 3 * sqrt(K) * eps * sqrt(sum terms^2) at the worst output, and redraw the input until reordered host sums spend at most half the tolerance.",
+      "description": "Float TransposeConv only: set atol from the data, 3 * sqrt(K) * eps32 * sqrt(sum terms^2) at the worst output (f32 accumulation for FP16 too), and redraw the input until reordered f32 host sums spend at most half the tolerance.",
       "type": "boolean"
     },
     "fault": {

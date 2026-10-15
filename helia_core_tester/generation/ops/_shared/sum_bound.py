@@ -1,6 +1,6 @@
 """Data-scaled float tolerance for long sums.
 
-bound = SUM_BOUND * sqrt(K) * eps * sqrt(sum t_j^2)
+bound = SUM_BOUND * sqrt(K) * eps32 * sqrt(sum t_j^2)
 """
 
 from __future__ import annotations
@@ -9,7 +9,7 @@ from typing import Any, Mapping
 
 import numpy as np
 
-# Measured: reorders 0.27, f16 loss 6.6.
+# Measured: reorders 0.11, f16 loss 6.6.
 SUM_BOUND = 3.0
 # Host sums may spend this much.
 DRAW_SHARE = 0.5
@@ -64,17 +64,13 @@ def _pairwise_sum(terms: np.ndarray) -> np.ndarray:
     return level[:, 0]
 
 
-def reordered_sums(terms: np.ndarray, bias: np.ndarray, dtype) -> dict[str, np.ndarray]:
-    """Sums in orders a kernel might use."""
+def reordered_sums(terms: np.ndarray, bias: np.ndarray) -> dict[str, np.ndarray]:
+    """f32 sums in other orders."""
     zero = np.zeros(terms.shape[0])
-    sums = {
+    return {
         "reversed": _running_sum(terms[:, ::-1], zero, np.float32) + bias.astype(np.float32),
         "pairwise": _pairwise_sum(np.column_stack([bias, terms])),
     }
-    if np.dtype(dtype) == np.float16:
-        # The f16 kernel accumulates in f16.
-        sums["f16_reversed"] = _running_sum(terms[:, ::-1], zero, np.float16) + bias.astype(np.float16)
-    return sums
 
 
 def tconv_tolerance(
@@ -96,7 +92,8 @@ def tconv_tolerance(
     terms = np.where(finite, terms, 0)
     rows = np.tile(np.zeros(w.shape[0]) if bias is None else bias.astype(np.float64), terms.shape[0] // w.shape[0])
     scale = np.sqrt(np.square(terms).sum(axis=1) + np.square(rows))
-    bound = SUM_BOUND * np.sqrt(count + 1) * float(np.finfo(dtype).eps) * scale
+    # Both dtypes accumulate in f32.
+    bound = SUM_BOUND * np.sqrt(count + 1) * float(np.finfo(np.float32).eps) * scale
     atol = max(atol, float(bound.max()))
     golden = ref.astype(np.float64).ravel()
     tol = atol + rtol * np.abs(golden)
@@ -105,7 +102,7 @@ def tconv_tolerance(
     exact = np.clip(terms.sum(axis=1) + rows, low, high)
     if np.any(np.abs(golden - exact)[lanes] > DRAW_SHARE * tol[lanes]):
         return None
-    for total in reordered_sums(terms, rows, dtype).values():
+    for total in reordered_sums(terms, rows).values():
         out = np.clip(total.astype(dtype).astype(np.float64), low, high)
         with np.errstate(invalid="ignore"):
             drift = np.abs(out - golden)[lanes]
