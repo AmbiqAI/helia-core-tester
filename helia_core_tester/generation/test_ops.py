@@ -6,6 +6,7 @@ Thin generator that discovers YAML descriptors and generates TFLite models.
 import hashlib
 import re
 import json
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -432,15 +433,20 @@ def test_generation(test_filters):
     random_shapes = test_filters.get("random_shapes")
     hidden_dir = test_filters.get("hidden_dir")
     if random_shapes:
-        from helia_core_tester.generation.random_shapes import select_ops
+        from helia_core_tester.generation.random_shapes import GENERATORS, select_ops
 
-        shape_ops = select_ops(test_filters.get("op"), test_filters.get("dtype"))
+        # Draw only this run's suite.
+        shape_ops = tuple(key for key in select_ops(test_filters.get("op"), test_filters.get("dtype"))
+                          if GENERATORS[key].suite == _suite_mode(test_filters))
     if random_shapes and hidden_dir:
-        from helia_core_tester.generation.random_shapes import prepare_hidden
+        from helia_core_tester.core.path_layout import generated_tests_dir
+        from helia_core_tester.generation.random_shapes import op_suites, prepare_hidden
 
-        descriptors_dir = prepare_hidden(
-            Path(hidden_dir), random_shapes, normalize_cpu(test_filters.get("cpu") or "cortex-m55"), shape_ops,
-        )
+        cpu = normalize_cpu(test_filters.get("cpu") or "cortex-m55")
+        # Drop suites an older draw left.
+        for stale in {"int", "float"} - op_suites(test_filters.get("op"), test_filters.get("dtype")):
+            shutil.rmtree(generated_tests_dir(Path(hidden_dir), cpu, stale), ignore_errors=True)
+        descriptors_dir = prepare_hidden(Path(hidden_dir), random_shapes, cpu, shape_ops)
     elif random_shapes:
         from helia_core_tester.generation.random_shapes import prepare_shapes
 
@@ -451,7 +457,8 @@ def test_generation(test_filters):
     else:
         descriptors_dir = find_descriptors_dir()
     descriptors = load_all_descriptors(str(descriptors_dir))
-    unknown_ops = unmatched_ops(descriptors, _split_filter(test_filters.get("op")))
+    # Draws checked names; suites split them.
+    unknown_ops = [] if random_shapes else unmatched_ops(descriptors, _split_filter(test_filters.get("op")))
     assert not unknown_ops, f"No descriptor matches --op: {', '.join(unknown_ops)}"
 
     # Apply filters

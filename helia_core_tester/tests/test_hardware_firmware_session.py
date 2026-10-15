@@ -164,8 +164,8 @@ def _build_mram_harness(tmp_path: Path, *defines: str) -> Path:
 def test_c_blob_store(tmp_path: Path, placement: list[str]) -> None:
     binary = _build_mram_harness(tmp_path, "-DHCT_BLOB_STORE_BYTES=16384u", *placement)
     result = subprocess.run([str(binary)], capture_output=True, text=True)
-    # Exit codes name the failed check.
-    assert result.returncode == 0, f"harness exit {result.returncode}"
+    # The harness prints "FAILED check <id>"; the exit code is only 0 or 1.
+    assert result.returncode == 0, f"harness exit {result.returncode}: {result.stdout.strip().splitlines()[-1:]}"
     for line in ("store hits", "store wiped", "store exact fill", "store overlap refused"):
         assert line in result.stdout
 
@@ -187,8 +187,8 @@ def test_c_blob_store_rejects_bad_size(tmp_path: Path, size: str) -> None:
 def test_c_mram_placement(tmp_path: Path) -> None:
     binary = _build_mram_harness(tmp_path, "-DHCT_PLACEMENT_MRAM")
     result = subprocess.run([str(binary)], capture_output=True, text=True)
-    # Exit codes name the failed check.
-    assert result.returncode == 0, f"harness exit {result.returncode}"
+    # The harness prints "FAILED check <id>"; the exit code is only 0 or 1.
+    assert result.returncode == 0, f"harness exit {result.returncode}: {result.stdout.strip().splitlines()[-1:]}"
     # Host preflight mirrors the firmware allocator.
     used = 0
     for role, length, alignment in (("input_0", 12, 1), ("weights", 13, 1), ("bias", 8, 4), ("output", 12, 16)):
@@ -198,3 +198,5 @@ def test_c_mram_placement(tmp_path: Path) -> None:
     assert "placed reused" in result.stdout
     assert "rows skipped" in result.stdout
     assert "pool limits refused" in result.stdout
+    assert "pool fit placed" in result.stdout
+    assert "derived placed" in result.stdout

@@ -23,6 +23,7 @@ from .measurement import (
     counter_passes_for_selection,
     normalize_samples,
 )
+from .transfer import MRAM_POOL_BYTES
 from .transport import Transport, TransportStall
 from .wire import (
     COMPARISON_MODE_CODES,
@@ -435,6 +436,13 @@ class HostSession:
                 raise RuntimeError(
                     f"Case {bundle.case_id!r} requires {required} workspace bytes, "
                     f"but the target advertises only {available} bytes."
+                )
+            mram = bundle.mram_bytes_for(target_info.placement)
+            if mram > MRAM_POOL_BYTES:
+                # The firmware would refuse the CASE_META (status=-8 MRAM pool full).
+                raise RuntimeError(
+                    f"Case {bundle.case_id!r} needs {mram} bytes of MRAM for its weights, bias and packed operands, "
+                    f"but the placement pool holds {MRAM_POOL_BYTES} bytes."
                 )
 
         limits = self.limits

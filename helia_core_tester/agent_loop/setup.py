@@ -14,7 +14,7 @@ from typing import Callable, Optional
 from helia_core_tester.hardware.boards import repo_root, resolve_board
 from helia_core_tester.hardware.candidate_check import CheckError
 from helia_core_tester.hardware.candidate_check import _git as check_git
-from helia_core_tester.hardware.candidate_eval import read_baseline
+from helia_core_tester.hardware.candidate_eval import read_baseline, run_suite
 from helia_core_tester.hardware.harness_lock import tester_state
 from helia_core_tester.hardware.run_summary import bundle_toolchain
 from helia_core_tester.hardware.session_runner import store_env_args
@@ -142,9 +142,10 @@ def make_hidden(ws: Workspace, campaign: Campaign, facts: dict) -> None:
             handle.write(secrets.token_hex(SECRET_BYTES))
     shutil.rmtree(hidden, ignore_errors=True)
     cpu = resolve_board(campaign.board).cpu
+    suite = run_suite((campaign.dtype,))
     _run([*ws.tester_cmd(), "generate", "--cpu", cpu, "--random-shapes", str(campaign.hidden_shapes),
           "--hidden-dir", str(hidden), "--hidden-seed-file", str(seed), "--op", campaign.op,
-          "--dtype", campaign.dtype], ws.logs / "hidden.log",
+          "--dtype", campaign.dtype, *(["--suite", suite] if suite else [])], ws.logs / "hidden.log",
          # Probe the base tree's kernels.
          env={"CMSIS_NN_ROOT": str(ws.base)})
     hidden.chmod(0o700)

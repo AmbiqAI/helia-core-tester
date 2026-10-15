@@ -2291,7 +2291,8 @@ required_capabilities:
 - mve
 ---
 operator: DepthwiseConv
-name: depthwise_conv_entry_3x3_declines_c62_s8
+name: depthwise_conv_entry_3x3_declines_c15_s8
+# Below the direct entry minimum of 16 channels; partial groups are supported.
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -2302,11 +2303,11 @@ input_shape:
 - 1
 - 5
 - 5
-- 62
+- 15
 filter_shape:
 - 3
 - 3
-- 62
+- 15
 - 1
 strides:
 - 1
@@ -2855,3 +2856,31 @@ strides: [1, 1]
 padding: SAME
 use_bias: true
 # END mlperf model shapes
+---
+operator: DepthwiseConv
+name: depthwise_conv_relu_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: RELU
+hint:
+  call_style: per_tensor
+input_shape: [1, 5, 9, 4]
+filter_shape: [3, 3, 4, 1]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+---
+operator: DepthwiseConv
+name: depthwise_conv_relu6_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: RELU6
+hint:
+  call_style: per_tensor
+input_shape: [1, 6, 5, 3]
+filter_shape: [3, 3, 3, 2]
+strides: [2, 1]
+padding: VALID
+use_bias: true
+depth_multiplier: 2

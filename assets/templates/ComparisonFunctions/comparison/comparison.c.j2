@@ -13,13 +13,15 @@ int32_t {{ name }}_run(
 ) {
     HELIA_GUARD_ARM({{ name }}_output, false /* real output, not scratch: don't poison */);
     arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(
+{% if not unquantized | default(false) %}
         NULL,
+{% endif %}
         input_1,
         &{{ name }}_input_1_dims,
         input_2,
         &{{ name }}_input_2_dims,
         output,
-        &{{ name }}_output_dims,
+        &{{ name }}_output_dims{% if not unquantized | default(false) %},
         {{ input_1_offset }},
         {{ input_1_mult }},
         {{ input_1_shift }},
@@ -27,7 +29,7 @@ int32_t {{ name }}_run(
         {{ input_2_mult }},
         {{ input_2_shift }},
         {{ left_shift }}{% if operation is defined %},
-        {{ operation }}{% endif %}
+        {{ operation }}{% endif %}{% endif %}
     );
     return kernel_status;
 }

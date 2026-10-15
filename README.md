@@ -35,6 +35,15 @@ Removed interfaces:
 - `--include-float` (replaced by `--suite float` or `--suite both`)
 - the `perf-stream` command group and `scripts/run_hardware_perf_suite.sh` (replaced by `hardware run`, see below)
 
+INT32 predicate tests are available through the FVP pipeline with
+`generate --op Comparison,SelectV2 --dtype s32`. They cover all six
+comparisons and SELECT_V2, including scalar operands, broadcasting, tails and
+signed integer boundaries. S32 references come from LiteRT and use exact output
+validation; generation fails if that reference cannot run. These descriptors
+require their corresponding `arm_*_s32` declarations and are reported as
+capability skips with an older Core checkout. This adds generated FVP tests;
+hardware streaming adapters for these S32 operators are not added here.
+
 ## Hardware CLI
 
 The FVP commands above simulate; `hardware` runs the generated kernel tests on a
@@ -99,9 +108,16 @@ Correctness: int cases use the per-operator LSB tolerance in
 (elements differing at all) in `case_summary.csv` and `cases.json`; both are null
 when unknown (unvalidated outputs, wrong output size).
 `--strict-compare` drops the tolerance so int outputs must match the golden
-exactly. `--golden-from <bundle dir>` judges each case against that past run's
-`outputs/` instead (bit-exact for int, the usual tolerance for float), which pins
-the current kernels' rounding where the TFLite golden differs by design.
+exactly. `--golden-from <bundle dir>` judges each int case against that past
+run's `outputs/` instead, bit for bit, which pins the current kernels' rounding
+where the TFLite golden differs by design. Float cases (FP32/FP16 outputs, float
+compare mode) keep the generated TFLite golden and their tolerance, so a
+candidate's error never stacks on the baseline's; under `--golden-from` they
+also fail when the error spends more than 0.8 of the tolerance (the headroom
+rule in `assets/descriptors/ConvolutionFunctions/convolve_float.yaml`). Every
+float case records `tolerance_fraction`, the worst
+`|out - ref| / (atol + rtol * |ref|)`, in `case_summary.csv`, `cases.json` and
+`correctness/<case>.json`; the nightly run records it without the 0.8 gate.
 
 `--golden-from` is the compare mode for kernel changes: run the baseline
 kernels once, then judge the changed kernels against that bundle. Strict
@@ -114,10 +130,13 @@ Every bundle records a per-case `input_digest` in `cases.json` and
 everything streamed to the board except the expected output (input, weight,
 bias and quant blobs, scalar parameters, kernel id). Before flashing,
 `--golden-from` refuses a case that the baseline lacks, that the baseline run
-failed (unless `--golden-allow-failed`), whose baseline `input_digest` differs
+failed (unless `--golden-allow-failed`, which also skips the next check), that
+is a float case whose baseline `tolerance_fraction` is over 0.8 (no candidate
+could pass it), whose baseline `input_digest` differs
 or is absent (bundles from before this field must be rerun), or whose output is
 missing or wrong-sized. The session manifest's `compare` block records which
-mode ran, plus the baseline path (`golden_from`) and `golden_session_id`; each
+mode ran, plus the baseline path (`golden_from`), `golden_session_id` and
+`goldens` (case ids per golden: `baseline`, `generator` or `status`); each
 case's `expected_output_sha256` is the digest of the output it was compared
 against. The steps are also available individually as
 `hardware build`, `hardware flash [--force]`, `hardware stream` and
@@ -167,7 +186,10 @@ measures kernel-only cost. `mram` (Apollo510, Apollo330P)
 programs each case's weights and bias into a reserved MRAM pool past the image
 and evicts them from the D-cache before every timed call, as a large model's
 layer sees them; activations, scratch, multipliers and shifts stay in DTCM, as
-hpx places a TCM-sized arena. Neither programming nor eviction counts toward
+hpx places a TCM-sized arena. The packed fully-connected kernel reads a stream
+packed from its weights, so that stream is packed on the device once per case,
+before any timing, and placed in the pool after the bias; the per-call pack
+still runs, so `prepare_cycles` matches `tcm`. Neither programming nor eviction counts toward
 the timed cycles or `prepare_cycles`. Give each placement its own `--build-dir`. The
 bundle records it in `session_manifest.json` `target.placement`.
 

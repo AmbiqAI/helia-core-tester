@@ -41,8 +41,17 @@ class OpBatchMatMul(OperationBase):
                 kind, f"{kernel_fn} only validates arguments under ARM_MATH_MVEI; add required_capabilities: [mve]"
             )
 
+    def _require_no_activation(self) -> None:
+        """TFLite BATCH_MATMUL has no fused activation, so a clamp would have no golden counterpart."""
+        activation = self.activation_name()
+        if activation != 'NONE':
+            raise ValueError(
+                f"{self.desc.get('name', '<unnamed>')}: BatchMatMul has no fused activation, got {activation!r}"
+            )
+
     def build_keras_model(self) -> tf.keras.Model:
         """Build Keras model for BatchMatMul."""
+        self._require_no_activation()
         input_1_shape = self.desc['input_1_shape']
         input_2_shape = self.desc['input_2_shape']
         
@@ -152,6 +161,7 @@ class OpBatchMatMul(OperationBase):
         """
         Generate C and H files from templates for BatchMatMul.
         """
+        self._require_no_activation()
         from pathlib import Path
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
         from helia_core_tester.generation.utils.tflite_utils import calculate_multiplier_shift

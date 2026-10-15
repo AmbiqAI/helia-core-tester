@@ -599,10 +599,26 @@ def test_fresh_boot_skips_open_reset(tmp_path: Path, monkeypatch, fresh_boot: bo
 
 def test_open_passes_reset(tmp_path: Path, monkeypatch) -> None:
     made = {}
+    (tmp_path / "CMakeCache.txt").write_text(
+        "NSX_SEGGER_RTT_BUFFER_SIZE_UP:STRING=8192\nNSX_SEGGER_RTT_BUFFER_SIZE_DOWN:STRING=512\n", encoding="utf-8"
+    )
     monkeypatch.setattr(session_runner, "symbol_address_from_elf", lambda *a: 0x20000000)
     monkeypatch.setattr(session_runner, "JLinkRttTransport", lambda **kw: made.update(kw) or object())
     session_runner.open_rtt_session(resolve_board("apollo510_evb"), 1, build_dir=tmp_path, counter_passes=(), reset=False)
     assert made["reset_on_open"] is False
+    # The board must report this build dir's sizes, not today's constants.
+    assert (made["expected_up_size"], made["expected_down_size"]) == (8192, 512)
+
+
+def test_open_takes_sizes_from_the_build_dir(tmp_path: Path, monkeypatch) -> None:
+    made = {}
+    (tmp_path / "CMakeCache.txt").write_text(
+        "NSX_SEGGER_RTT_BUFFER_SIZE_UP:STRING=4096\nNSX_SEGGER_RTT_BUFFER_SIZE_DOWN:STRING=256\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(session_runner, "symbol_address_from_elf", lambda *a: 0x20000000)
+    monkeypatch.setattr(session_runner, "JLinkRttTransport", lambda **kw: made.update(kw) or object())
+    session_runner.open_rtt_session(resolve_board("apollo510_evb"), 1, build_dir=tmp_path, counter_passes=())
+    assert (made["expected_up_size"], made["expected_down_size"]) == (4096, 256)
 
 
 @pytest.mark.parametrize(("value", "enabled"), [(None, True), ("1", True), ("0", False), ("off", False), (" OFF ", False)])

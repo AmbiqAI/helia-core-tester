@@ -22,7 +22,8 @@ class OpSelectV2(OperationBase):
         import ai_edge_litert.schema_py_generated as litert
 
         activation_dtype = self.desc.get("activation_dtype", "S8")
-        tensor_type = litert.TensorType.INT16 if activation_dtype == "S16" else litert.TensorType.INT8
+        tensor_type = {"S8": litert.TensorType.INT8, "S16": litert.TensorType.INT16,
+                       "S32": litert.TensorType.INT32}[activation_dtype]
 
         output_shape = tuple(self.desc["input_shape"])
         condition_shape = tuple(self.desc.get("condition_shape", output_shape))
@@ -51,6 +52,8 @@ class OpSelectV2(OperationBase):
 
     def _select_kernel(self) -> Dict[str, str]:
         activation_dtype = self.desc.get("activation_dtype", "S8")
+        if activation_dtype == "S32":
+            return {"kernel_fn": "arm_select_v2_s32", "c_type": "int32_t", "np_dtype": "int32", "qmin": -(2**31), "qmax": 2**31 - 1}
         if activation_dtype == "S16":
             return {"kernel_fn": "arm_select_v2_s16", "c_type": "int16_t", "np_dtype": "int16", "qmin": -32768, "qmax": 32767}
         return {"kernel_fn": "arm_select_v2_s8", "c_type": "int8_t", "np_dtype": "int8", "qmin": -128, "qmax": 127}
@@ -84,11 +87,17 @@ class OpSelectV2(OperationBase):
         rank = len(output_shape)
 
         rng = self._seeded_rng()
-        np_dtype = np.int16 if ki["np_dtype"] == "int16" else np.int8
+        np_dtype = np.dtype(ki["np_dtype"])
 
         condition = rng.integers(0, 2, size=condition_shape, dtype=np.bool_)
-        x_data = rng.integers(ki["qmin"], ki["qmax"] + 1, size=x_shape, dtype=np_dtype)
-        y_data = rng.integers(ki["qmin"], ki["qmax"] + 1, size=y_shape, dtype=np_dtype)
+        if ki["np_dtype"] == "int32":
+            from helia_core_tester.generation.ops._shared.int32_data import sample_int32
+
+            x_data = sample_int32(rng, x_shape)
+            y_data = sample_int32(rng, y_shape, phase=1)
+        else:
+            x_data = rng.integers(ki["qmin"], ki["qmax"] + 1, size=x_shape, dtype=np_dtype)
+            y_data = rng.integers(ki["qmin"], ki["qmax"] + 1, size=y_shape, dtype=np_dtype)
 
         # Use TFLite interpreter for reference output (fallback to numpy if unsupported)
         tflite_path = str(output_dir / f"{name}.tflite")
@@ -102,6 +111,8 @@ class OpSelectV2(OperationBase):
             interpreter.invoke()
             output_data = np.array(interpreter.get_tensor(output_details[0]["index"]))
         except (ValueError, RuntimeError):
+            if ki["np_dtype"] == "int32":
+                raise
             output_data = np.where(condition, x_data, y_data)
 
         cond_strides = self._compute_broadcast_strides(condition_shape, output_shape)
@@ -131,6 +142,9 @@ class OpSelectV2(OperationBase):
             "condition_c_type": "bool",
             "kernel_fn": ki["kernel_fn"],
         }
+
+        if ki["np_dtype"] == "int32":
+            context["validation_mode"] = "exact_int"
 
         includes_dir = output_dir / "includes"
         includes_dir.mkdir(parents=True, exist_ok=True)

@@ -302,7 +302,8 @@ static void queue_error_frame(hct_server_session_t *session, uint16_t offending_
     uint8_t payload[64];
     size_t offset = 0u;
     char message[48];
-    (void)snprintf(message, sizeof(message), "message_type=%u status=%d", (unsigned)offending_message_type, (int)status);
+    (void)snprintf(message, sizeof(message), "message_type=%u status=%d%s", (unsigned)offending_message_type, (int)status,
+                   status == HCTP_STATUS_NO_SPACE ? " MRAM pool full" : "");
     (void)write_text(payload, sizeof(payload), &offset, message);
     (void)queue_frame(session, HCTP_MSG_ERROR, payload, offset);
 }
@@ -637,6 +638,12 @@ static void reset_case_buffers(hct_server_session_t *session)
     session->output_stream_checksum = 0u;
     session->output_stream_active = 0u;
     session->mram_cursor = 0u;
+    session->mram_case_bytes = 0u;
+    session->derived_bytes = 0u;
+    session->derived_source = NULL;
+    session->derived_built = 0u;
+    session->derived = NULL;
+    session->deriving = 0u;
     session->checked_bytes = 0u;
     hct_window.cold_count = 0u;
     session->last_kernel_status = ARM_CMSIS_NN_SUCCESS;
@@ -854,12 +861,53 @@ uint32_t hct_host_input_moves;
 const uint8_t *hct_host_last_input;
 /* Host tests: calls with a misaligned input. */
 uint32_t hct_host_misaligned;
+/* Host tests: derived operand size the hook plans (0: none). */
+uint32_t hct_host_derived_bytes;
+/* Host tests: how the deriving call behaves (hct_host_derive_mode_t). */
+uint32_t hct_host_derive_mode;
+/* Host tests: added to every derived byte, so a case can change the stored rows. */
+uint32_t hct_host_derive_seed;
+/* Host tests: derived operand the last kernel call read. */
+const uint8_t *hct_host_last_derived;
+/* Host tests: the operand a deriving call builds. */
+uint8_t hct_host_derived_data[HCT_HOST_DERIVED_MAX_BYTES];
+
+uint32_t hct_derived_operand_bytes(hct_server_session_t *session)
+{
+    (void)session;
+    return hct_host_derived_bytes;
+}
+
+static arm_cmsis_nn_status host_derive(hct_server_session_t *session)
+{
+    uint32_t index;
+    if (hct_host_derive_mode == HCT_HOST_DERIVE_FAIL)
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
+    if (hct_host_derive_mode == HCT_HOST_DERIVE_NOTHING || hct_host_derived_bytes > sizeof(hct_host_derived_data))
+    {
+        return ARM_CMSIS_NN_SUCCESS;
+    }
+    for (index = 0u; index < hct_host_derived_bytes; ++index)
+    {
+        hct_host_derived_data[index] = (uint8_t)(index * 29u + 3u + hct_host_derive_seed);
+    }
+    session->derived_source = hct_host_derived_data;
+    session->derived_built = hct_host_derived_bytes + (hct_host_derive_mode == HCT_HOST_DERIVE_WRONG_SIZE ? 1u : 0u);
+    return ARM_CMSIS_NN_SUCCESS;
+}
 
 arm_cmsis_nn_status hct_run_kernel_once(hct_server_session_t *session)
 {
     const hct_server_blob_t *input = find_blob_by_role(session, HCT_BLOB_ROLE_INPUT_0);
     uint8_t *data = (input != NULL) ? blob_ptr(session, input) : NULL;
     arm_cmsis_nn_status status;
+    if (session->deriving != 0u)
+    {
+        return host_derive(session);
+    }
+    hct_host_last_derived = session->derived;
     hct_host_input_moves += (hct_host_last_input != NULL && data != hct_host_last_input) ? 1u : 0u;
     hct_host_last_input = data;
     hct_host_misaligned += (input != NULL && input->arena_offset % input->alignment != 0u) ? 1u : 0u;
@@ -1082,6 +1130,44 @@ static hctp_status_t handle_session_plan(hct_server_session_t *session, const ui
 /* Tail: u8 kind, u64 per blob. */
 #define HCT_STORE_KEYS_KIND 1u
 
+/* Add one region (row-padded, from a cache line) to a case's MRAM total. */
+static bool plan_mram_region(uint32_t byte_length, uint32_t *total)
+{
+    const uint32_t rows = (byte_length + HCT_MRAM_ROW_BYTES - 1u) & ~(HCT_MRAM_ROW_BYTES - 1u);
+    const uint32_t lines = (rows + HCT_MRAM_LINE_BYTES - 1u) & ~(HCT_MRAM_LINE_BYTES - 1u);
+    if (rows < byte_length || lines < rows || lines > HCT_MRAM_POOL_BYTES - *total)
+    {
+        return false;
+    }
+    *total += lines;
+    return true;
+}
+
+/* Size this case's MRAM footprint, blobs then the derived operand; refuse one the
+ * placement pool cannot hold before any of it is programmed. */
+static hctp_status_t plan_mram(hct_server_session_t *session)
+{
+    uint32_t total = 0u;
+    uint16_t index;
+    for (index = 0u; index < session->blob_count; ++index)
+    {
+        const hct_server_blob_t *blob = &session->blobs[index];
+        if (blob_in_mram(blob) && !plan_mram_region(blob->byte_length, &total))
+        {
+            return HCTP_STATUS_NO_SPACE;
+        }
+    }
+#if defined(HCT_PLACEMENT_MRAM)
+    session->derived_bytes = hct_derived_operand_bytes(session);
+    if (session->derived_bytes > 0u && !plan_mram_region(session->derived_bytes, &total))
+    {
+        return HCTP_STATUS_NO_SPACE;
+    }
+#endif
+    session->mram_case_bytes = total;
+    return HCTP_STATUS_OK;
+}
+
 static hctp_status_t parse_store_keys(hct_server_session_t *session, hct_cursor_t *cursor)
 {
     uint16_t index;
@@ -1231,6 +1317,9 @@ static hctp_status_t handle_case_meta(hct_server_session_t *session, const uint8
     status = parse_store_keys(session, &cursor);
     if (status != HCTP_STATUS_OK) return status;
 
+    status = plan_mram(session);
+    if (status != HCTP_STATUS_OK) return status;
+
     session->current_blob_index = 0u;
     session->state = HCT_SERVER_STATE_WAIT_BLOB_CHUNK;
     return next_blob(session);
@@ -1274,53 +1363,118 @@ static int program_changed_rows(const uint8_t *staged, uintptr_t address, uint32
     return 0;
 }
 
-/* Program the staged copy into MRAM. */
-static hctp_status_t place_in_mram(hct_server_session_t *session, hct_server_blob_t *blob)
+/* Pool offset of a case's first blob: content-spread, leaving room for all of it. */
+static uint32_t mram_start_offset(uint32_t crc32, uint32_t case_bytes)
+{
+    const uint32_t room = HCT_MRAM_POOL_BYTES - case_bytes + HCT_MRAM_LINE_BYTES;
+    const uint32_t window = room < HCT_MRAM_POOL_BYTES / 2u ? room : HCT_MRAM_POOL_BYTES / 2u;
+    return (crc32 % window) & ~(HCT_MRAM_LINE_BYTES - 1u);
+}
+
+/* Program byte_length bytes at the case cursor and register them as cold.
+ * `staged` holds whole rows when `padded` is set; otherwise the last partial row
+ * goes through a zero-filled copy so nothing past byte_length is read. */
+static hctp_status_t program_into_pool(hct_server_session_t *session,
+                                       const uint8_t *staged,
+                                       uint32_t byte_length,
+                                       uint32_t crc32,
+                                       bool padded,
+                                       const uint8_t **placed)
 {
     const uintptr_t base = hct_mram_pool_base();
-    /* allocate_blob padded the stage to rows. */
-    const uint32_t length = (blob->byte_length + HCT_MRAM_ROW_BYTES - 1u) & ~(HCT_MRAM_ROW_BYTES - 1u);
-    uint8_t *staged = &session->workspace[blob->arena_offset];
+    const uint32_t length = (byte_length + HCT_MRAM_ROW_BYTES - 1u) & ~(HCT_MRAM_ROW_BYTES - 1u);
+    const uint32_t whole = padded ? length : (byte_length & ~(HCT_MRAM_ROW_BYTES - 1u));
     uintptr_t address;
     if (length == 0u)
     {
         return HCTP_STATUS_OK;
     }
-    if (base == 0u || length > HCT_MRAM_POOL_BYTES || hct_window.cold_count >= HCT_SERVER_MAX_BLOBS)
+    if (base == 0u || length < byte_length || length > HCT_MRAM_POOL_BYTES || hct_window.cold_count >= HCT_SERVER_MAX_BLOBS)
     {
         return HCTP_STATUS_INVALID_ARGUMENT;
     }
-    /* Spread writes by content: wear leveling. */
+    /* Spread writes by content (wear leveling), but start where the whole case
+     * fits: blobs then never wrap onto this case's earlier ones (#377). */
     if (session->mram_cursor == 0u)
     {
-        session->mram_cursor = base + ((blob->crc32 % (HCT_MRAM_POOL_BYTES / 2u)) & ~(HCT_MRAM_LINE_BYTES - 1u));
+        session->mram_cursor = base + mram_start_offset(crc32, session->mram_case_bytes);
     }
     if (session->mram_cursor + length > base + HCT_MRAM_POOL_BYTES)
     {
-        session->mram_cursor = base;
+        return HCTP_STATUS_NO_SPACE;
     }
     address = session->mram_cursor;
-    /* Each blob starts on a cache line. */
+    /* Each region starts on a cache line. */
     session->mram_cursor += (length + HCT_MRAM_LINE_BYTES - 1u) & ~(HCT_MRAM_LINE_BYTES - 1u);
-    if (program_changed_rows(staged, address, blob->byte_length, length) != 0)
+    if (whole > 0u && program_changed_rows(staged, address, whole, whole) != 0)
     {
         return HCTP_STATUS_INVALID_ARGUMENT;
     }
-    if (hctp_crc32((const uint8_t *)address, blob->byte_length) != blob->crc32)
+    if (whole < length)
+    {
+        uint8_t tail[HCT_MRAM_ROW_BYTES] __attribute__((aligned(4))) = {0};
+        memcpy(tail, staged + whole, byte_length - whole);
+        if (program_changed_rows(tail, address + whole, byte_length - whole, HCT_MRAM_ROW_BYTES) != 0)
+        {
+            return HCTP_STATUS_INVALID_ARGUMENT;
+        }
+    }
+    if (hctp_crc32((const uint8_t *)address, byte_length) != crc32)
     {
         return HCTP_STATUS_PAYLOAD_CRC_MISMATCH;
     }
-    blob->placed = (const uint8_t *)address;
-    hct_window.cold_addr[hct_window.cold_count] = blob->placed;
+    *placed = (const uint8_t *)address;
+    hct_window.cold_addr[hct_window.cold_count] = *placed;
     hct_window.cold_bytes[hct_window.cold_count] = (int32_t)length;
     hct_window.cold_count += 1u;
     return HCTP_STATUS_OK;
+}
+
+/* Program the staged copy into MRAM; allocate_blob padded the stage to rows. */
+static hctp_status_t place_in_mram(hct_server_session_t *session, hct_server_blob_t *blob)
+{
+    return program_into_pool(session, &session->workspace[blob->arena_offset], blob->byte_length, blob->crc32, true,
+                             &blob->placed);
+}
+
+/* Build the derived operand with one untimed adapter call and program it after the
+ * blobs, so the kernel reads it from MRAM as inference reads a packed model. An
+ * adapter error is left for the correctness run to report; an adapter that builds
+ * nothing, or a size other than planned, fails the case. */
+static hctp_status_t place_derived(hct_server_session_t *session)
+{
+    arm_cmsis_nn_status status;
+    if (session->derived_bytes == 0u || session->derived != NULL)
+    {
+        return HCTP_STATUS_OK;
+    }
+    session->derived_source = NULL;
+    session->derived_built = 0u;
+    session->deriving = 1u;
+    status = hct_run_kernel_once(session);
+    session->deriving = 0u;
+    if (status != ARM_CMSIS_NN_SUCCESS)
+    {
+        return HCTP_STATUS_OK;
+    }
+    if (session->derived_source == NULL || session->derived_built != session->derived_bytes)
+    {
+        return HCTP_STATUS_INVALID_ARGUMENT;
+    }
+    return program_into_pool(session, session->derived_source, session->derived_built,
+                             hctp_crc32(session->derived_source, session->derived_built), false, &session->derived);
 }
 #else
 static hctp_status_t place_in_mram(hct_server_session_t *session, hct_server_blob_t *blob)
 {
     (void)session;
     (void)blob;
+    return HCTP_STATUS_OK;
+}
+
+static hctp_status_t place_derived(hct_server_session_t *session)
+{
+    (void)session;
     return HCTP_STATUS_OK;
 }
 #endif
@@ -1478,7 +1632,14 @@ static arm_cmsis_nn_status run_counting_prepare(hct_server_session_t *session)
 
 static hctp_status_t handle_run_correctness(hct_server_session_t *session)
 {
-    arm_cmsis_nn_status status = run_counting_prepare(session);
+    arm_cmsis_nn_status status;
+    /* Before any window: MRAM is never programmed while one is armed. */
+    const hctp_status_t placed = place_derived(session);
+    if (placed != HCTP_STATUS_OK)
+    {
+        return placed;
+    }
+    status = run_counting_prepare(session);
     session->last_kernel_status = status;
     if (kernel_status_is_fatal(session, status))
     {

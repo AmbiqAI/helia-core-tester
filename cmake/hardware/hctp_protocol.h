@@ -34,7 +34,9 @@ typedef enum
     HCTP_STATUS_HEADER_CRC_MISMATCH = -4,
     HCTP_STATUS_PAYLOAD_CRC_MISMATCH = -5,
     HCTP_STATUS_OVERSIZED_PAYLOAD = -6,
-    HCTP_STATUS_TRUNCATED_FRAME = -7
+    HCTP_STATUS_TRUNCATED_FRAME = -7,
+    /* The case's MRAM blobs do not fit the placement pool. */
+    HCTP_STATUS_NO_SPACE = -8
 } hctp_status_t;
 
 typedef enum

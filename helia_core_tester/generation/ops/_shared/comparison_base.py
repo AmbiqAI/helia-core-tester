@@ -19,6 +19,7 @@ _OP_MAP = {
 _DTYPE_INFO = {
     "S8": ("int8", "int8_t", np.int8, -128, 127, "s8"),
     "S16": ("int16", "int16_t", np.int16, -32768, 32767, "s16"),
+    "S32": ("int32", "int32_t", np.int32, -(2**31), 2**31 - 1, "s32"),
 }
 
 
@@ -137,19 +138,42 @@ class ComparisonFamilyBase(OperationBase):
         input_2_dims = builder.nhwc_to_cmsis_dims(input_shape_2)
         output_dims = builder.nhwc_to_cmsis_dims(output_shape)
 
-        params = self._quant_params(tflite_path)
-        rng = self._seeded_rng()
-        # Redraw until the output mixes.
-        for _ in range(16):
-            input_1_q, input_2_q = self._sample_operands(
-                rng, input_shape_1, input_shape_2, output_shape, qmin, qmax, np_in_dtype, _near_step(params)
-            )
-            expected = simulate_compare(input_1_q, input_2_q, operation=op_enum, **params)
-            if np.unique(expected).size > 1:
-                break
+        if activation_dtype == "S32":
+            from helia_core_tester.generation.ops._shared.int32_data import sample_int32
+
+            params = {}
+            rng = self._seeded_rng()
+            input_1_q = sample_int32(rng, input_shape_1)
+            input_2_q = sample_int32(rng, input_shape_2, phase=1)
+            if input_1_q.size == 1:
+                input_1_q[...] = 0
+            elif input_2_q.size == 1:
+                input_2_q[...] = 0
+            elif input_2_q.size >= input_1_q.size:
+                _pin_near(rng, input_1_q, input_2_q, output_shape, qmin, qmax, 1)
+            else:
+                _pin_near(rng, input_2_q, input_1_q, output_shape, qmin, qmax, 1)
+            interpreter = self.load_litert_interpreter(str(tflite_path))
+            details = interpreter.get_input_details()
+            interpreter.set_tensor(details[0]["index"], input_1_q)
+            interpreter.set_tensor(details[1]["index"], input_2_q)
+            interpreter.invoke()
+            expected = interpreter.get_tensor(interpreter.get_output_details()[0]["index"])
+        else:
+            params = self._quant_params(tflite_path)
+            rng = self._seeded_rng()
+            # Redraw until the output mixes.
+            for _ in range(16):
+                input_1_q, input_2_q = self._sample_operands(
+                    rng, input_shape_1, input_shape_2, output_shape, qmin, qmax, np_in_dtype, _near_step(params)
+                )
+                expected = simulate_compare(input_1_q, input_2_q, operation=op_enum, **params)
+                if np.unique(expected).size > 1:
+                    break
 
         context = {
             "name": name,
+            "unquantized": activation_dtype == "S32",
             "input_1_dims": input_1_dims,
             "input_2_dims": input_2_dims,
             "output_dims": output_dims,
