@@ -78,6 +78,15 @@ def test_mismatched_inch_is_rejected(base_desc, in_ch):
         OpTransposeConv(base_desc, 1).build_keras_model()
 
 
+def test_generate_test_rejects_a_mismatch_before_writing(base_desc, tmp_path):
+    base_desc["filter_shape"][3] = 16
+    failures = []
+    with pytest.raises(ValueError, match=r"InCh \(16\) must equal the input channel count \(17\)"):
+        generate_test(base_desc, str(tmp_path), seed=Config.seed, generation_failures=failures)
+    assert [f["stage"] for f in failures] == ["validate_descriptor"]
+    assert not any(tmp_path.rglob("*")), "nothing may be written for a rejected descriptor"
+
+
 def test_conv2d_order_gets_a_swap_hint(base_desc):
     base_desc["filter_shape"] = [1, 1, 17, 5]  # [KH, KW, InCh, OutCh]
     with pytest.raises(ValueError, match=re.escape("did you mean [1, 1, 5, 17] (OutCh 5)?")):

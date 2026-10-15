@@ -299,7 +299,7 @@ def test_model_builders_accept_the_names_the_clamp_accepts(activation: str, relu
 
     fc = OpFullyConnected(
         {**base, "operator": "FullyConnected", "name": "fc_case_s8", "input_shape": [1, 8],
-         "filter_shape": [8, 4], "activation": activation},
+         "filter_shape": [4, 8], "activation": activation},
         1,
     ).build_keras_model()
     assert "ReLU" in _layer_kinds(fc)

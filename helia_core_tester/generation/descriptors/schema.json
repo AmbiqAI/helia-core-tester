@@ -953,6 +953,25 @@
           "filter_shape": { "minItems": 4, "maxItems": 4, "items": { "minimum": 1 } }
         }
       }
+    },
+    {
+      "$comment": "FullyConnected: input_shape [N, C] or [N, H, W, C] and filter_shape [OutCh, InFeatures], every dim positive. InFeatures == prod(input_shape[1:]) is checked by OpFullyConnected.declared_filter_shape, since a schema cannot compare two fields.",
+      "if": {
+        "properties": { "operator": { "const": "FullyConnected" } },
+        "required": ["operator"]
+      },
+      "then": {
+        "properties": {
+          "input_shape": {
+            "anyOf": [
+              { "minItems": 2, "maxItems": 2 },
+              { "minItems": 4, "maxItems": 4 }
+            ],
+            "items": { "minimum": 1 }
+          },
+          "filter_shape": { "minItems": 2, "maxItems": 2, "items": { "minimum": 1 } }
+        }
+      }
     }
   ]
 }
