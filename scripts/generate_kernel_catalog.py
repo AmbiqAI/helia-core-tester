@@ -92,8 +92,24 @@ def _validate_registry(kernels: list[dict]) -> None:
         )
 
 
+def _contract_dtypes(kernel_id, role: str, dtype) -> tuple[str, ...]:
+    """Normalise one role's contract value (a dtype or a non-empty list of distinct dtypes)."""
+    dtypes = tuple(dtype) if isinstance(dtype, list) else (dtype,)
+    if not dtypes:
+        raise ValueError(f"kernel_id={kernel_id} blobs: role {role!r} has an empty dtype list")
+    if len(set(dtypes)) != len(dtypes):
+        raise ValueError(f"kernel_id={kernel_id} blobs: role {role!r} lists a dtype more than once: {list(dtypes)}")
+    for item in dtypes:
+        if item not in _BLOB_DTYPE_MACROS:
+            raise ValueError(
+                f"kernel_id={kernel_id} blobs: role {role!r} has unknown dtype {item!r} "
+                f"(allowed: {sorted(_BLOB_DTYPE_MACROS)})"
+            )
+    return dtypes
+
+
 def _validate_blob_contract(entry: dict) -> None:
-    """Every kernel declares the CASE_META roles it accepts and the dtype each must carry."""
+    """Every kernel declares the CASE_META roles it accepts and the dtype(s) each may carry."""
     kernel_id = entry.get("kernel_id")
     blobs = entry.get("blobs")
     if not isinstance(blobs, dict) or not blobs:
@@ -101,49 +117,54 @@ def _validate_blob_contract(entry: dict) -> None:
     for role, dtype in blobs.items():
         if role not in _BLOB_ROLES:
             raise ValueError(f"kernel_id={kernel_id} blobs: unknown role {role!r} (allowed: {list(_BLOB_ROLES)})")
-        if dtype not in _BLOB_DTYPE_MACROS:
-            raise ValueError(
-                f"kernel_id={kernel_id} blobs: role {role!r} has unknown dtype {dtype!r} "
-                f"(allowed: {sorted(_BLOB_DTYPE_MACROS)})"
-            )
+        _contract_dtypes(kernel_id, role, dtype)
 
 
 def _render_blob_contracts(kernels: list[dict]) -> list[str]:
     lines = [
-        "/* Per-kernel CASE_META blob contracts: the dtype each accepted role must carry,",
-        " * HCT_DTYPE_UNKNOWN for a role the kernel does not take. */",
+        "/* Per-kernel CASE_META blob contracts: a bit per HCT_DTYPE_* each accepted role may",
+        " * carry, 0 for a role the kernel does not take. */",
         "typedef struct",
         "{",
         "    uint32_t kernel_id;",
-        "    uint8_t dtype[HCT_BLOB_ROLE_COUNT];",
+        "    uint16_t accepted[HCT_BLOB_ROLE_COUNT];",
         "} hct_kernel_blob_contract_t;",
+        "",
+        "#define HCT_DTYPE_BIT(dtype) ((uint16_t)(1u << (dtype)))",
         "",
         "static const hct_kernel_blob_contract_t g_hct_kernel_blob_contracts[] = {",
     ]
     for kernel in kernels:
         blobs = kernel["blobs"]
         fields = ", ".join(
-            f"[HCT_BLOB_ROLE_{role.upper()}] = {_BLOB_DTYPE_MACROS[blobs[role]]}" for role in _BLOB_ROLES if role in blobs
+            f"[HCT_BLOB_ROLE_{role.upper()}] = "
+            + " | ".join(
+                f"HCT_DTYPE_BIT({_BLOB_DTYPE_MACROS[dtype]})"
+                for dtype in _contract_dtypes(kernel["kernel_id"], role, blobs[role])
+            )
+            for role in _BLOB_ROLES
+            if role in blobs
         )
         lines.append(f"    {{{int(kernel['kernel_id'])}u, {{{fields}}}}},")
     lines += [
         "};",
         "",
-        "uint8_t hct_kernel_blob_dtype(uint32_t kernel_id, uint8_t role)",
+        "bool hct_kernel_blob_accepts(uint32_t kernel_id, uint8_t role, uint8_t dtype)",
         "{",
         "    size_t index;",
-        "    if (role == HCT_BLOB_ROLE_UNKNOWN || role >= HCT_BLOB_ROLE_COUNT)",
+        "    if (role == HCT_BLOB_ROLE_UNKNOWN || role >= HCT_BLOB_ROLE_COUNT || dtype == HCT_DTYPE_UNKNOWN ||",
+        "        dtype >= 8u * sizeof(uint16_t))",
         "    {",
-        "        return HCT_DTYPE_UNKNOWN;",
+        "        return false;",
         "    }",
         "    for (index = 0u; index < sizeof(g_hct_kernel_blob_contracts) / sizeof(g_hct_kernel_blob_contracts[0]); ++index)",
         "    {",
         "        if (g_hct_kernel_blob_contracts[index].kernel_id == kernel_id)",
         "        {",
-        "            return g_hct_kernel_blob_contracts[index].dtype[role];",
+        "            return (g_hct_kernel_blob_contracts[index].accepted[role] & HCT_DTYPE_BIT(dtype)) != 0u;",
         "        }",
         "    }",
-        "    return HCT_DTYPE_UNKNOWN;",
+        "    return false;",
         "}",
         "",
     ]

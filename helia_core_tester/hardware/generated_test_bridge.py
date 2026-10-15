@@ -411,6 +411,13 @@ def _extract_define_int(source_text: str, name: str) -> int:
     return {"true": 1, "false": 0}.get(match.group(1)) if match.group(1) in ("true", "false") else int(match.group(1))
 
 
+def _extract_array_c_type(header_text: str, array_name: str) -> str | None:
+    """Element C type of `array_name`'s definition (e.g. `int32_t`), None when not declared as an array."""
+    pattern = re.compile(rf"\b([A-Za-z_][A-Za-z0-9_]*)\s+{re.escape(array_name)}\s*\[[^\]]*\]\s*=")
+    match = pattern.search(header_text)
+    return match.group(1) if match else None
+
+
 def _extract_null_pointer_decl(header_text: str, variable_name: str) -> bool:
     pattern = re.compile(rf"\b{re.escape(variable_name)}\s*=\s*NULL\s*;")
     return pattern.search(header_text) is not None
@@ -935,8 +942,20 @@ def _build_convolve_case(
 
     if activation_dtype == "S16":
         activation_numpy_dtype = np.int16
-        bias_numpy_dtype = np.int64
-        bias_wire_dtype = "S64"
+        # arm_convolve_wrapper_s16 takes cmsis_nn_bias_data: int64 by default, int32 when
+        # the descriptor pins `bias_dtype: S32` (the header then declares int32_t biases).
+        bias_c_type = _extract_array_c_type(header_text, f"{prefix}_biases")
+        if bias_c_type == "int32_t":
+            bias_numpy_dtype = np.int32
+            bias_wire_dtype = "S32"
+        elif bias_c_type in ("int64_t", None):
+            bias_numpy_dtype = np.int64
+            bias_wire_dtype = "S64"
+        else:
+            raise UnsupportedGeneratedTestError(
+                f"{generated_test.name}: S16 Convolve bias array has unexpected C type {bias_c_type!r} "
+                f"(expected int32_t or int64_t)."
+            )
     elif activation_dtype == "S8":
         activation_numpy_dtype = np.int8
         bias_numpy_dtype = np.int32

@@ -1283,9 +1283,9 @@ static hctp_status_t handle_case_meta(hct_server_session_t *session, const uint8
         {
             return HCTP_STATUS_INVALID_ARGUMENT;
         }
-        /* Adapters cast blob pointers by kernel id, so the declared dtype must be the
-         * kernel's, and each role may appear once (lookups take the first match). */
-        if (blob->dtype != hct_kernel_blob_dtype(session->expected_kernel_id, blob->role))
+        /* Adapters cast blob pointers by kernel id, so the declared dtype must be one the
+         * kernel accepts, and each role may appear once (lookups take the first match). */
+        if (!hct_kernel_blob_accepts(session->expected_kernel_id, blob->role, blob->dtype))
         {
             return HCTP_STATUS_INVALID_ARGUMENT;
         }

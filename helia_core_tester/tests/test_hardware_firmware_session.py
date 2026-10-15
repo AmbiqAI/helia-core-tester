@@ -80,6 +80,10 @@ def test_c_firmware_session_loop_executes_abs_correctness_flow(tmp_path: Path, p
         "abs_s8_rejects_extra_role",
         "abs_s8_rejects_duplicate_role",
         "unknown_kernel_rejected",
+        "convolve_s16_accepts_s64_bias",
+        "convolve_s16_accepts_s32_bias",
+        "convolve_s16_rejects_s16_bias",
+        "depthwise_conv_s16_rejects_s32_bias",
     ):
         assert f"blob_contract {label} ok" in result.stdout
     # v2: the harness continues through CORRECTNESS_ACK/RUN_PERFORMANCE with two PMU

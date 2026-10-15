@@ -35,6 +35,8 @@ BLOB_TYPES_H = PROJECT_ROOT / "cmake" / "hardware" / "benchmark_server_blob_type
 
 ABS_S8 = 1
 CONVOLVE_S8 = 2
+CONVOLVE_S16 = 14
+DEPTHWISE_CONV_S16 = 15
 
 
 @pytest.fixture(scope="module")
@@ -63,6 +65,9 @@ def test_every_registry_entry_declares_a_valid_contract(catalog_generator) -> No
         ({"expected_output": "S8"}, "unknown role 'expected_output'"),
         ({"input_0": "S9"}, "unknown dtype 'S9'"),
         ({"input_0": "F32"}, "unknown dtype 'F32'"),
+        ({"bias": []}, "role 'bias' has an empty dtype list"),
+        ({"bias": ["S32", "S9"]}, "unknown dtype 'S9'"),
+        ({"bias": ["S32", "S32"]}, "lists a dtype more than once"),
     ],
 )
 def test_catalog_generator_rejects_bad_contracts(catalog_generator, blobs, message) -> None:
@@ -79,9 +84,19 @@ def test_catalog_table_matches_registry(catalog_generator) -> None:
     kernels = load_kernel_registry(PROJECT_ROOT)
     assert sorted(int(kernel_id) for kernel_id in rows) == sorted(kernel.kernel_id for kernel in kernels)
     for kernel in kernels:
-        fields = dict(re.findall(r"\[HCT_BLOB_ROLE_([A-Z0-9_]+)\] = (HCT_DTYPE_[A-Z0-9]+)", rows[str(kernel.kernel_id)]))
-        expected = {role.upper(): catalog_generator._BLOB_DTYPE_MACROS[dtype] for role, dtype in kernel.blobs}
+        fields = {
+            role: set(re.findall(r"HCT_DTYPE_BIT\((HCT_DTYPE_[A-Z0-9]+)\)", bits))
+            for role, bits in re.findall(r"\[HCT_BLOB_ROLE_([A-Z0-9_]+)\] = ([^\[\]]+?)(?=, \[|$)", rows[str(kernel.kernel_id)])
+        }
+        expected = {
+            role.upper(): {catalog_generator._BLOB_DTYPE_MACROS[dtype] for dtype in dtypes} for role, dtypes in kernel.blobs
+        }
         assert fields == expected, kernel.kernel_id
+    # Only the wrapper that takes cmsis_nn_bias_data accepts two bias widths.
+    multi = {kernel.cmsis_function for kernel in kernels if any(len(dtypes) > 1 for _, dtypes in kernel.blobs)}
+    assert multi == {"arm_convolve_wrapper_s16"}
+    assert dict(blob_contract(PROJECT_ROOT, CONVOLVE_S16))["bias"] == ("S32", "S64")
+    assert dict(blob_contract(PROJECT_ROOT, DEPTHWISE_CONV_S16))["bias"] == ("S64",)
 
 
 def test_generator_names_match_firmware_wire_codes(catalog_generator) -> None:
@@ -114,19 +129,21 @@ def test_data_movement_operand_dtype_follows_kernel(operator, dtype, role, expec
         for kernel in load_kernel_registry(PROJECT_ROOT)
         if kernel.operator == operator and kernel.dtype == dtype
     )
-    assert blob_contract(PROJECT_ROOT, kernel_id)[role] == expected
+    assert blob_contract(PROJECT_ROOT, kernel_id)[role] == (expected,)
 
 
 def test_reverse_sequence_lengths_are_s32() -> None:
     for kernel in load_kernel_registry(PROJECT_ROOT):
         if kernel.operator == "ReverseSequence":
-            assert dict(kernel.blobs)["input_1"] == "S32"
+            assert dict(kernel.blobs)["input_1"] == ("S32",)
 
 
 def test_check_blob_contract_accepts_valid_and_partial_sets() -> None:
     check_blob_contract(PROJECT_ROOT, ABS_S8, [("input_0", "S8")])
     # Optional roles (no bias, no per-channel quant) may be absent.
     check_blob_contract(PROJECT_ROOT, CONVOLVE_S8, [("input_0", "S8"), ("weights", "S8")])
+    for bias_dtype in ("S32", "S64"):
+        check_blob_contract(PROJECT_ROOT, CONVOLVE_S16, [("input_0", "S16"), ("weights", "S8"), ("bias", bias_dtype)])
 
 
 @pytest.mark.parametrize(
@@ -136,6 +153,8 @@ def test_check_blob_contract_accepts_valid_and_partial_sets() -> None:
         (ABS_S8, [("input_0", "S8"), ("weights", "S8")], "role 'weights' is not accepted"),
         (ABS_S8, [("input_0", "S8"), ("input_0", "S8")], "role 'input_0' appears more than once"),
         (CONVOLVE_S8, [("input_0", "S8"), ("bias", "S8")], "role 'bias' is S8, contract requires S32"),
+        (CONVOLVE_S16, [("input_0", "S16"), ("bias", "S16")], "role 'bias' is S16, contract requires S32 or S64"),
+        (DEPTHWISE_CONV_S16, [("input_0", "S16"), ("bias", "S32")], "role 'bias' is S32, contract requires S64"),
         (0, [("input_0", "S8")], "kernel_id=0 has no `blobs:` contract"),
         (10_000, [("input_0", "S8")], "kernel_id=10000 has no `blobs:` contract"),
     ],

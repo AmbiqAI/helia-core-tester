@@ -116,7 +116,8 @@ kernels:
     operator: Convolve
     dtype: S16
     cmsis_function: arm_convolve_wrapper_s16
-    blobs: {input_0: S16, weights: S8, bias: S64, multiplier: S32, shift: S32}
+    # cmsis_nn_bias_data: the adapter sets is_int32_bias from the bias blob's dtype.
+    blobs: {input_0: S16, weights: S8, bias: [S32, S64], multiplier: S32, shift: S32}
 
   - kernel_id: 15
     family: ConvolutionFunctions

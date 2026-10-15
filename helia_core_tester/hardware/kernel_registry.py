@@ -29,8 +29,8 @@ class KernelEntry:
     cmsis_function: str
     # Reached only through a descriptor's `entry:`.
     direct_entry: bool = False
-    # CASE_META contract: (role, dtype) pairs the kernel accepts; firmware rejects any other.
-    blobs: tuple[tuple[str, str], ...] = ()
+    # CASE_META contract: (role, accepted dtypes) per role the kernel takes; firmware rejects any other.
+    blobs: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
 
 class UnknownKernelError(Exception):
@@ -81,7 +81,7 @@ def _parse_registry(raw: bytes) -> tuple[KernelEntry, ...]:
             weight_dtype=(None if entry.get("weight_dtype") is None else str(entry["weight_dtype"])),
             cmsis_function=str(entry.get("cmsis_function", "")),
             direct_entry=bool(entry.get("direct_entry", False)),
-            blobs=tuple((str(role), str(dtype)) for role, dtype in (entry.get("blobs") or {}).items()),
+            blobs=tuple((str(role), _contract_dtypes(dtype)) for role, dtype in (entry.get("blobs") or {}).items()),
         )
         for entry in data.get("kernels", [])
     )
@@ -143,8 +143,12 @@ def lookup_entry_id(project_root: Path, entry: str) -> int | None:
     return None
 
 
-def blob_contract(project_root: Path, kernel_id: int) -> dict[str, str]:
-    """Role -> dtype the kernel accepts in CASE_META; empty for an unknown kernel_id."""
+def _contract_dtypes(dtype) -> tuple[str, ...]:
+    return tuple(str(item) for item in dtype) if isinstance(dtype, list) else (str(dtype),)
+
+
+def blob_contract(project_root: Path, kernel_id: int) -> dict[str, tuple[str, ...]]:
+    """Role -> dtypes the kernel accepts in CASE_META; empty for an unknown kernel_id."""
     for kernel in load_kernel_registry(project_root):
         if kernel.kernel_id == kernel_id:
             return dict(kernel.blobs)
@@ -164,7 +168,7 @@ def check_blob_contract(project_root: Path, kernel_id: int, blobs: Iterable[tupl
         seen.add(role)
         if role not in contract:
             problems.append(f"role {role!r} is not accepted (contract: {contract})")
-        elif dtype != contract[role]:
-            problems.append(f"role {role!r} is {dtype}, contract requires {contract[role]}")
+        elif dtype not in contract[role]:
+            problems.append(f"role {role!r} is {dtype}, contract requires {' or '.join(contract[role])}")
     if problems:
         raise BlobContractError(f"kernel_id={kernel_id}: " + "; ".join(problems))

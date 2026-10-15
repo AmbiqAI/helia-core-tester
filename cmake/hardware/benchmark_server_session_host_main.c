@@ -423,6 +423,10 @@ int main(void)
         static const char *const kS8S8[] = {"S8", "S8"};
         static const char *const kS8S32[] = {"S8", "S32"};
         static const char *const kS16S32[] = {"S16", "S32"};
+        static const char *const kConv[] = {"input_0", "weights", "bias"};
+        static const char *const kConvS64[] = {"S16", "S8", "S64"};
+        static const char *const kConvS32[] = {"S16", "S8", "S32"};
+        static const char *const kConvS16[] = {"S16", "S8", "S16"};
         if (probe_blob_contract(&session, HCT_KERNEL_ID_STRIDED_SLICE_S16, 2u, kInputMeta, kS16S32, HCTP_STATUS_OK, "strided_slice_s16_accepts_s16")) return 80;
         if (probe_blob_contract(&session, HCT_KERNEL_ID_STRIDED_SLICE_S16, 2u, kInputMeta, kS8S32, HCTP_STATUS_INVALID_ARGUMENT, "strided_slice_s16_rejects_s8")) return 81;
         if (probe_blob_contract(&session, HCT_KERNEL_ID_STRIDED_SLICE_S32, 2u, kInputMeta, kS8S32, HCTP_STATUS_INVALID_ARGUMENT, "strided_slice_s32_rejects_s8")) return 82;
@@ -431,6 +435,11 @@ int main(void)
         if (probe_blob_contract(&session, 1u, 2u, kInputWeights, kS8S8, HCTP_STATUS_INVALID_ARGUMENT, "abs_s8_rejects_extra_role")) return 85;
         if (probe_blob_contract(&session, 1u, 2u, kTwoInput0, kS8S8, HCTP_STATUS_INVALID_ARGUMENT, "abs_s8_rejects_duplicate_role")) return 86;
         if (probe_blob_contract(&session, 0xFFFFu, 1u, kInput0, kS8, HCTP_STATUS_INVALID_ARGUMENT, "unknown_kernel_rejected")) return 87;
+        /* arm_convolve_wrapper_s16's bias is cmsis_nn_bias_data: S64 or S32, nothing else. */
+        if (probe_blob_contract(&session, HCT_KERNEL_ID_CONVOLVE_S16, 3u, kConv, kConvS64, HCTP_STATUS_OK, "convolve_s16_accepts_s64_bias")) return 88;
+        if (probe_blob_contract(&session, HCT_KERNEL_ID_CONVOLVE_S16, 3u, kConv, kConvS32, HCTP_STATUS_OK, "convolve_s16_accepts_s32_bias")) return 89;
+        if (probe_blob_contract(&session, HCT_KERNEL_ID_CONVOLVE_S16, 3u, kConv, kConvS16, HCTP_STATUS_INVALID_ARGUMENT, "convolve_s16_rejects_s16_bias")) return 90;
+        if (probe_blob_contract(&session, HCT_KERNEL_ID_DEPTHWISE_CONV_S16, 3u, kConv, kConvS32, HCTP_STATUS_INVALID_ARGUMENT, "depthwise_conv_s16_rejects_s32_bias")) return 91;
     }
     if (send_frame(&session, HCTP_MSG_CASE_META, inbound_payload, encode_abs_meta(inbound_payload, "abs_default_s8_stream_demo", 0u, 64u)) != HCTP_STATUS_OK) return 15;
 
