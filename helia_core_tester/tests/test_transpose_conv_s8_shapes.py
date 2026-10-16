@@ -81,7 +81,7 @@ def test_edge_categories_hold(seed: int) -> None:
         elif edge == "odd_tail":
             assert cout % 2
         elif edge == "unit_tail":
-            assert cin == cout == 1
+            assert cin == cout == 1 and case["activation"] == "NONE"
 
 
 @pytest.mark.parametrize("seed", range(6))

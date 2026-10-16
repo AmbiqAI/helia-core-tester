@@ -473,11 +473,18 @@ def _tc8_odd_tail(rng: np.random.Generator) -> Layer:
     return layer
 
 
+def _tc8_unit_tail(rng: np.random.Generator) -> Layer:
+    """One channel each way; ReLU would saturate it."""
+    layer = _tc16_unit_tail(rng)
+    layer.knobs = {"activation": "NONE", "use_bias": bool(rng.random() < 0.85)}
+    return layer
+
+
 # s8 edge categories, highest priority first.
 TC8_DRAWS: dict[str, Callable[[np.random.Generator], Layer]] = {
     "threshold": _tc8_threshold, "stride3": _tc8_stride3, "decoder": _tc8_decoder, "clamp": _tc8_clamp,
     "batch2": _tc8_batch2, "gaps": _tc16_gaps, "overlap": _tc16_overlap, "odd_tail": _tc8_odd_tail,
-    "unit_tail": _tc16_unit_tail,
+    "unit_tail": _tc8_unit_tail,
 }
 TC8_EDGES = tuple(TC8_DRAWS)
 
