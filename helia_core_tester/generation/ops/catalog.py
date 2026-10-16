@@ -143,6 +143,10 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         descriptor_relpaths=("BasicMathFunctions/sub.yaml", "BasicMathFunctions/sub_float.yaml"),
         template_relpath="BasicMathFunctions/sub",
     ),
+    "Div": _spec(
+        "Div", "BasicMathFunctions", "div", "OpDiv",
+        "BasicMathFunctions/div_float.yaml", "BasicMathFunctions/mul",
+    ),
     "Mul": _spec(
         "Mul",
         "BasicMathFunctions",

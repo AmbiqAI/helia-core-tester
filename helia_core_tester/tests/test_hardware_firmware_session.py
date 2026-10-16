@@ -71,6 +71,21 @@ def test_c_firmware_session_loop_executes_abs_correctness_flow(tmp_path: Path, p
     assert result.returncode == 0, f"harness exit {result.returncode}"
     assert "chunks=" in result.stdout
     assert "bytes=12" in result.stdout
+    for label in (
+        "strided_slice_s16_accepts_s16",
+        "strided_slice_s16_rejects_s8",
+        "strided_slice_s32_rejects_s8",
+        "strided_slice_meta_rejects_s8",
+        "abs_s8_rejects_s16",
+        "abs_s8_rejects_extra_role",
+        "abs_s8_rejects_duplicate_role",
+        "unknown_kernel_rejected",
+        "convolve_s16_accepts_s64_bias",
+        "convolve_s16_accepts_s32_bias",
+        "convolve_s16_rejects_s16_bias",
+        "depthwise_conv_s16_rejects_s32_bias",
+    ):
+        assert f"blob_contract {label} ok" in result.stdout
     # v2: the harness continues through CORRECTNESS_ACK/RUN_PERFORMANCE with two PMU
     # passes (3 samples each) and checks every SAMPLE_RESULT leads with the CCNTR entry.
     # DWT-only: event counters come back unsupported. PMU stub: the harness also checks

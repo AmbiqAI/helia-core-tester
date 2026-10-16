@@ -23,6 +23,7 @@ SEEDS = (0, 1, 7, 12345)
 CONV, DW, DW16, TC16 = ("Convolve", "S8"), ("DepthwiseConv", "S8"), ("DepthwiseConv", "S16"), ("TransposeConv", "S16")
 TCF32, TCF16 = ("TransposeConv", "FP32"), ("TransposeConv", "FP16")
 SM8 = ("Softmax", "S8")
+SIG32, SIG16 = ("NNActivationFloat", "FP32"), ("NNActivationFloat", "FP16")
 
 
 def _layer(case: dict) -> rs.Layer:
@@ -52,7 +53,7 @@ def test_ops_draw_independently() -> None:
 
 
 @pytest.mark.parametrize(("op", "dtype", "picked"), [
-    (None, None, (CONV, DW, DW16, TC16, TCF32, TCF16, SM8)),
+    (None, None, (CONV, DW, DW16, TC16, TCF32, TCF16, SIG32, SIG16, SM8)),
     ("Softmax", "S8", (SM8,)),
     ("softmax", None, (SM8,)),
     ("TransposeConv", "S16", (TC16,)),
@@ -77,7 +78,7 @@ def test_select_ops_matches_filters(op, dtype, picked) -> None:
     ("rs7_conv", None),
 ])
 def test_select_ops_refuses_unknown(op, dtype) -> None:
-    with pytest.raises(ValueError, match="TransposeConv FP32, TransposeConv FP16, Softmax S8$"):
+    with pytest.raises(ValueError, match="NNActivationFloat FP32, NNActivationFloat FP16, Softmax S8$"):
         rs.select_ops(op, dtype)
 
 
@@ -119,7 +120,9 @@ def test_random_filter_refused_early() -> None:
 def test_cases_fit_the_board(cpu: str, seed: int) -> None:
     workspace = rs.min_workspace(cpu)
     mve = cpu == "cortex-m55"
-    for case in rs.sample_cases(50, seed, cpu, rs.OPS[:-1]):
+    for case in rs.sample_cases(50, seed, cpu):
+        if rs.GENERATORS[case["operator"], case["activation_dtype"]].layerless:
+            continue
         op, dtype, layer = case["operator"], case["activation_dtype"], _layer(case)
         assert min(layer.out_hw()) >= 1
         assert rs.footprint(op, layer, dtype) <= workspace
@@ -195,6 +198,8 @@ def test_softmax_cases_fit(cpu: str, seed: int) -> None:
     for case in cases:
         one, rows, size = case["input_shape"]
         assert one == 1 and rows * size <= rs.SOFTMAX_MAX
+        # Input and output buffers fit.
+        assert 2 * rows * size + 16 <= rs.min_workspace(cpu)
         assert case["name"].startswith(f"rs{seed}_sm8_") and case["shape_seed"] == seed
         lo, hi = case["calibration_range"]
         assert lo <= 0 < hi
@@ -203,7 +208,8 @@ def test_softmax_cases_fit(cpu: str, seed: int) -> None:
 
 
 def test_softmax_edges_covered() -> None:
-    cases = [c for seed in SEEDS for c in rs.sample_cases(30, seed, ops=(SM8,))]
+    # Edges are per seed; draw many.
+    cases = [c for seed in range(16) for c in rs.sample_cases(30, seed, ops=(SM8,))]
     sizes = [c["input_shape"][2] for c in cases]
     rows = {c["input_shape"][1] for c in cases}
     # Steps per e-fold: 255 over the span.
@@ -271,7 +277,7 @@ def test_sm8_hidden_set_pinned(cpu: str) -> None:
     # Pinned when sm8 joined.
     cases = rs.hidden_cases(8, SECRET.encode(), cpu, (SM8,))
     digest = hashlib.sha256(yaml.safe_dump_all(cases, sort_keys=False).encode()).hexdigest()
-    assert digest == "ee0df1bd22640a2ac23757a7d08af1de39349fd655409bc874d083de3d709907"
+    assert digest == "91348f667cc752cb2fa7ec08c4bb07e3b63bfc2eedd5f38f5550061f588f3da9"
 
 
 def test_streams_and_tags_unique() -> None:
