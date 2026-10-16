@@ -1,0 +1,559 @@
+operator: Div
+name: div_flat_tail_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_1_shape:
+- 1
+- 1
+- 1
+- 17
+input_2_shape:
+- 1
+- 1
+- 1
+- 17
+required_kernel_symbols:
+- arm_elementwise_div_f32
+comparison:
+  atol: 0.0
+  rtol: 0.0
+---
+operator: Div
+name: div_flat_aligned_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_1_shape:
+- 1
+- 1
+- 1
+- 32
+input_2_shape:
+- 1
+- 1
+- 1
+- 32
+required_kernel_symbols:
+- arm_elementwise_div_f32
+comparison:
+  atol: 0.0
+  rtol: 0.0
+---
+operator: Div
+name: div_scalar_numerator_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_1_shape:
+- 1
+- 1
+- 1
+- 1
+input_2_shape:
+- 1
+- 1
+- 3
+- 7
+required_kernel_symbols:
+- arm_elementwise_div_broadcast_f32
+comparison:
+  atol: 0.0
+  rtol: 0.0
+---
+operator: Div
+name: div_scalar_denominator_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_1_shape:
+- 1
+- 1
+- 3
+- 7
+input_2_shape:
+- 1
+- 1
+- 1
+- 1
+required_kernel_symbols:
+- arm_elementwise_div_broadcast_f32
+comparison:
+  atol: 0.0
+  rtol: 0.0
+---
+operator: Div
+name: div_channel_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_1_shape:
+- 1
+- 3
+- 5
+- 7
+input_2_shape:
+- 1
+- 1
+- 1
+- 7
+required_kernel_symbols:
+- arm_elementwise_div_broadcast_f32
+comparison:
+  atol: 0.0
+  rtol: 0.0
+---
+operator: Div
+name: div_mixed_axes_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_1_shape:
+- 2
+- 1
+- 5
+- 1
+input_2_shape:
+- 1
+- 3
+- 1
+- 7
+required_kernel_symbols:
+- arm_elementwise_div_broadcast_f32
+comparison:
+  atol: 0.0
+  rtol: 0.0
+---
+operator: Div
+name: div_batch_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_1_shape:
+- 2
+- 3
+- 5
+- 7
+input_2_shape:
+- 1
+- 3
+- 5
+- 7
+required_kernel_symbols:
+- arm_elementwise_div_broadcast_f32
+comparison:
+  atol: 0.0
+  rtol: 0.0
+---
+operator: Div
+name: div_row_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_1_shape:
+- 1
+- 3
+- 5
+- 7
+input_2_shape:
+- 1
+- 1
+- 5
+- 7
+required_kernel_symbols:
+- arm_elementwise_div_broadcast_f32
+comparison:
+  atol: 0.0
+  rtol: 0.0
+---
+operator: Div
+name: div_gtcrn_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_1_shape:
+- 1
+- 1
+- 33
+- 16
+input_2_shape:
+- 1
+- 1
+- 1
+- 1
+required_kernel_symbols:
+- arm_elementwise_div_broadcast_f32
+comparison:
+  atol: 0.0
+  rtol: 0.0
+---
+operator: Div
+name: div_circlematch_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_1_shape:
+- 1
+- 1
+- 101
+- 32
+input_2_shape:
+- 1
+- 1
+- 101
+- 1
+required_kernel_symbols:
+- arm_elementwise_div_broadcast_f32
+comparison:
+  atol: 0.0
+  rtol: 0.0
+---
+operator: Div
+name: div_clamp_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_1_shape:
+- 1
+- 1
+- 1
+- 33
+input_2_shape:
+- 1
+- 1
+- 1
+- 33
+required_kernel_symbols:
+- arm_elementwise_div_f32
+comparison:
+  atol: 0.0
+  rtol: 0.0
+act_min: -0.5
+act_max: 0.5
+---
+operator: Div
+name: div_flat_tail_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_1_shape:
+- 1
+- 1
+- 1
+- 17
+input_2_shape:
+- 1
+- 1
+- 1
+- 17
+required_kernel_symbols:
+- arm_elementwise_div_f16
+comparison:
+  atol: 0.0
+  rtol: 0.0
+---
+operator: Div
+name: div_flat_aligned_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_1_shape:
+- 1
+- 1
+- 1
+- 32
+input_2_shape:
+- 1
+- 1
+- 1
+- 32
+required_kernel_symbols:
+- arm_elementwise_div_f16
+comparison:
+  atol: 0.0
+  rtol: 0.0
+---
+operator: Div
+name: div_scalar_numerator_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_1_shape:
+- 1
+- 1
+- 1
+- 1
+input_2_shape:
+- 1
+- 1
+- 3
+- 7
+required_kernel_symbols:
+- arm_elementwise_div_broadcast_f16
+comparison:
+  atol: 0.0
+  rtol: 0.0
+---
+operator: Div
+name: div_scalar_denominator_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_1_shape:
+- 1
+- 1
+- 3
+- 7
+input_2_shape:
+- 1
+- 1
+- 1
+- 1
+required_kernel_symbols:
+- arm_elementwise_div_broadcast_f16
+comparison:
+  atol: 0.0
+  rtol: 0.0
+---
+operator: Div
+name: div_channel_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_1_shape:
+- 1
+- 3
+- 5
+- 7
+input_2_shape:
+- 1
+- 1
+- 1
+- 7
+required_kernel_symbols:
+- arm_elementwise_div_broadcast_f16
+comparison:
+  atol: 0.0
+  rtol: 0.0
+---
+operator: Div
+name: div_mixed_axes_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_1_shape:
+- 2
+- 1
+- 5
+- 1
+input_2_shape:
+- 1
+- 3
+- 1
+- 7
+required_kernel_symbols:
+- arm_elementwise_div_broadcast_f16
+comparison:
+  atol: 0.0
+  rtol: 0.0
+---
+operator: Div
+name: div_batch_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_1_shape:
+- 2
+- 3
+- 5
+- 7
+input_2_shape:
+- 1
+- 3
+- 5
+- 7
+required_kernel_symbols:
+- arm_elementwise_div_broadcast_f16
+comparison:
+  atol: 0.0
+  rtol: 0.0
+---
+operator: Div
+name: div_row_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_1_shape:
+- 1
+- 3
+- 5
+- 7
+input_2_shape:
+- 1
+- 1
+- 5
+- 7
+required_kernel_symbols:
+- arm_elementwise_div_broadcast_f16
+comparison:
+  atol: 0.0
+  rtol: 0.0
+---
+operator: Div
+name: div_gtcrn_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_1_shape:
+- 1
+- 1
+- 33
+- 16
+input_2_shape:
+- 1
+- 1
+- 1
+- 1
+required_kernel_symbols:
+- arm_elementwise_div_broadcast_f16
+comparison:
+  atol: 0.0
+  rtol: 0.0
+---
+operator: Div
+name: div_circlematch_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_1_shape:
+- 1
+- 1
+- 101
+- 32
+input_2_shape:
+- 1
+- 1
+- 101
+- 1
+required_kernel_symbols:
+- arm_elementwise_div_broadcast_f16
+comparison:
+  atol: 0.0
+  rtol: 0.0
+---
+operator: Div
+name: div_clamp_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_1_shape:
+- 1
+- 1
+- 1
+- 33
+input_2_shape:
+- 1
+- 1
+- 1
+- 33
+required_kernel_symbols:
+- arm_elementwise_div_f16
+comparison:
+  atol: 0.0
+  rtol: 0.0
+act_min: -0.5
+act_max: 0.5
+---
+operator: Div
+name: div_rank2_channel_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_1_shape:
+- 2
+- 3
+input_2_shape:
+- 3
+required_kernel_symbols:
+- arm_elementwise_div_broadcast_f32
+comparison:
+  atol: 0.0
+  rtol: 0.0
+---
+operator: Div
+name: div_rank3_mixed_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_1_shape:
+- 2
+- 1
+- 7
+input_2_shape:
+- 3
+- 1
+required_kernel_symbols:
+- arm_elementwise_div_broadcast_f32
+comparison:
+  atol: 0.0
+  rtol: 0.0
+---
+operator: Div
+name: div_rank2_channel_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_1_shape:
+- 2
+- 3
+input_2_shape:
+- 3
+required_kernel_symbols:
+- arm_elementwise_div_broadcast_f16
+comparison:
+  atol: 0.0
+  rtol: 0.0
+---
+operator: Div
+name: div_rank3_mixed_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_1_shape:
+- 2
+- 1
+- 7
+input_2_shape:
+- 3
+- 1
+required_kernel_symbols:
+- arm_elementwise_div_broadcast_f16
+comparison:
+  atol: 0.0
+  rtol: 0.0

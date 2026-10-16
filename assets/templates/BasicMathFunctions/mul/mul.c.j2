@@ -11,7 +11,7 @@ int32_t {{ name }}_run(
     const {{ input_dtype }}* __restrict input2,
     {{ output_dtype }}* __restrict output
 ) {
-    // Call mul kernel (handles broadcast + scalar)
+    // Call the selected binary kernel.
     {% if float_kernel %}
     {% if float_broadcast %}
     arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(
