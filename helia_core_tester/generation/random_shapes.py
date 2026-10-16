@@ -44,6 +44,12 @@ DW16_ROUTES = ("arm_depthwise_conv_fast_s16", "arm_depthwise_conv_s16")
 # Direct entry; no wrapper.
 TC16_ROUTE = "arm_transpose_conv_s16"
 TC16_SYMBOLS = [TC16_ROUTE, "arm_transpose_conv_s16_get_buffer_size"]
+# s8 wrapper callees: reverse conv or rolling.
+TC8_REVERSE = "arm_convolve_s8"
+TC8_ROLLING = "arm_transpose_conv_s8"
+TC8_ROUTES = (TC8_REVERSE, TC8_ROLLING)
+# REVERSE_TCOL_EFFICIENT_THRESHOLD in ns-cmsis-nn.
+TC8_REVERSE_MIN_CIN = 17
 # Float entries, called directly.
 TCF_ROUTES = {"FP32": "arm_transpose_conv_f32", "FP16": "arm_transpose_conv_f16"}
 # MVE lanes per vector.
@@ -393,6 +399,97 @@ def _tc16_mixed(rng: np.random.Generator) -> Layer:
     return Layer(_size(rng, 1, 16), _size(rng, 1, 16), cin, cout, kh, kw, sh, sw, padding=pad, transpose=True)
 
 
+def tc8_route(layer: Layer) -> str:
+    """The s8 wrapper's callee."""
+    reverse = layer.sh <= 2 and layer.sw <= 2 and layer.cin >= TC8_REVERSE_MIN_CIN
+    return TC8_REVERSE if reverse else TC8_ROLLING
+
+
+def _tc8_mixed(rng: np.random.Generator, route: str) -> Layer:
+    """The normal mix, aimed at one route."""
+    pad = _padding(rng)
+    if route == TC8_REVERSE:
+        cin = _channels(rng, TC8_REVERSE_MIN_CIN, 64)
+        sh, sw = int(rng.integers(1, 3)), int(rng.integers(1, 3))
+    else:
+        cin = _odd_channels(rng, 1, 48)
+        sh, sw = int(rng.integers(1, 5)), int(rng.integers(1, 5))
+        if cin >= TC8_REVERSE_MIN_CIN and sh <= 2 and sw <= 2:
+            sw = int(rng.integers(3, 5))
+    cout = _channels(rng, 1, 48)
+    if rng.random() < 0.3:
+        # 1D: kernel and stride on W.
+        return Layer(1, _size(rng, 4, 64), cin, cout, 1, int(rng.integers(1, 9)), 1, sw, padding=pad, transpose=True)
+    kh, kw = int(rng.integers(1, 7)), int(rng.integers(1, 7))
+    return Layer(_size(rng, 1, 16), _size(rng, 1, 16), cin, cout, kh, kw, sh, sw, padding=pad, transpose=True)
+
+
+def _tc8_threshold(rng: np.random.Generator) -> Layer:
+    """Cin at the reverse-route threshold."""
+    layer = _tc8_mixed(rng, TC8_REVERSE)
+    layer.cin = TC8_REVERSE_MIN_CIN - int(rng.integers(0, 2))
+    return layer
+
+
+def _tc8_stride3(rng: np.random.Generator) -> Layer:
+    """Wide Cin, stride 3: rolling route."""
+    layer = _tc8_mixed(rng, TC8_REVERSE)
+    layer.sh, layer.sw = (3, layer.sw) if rng.random() < 0.5 else (layer.sh, 3)
+    return layer
+
+
+def _tc8_decoder(rng: np.random.Generator) -> Layer:
+    """Segmentation upsampler: stride 2, kernel 2 to 4."""
+    k = int(rng.integers(2, 5))
+    return Layer(_size(rng, 4, 16), _size(rng, 4, 16), _channels(rng, 8, 64), _channels(rng, 4, 32), k, k, 2, 2,
+                 padding=_padding(rng), transpose=True)
+
+
+def _tc8_clamp(rng: np.random.Generator) -> Layer:
+    """Clamps hit on both sides."""
+    layer = _tc8_mixed(rng, TC8_ROUTES[int(rng.integers(0, 2))])
+    low = -int(rng.integers(40, 120))
+    layer.knobs = {"activation": "NONE", "use_bias": bool(rng.random() < 0.7),
+                   "calibration_range": [-8.0, 8.0], "input_range": [-8.0, 8.0], "weight_gain": 4.0,
+                   "activation_min": low, "activation_max": int(rng.integers(low + 40, 120))}
+    return layer
+
+
+def _tc8_batch2(rng: np.random.Generator) -> Layer:
+    """Two images in one call."""
+    layer = _tc8_mixed(rng, TC8_ROUTES[int(rng.integers(0, 2))])
+    layer.n = 2
+    return layer
+
+
+def _tc8_odd_tail(rng: np.random.Generator) -> Layer:
+    """Odd Cout past the last vector."""
+    layer = _tc8_mixed(rng, TC8_ROUTES[int(rng.integers(0, 2))])
+    layer.cout = 4 * int(rng.integers(0, 8)) + int(rng.choice([1, 3]))
+    return layer
+
+
+# s8 edge categories, highest priority first.
+TC8_DRAWS: dict[str, Callable[[np.random.Generator], Layer]] = {
+    "threshold": _tc8_threshold, "stride3": _tc8_stride3, "decoder": _tc8_decoder, "clamp": _tc8_clamp,
+    "batch2": _tc8_batch2, "gaps": _tc16_gaps, "overlap": _tc16_overlap, "odd_tail": _tc8_odd_tail,
+    "unit_tail": _tc16_unit_tail,
+}
+TC8_EDGES = tuple(TC8_DRAWS)
+
+
+def _tc8_plan(n: int) -> list[str]:
+    """Mixed draws on both routes, then edges."""
+    count = edge_count(n, len(TC8_EDGES))
+    return [TC8_ROUTES[i % 2] for i in range(n - count)] + [TC8_EDGES[i % len(TC8_EDGES)] for i in range(count)]
+
+
+def _tc8_layer(rng: np.random.Generator, target: str) -> Layer:
+    """An s8 transpose conv layer."""
+    edge = TC8_DRAWS.get(target)
+    return edge(rng) if edge else _tc8_mixed(rng, target)
+
+
 def _tcf_rms(layer: Layer, data: float) -> float:
     """Output RMS for Glorot weights, |x| <= data."""
     taps = layer.cin * max(layer.kh / layer.sh, 1.0) * max(layer.kw / layer.sw, 1.0)
@@ -600,6 +697,10 @@ def _tc16_routes(mve: bool) -> list[str]:
     return [TC16_ROUTE]
 
 
+def _tc8_routes(mve: bool) -> list[str]:
+    return list(TC8_ROUTES)
+
+
 def _tcf_gen(dtype: str, stream: int) -> Generator:
     """Float transpose conv generator."""
     route = TCF_ROUTES[dtype]
@@ -727,6 +828,9 @@ GENERATORS: dict[tuple[str, str], Generator] = {
         "sm8", "SoftmaxFunctions/softmax.yaml", 8, lambda mve: [SOFTMAX_ROUTE], _sm_draw,
         lambda n: _edge_plan(n, SOFTMAX_ROUTE, SOFTMAX_EDGES), layerless=True,
     ),
+    ("TransposeConv", "S8"): Generator(
+        "tc8", "ConvolutionFunctions/transpose_conv.yaml", 9, _tc8_routes, _tc8_layer, _tc8_plan,
+    ),
 }
 # (op, dtype) keys, in draw order.
 OPS = tuple(GENERATORS)
@@ -779,7 +883,7 @@ def op_suites(op_filter: str | None = None, dtype_filter: str | None = None) -> 
 def layer_route(op: str, layer: Layer, mve: bool, dtype: str = "S8") -> str:
     """The wrapper's direct callee."""
     if op == "TransposeConv":
-        return TCF_ROUTES.get(dtype, TC16_ROUTE)
+        return tc8_route(layer) if dtype == "S8" else TCF_ROUTES.get(dtype, TC16_ROUTE)
     oh, ow = layer.out_hw()
     i, o = (1, layer.h, layer.w, layer.cin), (1, oh, ow, layer.cout)
     stride, dil, pad = (layer.sh, layer.sw), (layer.dh, layer.dw), layer.pads()
@@ -927,6 +1031,8 @@ def _descriptor(
         desc["tensor_dtypes"] = dict.fromkeys(("input", "output", "weights", "bias"), dtype)
         # Tolerance scales with the summed terms.
         desc["sum_bound"] = True
+    elif op == "TransposeConv" and dtype == "S8":
+        desc["filter_shape"] = [layer.kh, layer.kw, layer.cout, layer.cin]
     elif op == "TransposeConv":
         desc["filter_shape"] = [layer.kh, layer.kw, layer.cout, layer.cin]
         # Skip on kernels without the entry.
