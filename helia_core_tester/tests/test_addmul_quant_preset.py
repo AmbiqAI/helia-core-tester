@@ -96,9 +96,11 @@ def test_distinct_case_golden_changes_when_operand_quant_is_swapped(name: str, t
     if op == "add":
         assert (params["input_1_mult"], params["input_1_shift"]) != (params["input_2_mult"], params["input_2_shift"])
     assert np.array_equal(_simulate(op, params, a, b), golden)
-    # mul_scalar_right has 4 elements, two of which saturate either way.
+    # Count only moves the FVP's 1-LSB tolerance cannot absorb. mul_scalar_right has
+    # 4 elements, two of which saturate either way.
     for keys in _swaps(op):
-        assert np.mean(_simulate(op, _swapped(params, *keys), a, b) != golden) >= 0.5, keys
+        moved = np.abs(_simulate(op, _swapped(params, *keys), a, b).astype(np.int32) - golden) > 1
+        assert np.mean(moved) >= 0.5, keys
 
 
 @pytest.mark.parametrize("name", ["add_default_s8", "mul_default_s8"])
