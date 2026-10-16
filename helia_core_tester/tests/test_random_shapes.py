@@ -22,6 +22,7 @@ from helia_core_tester.hardware.generated_test_bridge import HW_CASE_SUFFIX
 SEEDS = (0, 1, 7, 12345)
 CONV, DW, DW16, TC16 = ("Convolve", "S8"), ("DepthwiseConv", "S8"), ("DepthwiseConv", "S16"), ("TransposeConv", "S16")
 TCF32, TCF16 = ("TransposeConv", "FP32"), ("TransposeConv", "FP16")
+SIG32, SIG16 = ("NNActivationFloat", "FP32"), ("NNActivationFloat", "FP16")
 
 
 def _layer(case: dict) -> rs.Layer:
@@ -51,7 +52,7 @@ def test_ops_draw_independently() -> None:
 
 
 @pytest.mark.parametrize(("op", "dtype", "picked"), [
-    (None, None, (CONV, DW, DW16, TC16, TCF32, TCF16)),
+    (None, None, (CONV, DW, DW16, TC16, TCF32, TCF16, SIG32, SIG16)),
     ("TransposeConv", "S16", (TC16,)),
     ("transpose_conv", None, (TC16,)),
     ("Convolve", None, (CONV,)),
@@ -74,7 +75,7 @@ def test_select_ops_matches_filters(op, dtype, picked) -> None:
     ("rs7_conv", None),
 ])
 def test_select_ops_refuses_unknown(op, dtype) -> None:
-    with pytest.raises(ValueError, match="TransposeConv S16, TransposeConv FP32, TransposeConv FP16$"):
+    with pytest.raises(ValueError, match="TransposeConv FP16, NNActivationFloat FP32, NNActivationFloat FP16$"):
         rs.select_ops(op, dtype)
 
 
@@ -117,6 +118,8 @@ def test_cases_fit_the_board(cpu: str, seed: int) -> None:
     workspace = rs.min_workspace(cpu)
     mve = cpu == "cortex-m55"
     for case in rs.sample_cases(50, seed, cpu):
+        if rs.GENERATORS[case["operator"], case["activation_dtype"]].layerless:
+            continue
         op, dtype, layer = case["operator"], case["activation_dtype"], _layer(case)
         assert min(layer.out_hw()) >= 1
         assert rs.footprint(op, layer, dtype) <= workspace
