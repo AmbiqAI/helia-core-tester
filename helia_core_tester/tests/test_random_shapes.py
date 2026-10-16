@@ -274,10 +274,10 @@ def test_sm8_hidden_set_pinned(cpu: str) -> None:
 
     import yaml
 
-    # Pinned when sm8 joined.
+    # Pinned when sm8 draws went libm.
     cases = rs.hidden_cases(8, SECRET.encode(), cpu, (SM8,))
     digest = hashlib.sha256(yaml.safe_dump_all(cases, sort_keys=False).encode()).hexdigest()
-    assert digest == "91348f667cc752cb2fa7ec08c4bb07e3b63bfc2eedd5f38f5550061f588f3da9"
+    assert digest == "c8a5cad600df0bbb3d515c9c4881059293296c4438569733f2e5bee5688dfb0e"
 
 
 def test_streams_and_tags_unique() -> None:
