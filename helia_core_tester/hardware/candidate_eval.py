@@ -457,7 +457,8 @@ def snapshot_hash(snap: Path) -> str:
 
 def _case_view(case: dict) -> dict:
     keys = ("case_id", "family", "timed_symbol", "excluded_by", "timing_lost", "baseline_cycles", "candidate_cycles",
-            "speedup", "delta_pct", "band_pct", "touched", "regression", "cycles_per_mac_candidate", "tolerance_fraction")
+            "speedup", "delta_pct", "band_pct", "touched", "regression", "cycles_per_mac_candidate", "cycles_per_op_candidate",
+            "tolerance_fraction")
     return {key: case.get(key) for key in keys}
 
 

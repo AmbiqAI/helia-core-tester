@@ -26,6 +26,9 @@ cpus:
         s16: {cycles_per_mac: 0.5, lanes: 4, basis: "per-channel s16 widens to 32-bit lanes: VMLA.S32 4 MACs per 2 cycles"}
         f16: {cycles_per_mac: 0.25, lanes: 8, basis: "VFMA.F16 8 MACs per 2 cycles"}
         f32: {cycles_per_mac: 0.5, lanes: 4, basis: "VFMA.F32 4 MACs per 2 cycles"}
+      # No MACs: cycles per element.
+      softmax:
+        s8: {cycles_per_op: 4.0, lanes: 4, basis: "4-lane sum and scale passes; exp from a 256-entry table"}
   cortex-m4:
     ops:
       conv: &m4_mac

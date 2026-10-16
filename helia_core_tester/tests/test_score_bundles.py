@@ -13,7 +13,7 @@ from helia_core_tester.hardware.score import FAMILY_KEYS, GATE_KEYS, kernel_comm
 
 FIELDS = ["case_id", "kernel_id", "comparison_passed", "median_cycles", "mad_cycles", "timed_symbol", "inner_symbol", "macs",
           "ARM_PMU_INST_RETIRED", "ARM_PMU_MVE_INST_RETIRED", "timing_status", "prepare_cycles", "hidden",
-          "tolerance_fraction"]
+          "tolerance_fraction", "ops"]
 CASES = {
     "conv_a": ("arm_convolve_wrapper_s8", 1000.0),
     "dw_a": ("arm_depthwise_conv_wrapper_s8", 2000.0),
@@ -449,6 +449,17 @@ def test_case_reports_peak_and_dtype(tmp_path):
     # 0.125 cycles/MAC peak over 10 measured.
     assert conv["pct_of_peak_candidate"] == pytest.approx(1.25)
     assert (conv["dtype"], conv["mlperf"], conv["weight"]) == ("s8", False, 1.0)
+
+
+def test_softmax_peak_uses_ops(tmp_path):
+    cases = {"sm_a": ("arm_softmax_s8", 4000.0)}
+    rows = {"sm_a": {"macs": "", "ops": 500}}
+    target = {"board": "apollo510_evb", "cpu": "cortex-m55", "placement": {"name": "tcm"}}
+    base = _bundle(tmp_path, "a", cases=cases, rows=rows, target=target)
+    case = _score([base], [_bundle(tmp_path, "b", cases=cases, rows=rows, target=target)])["cases"][0]
+    assert case["cycles_per_mac_candidate"] is None and case["cycles_per_op_candidate"] == 8.0
+    # 4.0 cycles/op ceiling over 8 measured.
+    assert case["pct_of_peak_candidate"] == pytest.approx(50.0)
 
 
 def test_focus_wins_cannot_hide_slowdowns(tmp_path):

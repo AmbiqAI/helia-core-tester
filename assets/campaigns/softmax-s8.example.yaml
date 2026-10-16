@@ -1,0 +1,34 @@
+# Campaign for `helia_core_tester agent-loop init`.
+name: softmax-s8
+board: apollo510_evb
+# bench-agent board id; defaults to board.
+bench_id: apollo510_evb
+# No weights: MRAM adds nothing.
+legs: [tcm]
+toolchains: [gcc, atfe]
+target:
+  op: Softmax
+  dtype: S8
+  # Optional: only these case ids.
+  case_ids: []
+kernels:
+  repo: ~/ns-cmsis-nn
+  ref: v7.43.0
+# Softmax weighs 0.02 in score; 0.0001 is about 0.5 % gain.
+min_score: 0.0001
+# Charged board evals for the agent.
+evals: 12
+# Last evals for cutting code size; 0 for none.
+# size_evals: 4
+# Claude --max-budget-usd.
+cost_usd: 25
+model: claude-opus-5-5
+# Random s8 softmax shapes, 0 for none.
+hidden_shapes: 12
+repeats: 3
+# Outside the workspace; init makes it 0700.
+secrets_dir: ~/hct-secrets/softmax-s8
+# Optional: seed the agent tree from a ledger diff.
+# start_patch: ~/campaigns/softmax-s8-run1/ledger/009.diff
+# start_notes: |
+#   - The MVE path recomputes exp per element.

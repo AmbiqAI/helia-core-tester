@@ -1,4 +1,4 @@
-"""Seeded held-out conv shapes."""
+"""Seeded held-out shapes."""
 
 from __future__ import annotations
 
@@ -498,6 +498,91 @@ def _float_knobs(rng: np.random.Generator, layer: Layer) -> dict[str, Any]:
     return knobs
 
 
+SOFTMAX_ROUTE = "arm_softmax_s8"
+# Elements per case: two 4096 rows.
+SOFTMAX_MAX = 8192
+# Row patterns softmax.py applies.
+SOFTMAX_PATTERNS = ("equal", "max_first", "max_last", "peak")
+
+
+def _sm_size(rng: np.random.Generator, lo: int, hi: int) -> int:
+    """Log-spread size; mostly off the 4 grid."""
+    top = int(round(2 ** rng.uniform(np.log2(lo), np.log2(hi))))
+    return _channels(rng, lo, max(lo, top))
+
+
+def _sm_knobs(rng: np.random.Generator, low: float, high: float, pattern: Optional[str] = None) -> dict[str, Any]:
+    """Steps per e-fold in [low, high]; sets the scale."""
+    span = 255.0 / float(np.exp(rng.uniform(np.log(low), np.log(high))))
+    lo = -span * float(rng.uniform(0.0, 1.0))
+    knobs: dict[str, Any] = {"calibration_range": [lo, lo + span]}
+    if pattern:
+        knobs["input_pattern"] = pattern
+    return knobs
+
+
+def _sm_mixed(rng: np.random.Generator) -> tuple[int, int, dict]:
+    """The normal mix; goldens keep a spread."""
+    rows, size = _sm_size(rng, 1, 64), _sm_size(rng, 2, 1024)
+    # Under 32 elements flatten by chance.
+    rows = max(rows, -(-32 // size))
+    pattern = str(rng.choice(SOFTMAX_PATTERNS[1:3])) if rng.random() < 0.2 else None
+    # Measured bounds for a non-flat golden.
+    return rows, size, _sm_knobs(rng, 9 + size / 100, min(2000.0, 25000 / size), pattern)
+
+
+def _sm_diff_min(rng: np.random.Generator) -> tuple[int, int, dict]:
+    """Coarse scale: most diffs below diff_min."""
+    pattern = "peak" if rng.random() < 0.5 else None
+    return _sm_size(rng, 1, 16), _sm_size(rng, 4, 512), _sm_knobs(rng, 0.1, 1.5, pattern)
+
+
+def _sm_pattern(rng: np.random.Generator) -> tuple[int, int, dict]:
+    """Equal rows, edge maxima or one peak."""
+    pattern = str(rng.choice(SOFTMAX_PATTERNS))
+    return _sm_size(rng, 1, 32), _sm_size(rng, 2, 1024), _sm_knobs(rng, 0.5, 3000.0, pattern)
+
+
+def _sm_long(rng: np.random.Generator) -> tuple[int, int, dict]:
+    """One or two rows of 3072+."""
+    # Equal or peak rows lose the sum.
+    pattern = str(rng.choice(SOFTMAX_PATTERNS[1:3])) if rng.random() < 0.3 else None
+    return int(rng.integers(1, 3)), _channels(rng, 3072, 4096), _sm_knobs(rng, 0.5, 300.0, pattern)
+
+
+def _sm_short(rng: np.random.Generator) -> tuple[int, int, dict]:
+    """Rows of 1-3, or vectors plus a tail."""
+    tail = int(rng.choice([1, 2, 3, 5, 6, 7, 9, 10, 11, 13, 14, 15]))
+    size = int(rng.integers(1, 4)) if rng.random() < 0.5 else 16 * int(rng.integers(0, 5)) + tail
+    return _sm_size(rng, 1, 64), size, _sm_knobs(rng, 0.5, 3000.0)
+
+
+# Softmax edge categories, highest priority first.
+SOFTMAX_DRAWS: dict[str, Callable[[np.random.Generator], tuple[int, int, dict]]] = {
+    "diff_min": _sm_diff_min, "pattern": _sm_pattern, "long_row": _sm_long, "short_row": _sm_short,
+}
+SOFTMAX_EDGES = tuple(SOFTMAX_DRAWS)
+
+
+def _sm_draw(rng: np.random.Generator, target: str) -> dict[str, Any]:
+    """An s8 softmax case body."""
+    for _ in range(MAX_TRIES):
+        rows, size, knobs = SOFTMAX_DRAWS.get(target, _sm_mixed)(rng)
+        if rows * size <= SOFTMAX_MAX:
+            break
+    else:
+        raise RuntimeError(f"No Softmax S8 shape for {target}")
+    case = {
+        "activation_dtype": "S8", "weight_dtype": "S8", "activation": "NONE",
+        "hint": {"call_style": "per_tensor"}, "input_shape": [1, rows, size],
+        "expected_route": SOFTMAX_ROUTE, **knobs,
+    }
+    if target in SOFTMAX_DRAWS:
+        # Saturated or flat by design.
+        case["degenerate_golden_reason"] = f"softmax {target} edge"
+    return case
+
+
 def _conv_routes(mve: bool) -> list[str]:
     return [r for r in CONV_ROUTES if mve or r not in MVE_CONV_ROUTES]
 
@@ -638,6 +723,10 @@ GENERATORS: dict[tuple[str, str], Generator] = {
     ("TransposeConv", "FP16"): _tcf_gen("FP16", 5),
     ("NNActivationFloat", "FP32"): _sig_gen("FP32", 6),
     ("NNActivationFloat", "FP16"): _sig_gen("FP16", 7),
+    ("Softmax", "S8"): Generator(
+        "sm8", "SoftmaxFunctions/softmax.yaml", 8, lambda mve: [SOFTMAX_ROUTE], _sm_draw,
+        lambda n: _edge_plan(n, SOFTMAX_ROUTE, SOFTMAX_EDGES), layerless=True,
+    ),
 }
 # (op, dtype) keys, in draw order.
 OPS = tuple(GENERATORS)
@@ -852,10 +941,10 @@ def sample_op(key: tuple[str, str], n: int, seed: int, cpu: str, workspace: int)
     """N descriptors for one generator, cycling routes."""
     mve = get_cpu_profile(cpu).has_mve
     gen, (op, dtype) = GENERATORS[key], key
-    routes, draw = gen.routes(mve), gen.draw
-    targets = gen.plan(n) if gen.plan else routes
     # One stream per op keeps ops independent.
     rng = np.random.default_rng([seed, gen.stream])
+    routes, draw = gen.routes(mve), gen.draw
+    targets = gen.plan(n) if gen.plan else routes
     cases = []
     for index in range(n):
         target = targets[index % len(targets)]
