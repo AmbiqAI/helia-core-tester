@@ -916,6 +916,8 @@ def footprint(op: str, layer: Layer, dtype: str = "S8") -> int:
         fdims = {"h": layer.kh, "w": layer.kw, "c": layer.cin, "n": layer.cout}
         scratch = TemplateContextBuilder.calculate_transpose_conv_buffer_size_max(
             idims, fdims, odims, output_dtype=dtype, stride_h=layer.sh, stride_w=layer.sw)
+        if dtype == "S8":
+            scratch = _tc8_scratch(layer, scratch)
         weights = layer.kh * layer.kw * layer.cin * layer.cout
     elif dtype == "S16":
         fdims = {"n": 1, "h": layer.kh, "w": layer.kw, "c": layer.cout}
@@ -934,6 +936,16 @@ def footprint(op: str, layer: Layer, dtype: str = "S8") -> int:
     used = _align_up(used, 16) + scratch
     return _align_up(used, 16) + item * layer.n * oh * ow * layer.cout
 
+
+def _tc8_scratch(layer: Layer, ctx: int) -> int:
+    """Mirror the bridge: ctx, reverse ctx, sums."""
+    oh, ow = layer.out_hw()
+    if tc8_route(layer) == TC8_REVERSE:
+        reverse = layer.cin * layer.kh * layer.kw * layer.cout
+    else:
+        # Rolling route still gets an output-sized ctx.
+        reverse = oh * ow * layer.cout * 4
+    return _align_up(_align_up(ctx, 16) + reverse, 16) + 4 * layer.cout
 
 def _float_footprint(layer: Layer, idims: dict, odims: dict, item: int) -> int:
     """Float transpose conv workspace bytes."""
