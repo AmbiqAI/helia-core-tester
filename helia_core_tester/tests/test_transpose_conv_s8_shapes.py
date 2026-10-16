@@ -85,11 +85,11 @@ def test_edge_categories_hold(seed: int) -> None:
 
 
 @pytest.mark.parametrize("seed", range(6))
-def test_fused_relu_has_no_clamp(seed: int) -> None:
-    # The kernel clamp would override an unfused ReLU.
+def test_relu_stays_fused(seed: int) -> None:
+    # No bias leaves ReLU unfused; a clamp replaces it.
     for case in rs.sample_cases(40, seed, ops=(TC8,)):
         if case["activation"] != "NONE":
-            assert "activation_min" not in case and "activation_max" not in case
+            assert case["use_bias"] and "activation_min" not in case and "activation_max" not in case
 
 
 @pytest.mark.parametrize("cpu", ["cortex-m55", "cortex-m4"])

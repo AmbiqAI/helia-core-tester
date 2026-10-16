@@ -1003,6 +1003,10 @@ def _quant(rng: np.random.Generator, op: str, layer: Layer, dtype: str = "S8") -
     # Dilated graphs keep the activation outside.
     act = act if roomy and (layer.dh, layer.dw) == (1, 1) else "NONE"
     knobs: dict[str, Any] = {"activation": act, "use_bias": bool(rng.random() < 0.85)}
+    # s8 tconv fuses ReLU only with a bias.
+    fused_tc8 = op == "TransposeConv" and dtype == "S8" and act != "NONE"
+    if fused_tc8:
+        knobs["use_bias"] = True
     calib = (-32.0, 32.0)
     if rng.random() < 0.5:
         # Off-centre ranges give non-zero offsets.
@@ -1021,8 +1025,7 @@ def _quant(rng: np.random.Generator, op: str, layer: Layer, dtype: str = "S8") -
     # Int16 fused activations clamp at zero.
     floor = 0 if dtype == "S16" and act != "NONE" else -qmax - 1
     span = qmax + 1 - floor
-    # Unfused s8 tconv ReLU: clamp would override it.
-    fused_tc8 = op == "TransposeConv" and dtype == "S8" and act != "NONE"
+    # An explicit clamp would replace the ReLU.
     if rng.random() < 0.25 and roomy and not fused_tc8:
         low = int(rng.integers(floor, floor + span // 2))
         knobs["activation_min"] = low
