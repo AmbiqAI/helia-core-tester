@@ -84,9 +84,17 @@ def test_edge_categories_hold(seed: int) -> None:
             assert cin == cout == 1
 
 
+@pytest.mark.parametrize("seed", range(6))
+def test_fused_relu_has_no_clamp(seed: int) -> None:
+    # The kernel clamp would override an unfused ReLU.
+    for case in rs.sample_cases(40, seed, ops=(TC8,)):
+        if case["activation"] != "NONE":
+            assert "activation_min" not in case and "activation_max" not in case
+
+
 @pytest.mark.parametrize("cpu", ["cortex-m55", "cortex-m4"])
 def test_tc8_hidden_set_pinned(cpu: str) -> None:
     # Pinned when tc8 joined; no MVE routes.
     cases = rs.hidden_cases(8, SECRET.encode(), cpu, (TC8,))
     digest = hashlib.sha256(yaml.safe_dump_all(cases, sort_keys=False).encode()).hexdigest()
-    assert digest == "8778cb655580b0e6c3b63e043a3ea0b0224e795596346449de29d7a78429db56"
+    assert digest == "2eaa99bfa58e6b1e5a1bba84fb8e98b64954160604dea17f7e7ee299088b80e5"

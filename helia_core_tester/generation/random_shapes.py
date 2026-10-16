@@ -414,14 +414,18 @@ def _tc8_mixed(rng: np.random.Generator, route: str) -> Layer:
     else:
         cin = _odd_channels(rng, 1, 48)
         sh, sw = int(rng.integers(1, 5)), int(rng.integers(1, 5))
-        if cin >= TC8_REVERSE_MIN_CIN and sh <= 2 and sw <= 2:
-            sw = int(rng.integers(3, 5))
     cout = _channels(rng, 1, 48)
     if rng.random() < 0.3:
         # 1D: kernel and stride on W.
-        return Layer(1, _size(rng, 4, 64), cin, cout, 1, int(rng.integers(1, 9)), 1, sw, padding=pad, transpose=True)
-    kh, kw = int(rng.integers(1, 7)), int(rng.integers(1, 7))
-    return Layer(_size(rng, 1, 16), _size(rng, 1, 16), cin, cout, kh, kw, sh, sw, padding=pad, transpose=True)
+        sh, kh, kw, h = 1, 1, int(rng.integers(1, 9)), 1
+        w = _size(rng, 4, 64)
+    else:
+        kh, kw = int(rng.integers(1, 7)), int(rng.integers(1, 7))
+        h, w = _size(rng, 1, 16), _size(rng, 1, 16)
+    if route == TC8_ROLLING and cin >= TC8_REVERSE_MIN_CIN and max(sh, sw) <= 2:
+        # Stride 3+ keeps wide Cin rolling.
+        sw = int(rng.integers(3, 5))
+    return Layer(h, w, cin, cout, kh, kw, sh, sw, padding=pad, transpose=True)
 
 
 def _tc8_threshold(rng: np.random.Generator) -> Layer:
@@ -451,7 +455,7 @@ def _tc8_clamp(rng: np.random.Generator) -> Layer:
     low = -int(rng.integers(40, 120))
     layer.knobs = {"activation": "NONE", "use_bias": bool(rng.random() < 0.7),
                    "calibration_range": [-8.0, 8.0], "input_range": [-8.0, 8.0], "weight_gain": 4.0,
-                   "activation_min": low, "activation_max": int(rng.integers(low + 40, 120))}
+                   "activation_min": low, "activation_max": int(rng.integers(max(low + 40, 1), 120))}
     return layer
 
 
@@ -998,7 +1002,9 @@ def _quant(rng: np.random.Generator, op: str, layer: Layer, dtype: str = "S8") -
     # Int16 fused activations clamp at zero.
     floor = 0 if dtype == "S16" and act != "NONE" else -qmax - 1
     span = qmax + 1 - floor
-    if rng.random() < 0.25 and roomy:
+    # Unfused s8 tconv ReLU: clamp would override it.
+    fused_tc8 = op == "TransposeConv" and dtype == "S8" and act != "NONE"
+    if rng.random() < 0.25 and roomy and not fused_tc8:
         low = int(rng.integers(floor, floor + span // 2))
         knobs["activation_min"] = low
         knobs["activation_max"] = int(rng.integers(low + span // 4, qmax + 1))
