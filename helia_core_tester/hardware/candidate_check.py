@@ -647,7 +647,7 @@ def check_command(
     tree: Path = typer.Argument(..., exists=True, file_okay=False, help="Candidate ns-cmsis-nn checkout."),
     base: str = typer.Option(..., "--base", help="Base commit SHA the candidate started from."),
     build_dir: Optional[Path] = typer.Option(
-        None, "--build-dir", exists=True, file_okay=False, help="Build of this tree; scan its kernel objects.",
+        None, "--build-dir", exists=True, file_okay=False, help="Board build of this tree; scan its kernel objects and linked image.",
     ),
     scan_deadline: float = typer.Option(SCAN_DEADLINE_S, "--scan-deadline", help="Seconds the gcc -E scan may take."),
 ) -> None:
