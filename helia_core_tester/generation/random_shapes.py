@@ -514,7 +514,7 @@ def _sm_size(rng: np.random.Generator, lo: int, hi: int) -> int:
 
 def _sm_knobs(rng: np.random.Generator, low: float, high: float, pattern: Optional[str] = None) -> dict[str, Any]:
     """Steps per e-fold in [low, high]; sets the scale."""
-    # libm, not numpy SIMD: same bits on every CPU.
+    # Reduce sensitivity to libm last-bit drift in serialized calibration spans.
     span = round(255.0 / math.exp(float(rng.uniform(math.log(low), math.log(high)))), 9)
     lo = -span * float(rng.uniform(0.0, 1.0))
     knobs: dict[str, Any] = {"calibration_range": [lo, lo + span]}
