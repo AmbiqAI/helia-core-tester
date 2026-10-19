@@ -585,7 +585,7 @@ def baseline_command(
     board: str = typer.Option(..., "--board", help="Board id from assets/hardware_boards.yaml."),
     out: Path = typer.Option(..., "--out", file_okay=False, resolve_path=True, help="New directory for bundles and baseline.json."),
     repeats: int = typer.Option(3, "--repeats", min=1, help="Runs to pool for the noise band."),
-    placement: str = typer.Option("tcm", "--placement", help="tcm or mram."),
+    placement: str = typer.Option("tcm", "--placement", help="tcm, mram or sram."),
     toolchain: str = typer.Option(DEFAULT_TOOLCHAIN, "--toolchain", help="gcc or atfe."),
     inline_asm: bool = typer.Option(True, "--inline-asm/--no-inline-asm", help="Requantize inline asm."),
     op: Optional[list[str]] = typer.Option(None, "--op", help="Only these operators (repeatable)."),

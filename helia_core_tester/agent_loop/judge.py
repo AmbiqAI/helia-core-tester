@@ -17,6 +17,7 @@ from helia_core_tester.hardware.candidate_eval import SNAPSHOT_TREES, VERDICT_EX
 from helia_core_tester.hardware.candidate_scan import run_binutil
 from helia_core_tester.hardware.session_runner import store_env_args
 
+from helia_core_tester.hardware.nsx_app import PLACEMENTS
 from helia_core_tester.hardware.toolchain import toolchain_spec
 
 from .config import Campaign
@@ -339,8 +340,8 @@ def _submit_locked(ws: Workspace, campaign: Campaign, facts: dict, ledger: Ledge
         legs: dict[str, Optional[dict]] = {}
         attempts: dict[str, int] = {}
         infra = False
-        # tcm first, so it gates mram.
-        order = sorted(campaign.runs, key=lambda r: (campaign.toolchains.index(r.toolchain), r.placement != "tcm"))
+        # tcm, mram, sram: each gates the next.
+        order = sorted(campaign.runs, key=lambda r: (campaign.toolchains.index(r.toolchain), PLACEMENTS.index(r.placement)))
         for run in order:
             reason = skip_reason(run, legs, campaign.runs)
             if reason:

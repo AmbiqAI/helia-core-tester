@@ -215,3 +215,25 @@ def test_c_mram_placement(tmp_path: Path) -> None:
     assert "pool limits refused" in result.stdout
     assert "pool fit placed" in result.stdout
     assert "derived placed" in result.stdout
+
+
+def test_c_sram_placement(tmp_path: Path) -> None:
+    binary = _build_mram_harness(tmp_path, "-DHCT_PLACEMENT_MRAM", "-DHCT_ACTIVATIONS_SRAM")
+    result = subprocess.run([str(binary)], capture_output=True, text=True)
+    assert result.returncode == 0, f"harness exit {result.returncode}: {result.stdout.strip().splitlines()[-1:]}"
+    # The MRAM checks still pass; each timed call also cleans the workspace.
+    assert "placed reused" in result.stdout
+    assert "workspace cold" in result.stdout
+
+
+def test_c_sram_activations_need_mram_weights(tmp_path: Path) -> None:
+    cc = shutil.which("cc")
+    if cc is None:
+        pytest.skip("host C compiler not available")
+    hardware = PROJECT_ROOT / "cmake" / "hardware"
+    result = subprocess.run(
+        [cc, "-std=c99", "-fsyntax-only", "-DHCT_HOST_ABS_ONLY", "-DHCT_ACTIVATIONS_SRAM", "-I", str(MRAM_STUB_DIR),
+         "-I", str(hardware), "-I", str(CMSIS_NN_ROOT / "Include"), str(hardware / "benchmark_server_session.c")],
+        capture_output=True, text=True,
+    )
+    assert result.returncode != 0 and "HCT_ACTIVATIONS_SRAM needs HCT_PLACEMENT_MRAM" in result.stderr

@@ -42,3 +42,10 @@ void SCB_InvalidateDCache_by_Addr(volatile void *addr, int32_t bytes)
     hct_mram_stub.last_invalidate = addr;
     hct_mram_stub.last_invalidate_bytes = bytes;
 }
+
+void SCB_CleanInvalidateDCache_by_Addr(volatile void *addr, int32_t bytes)
+{
+    hct_mram_stub.clean_invalidate_calls += 1u;
+    hct_mram_stub.last_clean_invalidate = addr;
+    hct_mram_stub.last_clean_invalidate_bytes = bytes;
+}

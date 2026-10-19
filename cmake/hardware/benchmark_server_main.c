@@ -18,7 +18,12 @@ typedef struct
     const void *address;
 } hct_symbol_ref_t;
 
+#if defined(HCT_ACTIVATIONS_SRAM)
+/* NSX's NOLOAD section in cacheable SSRAM. */
+__attribute__((aligned(16), section(".sram_bss"))) static uint8_t g_hct_workspace[HCT_SERVER_WORKSPACE_BYTES];
+#else
 __attribute__((aligned(16))) static uint8_t g_hct_workspace[HCT_SERVER_WORKSPACE_BYTES];
+#endif
 
 static const hct_symbol_ref_t g_hct_symbol_refs[] = {
 #include "kernel_symbol_refs.inc"

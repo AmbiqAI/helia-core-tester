@@ -97,6 +97,8 @@ class BlobAccumulator:
 # Mirror allocate_blob() MRAM row padding.
 MRAM_ROW_BYTES = 16
 MRAM_ROLES = frozenset({"weights", "bias"})
+# Placements that program weights and bias into MRAM.
+MRAM_PLACEMENTS = frozenset({"mram", "sram"})
 
 
 # cmake/hardware/benchmark_server_mram.h: placement pool and cache line.
@@ -105,8 +107,8 @@ MRAM_POOL_BYTES = 512 * 1024
 
 
 def mram_extent(role: str, byte_length: int, placement: str) -> int:
-    """MRAM pool bytes a blob takes (rows padded, from a cache line); 0 when it stays in SRAM."""
-    if placement != "mram" or role not in MRAM_ROLES:
+    """MRAM pool bytes a blob takes (rows padded, from a cache line); 0 when it stays in the workspace."""
+    if placement not in MRAM_PLACEMENTS or role not in MRAM_ROLES:
         return 0
     padded = -(-byte_length // MRAM_ROW_BYTES) * MRAM_ROW_BYTES
     return -(-padded // MRAM_LINE_BYTES) * MRAM_LINE_BYTES
@@ -127,7 +129,7 @@ def packed_fc_s8_size(k: int, n: int) -> int:
 
 def derived_mram_extent(kernel_id: int, blobs: Iterable[Any], placement: str) -> int:
     """MRAM pool bytes of the operand the adapter derives (hct_derived_operand_bytes()); 0 when none."""
-    if placement != "mram" or kernel_id != PACKED_FC_S8_KERNEL_ID:
+    if placement not in MRAM_PLACEMENTS or kernel_id != PACKED_FC_S8_KERNEL_ID:
         return 0
     weights = next((blob for blob in blobs if blob.role == "weights"), None)
     if weights is None:
@@ -139,7 +141,7 @@ def derived_mram_extent(kernel_id: int, blobs: Iterable[Any], placement: str) ->
 def staged_extent(role: str, byte_length: int, alignment: int, placement: str) -> tuple[int, int]:
     """Blob's firmware workspace length and alignment."""
     alignment = max(alignment, 1)
-    if placement != "mram" or role not in MRAM_ROLES:
+    if placement not in MRAM_PLACEMENTS or role not in MRAM_ROLES:
         return byte_length, alignment
     padded = -(-byte_length // MRAM_ROW_BYTES) * MRAM_ROW_BYTES
     return padded, max(alignment, MRAM_ROW_BYTES)
