@@ -217,6 +217,12 @@ DIRECT_ENTRIES.update(
         "arm_depthwise_conv_2x5_nhwc_f16": _fp16(
             "DepthwiseConv", "arm_depthwise_conv_f16_get_buffer_size", False, True
         ),
+        "arm_depthwise_conv_1d_k3_nhwc_f16_acc16": _fp16(
+            "DepthwiseConv", "arm_depthwise_conv_f16_get_buffer_size", False, True
+        ),
+        "arm_depthwise_conv_2x5_nhwc_f16_acc16": _fp16(
+            "DepthwiseConv", "arm_depthwise_conv_f16_get_buffer_size", False, True
+        ),
         "arm_depthwise_conv_cin1_nhwc_f16": _fp16(
             "DepthwiseConv", "arm_depthwise_conv_f16_get_buffer_size", False, True
         ),

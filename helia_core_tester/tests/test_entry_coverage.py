@@ -171,6 +171,29 @@ def test_derive_refuses_missing_headers(tmp_path: Path) -> None:
         module.public_entry_points(tmp_path)
 
 
+def _derive_module():
+    import importlib.util
+
+    script = Path(__file__).resolve().parents[2] / "scripts" / "derive_deployed_entry_points.py"
+    spec = importlib.util.spec_from_file_location("derive_entry_points", script)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_derive_counts_function_pointer_kernels() -> None:
+    """A kernel handed to a shared Eval as a pointer is deployed too; its string label, a call-shaped
+    string, a comment mention and a setup call are not counts of their own."""
+    source = """
+    // arm_comment_only_s8 is not called
+    return EvalArm(context, node, arm_strided_slice_s8, "arm_label_only_s8");
+    MicroPrintf("arm_printed_only_s8() is unsupported");
+    arm_convolve_wrapper_s8(ctx, &params);
+    int32_t size = arm_convolve_wrapper_s8_get_buffer_size(&dims);
+    """
+    assert _derive_module().kernel_references(source) == ["arm_convolve_wrapper_s8", "arm_strided_slice_s8"]
+
+
 def test_build_coverage_counts_a_wrapper_route(monkeypatch) -> None:
     monkeypatch.setattr(entry_coverage, "build_gate", lambda build_dir: True)
     coverage = build_coverage(PROJECT_ROOT, [_conv_s8_case()], build_dir=None)
