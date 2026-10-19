@@ -12,14 +12,29 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 from pathlib import Path
 
-from helia_core_tester.hardware.adapter_specs import timed_kernel_calls
+from helia_core_tester.generation.utils.temp_sizer_probe import _strip_comments
+from helia_core_tester.hardware.adapter_specs import is_setup_call, timed_kernel_calls
 from helia_core_tester.hardware.entry_coverage import DEPLOYED_PATH
 
 KERNELS_DIR = "tensorflow/lite/micro/kernels/helia"
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+# helia-rt also hands kernels to a shared Eval as function pointers (strided_slice.cc passes
+# arm_strided_slice_s8 to EvalArm), which no `name(` call site shows.
+_KERNEL_REF = re.compile(r"\b(arm_[a-z0-9_]+)\b(?!\s*\()")
+_STRING = re.compile(r'"(?:[^"\\\n]|\\.)*"')
+
+
+def kernel_references(source: str) -> list[str]:
+    """Kernels `source` calls or names as a function pointer, minus the setup calls. String
+    literals and comments do not count: helia-rt labels each pointer with its name in a string."""
+    code = _STRING.sub('""', _strip_comments(source))
+    pointers = {name for name in _KERNEL_REF.findall(code) if not is_setup_call(name)}
+    return sorted(set(timed_kernel_calls(code)) | pointers)
 
 
 def public_entry_points(include_dir: Path) -> list[str]:
@@ -49,7 +64,7 @@ def derive(helia_rt: Path, cmsis_nn: Path) -> dict:
     sources = sorted([*kernels.glob("*.cc"), *kernels.glob("*.h")])
     if not sources:
         raise SystemExit(f"No sources under {kernels}")
-    calls = timed_kernel_calls("\n".join(p.read_text(encoding="utf-8") for p in sources))
+    calls = kernel_references("\n".join(p.read_text(encoding="utf-8") for p in sources))
     # Support helpers (arm_memcpy_s8) are not public.
     public = set(public_entry_points(cmsis_nn / "Include"))
     return {
