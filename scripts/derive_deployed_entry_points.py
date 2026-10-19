@@ -34,7 +34,7 @@ def kernel_references(source: str) -> list[str]:
     literals and comments do not count: helia-rt labels each pointer with its name in a string."""
     code = _STRING.sub('""', _strip_comments(source))
     pointers = {name for name in _KERNEL_REF.findall(code) if not is_setup_call(name)}
-    return sorted(set(timed_kernel_calls(source)) | pointers)
+    return sorted(set(timed_kernel_calls(code)) | pointers)
 
 
 def public_entry_points(include_dir: Path) -> list[str]:

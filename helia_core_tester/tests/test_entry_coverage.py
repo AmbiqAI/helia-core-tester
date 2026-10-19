@@ -182,11 +182,12 @@ def _derive_module():
 
 
 def test_derive_counts_function_pointer_kernels() -> None:
-    """A kernel handed to a shared Eval as a pointer is deployed too; its string label, a comment
-    mention and a setup call are not counts of their own."""
+    """A kernel handed to a shared Eval as a pointer is deployed too; its string label, a call-shaped
+    string, a comment mention and a setup call are not counts of their own."""
     source = """
     // arm_comment_only_s8 is not called
     return EvalArm(context, node, arm_strided_slice_s8, "arm_label_only_s8");
+    MicroPrintf("arm_printed_only_s8() is unsupported");
     arm_convolve_wrapper_s8(ctx, &params);
     int32_t size = arm_convolve_wrapper_s8_get_buffer_size(&dims);
     """
