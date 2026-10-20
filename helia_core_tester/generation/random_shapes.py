@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import math
 import os
 import re
 import shutil
@@ -507,13 +508,14 @@ SOFTMAX_PATTERNS = ("equal", "max_first", "max_last", "peak")
 
 def _sm_size(rng: np.random.Generator, lo: int, hi: int) -> int:
     """Log-spread size; mostly off the 4 grid."""
-    top = int(round(2 ** rng.uniform(np.log2(lo), np.log2(hi))))
+    top = int(round(2 ** float(rng.uniform(math.log2(lo), math.log2(hi)))))
     return _channels(rng, lo, max(lo, top))
 
 
 def _sm_knobs(rng: np.random.Generator, low: float, high: float, pattern: Optional[str] = None) -> dict[str, Any]:
     """Steps per e-fold in [low, high]; sets the scale."""
-    span = 255.0 / float(np.exp(rng.uniform(np.log(low), np.log(high))))
+    # Reduce sensitivity to libm last-bit drift in serialized calibration spans.
+    span = round(255.0 / math.exp(float(rng.uniform(math.log(low), math.log(high)))), 9)
     lo = -span * float(rng.uniform(0.0, 1.0))
     knobs: dict[str, Any] = {"calibration_range": [lo, lo + span]}
     if pattern:
