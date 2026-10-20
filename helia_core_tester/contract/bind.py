@@ -26,8 +26,8 @@ ALIAS_GROUPS: tuple[tuple[str, ...], ...] = (
     ("output_data", "output", "dst"),
     ("filter_data", "kernel"),
     ("bias_data", "bias"),
-    ("input_1_data", "input_1_vect", "input1_data"),
-    ("input_2_data", "input_2_vect", "input2_data"),
+    ("input_1_data", "input_1_vect", "input1_data", "input_1"),
+    ("input_2_data", "input_2_vect", "input2_data", "input_2"),
     ("out_offset", "output_offset"),
 )
 _GROUP_OF = {name: group for group in ALIAS_GROUPS for name in group}

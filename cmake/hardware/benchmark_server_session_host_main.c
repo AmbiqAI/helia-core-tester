@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "arm_nn_types.h"
+#include "benchmark_server_adapters.h"
 #include "benchmark_server_session.h"
 
 static void write_u8(uint8_t *buffer, size_t *offset, uint8_t value)
@@ -148,6 +149,73 @@ static size_t encode_abs_meta(uint8_t *payload, const char *case_id, uint8_t mut
     write_u8(payload, &offset, mutable_data);
     write_u32(payload, &offset, 0u);
     return offset;
+}
+
+/* CASE_META with caller-chosen blob roles/dtypes, each backed by kInput's bytes. */
+static size_t encode_probe_meta(uint8_t *payload, const char *case_id, uint32_t kernel_id, uint16_t blob_count,
+                                const char *const *roles, const char *const *dtypes)
+{
+    size_t offset = 0u;
+    uint16_t index;
+    write_text(payload, &offset, case_id);
+    write_u32(payload, &offset, kernel_id);
+    write_u16(payload, &offset, 1u);
+    write_u8(payload, &offset, 1u);
+    write_i32(payload, &offset, 0);
+    write_u32(payload, &offset, 0u);
+    write_u32(payload, &offset, 0u);
+    write_u8(payload, &offset, 1u);
+    write_text(payload, &offset, "output_capacity_bytes");
+    write_i32(payload, &offset, (int32_t)sizeof(kInput));
+    write_u16(payload, &offset, blob_count);
+    for (index = 0u; index < blob_count; ++index)
+    {
+        write_u32(payload, &offset, (uint32_t)index + 1u);
+        write_text(payload, &offset, roles[index]);
+        write_text(payload, &offset, dtypes[index]);
+        write_u8(payload, &offset, 1u);
+        write_u32(payload, &offset, (uint32_t)sizeof(kInput));
+        write_u32(payload, &offset, 0u);
+        write_u32(payload, &offset, 0u);
+        write_u32(payload, &offset, 0u);
+        write_u32(payload, &offset, 0u);
+        write_u32(payload, &offset, 0u);
+        write_u32(payload, &offset, (uint32_t)sizeof(kInput));
+        write_u32(payload, &offset, 4u);
+        write_u32(payload, &offset, hctp_crc32((const uint8_t *)kInput, sizeof(kInput)));
+        write_u8(payload, &offset, 0u);
+    }
+    write_u32(payload, &offset, 0u);
+    return offset;
+}
+
+/* CASE_META on a copy of the session: the blob dtypes must match the kernel's contract. */
+static int probe_blob_contract(const hct_server_session_t *session, uint32_t kernel_id, uint16_t blob_count,
+                               const char *const *roles, const char *const *dtypes, hctp_status_t expected,
+                               const char *label)
+{
+    static hct_server_session_t probe;
+    static uint8_t payload[512];
+    hctp_status_t status;
+    memcpy(&probe, session, sizeof(probe));
+    probe.expected_kernel_id = kernel_id;
+    status = hct_server_session_accept_frame(
+        &probe, inbound_frame,
+        encode_frame(HCTP_MSG_CASE_META, probe.session_id, next_host_sequence, payload,
+                     encode_probe_meta(payload, probe.current_case_id, kernel_id, blob_count, roles, dtypes),
+                     inbound_frame));
+    if (status != expected)
+    {
+        printf("blob_contract %s status=%d expected=%d\n", label, (int)status, (int)expected);
+        return 1;
+    }
+    if (expected == HCTP_STATUS_OK && probe.state != HCT_SERVER_STATE_WAIT_BLOB_CHUNK)
+    {
+        printf("blob_contract %s state=%d\n", label, (int)probe.state);
+        return 1;
+    }
+    printf("blob_contract %s ok\n", label);
+    return 0;
 }
 
 /* Answer blob requests until CASE_READY. */
@@ -345,6 +413,34 @@ int main(void)
     if (hct_server_session_accept_frame(&session, inbound_frame, encode_frame(HCTP_MSG_SESSION_PLAN, session.session_id, next_host_sequence++, inbound_payload, offset, inbound_frame)) != HCTP_STATUS_OK) return 13;
     if (drain_single_message(&session, HCTP_MSG_REQUEST_CASE, outbound_payload, &outbound_length) != 0) return 14;
 
+    {
+        static const char *const kInput0[] = {"input_0"};
+        static const char *const kInputMeta[] = {"input_0", "meta_0"};
+        static const char *const kTwoInput0[] = {"input_0", "input_0"};
+        static const char *const kInputWeights[] = {"input_0", "weights"};
+        static const char *const kS8[] = {"S8"};
+        static const char *const kS16[] = {"S16"};
+        static const char *const kS8S8[] = {"S8", "S8"};
+        static const char *const kS8S32[] = {"S8", "S32"};
+        static const char *const kS16S32[] = {"S16", "S32"};
+        static const char *const kConv[] = {"input_0", "weights", "bias"};
+        static const char *const kConvS64[] = {"S16", "S8", "S64"};
+        static const char *const kConvS32[] = {"S16", "S8", "S32"};
+        static const char *const kConvS16[] = {"S16", "S8", "S16"};
+        if (probe_blob_contract(&session, HCT_KERNEL_ID_STRIDED_SLICE_S16, 2u, kInputMeta, kS16S32, HCTP_STATUS_OK, "strided_slice_s16_accepts_s16")) return 80;
+        if (probe_blob_contract(&session, HCT_KERNEL_ID_STRIDED_SLICE_S16, 2u, kInputMeta, kS8S32, HCTP_STATUS_INVALID_ARGUMENT, "strided_slice_s16_rejects_s8")) return 81;
+        if (probe_blob_contract(&session, HCT_KERNEL_ID_STRIDED_SLICE_S32, 2u, kInputMeta, kS8S32, HCTP_STATUS_INVALID_ARGUMENT, "strided_slice_s32_rejects_s8")) return 82;
+        if (probe_blob_contract(&session, HCT_KERNEL_ID_STRIDED_SLICE_S8, 2u, kInputMeta, kS8S8, HCTP_STATUS_INVALID_ARGUMENT, "strided_slice_meta_rejects_s8")) return 83;
+        if (probe_blob_contract(&session, 1u, 1u, kInput0, kS16, HCTP_STATUS_INVALID_ARGUMENT, "abs_s8_rejects_s16")) return 84;
+        if (probe_blob_contract(&session, 1u, 2u, kInputWeights, kS8S8, HCTP_STATUS_INVALID_ARGUMENT, "abs_s8_rejects_extra_role")) return 85;
+        if (probe_blob_contract(&session, 1u, 2u, kTwoInput0, kS8S8, HCTP_STATUS_INVALID_ARGUMENT, "abs_s8_rejects_duplicate_role")) return 86;
+        if (probe_blob_contract(&session, 0xFFFFu, 1u, kInput0, kS8, HCTP_STATUS_INVALID_ARGUMENT, "unknown_kernel_rejected")) return 87;
+        /* arm_convolve_wrapper_s16's bias is cmsis_nn_bias_data: S64 or S32, nothing else. */
+        if (probe_blob_contract(&session, HCT_KERNEL_ID_CONVOLVE_S16, 3u, kConv, kConvS64, HCTP_STATUS_OK, "convolve_s16_accepts_s64_bias")) return 88;
+        if (probe_blob_contract(&session, HCT_KERNEL_ID_CONVOLVE_S16, 3u, kConv, kConvS32, HCTP_STATUS_OK, "convolve_s16_accepts_s32_bias")) return 89;
+        if (probe_blob_contract(&session, HCT_KERNEL_ID_CONVOLVE_S16, 3u, kConv, kConvS16, HCTP_STATUS_INVALID_ARGUMENT, "convolve_s16_rejects_s16_bias")) return 90;
+        if (probe_blob_contract(&session, HCT_KERNEL_ID_DEPTHWISE_CONV_S16, 3u, kConv, kConvS32, HCTP_STATUS_INVALID_ARGUMENT, "depthwise_conv_s16_rejects_s32_bias")) return 91;
+    }
     if (send_frame(&session, HCTP_MSG_CASE_META, inbound_payload, encode_abs_meta(inbound_payload, "abs_default_s8_stream_demo", 0u, 64u)) != HCTP_STATUS_OK) return 15;
 
     /* Regression: a BLOB_CHUNK whose declared length is near UINT32_MAX must be refused

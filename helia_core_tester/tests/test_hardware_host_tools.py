@@ -341,4 +341,4 @@ def test_linker_script_missing_names_the_fix(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("compiler", [None, "/nonexistent/arm-none-eabi-gcc"])
 def test_missing_gcc_reads_null(compiler) -> None:
-    assert toolchain.gcc_version(compiler) is None
+    assert toolchain.compiler_version(compiler) is None

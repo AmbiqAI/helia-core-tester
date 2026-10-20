@@ -82,11 +82,12 @@ def check_command(workspace: Path = WS_OPT) -> None:
 def disasm_command(
     function: str = typer.Argument("", help="Kernel function name."),
     workspace: Path = WS_OPT,
+    toolchain: str = typer.Option("", "--toolchain", help="gcc or atfe build (default: first)."),
 ) -> None:
     """Disassemble one function from the check build (agent wrapper)."""
     from .judge import disasm
 
-    raise typer.Exit(disasm(_ws(workspace), function))
+    raise typer.Exit(disasm(_ws(workspace), function, toolchain))
 
 
 @agent_loop_app.command("launch")
@@ -119,7 +120,8 @@ def status_command(
         typer.echo(json.dumps(info, indent=2))
         return
     state = "running" if info["running"] else "not running"
-    typer.echo(f"{info['campaign']}: {info['evals_used']}/{info['evals']} evals, agent {state} (pid {info['pid']})")
+    typer.echo(f"{info['campaign']}: {info['evals_used']}/{info['evals']} evals, {info['phase']}, "
+               f"agent {state} (pid {info['pid']})")
     cost = info["cost"]
     if cost["finished"]:
         typer.echo(f"finished {cost['subtype']}: ${cost['cost_usd']}, {cost['turns']} turns, {cost['denials']} denials")
@@ -128,9 +130,38 @@ def status_command(
         charged = "" if row["charged"] else " (free)"
         means = ", ".join(f"{leg} {fam} {g:.3f}" for leg, fams in row["geomean"].items()
                           for fam, g in fams.items() if g is not None)
-        typer.echo(f"  {row['eval']} {row['verdict']:<14}{charged} size {row['size_delta']} {means}")
+        gains = row.get("toolchains") or {}
+        size = "" if gains else f" size {row['size_delta']}"
+        skips = f" skipped {', '.join(row['skipped'])}" if row.get("skipped") else ""
+        typer.echo(f"  {row['eval']} {row['verdict']:<14}{charged}{size} {means}{skips}")
+        for name, gain in gains.items():
+            typer.echo(f"      {name}: geomean {gain['geomean']}, size {gain['size_delta']}")
+    _print_passes(info["passes"])
     for line in info["recent"]:
         typer.echo(f"  {line}")
+
+
+MARKS = ("fastest", "smallest", "pareto")
+
+
+def _print_passes(passes: list[dict]) -> None:
+    """Speed and size of each pass."""
+    if not passes:
+        return
+    names = list(passes[0]["toolchains"])
+    head = "".join(f"{name + ' speed':>12}{name + ' bytes':>12}" for name in names)
+    typer.echo("passing evals (pick one to PR):")
+    typer.echo(f"  eval{head}  marks")
+    for pick in passes:
+        cols = ""
+        for name in names:
+            gain = pick["toolchains"].get(name) or {}
+            speed, size = gain.get("geomean"), gain.get("size_delta")
+            cols += f"{f'{speed:.2f}x' if speed is not None else '?':>12}"
+            cols += f"{f'{size:+,}' if isinstance(size, int) else '?':>12}"
+        marks = " ".join(m for m in MARKS if pick[m])
+        typer.echo(f"  {pick['eval']:<4}{cols}  {marks}".rstrip())
+        typer.echo(f"      diff {pick['diff']}")
 
 
 @agent_loop_app.command("stop")

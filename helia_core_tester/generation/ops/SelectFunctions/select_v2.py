@@ -15,6 +15,8 @@ class OpSelectV2(OperationBase):
 
     def _select_kernel(self) -> Dict[str, str]:
         activation_dtype = self.desc.get("activation_dtype", "S8")
+        if activation_dtype == "S32":
+            return {"kernel_fn": "arm_select_v2_s32", "c_type": "int32_t", "np_dtype": "int32", "qmin": -(2**31), "qmax": 2**31 - 1}
         if activation_dtype == "S16":
             return {"kernel_fn": "arm_select_v2_s16", "c_type": "int16_t", "np_dtype": "int16", "qmin": -32768, "qmax": 32767}
         return {"kernel_fn": "arm_select_v2_s8", "c_type": "int8_t", "np_dtype": "int8", "qmin": -128, "qmax": 127}
@@ -49,11 +51,17 @@ class OpSelectV2(OperationBase):
         rank = len(output_shape)
 
         rng = self._seeded_rng()
-        np_dtype = np.int16 if ki["np_dtype"] == "int16" else np.int8
+        np_dtype = np.dtype(ki["np_dtype"])
 
         condition = rng.integers(0, 2, size=condition_shape, dtype=np.bool_)
-        x_data = rng.integers(ki["qmin"], ki["qmax"] + 1, size=x_shape, dtype=np_dtype)
-        y_data = rng.integers(ki["qmin"], ki["qmax"] + 1, size=y_shape, dtype=np_dtype)
+        if ki["np_dtype"] == "int32":
+            from helia_core_tester.generation.ops._shared.int32_data import sample_int32
+
+            x_data = sample_int32(rng, x_shape)
+            y_data = sample_int32(rng, y_shape, phase=1)
+        else:
+            x_data = rng.integers(ki["qmin"], ki["qmax"] + 1, size=x_shape, dtype=np_dtype)
+            y_data = rng.integers(ki["qmin"], ki["qmax"] + 1, size=y_shape, dtype=np_dtype)
 
         output_data = self.reference_golden(ReferenceCall(
             "select_v2", {"unused": 0}, {"condition": condition.astype(np.uint8), "x": x_data, "y": y_data},

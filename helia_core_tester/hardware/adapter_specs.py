@@ -313,18 +313,32 @@ static arm_cmsis_nn_status run_convolve_once(hct_server_session_t *session)
     {
         /* arm_convolve_wrapper_s16 needs no weight-sum precompute (unlike S8's
          * wrapper, whose bias must be pre-adjusted via arm_convolve_weight_sum())
-         * and its bias is a cmsis_nn_bias_data struct wrapping a plain int64_t payload
-         * (see arm_nnfunctions.h), not S8's raw int32_t* bias pointer. */
-        cmsis_nn_bias_data bias_data = {blob_ptr(session, bias), false};
+         * and its bias is a cmsis_nn_bias_data struct whose payload is int64_t or,
+         * with is_int32_bias set, int32_t (see arm_nnfunctions.h). The blob's dtype
+         * (S64 or S32, enforced by the CASE_META contract) selects the payload width. */
+        cmsis_nn_bias_data bias_data = {blob_ptr(session, bias), bias->dtype == HCT_DTYPE_S32};
+        size_t bias_elem_size;
         int32_t required_scratch = arm_convolve_wrapper_s16_get_buffer_size(&conv_params, &input_dims, &filter_dims, &output_dims);
         uint32_t operand_bytes_needed;
+        if (bias->dtype == HCT_DTYPE_S32)
+        {
+            bias_elem_size = sizeof(int32_t);
+        }
+        else if (bias->dtype == HCT_DTYPE_S64)
+        {
+            bias_elem_size = sizeof(int64_t);
+        }
+        else
+        {
+            return ARM_CMSIS_NN_ARG_ERROR;
+        }
         if (required_scratch < 0 || (uint32_t)required_scratch > session->scratch_bytes)
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
         if (!hct_checked_dims_bytes(&input_dims, sizeof(int16_t), input->byte_length, &operand_bytes_needed) ||
             !hct_checked_dims_bytes(&filter_dims, sizeof(int8_t), weights->byte_length, &operand_bytes_needed) ||
-            !hct_checked_count_bytes(bias_dims.c, sizeof(int64_t), bias->byte_length, &operand_bytes_needed))
+            !hct_checked_count_bytes(bias_dims.c, bias_elem_size, bias->byte_length, &operand_bytes_needed))
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
@@ -1811,6 +1825,7 @@ static arm_cmsis_nn_status run_transpose_conv_once(hct_server_session_t *session
     uint32_t output_ctx_offset;
     int32_t required_ctx;
     int32_t required_output_ctx;
+    bool is_float;
 
     if (input == NULL || weights == NULL)
     {
@@ -1829,7 +1844,11 @@ static arm_cmsis_nn_status run_transpose_conv_once(hct_server_session_t *session
     output_dims.h = session->output_h;
     output_dims.w = session->output_w;
     output_dims.c = session->output_c;
-    if (input_dims.n != 1 || output_dims.n != 1 || output_dims.h <= 0 || output_dims.w <= 0 || output_dims.c <= 0)
+    is_float = (session->expected_kernel_id == HCT_KERNEL_ID_TRANSPOSE_CONV_F32 ||
+                session->expected_kernel_id == HCT_KERNEL_ID_TRANSPOSE_CONV_F16);
+    /* Float entries loop over batches. */
+    if ((is_float ? (input_dims.n < 1 || output_dims.n != input_dims.n) : (input_dims.n != 1 || output_dims.n != 1)) ||
+        output_dims.h <= 0 || output_dims.w <= 0 || output_dims.c <= 0)
     {
         return ARM_CMSIS_NN_ARG_ERROR;
     }
@@ -1843,8 +1862,7 @@ static arm_cmsis_nn_status run_transpose_conv_once(hct_server_session_t *session
         bias_dims.c = (int32_t)bias->dimensions[0];
     }
 
-    if (session->expected_kernel_id == HCT_KERNEL_ID_TRANSPOSE_CONV_F32 ||
-        session->expected_kernel_id == HCT_KERNEL_ID_TRANSPOSE_CONV_F16)
+    if (is_float)
     {
         const bool is_f16 = (session->expected_kernel_id == HCT_KERNEL_ID_TRANSPOSE_CONV_F16);
         const uint32_t element_size = is_f16 ? (uint32_t)sizeof(float16_t) : (uint32_t)sizeof(float);
@@ -2060,6 +2078,118 @@ static arm_cmsis_nn_status run_transpose_conv_once(hct_server_session_t *session
                                              &output_dims,
                                              (int8_t *)hct_output_ptr(session));
     }
+}'''
+
+
+_RUN_TRANSPOSE_CONV_S16_ONCE = '''\
+/* Direct A16W8 entry; no wrapper. */
+static arm_cmsis_nn_status run_transpose_conv_s16_once(hct_server_session_t *session)
+{
+    hct_server_blob_t *input = find_blob_by_role(session, HCT_BLOB_ROLE_INPUT_0);
+    hct_server_blob_t *weights = find_blob_by_role(session, HCT_BLOB_ROLE_WEIGHTS);
+    hct_server_blob_t *bias = find_blob_by_role(session, HCT_BLOB_ROLE_BIAS);
+    hct_server_blob_t *multiplier = find_blob_by_role(session, HCT_BLOB_ROLE_MULTIPLIER);
+    hct_server_blob_t *shift = find_blob_by_role(session, HCT_BLOB_ROLE_SHIFT);
+    cmsis_nn_context ctx;
+    cmsis_nn_context output_ctx;
+    cmsis_nn_transpose_conv_params params;
+    cmsis_nn_per_channel_quant_params quant_params;
+    cmsis_nn_dims input_dims;
+    cmsis_nn_dims filter_dims;
+    cmsis_nn_dims bias_dims;
+    cmsis_nn_dims output_dims;
+    uint32_t ctx_offset;
+    uint32_t ctx_end;
+    int32_t required_ctx;
+
+    /* Absent from older kernels. */
+    if (arm_transpose_conv_s16 == NULL || arm_transpose_conv_s16_get_buffer_size == NULL)
+    {
+        return ARM_CMSIS_NN_NO_IMPL_ERROR;
+    }
+    if (input == NULL || weights == NULL || multiplier == NULL || shift == NULL)
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
+
+    input_dims.n = (int32_t)input->dimensions[0];
+    input_dims.h = (int32_t)input->dimensions[1];
+    input_dims.w = (int32_t)input->dimensions[2];
+    input_dims.c = (int32_t)input->dimensions[3];
+    filter_dims.n = (int32_t)weights->dimensions[0];
+    filter_dims.h = (int32_t)weights->dimensions[1];
+    filter_dims.w = (int32_t)weights->dimensions[2];
+    filter_dims.c = (int32_t)weights->dimensions[3];
+    output_dims.n = (session->output_n > 0) ? session->output_n : 1;
+    output_dims.h = session->output_h;
+    output_dims.w = session->output_w;
+    output_dims.c = session->output_c;
+    if (input_dims.n < 1 || output_dims.n != input_dims.n || output_dims.h <= 0 || output_dims.w <= 0 || output_dims.c <= 0)
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
+    bias_dims.n = 1;
+    bias_dims.h = 1;
+    bias_dims.w = 1;
+    bias_dims.c = output_dims.c;
+
+    if (!hct_checked_dims_bytes(&output_dims, sizeof(int16_t),
+                                session->output_capacity_bytes, &session->output_length))
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
+    {
+        uint32_t operand_bytes_needed;
+        if (!hct_checked_dims_bytes(&input_dims, sizeof(int16_t), input->byte_length, &operand_bytes_needed) ||
+            !hct_checked_dims_bytes(&filter_dims, sizeof(int8_t), weights->byte_length, &operand_bytes_needed) ||
+            (bias != NULL && !hct_checked_count_bytes(bias_dims.c, sizeof(int64_t), bias->byte_length, &operand_bytes_needed)) ||
+            !hct_checked_count_bytes(output_dims.c, sizeof(int32_t), multiplier->byte_length, &operand_bytes_needed) ||
+            !hct_checked_count_bytes(output_dims.c, sizeof(int32_t), shift->byte_length, &operand_bytes_needed))
+        {
+            return ARM_CMSIS_NN_ARG_ERROR;
+        }
+    }
+
+    params.input_offset = session->input_offset;
+    params.output_offset = session->output_offset;
+    params.stride.w = session->stride_w;
+    params.stride.h = session->stride_h;
+    params.dilation.w = session->dilation_w;
+    params.dilation.h = session->dilation_h;
+    params.padding.w = session->pad_w;
+    params.padding.h = session->pad_h;
+    params.padding_offsets.w = session->pad_offset_w;
+    params.padding_offsets.h = session->pad_offset_h;
+    params.activation.min = session->activation_min;
+    params.activation.max = session->activation_max;
+    quant_params.multiplier = (int32_t *)blob_ptr(session, multiplier);
+    quant_params.shift = (int32_t *)blob_ptr(session, shift);
+
+    /* The kernel's own sizer owns scratch. */
+    required_ctx = arm_transpose_conv_s16_get_buffer_size(&params, &input_dims, &filter_dims, &output_dims);
+    if (required_ctx < 0 ||
+        !hct_checked_aligned_range(0u, 16u, (uint32_t)required_ctx, session->scratch_bytes, &ctx_offset, &ctx_end))
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
+    ctx.buf = (required_ctx > 0) ? &session->workspace[session->scratch_offset + ctx_offset] : NULL;
+    ctx.size = required_ctx;
+    /* The kernel never reads output_ctx. */
+    output_ctx.buf = NULL;
+    output_ctx.size = 0;
+
+    return arm_transpose_conv_s16(&ctx,
+                                  &output_ctx,
+                                  &params,
+                                  &quant_params,
+                                  &input_dims,
+                                  (const int16_t *)blob_ptr(session, input),
+                                  &filter_dims,
+                                  (const int8_t *)blob_ptr(session, weights),
+                                  &bias_dims,
+                                  (bias != NULL) ? (const int64_t *)blob_ptr(session, bias) : NULL,
+                                  &output_dims,
+                                  (int16_t *)hct_output_ptr(session));
 }'''
 
 
@@ -2536,11 +2666,19 @@ static arm_cmsis_nn_status run_fully_connected_once(hct_server_session_t *sessio
                 {
                     return ARM_CMSIS_NN_ARG_ERROR;
                 }
+                if (session->deriving != 0u)
+                {
+                    session->derived_source = (const uint8_t *)stream;
+                    session->derived_built = (uint32_t)packed_size;
+                    return ARM_CMSIS_NN_SUCCESS;
+                }
+                /* MRAM placement reads the copy programmed from this stream (#377);
+                 * the pack above still runs so prepare_cycles matches TCM. */
                 return arm_fully_connected_per_channel_packed_s8(&fc_params,
                                                                  &input_dims,
                                                                  (const int8_t *)blob_ptr(session, input),
                                                                  &filter_dims,
-                                                                 stream,
+                                                                 (session->derived != NULL) ? (const int8_t *)session->derived : stream,
                                                                  &output_dims,
                                                                  (int8_t *)hct_output_ptr(session));
             }
@@ -4699,19 +4837,40 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             params.shape = shape;
             params.seq_dim = meta[1];
             params.batch_dim = meta[2];
+            if (params.seq_dim < 0 || params.seq_dim >= rank || params.batch_dim < 0 ||
+                params.batch_dim >= rank || params.seq_dim == params.batch_dim)
+            {
+                return ARM_CMSIS_NN_ARG_ERROR;
+            }
             session->output_length = input0->byte_length;
             if (session->output_length > session->output_capacity_bytes)
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
             {
-                /* seq_lengths (input1) sizing is batch_dim-relative and not independently
-                 * confirmed here -- only the primary operand (input0) is bounds-checked. */
                 uint32_t operand_bytes_needed;
                 if (!hct_checked_shape_bytes(shape, rank, hct_dtype_size_bytes(input0->dtype),
                                              input0->byte_length, &operand_bytes_needed))
                 {
                     return ARM_CMSIS_NN_ARG_ERROR;
+                }
+            }
+            {
+                /* The kernel reads seq_lengths[coord[batch_dim]] and reverses up to that
+                 * many steps along seq_dim, so both must stay inside their tensors. */
+                const int32_t *seq_lengths = (const int32_t *)blob_ptr(session, input1);
+                int32_t batch;
+                if (input1->dtype != HCT_DTYPE_S32 ||
+                    input1->byte_length / sizeof(int32_t) < (uint32_t)shape[params.batch_dim])
+                {
+                    return ARM_CMSIS_NN_ARG_ERROR;
+                }
+                for (batch = 0; batch < shape[params.batch_dim]; ++batch)
+                {
+                    if (seq_lengths[batch] < 0 || seq_lengths[batch] > shape[params.seq_dim])
+                    {
+                        return ARM_CMSIS_NN_ARG_ERROR;
+                    }
                 }
             }
             if (session->expected_kernel_id == HCT_KERNEL_ID_REVERSE_SEQUENCE_S16)
@@ -5522,6 +5681,19 @@ FIRMWARE_ADAPTERS: tuple[FirmwareAdapterSpec, ...] = (
         c_body=_RUN_TRANSPOSE_CONV_ONCE,
     ),
     FirmwareAdapterSpec(
+        label="ConvolutionFunctions/TransposeConv S16",
+        function_name="run_transpose_conv_s16_once",
+        kernel_ids=("HCT_KERNEL_ID_TRANSPOSE_CONV_S16",),
+        guard="HCT_HOST_ABS_ONLY",
+        scalar_fields=(
+            "stride_h", "stride_w", "pad_h", "pad_w", "pad_offset_h", "pad_offset_w",
+            "output_n", "output_h", "output_w", "output_c",
+            "dilation_h", "dilation_w",
+            "input_offset", "output_offset", "activation_min", "activation_max",
+        ),
+        c_body=_RUN_TRANSPOSE_CONV_S16_ONCE,
+    ),
+    FirmwareAdapterSpec(
         label="SoftmaxFunctions/Softmax,SoftmaxS8S16",
         function_name="run_softmax_once",
         kernel_ids=(
@@ -5799,7 +5971,24 @@ arm_cmsis_nn_status arm_fully_connected_per_channel_packed_s8(const cmsis_nn_fc_
                                                               const cmsis_nn_dims *filter_dims,
                                                               const int8_t *packed_data,
                                                               const cmsis_nn_dims *output_dims,
-                                                              int8_t *output_data) __attribute__((weak));"""
+                                                              int8_t *output_data) __attribute__((weak));
+/* Entries missing before ns-cmsis-nn#750. */
+arm_cmsis_nn_status arm_transpose_conv_s16(const cmsis_nn_context *ctx,
+                                           const cmsis_nn_context *output_ctx,
+                                           const cmsis_nn_transpose_conv_params *transpose_conv_params,
+                                           const cmsis_nn_per_channel_quant_params *quant_params,
+                                           const cmsis_nn_dims *input_dims,
+                                           const int16_t *input_data,
+                                           const cmsis_nn_dims *filter_dims,
+                                           const int8_t *filter_data,
+                                           const cmsis_nn_dims *bias_dims,
+                                           const int64_t *bias_data,
+                                           const cmsis_nn_dims *output_dims,
+                                           int16_t *output_data) __attribute__((weak));
+int32_t arm_transpose_conv_s16_get_buffer_size(const cmsis_nn_transpose_conv_params *transposed_conv_params,
+                                               const cmsis_nn_dims *input_dims,
+                                               const cmsis_nn_dims *filter_dims,
+                                               const cmsis_nn_dims *out_dims) __attribute__((weak));"""
 
 
 def _template_environment(globals_: dict[str, Callable]) -> jinja2.Environment:
@@ -5904,9 +6093,35 @@ def _render_dispatch() -> list[str]:
         "            return ARM_CMSIS_NN_ARG_ERROR;",
         "    }",
         "}",
+        "",
+        _DERIVED_OPERAND_BYTES,
         "#endif",
     ])
     return lines
+
+
+# Read-only operands an adapter derives from its blobs: the packed FC stream. Sized from
+# the CASE_META weights dims so plan_mram() counts it before any blob arrives (#377).
+_DERIVED_OPERAND_BYTES = """uint32_t hct_derived_operand_bytes(hct_server_session_t *session)
+{
+    if (session->expected_kernel_id == HCT_KERNEL_ID_FULLY_CONNECTED_PER_CHANNEL_PACKED_S8)
+    {
+        const hct_server_blob_t *weights = find_blob_by_role(session, HCT_BLOB_ROLE_WEIGHTS);
+        cmsis_nn_dims filter_dims;
+        int32_t packed_size;
+        if (weights == NULL || arm_fully_connected_per_channel_packed_s8_get_packed_size == NULL)
+        {
+            return 0u;
+        }
+        filter_dims.n = (int32_t)weights->dimensions[1];
+        filter_dims.h = 1;
+        filter_dims.w = 1;
+        filter_dims.c = (int32_t)weights->dimensions[0];
+        packed_size = arm_fully_connected_per_channel_packed_s8_get_packed_size(&filter_dims);
+        return (packed_size > 0) ? (uint32_t)packed_size : 0u;
+    }
+    return 0u;
+}"""
 
 
 # Setup calls TFLM runs once in Prepare.

@@ -493,6 +493,16 @@ class OpDepthwiseConv(OperationBase):
             'entry_scratch_bytes': kernel_info.get("entry_scratch_bytes"),
             'entry_extra_sizers': kernel_info.get("entry_extra_sizers"),
             'expected_status': self.expected_status(),
+            # A Core that declares the macro declines the opt_3x3 entries under AUTOVECTORIZE; older
+            # releases run them, so their numerical check stays (ns-cmsis-nn#814).
+            'autovectorize_declines': (
+                "arm_depthwise_conv_s8_opt_3x3_get_buffer_size" in (kernel_info.get("entry_extra_sizers") or ())
+                and self.expected_status() == "ARM_CMSIS_NN_SUCCESS"
+            ),
+            'autovectorize_declines_if': (
+                "defined(HELIA_CMSIS_NN_INT_AUTOVECTORIZE) && "
+                "defined(ARM_NN_DEPTHWISE_CONV_S8_OPT_3X3_AUTOVECTORIZE_DECLINES)"
+            ),
             'planar_supported': self.desc.get("planar_supported"),
             'planar_rule_fn': DEPTHWISE_CONV_S8_PLANAR_RULE,
         }

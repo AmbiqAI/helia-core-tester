@@ -129,6 +129,17 @@ class OpBatchMatMul(OperationBase):
     def uses_reference(self) -> bool:
         return True
 
+    def _require_no_activation(self) -> None:
+        """TFLite BATCH_MATMUL has no fused activation, so a clamp would have no golden counterpart."""
+        activation = self.activation_name()
+        if activation != 'NONE':
+            raise ValueError(
+                f"{self.desc.get('name', '<unnamed>')}: BatchMatMul has no fused activation, got {activation!r}"
+            )
+
+    def validate_descriptor(self) -> None:
+        self._require_no_activation()
+
     def _numpy_dtype_to_c_type(self, np_dtype: np.dtype) -> str:
         """Map numpy dtype to C type string."""
         if np_dtype == np.int8:
@@ -200,6 +211,7 @@ class OpBatchMatMul(OperationBase):
         Generate C and H files for BatchMatMul, with the golden from the C reference (TFLite's
         BatchMatMul; float exact then rounded once).
         """
+        self._require_no_activation()
         from helia_core_tester.generation.ops._shared.conv_reference import FLOAT_UNBOUNDED, exact_comparison
         from helia_core_tester.generation.reference import policy
         from helia_core_tester.generation.reference.bindings import get_bindings

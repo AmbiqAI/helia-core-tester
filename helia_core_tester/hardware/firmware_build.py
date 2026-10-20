@@ -35,7 +35,7 @@ from .boards import BoardSpec
 from .boards import repo_root as tester_repo_root
 from .jlink_library import JLinkLibraryError, find_jlink_exe
 from .phase_log import mark
-from .toolchain import DOWNLOADS_DIR, GCC_NAME, add_toolchain_to_path, gcc_version
+from .toolchain import DOWNLOADS_DIR, add_toolchain_to_path, toolchain_spec
 
 if TYPE_CHECKING:
     from .nsx_app import AppOptions
@@ -49,16 +49,18 @@ def ensure_build_tools(repo_root: Path) -> None:
 
     downloads = repo_root / DOWNLOADS_DIR
     downloads.mkdir(parents=True, exist_ok=True)
-    if not (downloads / "arm_gcc_download").is_dir():
-        setup_arm_gcc(downloads)
+    # Returns early when the install matches the selected release (ARM_GCC_VERSION unless HELIA_GCC_VERSION is set).
+    setup_arm_gcc(downloads)
     # NSX's toolchain file finds GCC on PATH.
     add_toolchain_to_path(repo_root)
 
 
-def resolve_build_dir(repo_root: Path, board: BoardSpec, override: Optional[Path] = None) -> Path:
-    """`--build-dir` if given (relative paths are repo-rooted), else the board-keyed default."""
+def resolve_build_dir(
+    repo_root: Path, board: BoardSpec, override: Optional[Path] = None, toolchain: Optional[str] = None,
+) -> Path:
+    """`--build-dir` if given (relative paths are repo-rooted), else the board- and toolchain-keyed default."""
     if override is None:
-        return board.build_dir(repo_root)
+        return toolchain_spec(toolchain).build_dir(board.build_dir(repo_root))
     return override if override.is_absolute() else repo_root / override
 
 
@@ -117,6 +119,61 @@ def _cache_value(build_dir: Path, name: str) -> Optional[str]:
     return match.group(1) if match else None
 
 
+# CMake cache vars the NSX template sets and nsx-segger-rtt compiles into
+# BUFFER_SIZE_UP/DOWN for RTT channel 0 (up, down).
+RTT_BUFFER_CACHE_VARS = ("NSX_SEGGER_RTT_BUFFER_SIZE_UP", "NSX_SEGGER_RTT_BUFFER_SIZE_DOWN")
+# SEGGER_RTT.c's channel-0 arrays, sized exactly from those defines: the Apollo
+# targets configure no RTT cache line, so SEGGER_RTT__ROUND_UP_2_CACHE_LINE_SIZE is a no-op.
+RTT_BUFFER_SYMBOLS = ("_acUpBuffer", "_acDownBuffer")
+
+
+def configured_rtt_buffer_sizes(build_dir: Path) -> tuple[int, int]:
+    """(up, down) channel-0 RTT buffer sizes this build dir was configured with.
+
+    Raises RttBufferSizeError when either is missing or not a size: SEGGER then
+    falls back to its 1 KiB / 16 B defaults (#188).
+    """
+    from .transport import RttBufferSizeError
+
+    sizes = []
+    for name in RTT_BUFFER_CACHE_VARS:
+        value = _cache_value(build_dir, name)
+        try:
+            size = int(value) if value is not None else None
+        except ValueError:
+            size = None
+        if size is None or size < 2:
+            raise RttBufferSizeError(
+                f"{build_dir}/CMakeCache.txt has {name}={value!r}; without it the firmware runs on "
+                "SEGGER's 1 KiB / 16 B RTT buffers. Reconfigure the build dir."
+            )
+        sizes.append(size)
+    return sizes[0], sizes[1]
+
+
+def check_rtt_buffers(build_dir: Path) -> tuple[int, int]:
+    """Fail a build whose ELF does not carry its configured RTT channel-0 buffers.
+
+    Runs before anything is flashed, so a mis-sized image never reaches a board.
+    Returns the configured (up, down) sizes.
+    """
+    from .transport import RttBufferSizeError, elf_symbol_sizes
+
+    configured = configured_rtt_buffer_sizes(build_dir)
+    elf = elf_path(build_dir)
+    symbols = elf_symbol_sizes(str(elf))
+    for (name, cache_var), size in zip(zip(RTT_BUFFER_SYMBOLS, RTT_BUFFER_CACHE_VARS), configured):
+        actual = symbols.get(name)
+        if actual is None:
+            raise RttBufferSizeError(f"{elf} has no {name} symbol, so its RTT buffer size cannot be checked.")
+        if actual != size:
+            raise RttBufferSizeError(
+                f"{elf}: {name} is {actual} bytes but {cache_var} is {size}; the ELF was not "
+                "built with the configured RTT buffer size."
+            )
+    return configured
+
+
 def _configured_for(build_dir: Path, app_dir: Path, board: BoardSpec) -> bool:
     """The cache belongs to this app and board."""
     return (
@@ -137,6 +194,52 @@ def _built_compiler(build_dir: Path) -> Optional[str]:
     return match.group(1) if match else None
 
 
+def _drop_cache(build_dir: Path) -> None:
+    """Remove the CMake cache and probes."""
+    (build_dir / "CMakeCache.txt").unlink(missing_ok=True)
+    shutil.rmtree(build_dir / "CMakeFiles", ignore_errors=True)
+
+
+def _drop_other_compiler(build_dir: Path, toolchain: Optional[str]) -> None:
+    """Remove a cache another compiler configured."""
+    compiler = _built_compiler(build_dir)
+    if toolchain_spec(toolchain).matches(compiler):
+        return
+    typer.echo(f"[hardware] Dropping CMake cache built by {compiler}.")
+    _drop_cache(build_dir)
+
+
+def _drop_stale_compiler_outputs(build_dir: Path, toolchain: Optional[str]) -> None:
+    """Remove every build output when the compiler version changed since the last good build.
+
+    Ninja does not rebuild when the compiler binary at a configured path changes, so an
+    in-place toolchain swap would otherwise link old objects and record the new version.
+    Only a cache this NSX app configured is wiped; a foreign one is left to
+    `_drop_foreign_cache`, which removes just the cache.
+    """
+    if _cache_value(build_dir, "CMAKE_HOME_DIRECTORY") != str(nsx_app_dir(build_dir).resolve()):
+        return
+    installed = (toolchain_spec(toolchain).installed() or {}).get("version")
+    info = _read_record(nsx_app_dir(build_dir) / BUILT_INFO)
+    # No record: outputs from an unknown compiler.
+    built = info.get("toolchain", False)
+    if built is not False:
+        built = built.get("version") if isinstance(built, dict) else None
+        if built == installed:
+            return
+    typer.echo(
+        f"[hardware] Compiler changed ({built or 'unrecorded'} -> {installed or 'unknown'}); "
+        f"removing build outputs in {build_dir}."
+    )
+    for child in build_dir.iterdir():
+        if child.name == NSX_APP_SUBDIR:
+            continue
+        if child.is_dir() and not child.is_symlink():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+
+
 def _drop_foreign_cache(build_dir: Path, app_dir: Path) -> None:
     """Remove a cache another source tree wrote."""
     cache = build_dir / "CMakeCache.txt"
@@ -144,8 +247,7 @@ def _drop_foreign_cache(build_dir: Path, app_dir: Path) -> None:
     if not cache.is_file() or home == str(app_dir.resolve()):
         return
     typer.echo(f"[hardware] Dropping CMake cache from {home}.")
-    cache.unlink()
-    shutil.rmtree(build_dir / "CMakeFiles", ignore_errors=True)
+    _drop_cache(build_dir)
 
 
 @contextmanager
@@ -239,11 +341,14 @@ def board_build_id(board: BoardSpec, serial_no: int, build_dir: Path) -> str:
     from .transport import JLinkRttTransport, symbol_address_from_elf
 
     rtt_address = symbol_address_from_elf(str(elf_path(build_dir)), "_SEGGER_RTT")
+    up_size, down_size = configured_rtt_buffer_sizes(build_dir)
     transport = JLinkRttTransport(
         serial_no=serial_no,
         chip_name=board.jlink_device,
         speed_khz=board.swd_speed_khz,
         rtt_address=rtt_address,
+        expected_up_size=up_size,
+        expected_down_size=down_size,
         reset_on_open=True,
         read_timeout_s=5.0,
     )
@@ -378,12 +483,17 @@ def build_firmware(
     from . import nsx_cli
     from .nsx_app import AppOptions, save_options
 
+    options = options or AppOptions()
     ensure_build_tools(tester_repo_root())
+    # Host binutils stay GNU for both.
+    toolchain_spec(options.toolchain).require()
     stage_kernels(
         board, build_dir=build_dir, options=options, force_sync=force_reconfigure,
         update_dependencies=update_dependencies,
     )
     app_dir = nsx_app_dir(build_dir)
+    _drop_other_compiler(build_dir, options.toolchain)
+    _drop_stale_compiler_outputs(build_dir, options.toolchain)
     if not _configured_for(build_dir, app_dir, board):
         _drop_foreign_cache(build_dir, app_dir)
         with _jlink_path():
@@ -392,9 +502,10 @@ def build_firmware(
         typer.echo(f"[hardware] Reusing configured build dir: {build_dir}")
     # Ninja's default, not NSX's fixed 8.
     nsx_cli.build_app(app_dir, board=board.nsx_board, build_dir=build_dir, jobs=_jobs(jobs), frozen=True)
+    check_rtt_buffers(build_dir)
     # Record only what actually built.
-    save_options(app_dir, options or AppOptions())
-    _record_built(build_dir, options or AppOptions())
+    save_options(app_dir, options)
+    _record_built(build_dir, options)
     return elf_path(build_dir)
 
 
@@ -442,8 +553,7 @@ def _record_built(build_dir: Path, options: "AppOptions") -> None:
 
     app_dir = nsx_app_dir(build_dir)
     _replace_json(app_dir / BUILT_LOCK, _built_record(app_dir, options))
-    version = gcc_version(_built_compiler(build_dir))
-    toolchain = {"name": GCC_NAME, "version": version} if version else None
+    toolchain = toolchain_spec(options.toolchain).record(_built_compiler(build_dir))
     nsx_version = nsx_cli.nsx_version()
     info = {
         "nsx_version": nsx_version,

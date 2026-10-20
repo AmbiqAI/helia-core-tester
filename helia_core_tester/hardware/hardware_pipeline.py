@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, List, Optional,
 from ..core.cpu_targets import get_cpu_profile, normalize_cpu
 from ..utils.file_lock import exclusive_lock
 from .boards import BoardSpec, default_session_id
+from .comparison import FLOAT_HEADROOM
 from .firmware_build import (
     FlashDecision,
     build_id_path,
@@ -334,9 +335,10 @@ def hidden_summary(hidden_set: Path, cpu: str) -> dict[str, Any]:
 def hidden_record(hidden_set: Path, cpu: str) -> dict[str, Any]:
     """Seed commitment and case count."""
     from ..core.path_layout import generated_tests_dir
+    from .session_runner import normalize_suites
 
-    root = generated_tests_dir(hidden_set, normalize_cpu(cpu))
-    cases = sum(1 for case in root.glob("*/*") if (case / "descriptor.yaml").is_file())
+    roots = [generated_tests_dir(hidden_set, normalize_cpu(cpu), suite) for suite in normalize_suites("both")]
+    cases = sum(1 for root in roots for case in root.glob("*/*") if (case / "descriptor.yaml").is_file())
     return {"seed_commitment": hidden_summary(hidden_set, cpu)["seed_commitment"], "cases": cases}
 
 
@@ -349,7 +351,7 @@ def hidden_bundles(repo_root: Path, board: BoardSpec, options: "StreamOptions") 
     hidden_summary(options.hidden_set, board.cpu)
     # No FVP report names hidden cases.
     bundles, skipped = build_generated_test_case_bundles(
-        repo_root, cpu=normalize_cpu(board.cpu), family=None, suite="int", fvp_gate="off",
+        repo_root, cpu=normalize_cpu(board.cpu), family=None, suite="both", fvp_gate="off",
         board_id=board.id, tests_root=options.hidden_set,
     )
     # A partial set skews the score.
@@ -377,7 +379,7 @@ class StreamOptions:
     strict_compare: bool = False
     """Integer outputs must match exactly: no tolerance."""
     golden_from: Optional[Path] = None
-    """Result bundle whose outputs replace the goldens; implies strict."""
+    """Baseline bundle: int goldens, float headroom gate; implies strict."""
     golden_allow_failed: bool = False
     """Accept golden cases the past run failed."""
     hidden_set: Optional[Path] = None
@@ -391,13 +393,26 @@ class StreamOptions:
 
         return CaseSelection(ops=self.ops, dtypes=self.dtypes, case_ids=self.case_ids)
 
-    def compare_record(self) -> dict[str, Any]:
+    def compare_record(self, bundles: Sequence = ()) -> dict[str, Any]:
         """How outputs get judged, for the bundle."""
-        return {
+        record = {
             "strict": self.strict_compare or self.golden_from is not None,
             "golden_from": str(self.golden_from) if self.golden_from else None,
             "golden_session_id": golden_session_id(self.golden_from),
         }
+        if self.golden_from is not None and bundles:
+            record["goldens"] = golden_split(bundles)
+        return record
+
+
+def golden_split(bundles: Sequence) -> dict[str, list[str]]:
+    """Case ids per golden source."""
+    from .case_bundle import golden_source
+
+    split: dict[str, list[str]] = {}
+    for bundle in bundles:
+        split.setdefault(golden_source(bundle), []).append(bundle.case_id)
+    return split
 
 
 def golden_session_id(golden_dir: Optional[Path]) -> Optional[str]:
@@ -483,8 +498,8 @@ def prepare_bundles(
 
 
 def golden_bundles(bundles: list, golden_dir: Path, *, allow_failed: bool) -> list:
-    """Swap in past outputs; refuse misfits."""
-    from .case_bundle import golden_bundle, golden_record, golden_usable, input_digest
+    """Swap int goldens, gate float; refuse misfits."""
+    from .case_bundle import golden_bundle, golden_record, golden_source, golden_usable, input_digest
 
     if not any((golden_dir / "correctness").glob("*.json")):
         raise RunRefused(f"Golden bundle has no results: {golden_dir}")
@@ -492,6 +507,9 @@ def golden_bundles(bundles: list, golden_dir: Path, *, allow_failed: bool) -> li
     _refuse("Golden run is missing these cases", [i for i, r in records.items() if r is None])
     if not allow_failed:
         _refuse("Golden run failed these cases", [i for i, r in records.items() if r.get("passed") is not True])
+        # Candidates cannot beat a spent baseline.
+        spent = [b.case_id for b in bundles if golden_source(b) == "generator" and over_headroom(records[b.case_id])]
+        _refuse(f"Golden run spends over {FLOAT_HEADROOM:g} of tolerance for", spent)
     # Status-only cases use no past output.
     judged = [b for b in bundles if b.expected_status_code is None]
     digests = {b.case_id: records[b.case_id].get("input_digest") for b in judged}
@@ -499,6 +517,13 @@ def golden_bundles(bundles: list, golden_dir: Path, *, allow_failed: bool) -> li
     _refuse("Golden run used other inputs for", [b.case_id for b in judged if digests[b.case_id] != input_digest(b)])
     _refuse(f"No usable golden output in {golden_dir} for", [b.case_id for b in bundles if not golden_usable(b, golden_dir)])
     return [golden_bundle(bundle, golden_dir) for bundle in bundles]
+
+
+def over_headroom(record: dict) -> bool:
+    """The baseline spent past the gate."""
+    fraction = record.get("tolerance_fraction")
+    # Old records carry no fraction.
+    return isinstance(fraction, (int, float)) and fraction > FLOAT_HEADROOM
 
 
 def _refuse(reason: str, case_ids: list[str]) -> None:
@@ -582,13 +607,14 @@ def stream_generated_tests(
         build_dir=build_dir,
         on_case_complete=on_case_complete,
         expected_build_id=expected_build_id,
-        compare=options.compare_record(),
+        compare=options.compare_record(bundles),
         fresh_boot=fresh_boot,
     )
     merge_summary(bundle, "selection", resolved_selection(repo_root, board, options))
     timing = {
         "stream_s": round(time.monotonic() - stream_started, 4),
         "batch_count": int(getattr(result, "batch_count", 1)),
+        "blob_store": {"hits": int(getattr(result, "store_hits", 0)), "blobs": int(getattr(result, "store_blobs", 0))},
         "cases": case_seconds,
     }
     # Unverified firmware: build symbols unknown.
@@ -610,10 +636,12 @@ def finalize_timing(outcome: HardwareRunOutcome, *, generate_s: float = 0.0, ech
     outcome.timing = timing
     write_timing(outcome.bundle, timing)
     case_count = len(timing.get("cases", {}))
+    store = timing.get("blob_store") or {}
+    store_note = f", store hits {store['hits']}/{store['blobs']}" if store.get("blobs") else ""
     echo(
         f"[hardware] timing: generate {timing['generate_s']:.1f}s  build {timing['build_s']:.1f}s  "
         f"flash {timing['flash_s']:.1f}s  stream {timing.get('stream_s', 0.0):.1f}s  "
-        f"({case_count} case(s) in {timing.get('batch_count', 1)} batch(es), total {timing['total_s']:.1f}s)"
+        f"({case_count} case(s) in {timing.get('batch_count', 1)} batch(es){store_note}, total {timing['total_s']:.1f}s)"
     )
 
 
@@ -640,7 +668,8 @@ def run_hardware_pipeline(
     """stage kernels -> generate (board cpu) -> build -> flash unless the board already runs this build -> stream -> bundle."""
     if skip_flash and force_flash:
         raise ValueError("--skip-flash and --force-flash cannot be combined.")
-    resolved_build_dir = resolve_build_dir(repo_root, board, build_dir)
+    # Default dirs differ per toolchain.
+    resolved_build_dir = resolve_build_dir(repo_root, board, build_dir, getattr(app_options, "toolchain", None))
     if app_options is None and not (skip_generate and skip_flash):
         from .nsx_app import resolve_options
 

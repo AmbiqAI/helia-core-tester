@@ -98,7 +98,11 @@ if(EXISTS "${CMSIS_NN_ROOT}/CMakeLists.txt")
   # Use a stable binary subdir name "cmsis-nn" (we need this exact name below)
   add_subdirectory("${CMSIS_NN_ROOT}" cmsis-nn)
 else()
-  message(FATAL_ERROR "cmsis-nn CMakeLists.txt not found at: ${CMSIS_NN_ROOT}")
+  message(FATAL_ERROR
+    "cmsis-nn CMakeLists.txt not found at: ${CMSIS_NN_ROOT}\n"
+    "Point it at an ns-cmsis-nn checkout with helia_core_tester --cmsis-nn-root <path> "
+    "(or HELIA_CORE_TESTER_CMSIS_NN_ROOT=<path>; a bare CMSIS_NN_ROOT env var is not read), "
+    "or -DCMSIS_NN_ROOT=<path> when running CMake directly.")
 endif()
 
 if(ENABLE_COVERAGE)

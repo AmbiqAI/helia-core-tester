@@ -317,3 +317,102 @@ int32_t hct_ref_resize_nearest_neighbor(const HctResizeParams *params, const Hct
     }
     return HCT_OK;
 }
+
+/* ------------------------------------------------------------- ResizeBilinear (int8) */
+
+/* TFLite's ComputeInterpolationValuesInteger: Q10 source position and its clamped neighbours. */
+static void bilinear_axis(int32_t value, int32_t scale_10, int32_t half_pixel, int32_t in_size, int32_t *scaled,
+                          int32_t *lo, int32_t *hi)
+{
+    *scaled = half_pixel ? value * scale_10 + scale_10 / 2 - (1 << 9) : value * scale_10;
+    const int32_t lower = *scaled / (1 << 10);
+    *lo = lower > 0 ? lower : 0;
+    const int32_t upper = (*scaled + (1 << 10) - 1) / (1 << 10);
+    *hi = upper < in_size - 1 ? upper : in_size - 1;
+}
+
+static int32_t bilinear_scale_10(int64_t in_size, int64_t out_size, int32_t align_corners)
+{
+    if (align_corners && out_size > 1)
+    {
+        return (int32_t)(((1 << 10) * (in_size - 1) + (out_size - 1) / 2) / (out_size - 1));
+    }
+    return (int32_t)(((1 << 10) * in_size + out_size / 2) / out_size);
+}
+
+/* TFLite reference_ops::ResizeBilinearInteger<int8_t> (the int8 path of the builtin reference kernel):
+ * Q10 weights, a Q20 sum and a rounding divide by 2^20 with the half away from zero. */
+int32_t hct_ref_resize_bilinear_s8(const HctResizeParams *params, const HctTensor *inputs, int32_t num_inputs,
+                                   HctTensor *outputs, int32_t num_outputs)
+{
+    if (params == NULL)
+    {
+        return HCT_E_NULL;
+    }
+    HCT_TRY(hct_check_io(inputs, num_inputs, 1, outputs, num_outputs, 1));
+    const HctTensor *in = &inputs[0];
+    HctTensor *out = &outputs[0];
+    if (in->dtype != HCT_INT8 || out->dtype != HCT_INT8)
+    {
+        return HCT_E_DTYPE;
+    }
+    int64_t n_in = 0;
+    int64_t n_out = 0;
+    HCT_TRY(check_4d(in, &n_in, out, &n_out));
+    const int32_t ac = params->align_corners;
+    const int32_t hp = params->half_pixel_centers;
+    if ((ac != 0 && ac != 1) || (hp != 0 && hp != 1) || (ac && hp))
+    {
+        return HCT_E_PARAM;
+    }
+    if (out->dims[0] != in->dims[0] || out->dims[3] != in->dims[3] || in->dims[1] < 1 || in->dims[2] < 1 ||
+        out->dims[1] < 1 || out->dims[2] < 1)
+    {
+        return HCT_E_SHAPE;
+    }
+    /* The Q10 positions are int32 in TFLite: keep every product inside that range. */
+    if (in->dims[1] > (1 << 20) || in->dims[2] > (1 << 20) || out->dims[1] > (1 << 20) || out->dims[2] > (1 << 20))
+    {
+        return HCT_E_SHAPE;
+    }
+    const int32_t ih = (int32_t)in->dims[1];
+    const int32_t iw = (int32_t)in->dims[2];
+    const int32_t oh_n = (int32_t)out->dims[1];
+    const int32_t ow_n = (int32_t)out->dims[2];
+    const int32_t sh = bilinear_scale_10(ih, oh_n, ac);
+    const int32_t sw = bilinear_scale_10(iw, ow_n, ac);
+    if ((int64_t)sh * oh_n > INT32_MAX / 2 || (int64_t)sw * ow_n > INT32_MAX / 2)
+    {
+        return HCT_E_SHAPE;
+    }
+    const int8_t *src = (const int8_t *)in->data;
+    for (int64_t b = 0; b < out->dims[0]; ++b)
+    {
+        for (int32_t oy = 0; oy < oh_n; ++oy)
+        {
+            int32_t y = 0;
+            int32_t y0 = 0;
+            int32_t y1 = 0;
+            bilinear_axis(oy, sh, hp, ih, &y, &y0, &y1);
+            const int64_t fy = y - (1 << 10) * y0;
+            for (int32_t ox = 0; ox < ow_n; ++ox)
+            {
+                int32_t x = 0;
+                int32_t x0 = 0;
+                int32_t x1 = 0;
+                bilinear_axis(ox, sw, hp, iw, &x, &x0, &x1);
+                const int64_t fx = x - (1 << 10) * x0;
+                for (int64_t c = 0; c < out->dims[3]; ++c)
+                {
+                    const int64_t sum = (int64_t)src[at4(in, b, y0, x0, c)] * ((1 << 10) - fy) * ((1 << 10) - fx) +
+                                        (int64_t)src[at4(in, b, y1, x0, c)] * fy * ((1 << 10) - fx) +
+                                        (int64_t)src[at4(in, b, y0, x1, c)] * ((1 << 10) - fy) * fx +
+                                        (int64_t)src[at4(in, b, y1, x1, c)] * fy * fx;
+                    const int64_t round = sum > 0 ? (1 << 19) : -(1 << 19);
+                    hct_store_i32(out, at4(out, b, oy, ox, c), (int32_t)((sum + round) / (1 << 20)));
+                }
+            }
+        }
+    }
+    return HCT_OK;
+}

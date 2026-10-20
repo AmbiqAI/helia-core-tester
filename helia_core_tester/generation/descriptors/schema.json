@@ -33,11 +33,14 @@
         "DepthToSpace",
         "DepthwiseConv",
         "Dequantize",
+        "Div",
         "DynamicUpdateSlice",
         "Fill",
         "FullyConnected",
         "Gather",
         "GatherND",
+        "Gelu",
+        "GRUUnidirectional",
         "HardSwishCompat",
         "HardSwishPrecise",
         "LSTMUnidirectional",
@@ -58,10 +61,12 @@
         "Quantize",
         "ReduceMax",
         "ReduceMin",
+        "ReduceSum",
         "Relu",
         "Relu6",
         "Requantize",
         "Reshape",
+        "ResizeBilinear",
         "ResizeNearestNeighbor",
         "ReverseSequence",
         "Rsqrt",
@@ -90,15 +95,34 @@
       "enum": [
         "S8",
         "S16",
-        "S32"
+        "S32",
+        "FP16",
+        "FP32"
       ]
     },
     "weight_dtype": {
       "type": "string",
       "enum": [
         "S4",
-        "S8"
+        "S8",
+        "FP16",
+        "FP32"
       ]
+    },
+    "suite": {
+      "description": "Suite the case belongs to. Omitted means 'float' for *_float.yaml sources and 'default' otherwise.",
+      "type": "string",
+      "enum": ["default", "float"]
+    },
+    "required_capabilities": {
+      "description": "CPU capabilities the case needs; it is skipped on CPUs that lack any of them. Names must match core/cpu_targets.py known_capabilities().",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": ["dsp", "fp16_execution", "fp32_execution", "mve", "soft_float"]
+      }
     },
     "tensor_dtypes": {
       "type": "object",
@@ -118,6 +142,25 @@
           "$ref": "#/$defs/tensorDType"
         }
       }
+    },
+    "contract_interval": {
+      "description": "Check each element against the exact set of outputs within rtol * |ref| + atol of the float64 reference, as lowest and highest allowed bit patterns, instead of a tolerance around a rounded golden. Gelu only.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rtol", "atol"],
+      "properties": {
+        "rtol": {"type": "number", "minimum": 0},
+        "atol": {"type": "number", "minimum": 0}
+      }
+    },
+    "input_bits": {
+      "description": "Inputs are every bit pattern in these half-open [start, stop) ranges, in order, instead of uniform draws; input_shape must hold exactly that many elements. Gelu only.",
+      "type": "array",
+      "items": {"type": "array", "items": {"type": "integer", "minimum": 0}, "minItems": 2, "maxItems": 2}
+    },
+    "fpscr_fz16": {
+      "description": "Set FPSCR.FZ16 around the kernel call on targets with half-precision arithmetic; with contract_interval, a result whose reference is FP16-subnormal may also be a zero of the reference's sign. Gelu only.",
+      "type": "boolean"
     },
     "comparison": {
       "type": "object",
@@ -208,9 +251,11 @@
       "type": "string"
     },
     "entry_sizer": {
-      "description": "Public ns-cmsis-nn scratch-size query for an entry that has no <entry>_get_buffer_size of its own (a variant sized by its family's query). Mutually exclusive with entry_scratch; the case is skipped when the checkout does not declare it.",
-      "type": "string",
-      "pattern": "^arm_[a-z0-9_]+$"
+      "description": "Public ns-cmsis-nn scratch-size query for an entry that has no <entry>_get_buffer_size of its own (a variant sized by its family's query), or a list of queries whose largest answer sizes the scratch (the first is the family query). Mutually exclusive with entry_scratch; the case is skipped when the checkout does not declare them.",
+      "oneOf": [
+        {"type": "string", "pattern": "^arm_[a-z0-9_]+$"},
+        {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^arm_[a-z0-9_]+$"}}
+      ]
     },
     "entry_scratch": {
       "description": "Scratch for an entry that takes no sizer: 'none', or a fixed byte count. Mutually exclusive with entry_sizer.",
@@ -263,19 +308,30 @@
       "$ref": "#/$defs/intArray"
     },
     "block_size": {
-      "$ref": "#/$defs/intArray"
+      "type": "integer",
+      "minimum": 1
     },
     "block_shape": {
       "$ref": "#/$defs/intArray"
     },
     "crops": {
-      "$ref": "#/$defs/intArray"
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/intArray",
+        "minItems": 2,
+        "maxItems": 2
+      }
     },
     "pads": {
       "$ref": "#/$defs/intArray"
     },
     "use_bias": {
       "type": "boolean"
+    },
+    "bias_dtype": {
+      "type": "string",
+      "enum": ["S32", "S64"],
+      "description": "S16 x S8 Convolve only: bias width passed to arm_convolve_wrapper_s16 and used for the golden. Defaults to S64."
     },
     "axis": {
       "type": "integer"
@@ -373,6 +429,12 @@
             },
             "output_scale": {
               "type": "number"
+            },
+            "prescale": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 31,
+              "description": "HardSwishPrecise (integer): explicit prescale instead of the one derived from the scales; output_multiplier/output_shift follow from it. Generation rejects a value that lets the kernel's int32 x * relu6 product overflow or that rounds the relu6 term to 0 for every input."
             }
           }
         }
@@ -394,7 +456,7 @@
     },
     "quant_preset": {
       "type": "string",
-      "description": "SquaredDifference: named quantization preset variant. 'default' (implied when absent) gives the s8 inputs a moderate asymmetric zero point; 'relu_range' keeps the -128 input zero point that pins every post-offset lane non-negative."
+      "description": "Add, Mul (S8): 'shared' (implied when absent) gives both inputs and the output one quantization; 'distinct' gives each operand its own scale and zero point (#349). SquaredDifference: named quantization preset variant. 'default' (implied when absent) gives the s8 inputs a moderate asymmetric zero point; 'relu_range' keeps the -128 input zero point that pins every post-offset lane non-negative."
     },
     "quantization": {
       "type": "object",
@@ -425,7 +487,7 @@
       "type": "object",
       "minProperties": 1,
       "additionalProperties": { "type": "string", "minLength": 1 },
-      "description": "Int elementwise cases: operand name -> reason the operand is intentionally one-signed after its zero point is applied. Waives the generation-time operand sign-span check for that operand only. This schema is not enforced at load time (#100); the same rule is enforced in code by OperationBase._enforce_int_operand_sign_span."
+      "description": "Int elementwise cases: operand name -> reason the operand is intentionally one-signed after its zero point is applied. Waives the generation-time operand sign-span check for that operand only. The schema validates this declaration at load time; OperationBase._enforce_int_operand_sign_span applies the exemption during generation."
     },
     "expected_input_ctx_size": {
       "type": "integer",
@@ -530,6 +592,7 @@
               "Add",
               "BatchMatMul",
               "Comparison",
+              "Div",
               "Maximum",
               "Minimum",
               "Mul",
@@ -620,6 +683,7 @@
               "TransposeConv",
               "Tanh",
               "Logistic",
+              "Gelu",
               "HardSwishPrecise",
               "HardSwishCompat",
               "PReLU",
@@ -634,6 +698,7 @@
               "Concatenation",
               "SpaceToBatchND",
               "BatchToSpaceND",
+              "ResizeBilinear",
               "ResizeNearestNeighbor",
               "Clamp",
               "NNActivationS16",
@@ -710,8 +775,33 @@
       },
       "then": {
         "required": [
-          "alpha_shape",
-          "scalar_input_value"
+          "alpha_shape"
+        ],
+        "anyOf": [
+          {
+            "required": [
+              "scalar_input_value"
+            ]
+          },
+          {
+            "required": [
+              "hint"
+            ],
+            "properties": {
+              "hint": {
+                "required": [
+                  "extras"
+                ],
+                "properties": {
+                  "extras": {
+                    "required": [
+                      "input_values"
+                    ]
+                  }
+                }
+              }
+            }
+          }
         ]
       }
     },
@@ -730,6 +820,21 @@
           "effective_scale_shift",
           "input_zeropoint",
           "output_zeropoint"
+        ]
+      }
+    },
+    {
+      "$comment": "operator_required_fields:ResizeBilinear",
+      "if": {
+        "properties": {
+          "operator": {
+            "const": "ResizeBilinear"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "size"
         ]
       }
     },
@@ -835,13 +940,76 @@
       "then": { "required": ["axis"] }
     },
     {
-      "$comment": "A sweep case has to say how its golden is compared. There is no safe default: 'strict' pins a value ns-cmsis-nn may not contract, 'mask' drops lanes a contracted kernel should be asserting, and which one applies is a per-kernel question the descriptor author has to answer. This if/then is not enforced by the descriptor loader, which validates a subset of the schema; the rule that actually fails a policy-less sweep is OperationBase.nonfinite_policy(). Enforcement moves here when #100 lands.",
+      "$comment": "A sweep case has to say how its golden is compared. There is no safe default: 'strict' pins a value ns-cmsis-nn may not contract, 'mask' drops lanes a contracted kernel should be asserting, and which one applies is a per-kernel question the descriptor author has to answer. The descriptor loader enforces this rule; OperationBase.nonfinite_policy() keeps the same check for descriptors built in code.",
       "if": {
         "properties": { "input_mode": { "const": "nonfinite_sweep" } },
         "required": ["input_mode"]
       },
       "then": {
         "required": ["nonfinite_policy"]
+      }
+    },
+    {
+      "$comment": "hint.extras.prescale is read only by the integer HardSwishPrecise kernels; generation also rejects it on the float route.",
+      "if": {
+        "properties": {
+          "hint": {
+            "properties": { "extras": { "required": ["prescale"] } },
+            "required": ["extras"]
+          }
+        },
+        "required": ["hint"]
+      },
+      "then": {
+        "properties": { "operator": { "const": "HardSwishPrecise" } }
+      }
+    },
+    {
+      "$comment": "Activation bounds are quantized codes outside the float suite, so they must be integral there.",
+      "if": {
+        "not": {
+          "properties": { "suite": { "const": "float" } },
+          "required": ["suite"]
+        }
+      },
+      "then": {
+        "properties": {
+          "act_min": { "type": "integer" },
+          "act_max": { "type": "integer" }
+        }
+      }
+    },
+    {
+      "$comment": "TransposeConv: input_shape [N, H, W, C] and filter_shape [KH, KW, OutCh, InCh], every dim positive. InCh == C is checked by OpTransposeConv.declared_filter_shape, since a schema cannot compare two fields; that check also covers descriptors built in code.",
+      "if": {
+        "properties": { "operator": { "const": "TransposeConv" } },
+        "required": ["operator"]
+      },
+      "then": {
+        "required": ["filter_shape"],
+        "properties": {
+          "input_shape": { "minItems": 4, "maxItems": 4, "items": { "minimum": 1 } },
+          "filter_shape": { "minItems": 4, "maxItems": 4, "items": { "minimum": 1 } }
+        }
+      }
+    },
+    {
+      "$comment": "FullyConnected: input_shape [N, C] or [N, H, W, C] and filter_shape [OutCh, InFeatures], every dim positive. InFeatures == prod(input_shape[1:]) is checked by OpFullyConnected.declared_filter_shape, since a schema cannot compare two fields.",
+      "if": {
+        "properties": { "operator": { "const": "FullyConnected" } },
+        "required": ["operator"]
+      },
+      "then": {
+        "properties": {
+          "input_shape": {
+            "anyOf": [
+              { "minItems": 2, "maxItems": 2 },
+              { "minItems": 4, "maxItems": 4 }
+            ],
+            "items": { "minimum": 1 }
+          },
+          "filter_shape": { "minItems": 2, "maxItems": 2, "items": { "minimum": 1 } }
+        }
       }
     }
   ]

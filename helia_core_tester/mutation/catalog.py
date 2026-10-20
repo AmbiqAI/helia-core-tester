@@ -570,13 +570,16 @@ MUTANTS_V1: Tuple[Mutant, ...] = (
     ),
     Mutant(
         mutant_id="requantize_tail_drop",
-        description="arm_requantize_s8_s8 drops the trailing size % 4 elements",
+        description=(
+            "The shared 8-bit requantize loop drops the trailing size % 4 elements "
+            "(reached here through arm_requantize_s8_s8)"
+        ),
         family="QuantizationFunctions",
         edits=(
             Edit(
                 relpath="Source/QuantizationFunctions/arm_quantize_s8_s8.c",
-                pattern="int32_t count = (size + 3) / 4;",
-                replacement="int32_t count = size / 4; /* MUTANT requantize_tail_drop */",
+                pattern="const int32_t count = size / 4 + (size % 4 > 0);",
+                replacement="const int32_t count = size / 4; /* MUTANT requantize_tail_drop */",
                 count=1,
             ),
             Edit(
@@ -643,10 +646,18 @@ MUTANTS_V1: Tuple[Mutant, ...] = (
         description="Grouped convolution no longer rejects channel counts not divisible by groups",
         family="ConvolutionFunctions",
         edits=(
+            # arm_convolve_s8() checks the groups in arm_nn_convolve_s8_args_invalid(), and its
+            # kernel checks them again beside the 16-bit depth test; both go.
+            Edit(
+                relpath="Source/NNSupportFunctions/arm_nn_convolve_s8_args_invalid.c",
+                pattern="arm_nn_convolve_groups_invalid(input_dims, filter_dims, output_dims) ||",
+                replacement="0 /* MUTANT drop_conv_group_guard */ ||",
+                count=1,
+            ),
             Edit(
                 relpath="Source/ConvolutionFunctions/arm_convolve_s8.c",
-                pattern="    if (arm_nn_convolve_s8_groups_invalid(input_dims, filter_dims, output_dims))\n",
-                replacement="    if (0) /* MUTANT drop_conv_group_guard */\n",
+                pattern="        arm_nn_convolve_groups_invalid(input_dims, filter_dims, output_dims))\n",
+                replacement="        0 /* MUTANT drop_conv_group_guard */)\n",
                 count=1,
             ),
             # The s16 wrapper checks the groups before it routes, and arm_convolve_s16
@@ -700,19 +711,19 @@ MUTANTS_V1: Tuple[Mutant, ...] = (
         edits=(
             Edit(
                 relpath="Source/ConvolutionFunctions/arm_depthwise_conv_s8_opt.c",
-                pattern="    if (input_ch != output_ch)\n",
-                replacement="    if (0) /* MUTANT drop_depthwise_channel_guard */\n",
+                pattern="    if (input_ch != output_ch || dw_conv_params->ch_mult != 1)\n",
+                replacement="    if (0 /* MUTANT drop_depthwise_channel_guard */ || dw_conv_params->ch_mult != 1)\n",
                 count=1,
             ),
             Edit(
                 relpath="Source/ConvolutionFunctions/arm_depthwise_conv_fast_s16.c",
-                pattern="    if (input_ch != output_ch)\n",
-                replacement="    if (0) /* MUTANT drop_depthwise_channel_guard */\n",
+                pattern="    if (input_ch != output_ch || dw_conv_params->ch_mult != 1)\n",
+                replacement="    if (0 /* MUTANT drop_depthwise_channel_guard */ || dw_conv_params->ch_mult != 1)\n",
                 count=1,
             ),
             Edit(
                 relpath="Source/ConvolutionFunctions/arm_depthwise_conv_s4_opt.c",
-                pattern="    if (input_ch != output_ch)\n",
+                pattern="    if (input_dims->c != output_dims->c)\n",
                 replacement="    if (0) /* MUTANT drop_depthwise_channel_guard */\n",
                 count=1,
             ),
@@ -750,8 +761,8 @@ MUTANTS_V1: Tuple[Mutant, ...] = (
             ),
             Edit(
                 relpath="Source/ConvolutionFunctions/arm_depthwise_conv_s4_opt.c",
-                pattern="    if (ctx->buf == NULL)\n",
-                replacement="    if (0) /* MUTANT drop_depthwise_ctx_guard */\n",
+                pattern="buf_size < 0 || ctx->buf == NULL ||",
+                replacement="buf_size < 0 || 0 /* MUTANT drop_depthwise_ctx_guard */ ||",
                 count=1,
             ),
         ),

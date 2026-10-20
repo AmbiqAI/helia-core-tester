@@ -180,8 +180,9 @@ static float exp_lut(float x16)
     const float y0 = hct_f16_to_f32(exp2_lut_f16[idx]);
     const float y1 = hct_f16_to_f32(exp2_lut_f16[idx + 1]);
     const float y = fmaf(frac, y1 - y0, y0);
-    n = n > 15 ? 15 : (n < -14 ? -14 : n);
-    return h(y * hct_f16_to_f32((uint16_t)((n + 15) << 10)));
+    /* The 2^n scale stays float32 until the one float16 rounding (ns-cmsis-nn#861). */
+    n = n > 15 ? 15 : (n < -126 ? -126 : n);
+    return h(y * ldexpf(1.0f, n));
 }
 
 static void softmax_1x2(const float in[2], float out[2])

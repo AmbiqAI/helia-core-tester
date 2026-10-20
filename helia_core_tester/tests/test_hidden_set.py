@@ -32,13 +32,13 @@ BOARD = resolve_board("apollo510_evb")
 COMMITMENT = "ab" * 32
 
 
-def _hidden(root: Path, names=("h0123456789ab",), cpu: str = "cortex-m55") -> Path:
+def _hidden(root: Path, names=("h0123456789ab",), cpu: str = "cortex-m55", suite: str = "int") -> Path:
     """A minimal hidden root."""
     summary = root / "artifacts" / "random_shapes" / cpu / "summary.json"
     summary.parent.mkdir(parents=True)
     summary.write_text(json.dumps({"seed_commitment": COMMITMENT, "cpu": cpu, "cases": len(names)}))
     for name in names:
-        case = root / "artifacts" / "generated_tests" / "int" / cpu / "ConvolutionFunctions" / name
+        case = root / "artifacts" / "generated_tests" / suite / cpu / "ConvolutionFunctions" / name
         case.mkdir(parents=True)
         (case / "descriptor.yaml").write_text(yaml.safe_dump({"name": name, "operator": "Convolve", "activation_dtype": "S8", "weight_dtype": "S8"}))
     return root
@@ -123,6 +123,20 @@ def test_selection_records_commitment_only(tmp_path: Path) -> None:
     selection = resolved_selection(PROJECT_ROOT, BOARD, StreamOptions(hidden_set=root))
     assert selection["hidden_set"] == {"seed_commitment": COMMITMENT, "cases": 2}
     assert "hidden_set" not in resolved_selection(PROJECT_ROOT, BOARD, StreamOptions())
+
+
+def test_float_hidden_set_counts_and_bridges(tmp_path: Path, monkeypatch) -> None:
+    root = _hidden(tmp_path / "h", names=("h0123456789ab", "hba9876543210"), suite="float")
+    assert resolved_selection(PROJECT_ROOT, BOARD, StreamOptions(hidden_set=root))["hidden_set"]["cases"] == 2
+    suites = []
+    monkeypatch.setattr(
+        "helia_core_tester.hardware.session_runner.build_generated_test_case_bundles",
+        lambda *a, suite, **k: suites.append(suite) or ([], []),
+    )
+    with pytest.raises(HiddenSetError):
+        hardware_pipeline.hidden_bundles(PROJECT_ROOT, BOARD, StreamOptions(hidden_set=root))
+    # Float draws sit in the float tree.
+    assert suites == ["both"]
 
 
 def test_case_summary_flags_hidden(tmp_path: Path) -> None:

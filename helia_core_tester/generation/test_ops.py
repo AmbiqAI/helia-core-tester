@@ -7,6 +7,7 @@ import hashlib
 import os
 import re
 import json
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -343,6 +344,11 @@ def _write_reference_record(op, test_dir: Path, name: str, *, run_seed: int, cas
                          library_key=loaded_library_key())
 
 
+def _write_descriptor(path: Path, desc: Dict[str, Any]) -> None:
+    with open(path, 'w') as f:
+        yaml.dump(desc, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+
+
 def generate_test(
     desc: Dict[str, Any],
     out_dir: str,
@@ -364,31 +370,45 @@ def generate_test(
     name = desc['name']
     operator = desc['operator']
     print(f"Generating test: {name} ({operator})")
-    
-    # Create output directory
-    test_dir = _descriptor_test_dir(Path(out_dir), desc)
-    test_dir.mkdir(parents=True, exist_ok=True)
-    
-    if seed is None:
-        seed = default_seed_for_case(name, run_seed)
-    # Save the complete descriptor as YAML in the test directory, with the seeds that drew it.
-    descriptor_path = test_dir / "descriptor.yaml"
-    with open(descriptor_path, 'w') as f:
-        yaml.dump({**desc, "run_seed": int(run_seed), "case_seed": int(seed)}, f,
-                  default_flow_style=False, sort_keys=False, allow_unicode=True)
-    
+
     # Get operation class
     op_map = get_op_map()
     if operator not in op_map:
         raise ValueError(f"Unsupported operator: {operator}")
-        
+
     op_class = op_map[operator]
-    
+
     if kernel_numerics not in ("shipped", "bounded"):
         raise ValueError(f"kernel_numerics must be 'shipped' or 'bounded', got {kernel_numerics!r}")
+    if seed is None:
+        seed = default_seed_for_case(name, run_seed)
     op = op_class(desc, seed, target_cpu=cpu)
     op.run_seed = int(run_seed)
     op.kernel_numerics = kernel_numerics
+
+    try:
+        op.validate_descriptor()
+    except Exception as e:
+        if generation_failures is not None:
+            import traceback
+            generation_failures.append({
+                "name": name,
+                "operator": operator,
+                "family": _descriptor_family(desc),
+                "parity_kind": _descriptor_parity_kind(desc),
+                "stage": "validate_descriptor",
+                "exception": repr(e),
+                "traceback": traceback.format_exc(),
+            })
+        print(f"ERROR: Descriptor validation failed for {name} ({operator}): {e}")
+        raise
+
+    # Create output directory
+    test_dir = _descriptor_test_dir(Path(out_dir), desc)
+    test_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save the complete descriptor as YAML in the test directory, with the seeds that drew it.
+    _write_descriptor(test_dir / "descriptor.yaml", {**desc, "run_seed": int(run_seed), "case_seed": int(seed)})
 
     try:
         op.generate_c_files(test_dir)
@@ -436,15 +456,20 @@ def test_generation(test_filters):
     random_shapes = test_filters.get("random_shapes")
     hidden_dir = test_filters.get("hidden_dir")
     if random_shapes:
-        from helia_core_tester.generation.random_shapes import select_ops
+        from helia_core_tester.generation.random_shapes import GENERATORS, select_ops
 
-        shape_ops = select_ops(test_filters.get("op"), test_filters.get("dtype"))
+        # Draw only this run's suite.
+        shape_ops = tuple(key for key in select_ops(test_filters.get("op"), test_filters.get("dtype"))
+                          if GENERATORS[key].suite == _suite_mode(test_filters))
     if random_shapes and hidden_dir:
-        from helia_core_tester.generation.random_shapes import prepare_hidden
+        from helia_core_tester.core.path_layout import generated_tests_dir
+        from helia_core_tester.generation.random_shapes import op_suites, prepare_hidden
 
-        descriptors_dir = prepare_hidden(
-            Path(hidden_dir), random_shapes, normalize_cpu(test_filters.get("cpu") or "cortex-m55"), shape_ops,
-        )
+        cpu = normalize_cpu(test_filters.get("cpu") or "cortex-m55")
+        # Drop suites an older draw left.
+        for stale in {"int", "float"} - op_suites(test_filters.get("op"), test_filters.get("dtype")):
+            shutil.rmtree(generated_tests_dir(Path(hidden_dir), cpu, stale), ignore_errors=True)
+        descriptors_dir = prepare_hidden(Path(hidden_dir), random_shapes, cpu, shape_ops)
     elif random_shapes:
         from helia_core_tester.generation.random_shapes import prepare_shapes
 
@@ -455,7 +480,8 @@ def test_generation(test_filters):
     else:
         descriptors_dir = find_descriptors_dir()
     descriptors = load_all_descriptors(str(descriptors_dir))
-    unknown_ops = unmatched_ops(descriptors, _split_filter(test_filters.get("op")))
+    # Draws checked names; suites split them.
+    unknown_ops = [] if random_shapes else unmatched_ops(descriptors, _split_filter(test_filters.get("op")))
     assert not unknown_ops, f"No descriptor matches --op: {', '.join(unknown_ops)}"
 
     # Apply filters

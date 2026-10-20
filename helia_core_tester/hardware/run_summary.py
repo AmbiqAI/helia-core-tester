@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import re
 import sys
@@ -57,6 +58,8 @@ def _format_case_line(case, *, id_width: int = 0) -> str:
         line += f"  {case.rejection.reason}"
     elif not passed:
         line += f"  mismatches={case.comparison.mismatch_count}  max_abs_diff={case.comparison.max_abs_diff:g}"
+        if case.comparison.tolerance_fraction is not None:
+            line += f"  tolerance_fraction={case.comparison.tolerance_fraction:.3g}"
     return line
 
 
@@ -219,6 +222,15 @@ def github_record() -> Optional[dict[str, Any]]:
     }
 
 
+def bundle_toolchain(bundle: Path) -> Optional[dict]:
+    """The bundle's build toolchain, or None."""
+    try:
+        manifest = json.loads((bundle / "session_manifest.json").read_text(encoding="utf-8"))
+        return (manifest.get("build") or {}).get("toolchain")
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
 def build_json_summary(
     result, skipped: list[tuple], *, session_id: str, board_id: str, bundle: Path,
     selection: dict[str, Any], timing: Optional[dict] = None, coverage: Optional[dict] = None,
@@ -238,6 +250,7 @@ def build_json_summary(
                 "timing_status": case.statistics.timing_status,
                 "max_abs_diff": finite_or_none(case.comparison.max_abs_diff),
                 "diff_count": case.comparison.diff_count,
+                "tolerance_fraction": finite_or_none(case.comparison.tolerance_fraction),
                 "skipped_reason": None,
             }
         )
@@ -251,6 +264,7 @@ def build_json_summary(
                 "timing_status": None,
                 "max_abs_diff": None,
                 "diff_count": None,
+                "tolerance_fraction": None,
                 "skipped_reason": _clean_skip_reason(test.name, reason),
             }
         )
@@ -261,6 +275,8 @@ def build_json_summary(
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "session_id": session_id,
         "board": board_id,
+        # Firmware compiler: {name, version}.
+        "toolchain": bundle_toolchain(bundle),
         "boot": boot_record(result.target_info),
         "bundle": str(bundle),
         "totals": {"ran": ran, "passed": passed, "failed": ran - passed, "skipped": len(skipped)},

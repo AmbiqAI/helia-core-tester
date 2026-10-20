@@ -14,12 +14,15 @@ Dependencies downloaded:
 
 Usage:
     python3 scripts/setup_dependencies.py [--downloads-dir DOWNLOADS_DIR] [--force]
+        [--gcc-version 13.2.rel1] [--gcc-sha256 <hex>]
 """
 
 import argparse
+import contextlib
 import hashlib
 import os
 import platform
+import re
 import shutil
 import ssl
 import subprocess
@@ -28,9 +31,18 @@ import tarfile
 import tempfile
 import urllib.request
 from pathlib import Path
-from typing import Optional
+from typing import Iterator, NamedTuple, Optional
 
 import certifi
+
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
+try:
+    import msvcrt
+except ImportError:
+    msvcrt = None
 
 from helia_core_tester.core.discovery import find_repo_root
 
@@ -39,21 +51,137 @@ class ChecksumMismatchError(RuntimeError):
     """Raised when a downloaded file's SHA-256 does not match the pinned value."""
 
 
-# Pinned SHA-256 digests for all downloaded dependency archives, keyed by
-# (dependency, architecture). Values were obtained from Arm's official release
-# artifacts:
-#   - ARM GCC toolchain 14.2.rel1: published by Arm alongside the release at
-#     https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/<file>.sha256asc
-#   - Corstone-300 FVP 11.24_13: Arm does not publish a SHA-256 sidecar for this
-#     archive; the digest below was computed directly from a fresh download of
-#     the official Arm URL referenced in setup_corstone300() and should be
-#     re-verified/updated whenever the pinned Corstone300 version changes.
+GCC_VERSION_ENV = "HELIA_GCC_VERSION"
+GCC_SHA256_ENV = "HELIA_GCC_SHA256"
+GCC_VERSION_RE = re.compile(r"^\d+\.\d+\.rel\d+$")
+_SHA256_HEX_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+
+# Releases up to 15.2.rel1 are served from developer.arm.com; from 15.3.rel1 Arm
+# publishes to its GitLab package registry instead and the old path 404s.
+_GCC_GITLAB_FIRST_RELEASE = (15, 3)
+_GCC_DEVELOPER_URL = "https://developer.arm.com/-/media/Files/downloads/gnu/{version}/binrel/{archive}"
+_GCC_GITLAB_URL = (
+    "https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/"
+    "gnu-toolchain/{version}/{archive}"
+)
+
+# Pinned SHA-256 digests for all downloaded dependency archives. Values were
+# obtained from Arm's official release artifacts:
+#   - ARM GCC toolchain, keyed (dependency, version, architecture): published by
+#     Arm alongside each release as <archive>.sha256asc next to the archive (see
+#     arm_gcc_url() for the host). A release not listed here can still
+#     be selected with --gcc-version; its digest is then taken from
+#     --gcc-sha256 / HELIA_GCC_SHA256 or, failing that, fetched from that same
+#     sidecar at install time (see resolve_gcc_sha256()).
+#   - Corstone-300 FVP 11.24_13, keyed (dependency, architecture): Arm does not
+#     publish a SHA-256 sidecar for this archive; the digest below was computed
+#     directly from a fresh download of the official Arm URL referenced in
+#     setup_corstone300() and should be re-verified/updated whenever the pinned
+#     Corstone300 version changes.
 PINNED_SHA256 = {
-    ("arm_gcc", "x86_64"): "62a63b981fe391a9cbad7ef51b17e49aeaa3e7b0d029b36ca1e9c3b2a9b78823",
-    ("arm_gcc", "aarch64"): "87330bab085dd8749d4ed0ad633674b9dc48b237b61069e3b481abd364d0a684",
+    ("arm_gcc", "13.2.rel1", "x86_64"): "6cd1bbc1d9ae57312bcd169ae283153a9572bd6a8e4eeae2fedfbc33b115fdbb",
+    ("arm_gcc", "13.2.rel1", "aarch64"): "8fd8b4a0a8d44ab2e195ccfbeef42223dfb3ede29d80f14dcf2183c34b8d199a",
+    ("arm_gcc", "13.3.rel1", "x86_64"): "95c011cee430e64dd6087c75c800f04b9c49832cc1000127a92a97f9c8d83af4",
+    ("arm_gcc", "13.3.rel1", "aarch64"): "c8824bffd057afce2259f7618254e840715f33523a3d4e4294f471208f976764",
+    ("arm_gcc", "14.2.rel1", "x86_64"): "62a63b981fe391a9cbad7ef51b17e49aeaa3e7b0d029b36ca1e9c3b2a9b78823",
+    ("arm_gcc", "14.2.rel1", "aarch64"): "87330bab085dd8749d4ed0ad633674b9dc48b237b61069e3b481abd364d0a684",
+    ("arm_gcc", "14.3.rel1", "x86_64"): "8f6903f8ceb084d9227b9ef991490413014d991874a1e34074443c2a72b14dbd",
+    ("arm_gcc", "14.3.rel1", "aarch64"): "2d465847eb1d05f876270494f51034de9ace9abe87a4222d079f3360240184d3",
+    ("arm_gcc", "15.2.rel1", "x86_64"): "597893282ac8c6ab1a4073977f2362990184599643b4c5ee34870a8215783a16",
+    ("arm_gcc", "15.2.rel1", "aarch64"): "d061559d814b205ed30c5b7c577c03317ec447ca51cd5a159d26b12a5bbeb20c",
+    ("arm_gcc", "15.3.rel1", "x86_64"): "563bebb2b97d53382b956d6ee1fe61e2cae26699901417234a37df505ef9b5fa",
+    ("arm_gcc", "15.3.rel1", "aarch64"): "06979e0c8171de58e5dc2a2b2019330a290f30930f27728af98a83e1a7369b3a",
     ("corstone300", "x86_64"): "6ea4096ecf8a8c06d6e76e21cae494f0c7139374cb33f6bc3964d189b84539a9",
     ("corstone300", "aarch64"): "9b43da6a688220c707cd1801baf9cf4f5fb37d6dc77587b9071347411a64fd56",
 }
+
+
+# The default Arm GNU Toolchain release, matching heliaAOT's tests/e2e/tools/deps.py.
+# Bumping it needs pinned arm_gcc digests for it above.
+ARM_GCC_VERSION = "14.3.rel1"
+# Written into the install once it is complete. An install without it, or with another
+# version, is stale: a restored CI cache or a reused volume must not keep an old compiler.
+ARM_GCC_VERSION_MARKER = ".hct-arm-gcc-version"
+ARM_GCC_STAGING_PREFIX = ".arm_gcc_staging-"
+
+
+def normalize_gcc_version(version: str) -> str:
+    """Lowercase (Arm's URL path uses `rel1`, not `Rel1`) and validate the format."""
+    normalized = str(version).strip().lower()
+    if not GCC_VERSION_RE.match(normalized):
+        raise ValueError(
+            f"Invalid ARM GCC version {version!r}: expected <major>.<minor>.rel<N> "
+            f"(e.g. {ARM_GCC_VERSION})"
+        )
+    return normalized
+
+
+def resolve_gcc_version(cli_value: Optional[str] = None) -> str:
+    """Selected GCC release: --gcc-version > HELIA_GCC_VERSION > ARM_GCC_VERSION."""
+    raw = cli_value or os.environ.get(GCC_VERSION_ENV) or ARM_GCC_VERSION
+    return normalize_gcc_version(raw)
+
+
+def arm_gcc_url(arch: str, version: str = ARM_GCC_VERSION) -> str:
+    if arch not in ("x86_64", "aarch64"):
+        raise RuntimeError(f"Unsupported architecture for ARM GCC: {arch}")
+    version = normalize_gcc_version(version)
+    major, minor = (int(part) for part in version.split(".")[:2])
+    template = _GCC_GITLAB_URL if (major, minor) >= _GCC_GITLAB_FIRST_RELEASE else _GCC_DEVELOPER_URL
+    return template.format(version=version, archive=f"arm-gnu-toolchain-{version}-{arch}-arm-none-eabi.tar.xz")
+
+
+def parse_sha256_sidecar(text: str) -> str:
+    """Extract the digest from Arm's `<hex>  <filename>` .sha256asc content."""
+    for line in text.splitlines():
+        tokens = line.split()
+        if not tokens:
+            continue
+        if not _SHA256_HEX_RE.match(tokens[0]):
+            raise ValueError(f"Malformed SHA-256 sidecar line: {line!r}")
+        return tokens[0].lower()
+    raise ValueError("Empty SHA-256 sidecar")
+
+
+def fetch_sha256_sidecar(archive_url: str) -> str:
+    with urllib.request.urlopen(archive_url + ".sha256asc", context=tls_context()) as response:
+        return parse_sha256_sidecar(response.read().decode("utf-8", errors="replace"))
+
+
+def resolve_gcc_sha256(version: str, arch: str, override: Optional[str] = None) -> str:
+    """Expected digest: explicit override > pinned table > Arm's .sha256asc sidecar."""
+    if override:
+        digest = override.strip().lower()
+        if not _SHA256_HEX_RE.match(digest):
+            raise ValueError(f"Invalid --gcc-sha256 value {override!r}: expected 64 hex characters")
+        return digest
+
+    pinned = PINNED_SHA256.get(("arm_gcc", version, arch))
+    if pinned:
+        return pinned
+
+    url = arm_gcc_url(arch, version)
+    print(
+        f"NOTE: no pinned SHA-256 for ARM GCC {version} ({arch}); fetching {url}.sha256asc. "
+        "This digest comes from the same origin as the archive, so it guards against a "
+        "corrupted download but is not an independent pin. Pass --gcc-sha256 (or set "
+        f"{GCC_SHA256_ENV}) to pin it explicitly."
+    )
+    try:
+        return fetch_sha256_sidecar(url)
+    except Exception as e:
+        raise RuntimeError(
+            f"Could not fetch the SHA-256 sidecar for ARM GCC {version} ({arch}): {e}. "
+            f"Pass --gcc-sha256 <hex> (or set {GCC_SHA256_ENV}) with the expected digest."
+        ) from e
+
+
+def installed_arm_gcc_version(gcc_dir: Path) -> Optional[str]:
+    """The version an install records, or None when it records none."""
+    try:
+        return (gcc_dir / ARM_GCC_VERSION_MARKER).read_text().strip() or None
+    except OSError:
+        return None
 
 
 def get_architecture() -> str:
@@ -165,8 +293,16 @@ def extract_tar_gz(archive_path: Path, extract_to: Path, strip_components: int =
     print("Extracted successfully")
 
 
-def run_command(cmd: list[str], cwd: Optional[Path] = None, description: str = "") -> None:
-    """Run a command and handle errors."""
+def run_command(
+    cmd: list[str],
+    cwd: Optional[Path] = None,
+    description: str = "",
+    *,
+    env: Optional[dict] = None,
+    stdin: Optional[int] = None,
+    quiet: bool = False,
+) -> str:
+    """Run a command and return its stdout; quiet leaves output and failure details to the caller."""
     if description:
         print(f"Running: {description}")
     
@@ -176,17 +312,21 @@ def run_command(cmd: list[str], cwd: Optional[Path] = None, description: str = "
             cwd=cwd,
             check=True,
             capture_output=True,
-            text=True
+            text=True,
+            env=env,
+            stdin=stdin,
         )
-        if result.stdout:
+        if result.stdout and not quiet:
             print(result.stdout)
+        return result.stdout
     except subprocess.CalledProcessError as e:
-        print(f"Command failed: {' '.join(cmd)}")
-        print(f"Return code: {e.returncode}")
-        if e.stdout:
-            print(f"STDOUT: {e.stdout}")
-        if e.stderr:
-            print(f"STDERR: {e.stderr}")
+        if not quiet:
+            print(f"Command failed: {' '.join(cmd)}")
+            print(f"Return code: {e.returncode}")
+            if e.stdout:
+                print(f"STDOUT: {e.stdout}")
+            if e.stderr:
+                print(f"STDERR: {e.stderr}")
         raise
 
 
@@ -273,114 +413,303 @@ def setup_corstone300(downloads_dir: Path, force: bool = False) -> None:
 
 
 
-def setup_arm_gcc(downloads_dir: Path, force: bool = False) -> None:
-    """Download and setup ARM GCC toolchain."""
+def setup_arm_gcc(
+    downloads_dir: Path,
+    force: bool = False,
+    version: Optional[str] = None,
+    sha256: Optional[str] = None,
+) -> None:
+    """Download and set up the selected ARM GCC release, replacing a stale install.
+
+    `version` / `sha256` fall back to HELIA_GCC_VERSION / HELIA_GCC_SHA256 and then to
+    ARM_GCC_VERSION / the pinned table (see resolve_gcc_sha256()).
+    """
     gcc_dir = downloads_dir / "arm_gcc_download"
-    
+    version = resolve_gcc_version(version)
+
     if gcc_dir.exists() and not force:
-        print("Arm GCC already installed. If you wish to install a new version, please delete the old folder.")
-        return
-    
-    if force and gcc_dir.exists():
-        print("Removing existing ARM GCC installation...")
-        shutil.rmtree(gcc_dir)
-    
+        installed = installed_arm_gcc_version(gcc_dir)
+        if installed == version:
+            print(f"Arm GCC {version} already installed.")
+            return
+        print(f"Arm GCC at {gcc_dir} is {installed or 'an unrecorded version'}; installing {version}.")
+
     arch = get_architecture()
-    if arch == 'x86_64':
-        gcc_url = "https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-x86_64-arm-none-eabi.tar.xz"
-    elif arch == 'aarch64':
-        gcc_url = "https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-aarch64-arm-none-eabi.tar.xz"
-    else:
-        raise RuntimeError(f"Unsupported architecture for ARM GCC: {arch}")
+    gcc_url = arm_gcc_url(arch, version)
+    expected_sha256 = resolve_gcc_sha256(version, arch, override=sha256 or os.environ.get(GCC_SHA256_ENV))
 
-    expected_sha256 = PINNED_SHA256[("arm_gcc", arch)]
-
-    with tempfile.TemporaryDirectory() as temp_dir:
+    downloads_dir.mkdir(parents=True, exist_ok=True)
+    for leftover in downloads_dir.glob(f"{ARM_GCC_STAGING_PREFIX}*"):
+        shutil.rmtree(leftover, ignore_errors=True)
+    # Staged next to the install so the swap below is a rename, not a cross-device copy.
+    with tempfile.TemporaryDirectory(prefix=ARM_GCC_STAGING_PREFIX, dir=downloads_dir) as temp_dir:
         temp_path = Path(temp_dir)
         archive_file = temp_path / "arm_gcc.tar.xz"
-        
-        download_file(gcc_url, archive_file, "ARM GCC toolchain", expected_sha256)
-        
-        # Extract to temporary directory first
+
+        download_file(gcc_url, archive_file, f"ARM GCC toolchain {version}", expected_sha256)
+
         temp_extract = temp_path / "extracted"
         extract_tar_gz(archive_file, temp_extract, strip_components=0)
-        
-        # Find the toolchain directory (should be the only subdirectory)
+
         toolchain_dirs = [d for d in temp_extract.iterdir() if d.is_dir()]
-        if not toolchain_dirs:
-            raise RuntimeError("Could not find toolchain directory in archive")
-        
+        if len(toolchain_dirs) != 1:
+            raise RuntimeError(f"Expected one toolchain directory in the archive, found {len(toolchain_dirs)}")
         toolchain_dir = toolchain_dirs[0]
-        
-        # Move contents to final destination
-        print(f"Moving toolchain from {toolchain_dir.name} to {gcc_dir}")
-        shutil.move(str(toolchain_dir), str(gcc_dir))
-    
-    print("ARM GCC setup complete")
+        if not (toolchain_dir / "bin").is_dir():
+            raise RuntimeError(f"Toolchain archive has no bin/ under {toolchain_dir.name}")
+        (toolchain_dir / ARM_GCC_VERSION_MARKER).write_text(version + "\n")
+
+        # The old install goes only once the new one is verified, extracted and marked.
+        if gcc_dir.exists():
+            print(f"Replacing existing ARM GCC installation at {gcc_dir}...")
+            os.replace(gcc_dir, temp_path / "previous")
+        os.replace(toolchain_dir, gcc_dir)
+
+    print(f"ARM GCC {version} setup complete")
 
 
-def setup_cmsis5(downloads_dir: Path, force: bool = False) -> None:
-    """Clone CMSIS-5 repository."""
-    cmsis5_dir = downloads_dir / "CMSIS_5"
-    
-    # Check if it's a valid installation (has .git or CMSIS subdirectory)
-    is_valid_install = cmsis5_dir.exists() and (
-        (cmsis5_dir / ".git").exists() or 
-        (cmsis5_dir / "CMSIS").exists()
-    )
-    
-    if is_valid_install and not force:
-        print("CMSIS-5 already installed. If you wish to install a new version, please delete the old folder.")
-        return
-    
-    if force and cmsis5_dir.exists():
-        print("Removing existing CMSIS-5 installation...")
-        shutil.rmtree(cmsis5_dir)
-    elif cmsis5_dir.exists() and not is_valid_install:
-        # Directory exists but is empty/invalid, remove it
-        print("Removing invalid/empty CMSIS-5 directory...")
-        shutil.rmtree(cmsis5_dir)
-    
-    print("Cloning CMSIS-5...")
-    run_command(
-        ["git", "clone", "--quiet", "--depth=1", "https://github.com/ARM-software/CMSIS_5.git"],
-        cwd=downloads_dir,
-        description="Cloning CMSIS-5"
-    )
-    
-    print("CMSIS-5 setup complete")
+class SourcePin(NamedTuple):
+    label: str
+    url: str
+    commit: str
+    # Top-level directory every install of the repo has, git checkout or not.
+    marker: str
 
 
-def setup_ethos_u_platform(downloads_dir: Path, force: bool = False) -> None:
-    """Clone Ethos-U core platform repository."""
-    ethos_dir = downloads_dir / "ethos-u-core-platform"
-    
-    # Check if it's a valid installation (has .git or core_platform subdirectory)
-    is_valid_install = ethos_dir.exists() and (
-        (ethos_dir / ".git").exists() or 
-        (ethos_dir / "core_platform").exists()
-    )
-    
-    if is_valid_install and not force:
-        print("Ethos-U core platform already installed. If you wish to install a new version, please delete the old folder.")
-        return
-    
-    if force and ethos_dir.exists():
-        print("Removing existing Ethos-U core platform installation...")
-        shutil.rmtree(ethos_dir)
-    elif ethos_dir.exists() and not is_valid_install:
-        # Directory exists but is empty/invalid, remove it
-        print("Removing invalid/empty Ethos-U core platform directory...")
-        shutil.rmtree(ethos_dir)
-    
-    print("Cloning Ethos-U core platform...")
-    run_command(
-        ["git", "clone", "--quiet", "--depth=1", "https://gitlab.arm.com/artificial-intelligence/ethos-u/ethos-u-core-platform.git"],
-        cwd=downloads_dir,
-        description="Cloning Ethos-U core platform"
-    )
-    
-    print("Ethos-U core platform setup complete")
+# Reviewed source revisions, fetched by commit and verified after checkout.
+# Bumping one is a deliberate change to this table; CI's download cache is keyed
+# on this file's hash, so it refetches.
+SOURCE_PINS = {
+    # ARM-software/CMSIS_5 develop, 2024-09-03.
+    "CMSIS_5": SourcePin(
+        "CMSIS-5",
+        "https://github.com/ARM-software/CMSIS_5.git",
+        "55b19837f5703e418ca37894d5745b1dc05e4c91",
+        "CMSIS",
+    ),
+    # ethos-u-core-platform main, 2026-10-06.
+    "ethos-u-core-platform": SourcePin(
+        "Ethos-U core platform",
+        "https://gitlab.arm.com/artificial-intelligence/ethos-u/ethos-u-core-platform.git",
+        "8405e3fc7e6fc684917a6b0cdfc906ce8a94f204",
+        "core_platform",
+    ),
+}
+
+_COMMIT_RE = re.compile(r"[0-9a-f]{40}")
+
+# enforce (default, and what every build/run uses): put every checkout at its pin or fail.
+# warn (opt-in, --source-pins warn): fetch missing sources at the pin, but only
+# report an existing checkout that is off its pin.
+PIN_MODES = ("enforce", "warn")
+
+
+class SourcePinError(RuntimeError):
+    """Raised when a source dependency is not, or cannot be put, at its pinned commit."""
+
+
+def _git(args: list[str], cwd: Path) -> str:
+    """git without prompts, trusting cwd even when another user owns it.
+
+    downloads_dir is ours, but in a bind-mounted container it is owned by the
+    host user and git would otherwise refuse it as dubious ownership.
+    """
+    cmd = ["git", "-c", f"safe.directory={Path(cwd).resolve()}", *args]
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    try:
+        return run_command(cmd, cwd=cwd, env=env, stdin=subprocess.DEVNULL, quiet=True).strip()
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "").strip()
+        raise SourcePinError(f"git {' '.join(args)} failed in {cwd}: {detail}") from exc
+
+
+def _checkout_head(path: Path) -> Optional[str]:
+    """HEAD of the checkout at path, or None when it is not a usable git checkout."""
+    if not (path / ".git").exists():
+        return None
+    try:
+        return _git(["rev-parse", "--verify", "HEAD^{commit}"], path)
+    except SourcePinError:
+        return None
+
+
+def _has_local_changes(path: Path) -> bool:
+    """Tracked edits, untracked files, or index entries git status skips.
+
+    An assume-unchanged or skip-worktree entry hides edits from git status and
+    keeps its bytes across a checkout, so it is treated as a change (the same
+    rule as hardware/harness_lock.py).
+    """
+    if _git(["status", "--porcelain"], path):
+        return True
+    # ls-files -v tags: S = skip-worktree, lowercase = assume-unchanged.
+    entries = _git(["ls-files", "-v", "-z"], path).split("\0")
+    return any(entry[:1] == "S" or entry[:1].islower() for entry in entries if entry)
+
+
+def _has_commit(path: Path, commit: str) -> bool:
+    try:
+        _git(["cat-file", "-e", f"{commit}^{{commit}}"], path)
+    except SourcePinError:
+        return False
+    return True
+
+
+def _fetch_pinned(path: Path, pin: SourcePin) -> None:
+    if not _has_commit(path, pin.commit):
+        # Keep full clones full; only shallow (or new) repos get a depth-1 fetch.
+        shallow = _git(["rev-parse", "--is-shallow-repository"], path) == "true"
+        depth = ["--depth=1"] if shallow or not _git(["rev-list", "-n1", "--all"], path) else []
+        _git(["fetch", "--quiet", *depth, pin.url, pin.commit], path)
+    _git(["checkout", "--quiet", "--detach", pin.commit], path)
+    head = _checkout_head(path)
+    if head != pin.commit:
+        raise SourcePinError(f"{pin.label} checkout is at {head}, expected pinned {pin.commit}")
+
+
+@contextlib.contextmanager
+def _setup_lock(downloads_dir: Path, dirname: str) -> Iterator[bool]:
+    """Serialize setup of one source across processes (parallel runs share downloads_dir).
+
+    Yields whether a cross-process lock is held: flock on POSIX, msvcrt on
+    Windows, none elsewhere.
+    """
+    with open(downloads_dir / f".{dirname}.lock", "a") as handle:
+        if fcntl is not None:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            yield True
+        elif msvcrt is not None:
+            handle.seek(0)
+            while True:
+                try:
+                    # LK_LOCK retries for about 10 s before raising; keep waiting.
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+                    break
+                except OSError:
+                    continue
+            try:
+                yield True
+            finally:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            yield False
+
+
+def _remove_stale_staging(downloads_dir: Path, dirname: str) -> None:
+    """Drop staging dirs a killed setup left behind; safe only under _setup_lock."""
+    for leftover in downloads_dir.glob(f".{dirname}-*"):
+        if leftover.is_dir():
+            print(f"Removing stale staging directory {leftover}")
+            shutil.rmtree(leftover, ignore_errors=True)
+
+
+def _swap_in(stage: Path, dest: Path, scratch: Path) -> None:
+    """Move stage to dest; an existing dest is set aside first and restored if the move fails."""
+    backup = None
+    if dest.exists() or dest.is_symlink():
+        backup = scratch / f"{dest.name}.old"
+        os.replace(dest, backup)
+    try:
+        os.replace(stage, dest)
+    except OSError:
+        if backup is not None:
+            os.replace(backup, dest)
+        raise
+    if backup is not None:
+        try:
+            shutil.rmtree(backup)
+        except OSError as exc:
+            print(f"WARNING: could not remove the old checkout at {backup} ({exc}); the next setup removes it")
+
+
+def _existing_checkout_problem(dest: Path, pin: SourcePin) -> tuple[Optional[str], Optional[str], bool]:
+    """(head, problem, usable) for an existing dest; problem is None when it can be moved to the pin."""
+    head = _checkout_head(dest)
+    if head is None:
+        problem = (
+            f"{dest} exists but is not a git checkout git can read (a non-git directory or an "
+            f"empty repo), so its revision cannot be verified against {pin.commit}"
+        )
+        return None, problem, (dest / pin.marker).is_dir()
+    if _has_local_changes(dest):
+        return head, (
+            f"{dest} has local changes (edits, untracked files, or assume-unchanged/skip-worktree "
+            f"entries) at {head}"
+        ), True
+    return head, None, True
+
+
+def setup_pinned_source(
+    downloads_dir: Path, dirname: str, force: bool = False, pin_mode: str = "enforce"
+) -> None:
+    """Put downloads_dir/dirname at its SOURCE_PINS commit.
+
+    A fresh install (or a --force reinstall) is fetched by commit into a staging
+    directory and swapped in only once verified; the old checkout is set aside
+    and restored if the swap fails, so a failed setup leaves it untouched. In
+    enforce mode an existing clean checkout at another commit is moved to the
+    pin, and one with local changes, or a directory whose revision cannot be
+    read, is rejected unless force replaces it. In warn mode an existing
+    checkout off its pin is reported and used as is (a non-git install only if
+    it has the repo's marker directory).
+    """
+    if pin_mode not in PIN_MODES:
+        raise ValueError(f"pin_mode must be one of {PIN_MODES}, got {pin_mode!r}")
+    pin = SOURCE_PINS[dirname]
+    if not _COMMIT_RE.fullmatch(pin.commit):
+        raise SourcePinError(f"{pin.label} pin {pin.commit!r} is not a full 40-hex commit")
+    dest = downloads_dir / dirname
+    downloads_dir.mkdir(parents=True, exist_ok=True)
+
+    with _setup_lock(downloads_dir, dirname) as locked:
+        # Without a lock a concurrent setup's live staging dir would look stale.
+        if locked:
+            _remove_stale_staging(downloads_dir, dirname)
+
+        if dest.exists() and not force:
+            head, problem, usable = _existing_checkout_problem(dest, pin)
+            if problem is None and head == pin.commit:
+                print(f"{pin.label} already at pinned {pin.commit[:12]}")
+                return
+            if pin_mode == "warn" and usable:
+                reason = problem or f"{dest} is at {head[:12]}, not pinned {pin.commit[:12]}"
+                print(
+                    f"WARNING: {reason}; using it as is. setup_dependencies.py moves a clean "
+                    "checkout to the pin; --force replaces any other."
+                )
+                return
+            if problem is not None:
+                raise SourcePinError(
+                    f"{problem}; refusing to move it to {pin.commit}. Delete it or rerun with --force."
+                )
+            print(f"Moving {pin.label} from {head[:12]} to pinned {pin.commit[:12]}...")
+            _fetch_pinned(dest, pin)
+            print(f"{pin.label} setup complete")
+            return
+
+        print(f"Fetching {pin.label} at {pin.commit[:12]}...")
+        with tempfile.TemporaryDirectory(
+            dir=downloads_dir, prefix=f".{dirname}-", ignore_cleanup_errors=True
+        ) as tmp:
+            stage = Path(tmp) / dirname
+            stage.mkdir()
+            _git(["init", "--quiet"], stage)
+            _fetch_pinned(stage, pin)
+            if dest.exists() or dest.is_symlink():
+                print(f"Replacing existing {pin.label} at {dest}...")
+            _swap_in(stage, dest, Path(tmp))
+    print(f"{pin.label} setup complete")
+
+
+def setup_cmsis5(downloads_dir: Path, force: bool = False, pin_mode: str = "enforce") -> None:
+    """Fetch CMSIS-5 at its pinned commit."""
+    setup_pinned_source(downloads_dir, "CMSIS_5", force, pin_mode)
+
+
+def setup_ethos_u_platform(downloads_dir: Path, force: bool = False, pin_mode: str = "enforce") -> None:
+    """Fetch the Ethos-U core platform at its pinned commit."""
+    setup_pinned_source(downloads_dir, "ethos-u-core-platform", force, pin_mode)
 
 
 DEFAULT_DOWNLOADS_DIR = Path("artifacts/downloads")
@@ -453,9 +782,12 @@ Examples:
     python3 scripts/setup_dependencies.py
     python3 scripts/setup_dependencies.py --downloads-dir ./my_downloads
     python3 scripts/setup_dependencies.py --force
+    python3 scripts/setup_dependencies.py --gcc-version 13.2.rel1
+    HELIA_GCC_VERSION=15.2.rel1 python3 scripts/setup_dependencies.py
+    python3 scripts/setup_dependencies.py --gcc-version 16.1.rel1 --gcc-sha256 <hex>
         """
     )
-    
+
     parser.add_argument(
         "--downloads-dir",
         type=Path,
@@ -466,6 +798,23 @@ Examples:
         "--force",
         action="store_true",
         help="Force re-download and reinstall all dependencies"
+    )
+    parser.add_argument(
+        "--gcc-version",
+        default=None,
+        help=(
+            "ARM GCC release to install, e.g. 13.2.rel1 (default: $%s or %s). "
+            "An install of another release is replaced."
+            % (GCC_VERSION_ENV, ARM_GCC_VERSION)
+        ),
+    )
+    parser.add_argument(
+        "--gcc-sha256",
+        default=None,
+        help=(
+            "Expected SHA-256 of the ARM GCC archive (default: $%s, then the pinned table, "
+            "then Arm's published .sha256asc sidecar)" % GCC_SHA256_ENV
+        ),
     )
     parser.add_argument(
         "--skip-corstone",
@@ -488,6 +837,15 @@ Examples:
         help="Skip Ethos-U core platform download"
     )
     parser.add_argument(
+        "--source-pins",
+        choices=PIN_MODES,
+        default="enforce",
+        help=(
+            "enforce (default): move CMSIS-5 / Ethos-U checkouts to their pinned commits or fail; "
+            "warn: fetch missing ones at the pin, report but keep existing ones that are off it"
+        ),
+    )
+    parser.add_argument(
         "--skip-python",
         action="store_true",
         help="Skip Python virtual environment setup"
@@ -499,12 +857,13 @@ Examples:
     args = parser.parse_args()
     
     # Validate system. Only the two prebuilt-binary downloads (Corstone-300 FVP
-    # and the ARM GCC tarball) are Linux-only; the git-clone dependencies
-    # (CMSIS-5, Ethos-U core platform) install anywhere. Treat an
+    # and the ARM GCC tarball) are Linux-only; the git dependencies
+    # (CMSIS-5, Ethos-U core platform, fetched at pinned commits) install anywhere. Treat an
     # unsupported OS as "skip those two", not as a hard failure.
     try:
         get_architecture()
-    except RuntimeError as e:
+        gcc_version = resolve_gcc_version(args.gcc_version)
+    except (RuntimeError, ValueError) as e:
         print(f"Error: {e}")
         return 1
 
@@ -525,23 +884,24 @@ Examples:
     print("Setting up CMSIS-NN build dependencies")
     print(f"Downloads directory: {args.downloads_dir}")
     print(f"Force mode: {args.force}")
+    print(f"ARM GCC version: {gcc_version}")
     print("=" * 80)
-    
+
     try:
         if host_os_supported and not args.skip_corstone:
             setup_corstone300(args.downloads_dir, args.force)
             print()
-        
+
         if host_os_supported and not args.skip_gcc:
-            setup_arm_gcc(args.downloads_dir, args.force)
+            setup_arm_gcc(args.downloads_dir, args.force, version=gcc_version, sha256=args.gcc_sha256)
             print()
         
         if not args.skip_cmsis5:
-            setup_cmsis5(args.downloads_dir, args.force)
+            setup_cmsis5(args.downloads_dir, args.force, args.source_pins)
             print()
         
         if not args.skip_ethos:
-            setup_ethos_u_platform(args.downloads_dir, args.force)
+            setup_ethos_u_platform(args.downloads_dir, args.force, args.source_pins)
             print()
         
         if not args.skip_python:

@@ -11,6 +11,7 @@ from typing import Optional
 
 from helia_core_tester.core.errors import RepoRootNotFoundError
 from helia_core_tester.core.path_layout import build_dir as canonical_build_dir
+from helia_core_tester.core.path_layout import compiler_tag_for_toolchain
 from helia_core_tester.core.path_layout import generated_tests_dir as canonical_generated_tests_dir
 
 
@@ -206,10 +207,10 @@ def find_tester_templates_dir(repo_root: Optional[Path] = None) -> Path:
     return repo_root / "assets" / "templates"
 
 
-def find_build_dir(cpu: str, repo_root: Optional[Path] = None, suite: str = "int") -> Path:
+def find_build_dir(cpu: str, repo_root: Optional[Path] = None, suite: str = "int", toolchain: str = "gcc") -> Path:
     """Return build directory for a CPU under artifacts."""
     repo_root = _resolve_repo_root(repo_root)
-    return canonical_build_dir(repo_root, cpu, compiler_tag="gcc", suite=suite)
+    return canonical_build_dir(repo_root, cpu, compiler_tag=compiler_tag_for_toolchain(toolchain), suite=suite)
 
 
 def find_fvp_script_path(repo_root: Optional[Path] = None) -> Path:

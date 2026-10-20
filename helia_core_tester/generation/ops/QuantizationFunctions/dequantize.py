@@ -193,7 +193,8 @@ class OpDequantize(QuantizationFamilyBase):
 
         Finite values and infinities widen exactly. A NaN becomes the default NaN 0x7FC00000 on the
         MVE vector conversion; the scalar conversion, and the integer widening that copies it, keep
-        its sign and payload and set the quiet bit. The C file picks the rule its build compiled.
+        its sign and payload and set the quiet bit. The C file picks the rule its build compiled; a
+        library defining ARM_NN_HAS_DEQUANTIZE_F16_NAN_PAYLOAD gives the scalar rule on every path.
         """
         name = self.desc["name"]
         unknown = sorted(k for k in self.desc if k not in _F16_BITS_KEYS and not k.startswith(("_", "resolved_")))

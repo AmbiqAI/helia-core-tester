@@ -11,13 +11,14 @@ import zlib
 
 import numpy as np
 
-from .comparison import strict_comparison
+from .comparison import FLOAT_HEADROOM, strict_comparison
 from .fixed_point import UNIT_MULTIPLIER, UNIT_SHIFT, requantize_np
 from .pathutil import write_text_lf
-from .transfer import staged_extent
+from .transfer import derived_mram_extent, mram_extent, staged_extent
 
 from helia_core_tester.generation.golden_check import EDGE_CASE_KEY
 from helia_core_tester.generation.io.descriptors import load_descriptor
+from helia_core_tester.generation.io.dtypes import FLOAT_DTYPES
 from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
 
@@ -119,6 +120,13 @@ class CaseBundle:
             used = _align_up(used, max(output.required_alignment, 16)) + output.byte_length
         return used
 
+    def mram_bytes_for(self, placement: str) -> int:
+        """MRAM placement-pool bytes the firmware needs: weights, bias and any derived operand (plan_mram())."""
+        blobs = self.streamable_blobs
+        return sum(mram_extent(blob.role, blob.byte_length, placement) for blob in blobs) + derived_mram_extent(
+            self.kernel_id, blobs, placement
+        )
+
     def blob_by_role(self, role: str) -> BlobInfo:
         return next(blob for blob in self.blobs if blob.role == role)
 
@@ -180,10 +188,24 @@ def golden_usable(bundle: CaseBundle, golden_dir: Path) -> bool:
         return False
 
 
+def golden_source(bundle: CaseBundle) -> str:
+    """Which golden judges this case."""
+    if bundle.expected_status_code is not None:
+        return "status"
+    # Float keeps the reference; int matches baseline.
+    if bundle.comparison.get("mode") == "float" and bundle.expected_output.dtype in FLOAT_DTYPES:
+        return "generator"
+    return "baseline"
+
+
 def golden_bundle(bundle: CaseBundle, golden_dir: Path) -> CaseBundle:
     """The bundle, judged against a past run's output."""
-    if bundle.expected_status_code is not None:
+    source = golden_source(bundle)
+    if source == "status":
         return bundle
+    if source == "generator":
+        comparison = {**bundle.comparison, "headroom": FLOAT_HEADROOM}
+        return replace(bundle, manifest={**bundle.manifest, "correctness_comparison": comparison})
     path = golden_dir / "outputs" / f"{bundle.case_id}.bin"
     expected = bundle.expected_output
     try:

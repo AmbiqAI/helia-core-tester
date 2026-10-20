@@ -567,3 +567,28 @@ def test_cwd_marker_keeps_unit_cacheable(tmp_path: Path) -> None:
 def test_directory_dep_reads_as_none(tmp_path: Path) -> None:
     """A directory dep has no digest."""
     assert candidate_scan._file_digest(tmp_path, "", {}) is None
+
+
+def test_object_scan_drops_clang_flags(tmp_path: Path, monkeypatch) -> None:
+    """gcc -E rejects clang flags; keep CONFIGS."""
+    build = tmp_path / "build"
+    src = build / "nsx_app/modules/nsx-cmsis-nn/Source/k.c"
+    src.parent.mkdir(parents=True)
+    src.write_text("int k;\n", encoding="utf-8")
+    (build / "k.c.obj").write_bytes(b"")
+    args = ["/opt/atfe/bin/clang", "--target=arm-none-eabi", "-o", "k.c.obj", "-c", str(src)]
+    entry = {"directory": str(build), "file": str(src), "output": "k.c.obj", "arguments": args}
+    (build / "compile_commands.json").write_text(json.dumps([entry]), encoding="utf-8")
+    monkeypatch.setattr(candidate_scan, "_object_hits", lambda *a: [])
+    monkeypatch.setattr(candidate_scan, "_defined_symbols", lambda *a, **k: frozenset())
+    findings, summary, flags = candidate_scan.object_findings(build)
+    assert findings == [] and summary["count"] == 1 and flags == {}
+
+
+@pytest.mark.parametrize("name, ok", [
+    (".ARM.exidx.text.arm_fn", True), (".rel.ARM.exidx.text.arm_fn", True), (".llvm_addrsig", True),
+    (".note.GNU-stack", True), (".ARM.exidx", True), (".ARM.attributes.x", False), (".ARM.exidx.data.x", False),
+    (".itcm_text", False),
+])
+def test_clang_sections_allowed(name: str, ok: bool) -> None:
+    assert bool(candidate_scan._SECTION_OK.match(name) and candidate_scan._PLAIN_NAME.fullmatch(name)) == ok

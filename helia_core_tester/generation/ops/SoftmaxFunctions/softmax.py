@@ -66,6 +66,23 @@ class OpSoftmax(OperationBase):
         output_dtype = str(hint.get("output_dtype", extras.get("output_dtype", ""))).upper()
         return bool(hint.get("force_cmsis", False)) and output_dtype == "S16"
 
+    def _shape_rows(self, data: np.ndarray) -> np.ndarray:
+        """Apply the descriptor's input_pattern to s8 rows."""
+        pattern = self.desc.get("input_pattern")
+        if not pattern:
+            return data
+        rows = data.reshape(-1, data.shape[-1]).copy()
+        if pattern == "equal":
+            rows[:] = rows[:, :1]
+            return rows.reshape(data.shape)
+        # One max per row, others below.
+        rows = rows // 2 - 64 if pattern == "peak" else np.minimum(rows, 126)
+        last = rows.shape[1] - 1
+        cols = {"max_first": 0, "max_last": last}.get(pattern)
+        for row in rows:
+            row[self.rng.integers(0, last + 1) if cols is None else cols] = 127
+        return rows.reshape(data.shape)
+
     def _quantized_reference(self, kind: str, input_shape: Tuple[int, ...]):
         """Input draw (every code), quantization, prepared params and the golden."""
         from helia_core_tester.generation.reference import policy
@@ -79,7 +96,10 @@ class OpSoftmax(OperationBase):
             in_quant = policy.TensorQuant(float(np.float32(hint["input_scale"])), 0, kind)
         else:
             # The range the converter used to calibrate over.
-            in_quant = self.activation_quant("input", (-1.0, 1.0), kind)
+            from helia_core_tester.generation.ops._shared.quant_knobs import value_range
+
+            calibration = value_range(self.desc, "calibration_range", (-1.0, 1.0))
+            in_quant = self.activation_quant("input", calibration, kind)
         # The op fixes the output quantization.
         if kind == "s16":
             out_kind, out_scale, out_zp = "s16", 1.0 / 32768, 0
@@ -93,6 +113,8 @@ class OpSoftmax(OperationBase):
         np_dtype = np.int8 if kind == "s8" else np.int16
         info = np.iinfo(np_dtype)
         input_q = self.rng.integers(info.min, info.max + 1, size=input_shape, dtype=np_dtype)
+        if kind == "s8":
+            input_q = self._shape_rows(input_q)
         self.rng.__setstate__(rng_state)
 
         params = get_bindings().prepare("softmax_prepare", {

@@ -53,7 +53,7 @@ import yaml
 from .boards import repo_root
 from .harness_lock import kernel_digest
 from .nsx_app import CMSIS_NN_MODULE
-from .pmu_explain import _DTYPE_RE, classify_route, load_ceilings
+from .pmu_explain import _DTYPE_RE, classify_route, load_ceilings, peak_pct
 from .work_count import per_unit
 
 SCHEMA = "hct.score"
@@ -291,6 +291,12 @@ def _pool(rows: list[dict], key: str) -> float | None:
     return statistics.median(values) if len(values) == len(rows) else None
 
 
+def _worst(rows: list[dict], key: str) -> float | None:
+    """Largest finite value, else None."""
+    values = [v for v in (_num(row, key) for row in rows) if v is not None]
+    return max(values, default=None)
+
+
 def _spread(rows: list[dict], key: str = "median_cycles", mad_key: str | None = "mad_cycles") -> float:
     """Pooled MAD in cycles, scaled to sigma."""
     medians = [_num(row, key) or 0.0 for row in rows]
@@ -351,11 +357,11 @@ def in_focus(route: str, symbol: str, dtype: str | None, focus: dict | None) -> 
     return (not routes or route in routes or symbol in routes) and (not dtypes or dtype in dtypes)
 
 
-def _peak_pct(cpu: str | None, route: str, cycles_per_mac: float | None) -> float | None:
-    """Percent of the MAC ceiling reached."""
+def _peak_pct(cpu: str | None, route: str, per_mac: float | None, per_op: float | None = None) -> float | None:
+    """Percent of the MAC or op ceiling."""
     op, dtype = classify_route(route)
     entry = (((load_ceilings()["cpus"].get(cpu) or {}).get("ops") or {}).get(op) or {}).get(dtype)
-    return entry["cycles_per_mac"] / cycles_per_mac * 100.0 if entry and cycles_per_mac else None
+    return peak_pct(entry, per_mac, per_op)
 
 
 def _prepare_cause(a: float, b: float | None, allowed: float, saved: float, scoring: dict, gated: bool) -> str | None:
@@ -424,6 +430,9 @@ def _case(
     # Baseline route: the candidate cannot move it.
     base_route = (base[0].get("inner_symbol") if base else None) or symbol
     cpm_a, cpm_b = per_unit(a, _num(base[0], "macs")), per_unit(b, _num(cand[0], "macs"))
+    # Ops only when MACs are missing.
+    cpo_a = None if cpm_a else per_unit(a, _num(base[0], "ops"))
+    cpo_b = None if cpm_b else per_unit(b, _num(cand[0], "ops"))
     cpu = (baselines[0].manifest.get("target") or {}).get("cpu")
     mlperf = "mlperf" in case_id
     case: dict[str, Any] = {
@@ -442,10 +451,13 @@ def _case(
         "candidate_cycles": b,
         "cycles_per_mac_baseline": cpm_a,
         "cycles_per_mac_candidate": cpm_b,
-        "pct_of_peak_baseline": _peak_pct(cpu, base_route, cpm_a),
-        "pct_of_peak_candidate": _peak_pct(cpu, inner or symbol, cpm_b),
+        "cycles_per_op_baseline": cpo_a,
+        "cycles_per_op_candidate": cpo_b,
+        "pct_of_peak_baseline": _peak_pct(cpu, base_route, cpm_a, cpo_a),
+        "pct_of_peak_candidate": _peak_pct(cpu, inner or symbol, cpm_b, cpo_b),
         "touched": None if touched is None else case_id in touched,
         "retired": _retired(base, cand),
+        "tolerance_fraction": _worst(cand, "tolerance_fraction"),
     }
     case["prepare"] = _prepare(base, cand, (a, b), scoring, _gated(case))
     case["in_focus"] = in_focus(base_route, symbol, case["dtype"], focus)
@@ -567,7 +579,9 @@ def score_bundles(
     for c in candidates:
         for case_id, row in c.rows.items():
             if row.get("comparison_passed") != "true":
-                failures.append({"kind": "comparison_failed", "case_id": case_id, "reason": f"{c.session_id}: output mismatch"})
+                fraction = _num(row, "tolerance_fraction")
+                spent = "" if fraction is None else f", tolerance fraction {fraction:.3g}"
+                failures.append({"kind": "comparison_failed", "case_id": case_id, "reason": f"{c.session_id}: output mismatch{spent}"})
     present = []
     for case_id in wanted:
         missing = [c.session_id for c in candidates if case_id not in c.rows]

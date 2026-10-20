@@ -170,6 +170,9 @@ structs:
       - [input2_offset, int32]
       - [input2_multiplier, int32]
       - [input2_shift, int32]
+  HctCompareOpParams:
+    fields:
+      - [operation, int32]
   HctAbsQuant:
     fields:
       - [dtype, int32]
@@ -251,6 +254,17 @@ structs:
       - [input_zero_point, int32]
       - [output_scale, float32]
       - [output_zero_point, int32]
+  HctHardSwishPreciseQuant:
+    doc: >-
+      HctHardSwishQuant plus the prescale: -1 derives the smallest one that keeps x + relu_q3 and x * relu6 inside
+      int32 over every input code; 0..31 pins it (rejected if it overflows or rounds the relu6 term to 0 everywhere).
+    fields:
+      - [dtype, int32]
+      - [input_scale, float32]
+      - [input_zero_point, int32]
+      - [output_scale, float32]
+      - [output_zero_point, int32]
+      - [prescale, int32]
   HctHardSwishParams:
     doc: TFLite's HardSwishParams (int8); Q15 multipliers with frexp exponents, offsets are the zero points.
     fields:
@@ -621,7 +635,9 @@ structs:
       ns-cmsis-nn float16 depthwise convolution on Helium (named variant): the ch_mult 1 direct kernel, the generic
       kernel and the conv1d k3 / 2x5 specialisations, which all chain one float16 fused multiply-add per in-range
       tap from the bias. acc16 selects the _acc16 entries (never folding); otherwise more than 32 in-range taps fold
-      into float32.
+      into float32. acc32 is the default entries from ns-cmsis-nn#881 (ARM_NN_HAS_DEPTHWISE_F16_ACC32) on every
+      route: each in-range tap added in float32 from the bias in (ky, kx) order (a product of halves is exact), one
+      rounding to float16 before the clamp. acc16 and acc32 are exclusive.
     fields:
       - [stride_h, int32]
       - [stride_w, int32]
@@ -630,6 +646,7 @@ structs:
       - [pad_h, int32]
       - [pad_w, int32]
       - [acc16, int32]
+      - [acc32, int32]
       - [activation_min, float32]
       - [activation_max, float32]
 
@@ -699,7 +716,7 @@ prepare:
     in: HctHardSwishQuant
     out: HctHardSwishParams
   hard_swish_precise_prepare:
-    in: HctHardSwishQuant
+    in: HctHardSwishPreciseQuant
     out: HctHardSwishPreciseParams
   tanh_prepare:
     in: HctTanhLogisticQuant
@@ -755,6 +772,14 @@ kernels:
     params: HctFloatActivationParams
     inputs: {input1: float16, input2: float16}
     outputs: {output: float16}
+  div_f32:
+    params: HctFloatActivationParams
+    inputs: {input1: float32, input2: float32}
+    outputs: {output: float32}
+  div_f16:
+    params: HctFloatActivationParams
+    inputs: {input1: float16, input2: float16}
+    outputs: {output: float16}
   mul_f32:
     params: HctFloatActivationParams
     inputs: {input1: float32, input2: float32}
@@ -802,6 +827,10 @@ kernels:
   comparison_s8:
     params: HctComparisonParams
     inputs: {input1: int8, input2: int8}
+    outputs: {output: bool}
+  comparison_s32:
+    params: HctCompareOpParams
+    inputs: {input1: int32, input2: int32}
     outputs: {output: bool}
   abs_s8:
     params: HctAbsParams
@@ -896,6 +925,14 @@ kernels:
     inputs: {input: float32}
     outputs: {output: float32}
   hard_swish_f16:
+    params: HctNoParams
+    inputs: {input: float16}
+    outputs: {output: float16}
+  gelu_f32:
+    params: HctNoParams
+    inputs: {input: float32}
+    outputs: {output: float32}
+  gelu_f16:
     params: HctNoParams
     inputs: {input: float16}
     outputs: {output: float16}
@@ -1010,6 +1047,10 @@ kernels:
   conv_s16:
     params: HctConvParams
     inputs: {input: int16, filter: int8, bias: int64, multiplier: int32, shift: int32}
+    outputs: {output: int16}
+  conv_s16_b32:
+    params: HctConvParams
+    inputs: {input: int16, filter: int8, bias: int32, multiplier: int32, shift: int32}
     outputs: {output: int16}
   conv_f32:
     params: HctConvFloatParams
@@ -1248,6 +1289,10 @@ kernels:
     params: HctResizeParams
     inputs: {input: any}
     outputs: {output: any}
+  resize_bilinear_s8:
+    params: HctResizeParams
+    inputs: {input: int8}
+    outputs: {output: int8}
   transpose:
     params: HctNoParams
     inputs: {input: any, perm: int32}

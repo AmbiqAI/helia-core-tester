@@ -46,6 +46,8 @@ PLANAR_SLACK = 32
 CH_IN_BLOCK_MVE = 124
 # GCC value; armclang uses 8.
 DW_TO_CONV_THRESHOLD = 1
+# Fast s16 needs fewer taps.
+FAST_S16_TAPS = 512
 CONV_SOURCE = Path("Source/ConvolutionFunctions/arm_convolve_wrapper_s8.c")
 # Known 1xN conditions: padding gate or not.
 GATES_1XN = {
@@ -186,7 +188,7 @@ def dw_s4_route(i: Dims, dil: Pair, ch_mult: int) -> str:
 
 def dw_s16_route(i: Dims, f: Dims, o: Dims, stride: Pair, pad: Pair, dil: Pair, ch_mult: int) -> str:
     """arm_depthwise_conv_wrapper_s16's callee."""
-    if ch_mult == 1 and _dil_ok(i, f, o, stride, pad, dil) and f[1] * f[2] < 512:
+    if ch_mult == 1 and _dil_ok(i, f, o, stride, pad, dil) and f[1] * f[2] < FAST_S16_TAPS:
         return "arm_depthwise_conv_fast_s16"
     return "arm_depthwise_conv_s16"
 

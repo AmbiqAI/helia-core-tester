@@ -17,6 +17,11 @@ def clamp_golden(desc: Mapping[str, Any], output: np.ndarray) -> np.ndarray:
     """Apply the descriptor's activation clamp."""
     if "activation_min" not in desc and "activation_max" not in desc:
         return output
+    if np.issubdtype(output.dtype, np.floating):
+        # NaN lanes pass through.
+        low, high = (output.dtype.type(desc.get(key, default)) for key, default in
+                     (("activation_min", -np.inf), ("activation_max", np.inf)))
+        return np.clip(output, low, high)
     info = np.iinfo(output.dtype)
     low, high = int(desc.get("activation_min", info.min)), int(desc.get("activation_max", info.max))
     return np.clip(output, low, high).astype(output.dtype)

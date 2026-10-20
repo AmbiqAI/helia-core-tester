@@ -12,6 +12,7 @@ session streams (`build_generated_test_case_bundles`).
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Sequence
@@ -23,7 +24,7 @@ from .case_bundle import (
 )
 from .case_validity import apply_floor
 from .errors import RunRefused
-from .firmware_build import elf_path
+from .firmware_build import configured_rtt_buffer_sizes, elf_path
 from .generated_test_bridge import (
     CaseSelection,
     GeneratedTestCase,
@@ -113,16 +114,33 @@ def open_rtt_session(
     the host session, its transport (the caller closes it) and the RTT control-block
     address taken from the ELF in `build_dir`. reset=False: the board just booted."""
     rtt_address = symbol_address_from_elf(str(elf_path(build_dir)), "_SEGGER_RTT")
+    up_size, down_size = configured_rtt_buffer_sizes(build_dir)
     transport = JLinkRttTransport(
         serial_no=serial_no,
         chip_name=board.jlink_device,
         speed_khz=board.swd_speed_khz,
         rtt_address=rtt_address,
+        expected_up_size=up_size,
+        expected_down_size=down_size,
         reset_on_open=reset,
         # Sampling waits this long per pass.
         read_timeout_s=10.0,
     )
-    return HostSession(transport, counter_passes=counter_passes), transport, rtt_address
+    return HostSession(transport, counter_passes=counter_passes, blob_store=blob_store_enabled()), transport, rtt_address
+
+
+BLOB_STORE_ENV = "HCT_BLOB_STORE"
+
+
+def blob_store_enabled() -> bool:
+    """HCT_BLOB_STORE=0 turns the board store off."""
+    return os.environ.get(BLOB_STORE_ENV, "1").strip().lower() not in ("0", "off", "false", "no")
+
+
+def store_env_args() -> list[str]:
+    """Carry the switch past bench-agent's scrubbed env."""
+    value = os.environ.get(BLOB_STORE_ENV)
+    return [] if value is None else ["env", f"{BLOB_STORE_ENV}={value}"]
 
 
 def stalled_target_state(transport: Transport, build_dir: Path) -> str:
@@ -224,6 +242,7 @@ def run_case_bundles(
     all_cases: list[CaseRunResult] = []
     all_trace: list[str] = []
     session_complete_cases = 0
+    store_blobs = store_hits = 0
     rtt_address = 0
     build_id: str | None = None
     target_info = None
@@ -261,6 +280,8 @@ def run_case_bundles(
             all_cases.extend(result.cases)
             all_trace.extend(f"batch{batch_index}:{entry}" for entry in result.protocol_trace)
             session_complete_cases += result.session_complete_cases
+            store_blobs += result.store_blobs
+            store_hits += result.store_hits
             remaining = remaining[len(batch):]
             batch_index += 1
     finally:
@@ -277,6 +298,8 @@ def run_case_bundles(
         batch_count=batch_count,
         target_info=target_info,
         counter_passes=counter_passes,
+        store_blobs=store_blobs,
+        store_hits=store_hits,
     )
 
     # Per-board report dir: concurrent runs.
@@ -294,6 +317,7 @@ def run_case_bundles(
         f"batch_count={batch_count} max_cases_per_session={limits.max_cases if limits else 0} "
         f"max_session_plan_bytes={limits.max_plan_bytes if limits else 0}\n"
         f"protocol_trace_len={len(merged_result.protocol_trace)}\n"
+        f"blob_store_hits={store_hits}/{store_blobs}\n"
         f"case_ids={[b.case_id for b in case_bundles]}\n"
     )
     target_log = f"real {board.id} benchmark server over SEGGER RTT ({batch_count} batch(es))\n"

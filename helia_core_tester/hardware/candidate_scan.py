@@ -50,7 +50,7 @@ from itertools import islice
 from pathlib import Path
 from typing import Callable, Optional
 
-from .toolchain import arm_tool
+from .toolchain import arm_tool, toolchain_spec
 
 # Cores the boards use: MVE, DSP.
 _COMMON = ("-mthumb", "-mfloat-abi=hard", "-Ofast", "-ffast-math", "-DARM_NN_ENABLE_F32=1")
@@ -455,12 +455,13 @@ SCS_LOW, SCS_HIGH = 0xE0000000, 0xE00FFFFF
 # Sections the linker scripts map normally.
 _SECTION_OK = re.compile(
     r"^(?:\.rela?(?=\.))?(?:(?:\.text|\.rodata|\.data|\.bss|\.debug_\w+)(?:\..*)?"
-    r"|\.ARM\.(?:attributes|exidx|extab)|\.comment|\.note\.GNU-stack|\.group|\.(?:sym|str|shstr)tab|)$"
+    r"|\.ARM\.attributes|\.ARM\.(?:exidx|extab)(?:\.text\..*)?|\.llvm_addrsig|\.comment|\.note\.GNU-stack"
+    r"|\.group|\.(?:sym|str|shstr)tab|)$"
 )
 # Other names fail closed: no parser chasing.
 # Little-endian words 0xE0000000-0xE00FFFFF.
 _SCS_WORD = re.compile(rb"(?=[\x00-\xff]{2}[\x00-\x0f]\xe0)")
-_PLAIN_NAME = re.compile(r"[A-Za-z0-9._$]+")
+_PLAIN_NAME = re.compile(r"[A-Za-z0-9._$-]+")
 # ELF flag bits, as readelf letters.
 _FLAG_LETTERS = ((0x1, "W"), (0x2, "A"), (0x4, "X"), (0x10, "M"), (0x20, "S"), (0x40, "I"), (0x80, "L"),
                  (0x200, "G"), (0x400, "T"))
@@ -683,6 +684,9 @@ def object_findings(build_dir: Path, deadline_s: float = SCAN_DEADLINE_S) -> tup
             Path(limits[1]).touch()
             pool.shutdown(wait=True, cancel_futures=True)
     summary["count"] = len(units)
+    # gcc -E cannot take clang flags.
+    if Path(units[0][2][0]).stem == toolchain_spec("atfe").compiler:
+        return findings, summary, {}
     flags = {source: _preprocess_args(args, source) for source, _, args in units}
     # New units get the first unit's flags.
     return findings, summary, {"*": flags[units[0][0]], **flags}

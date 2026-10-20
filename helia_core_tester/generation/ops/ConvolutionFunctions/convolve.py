@@ -181,9 +181,34 @@ class OpConvolve(OperationBase):
         "negative_filter_depth",
     )
 
+    _S16_BIAS_C_TYPES = {"S32": "int32_t", "S64": "int64_t"}
+
     def _hint(self) -> Dict[str, Any]:
         hint = self.desc.get("hint", {})
         return hint if isinstance(hint, dict) else {}
+
+    def _pinned_bias_c_type(self) -> Optional[str]:
+        """C type a descriptor pins with ``bias_dtype``, or None for the dispatch default.
+
+        Only S16 x S8 takes the field: arm_convolve_wrapper_s16 accepts either an int32 or an
+        int64 bias, and the int32 form reaches MVE paths the default int64 corpus never does.
+        The golden then accumulates in int32 and requantizes as TFLite does for that bias width
+        (conv_s16_b32), not with the int64 accumulator's reduced multiplier.
+        """
+        value = self.desc.get("bias_dtype")
+        if value is None:
+            return None
+        name = self.desc.get("name")
+        act = str(self.desc.get("activation_dtype", "S8")).upper()
+        weight = str(self.desc.get("weight_dtype", "S8")).upper()
+        if (act, weight) != ("S16", "S8"):
+            raise ValueError(f"{name}: bias_dtype is only supported for S16 x S8 Convolve, got {act} x {weight}")
+        # Exact match: schema.json's enum is case-sensitive and is enforced at load.
+        if value not in self._S16_BIAS_C_TYPES:
+            raise ValueError(
+                f"{name}: unsupported bias_dtype {value!r}; expected one of {sorted(self._S16_BIAS_C_TYPES)}"
+            )
+        return self._S16_BIAS_C_TYPES[value]
 
     def _check_fault_reachable(self, kind: str, context: Dict[str, Any]) -> None:
         kernel_fn = context["kernel_fn"]
@@ -259,6 +284,9 @@ class OpConvolve(OperationBase):
             weight_dtype=self.desc.get("weight_dtype", "S8"),
             cpu=self.target_cpu,
         )
+        pinned_bias_c_type = self._pinned_bias_c_type()
+        if pinned_bias_c_type is not None:
+            info["bias_c_type"] = pinned_bias_c_type
         info.setdefault("kernel_needs_layout", info["input_c_type"] in {"float", "float16_t"})
         info.setdefault("buffer_size_needs_layout", info["input_c_type"] in {"float", "float16_t"})
 
@@ -335,6 +363,9 @@ class OpConvolve(OperationBase):
         conv_params, quant_params_dict = case["conv_params"], case["quant_params"]
         has_biases = biases is not None and biases.size > 0
         bias_dtype = kernel_info["bias_c_type"]
+        if has_biases and not float_kernel and biases.dtype != np.dtype(bias_dtype[:-2]):
+            # A silent cast would hand the kernel a bias the golden was not computed with.
+            raise ValueError(f"{name}: the kernel takes a {bias_dtype} bias but the case drew a {biases.dtype} one")
 
         builder = TemplateContextBuilder()
         input_dims = builder.nhwc_to_cmsis_dims(input_shape)

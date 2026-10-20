@@ -17,7 +17,7 @@ from helia_core_tester.reporting.descriptor_tracker import DescriptorTracker
 from helia_core_tester.reporting.generator import ReportGenerator
 from helia_core_tester.generation.artifact_identity import generated_case_artifact_sha256
 
-from .cmake import active_test_list, cmake_build, cmake_configure, find_elves
+from .cmake import active_test_list, cmake_build, cmake_configure, cmake_truthy, find_elves, read_cmake_cache_value
 from .coverage import generate_coverage_reports, new_coverage_context
 from .env import REPO_ROOT, get_git_sha
 from .runner import ProcessSupervisor, run_elf_jobs_with_reporting
@@ -25,6 +25,31 @@ from .runner import ProcessSupervisor, run_elf_jobs_with_reporting
 
 def resolve_generated_tests_dir(source_dir: Path, cpu: str, suite: str) -> Path:
     return canonical_generated_tests_dir(source_dir, cpu, suite=suite)
+
+
+# CMakeLists.txt appends this to cmsis-nn's flags under ENABLE_COVERAGE; the last -O wins.
+COVERAGE_CMSIS_NN_OPTIMIZATION = "-O0"
+
+
+def optimization_metadata(requested: Optional[str], coverage: bool) -> dict:
+    """Requested optimization plus the level ns-cmsis-nn was actually compiled at (#87)."""
+    return {
+        "optimization": requested,
+        "cmsis_nn_optimization": COVERAGE_CMSIS_NN_OPTIMIZATION if coverage else requested,
+        "coverage": bool(coverage),
+    }
+
+
+def build_optimization_metadata(build_dir: Path, args) -> dict:
+    """optimization_metadata for what build_dir was configured with.
+
+    The run step does not pass --opt (the build step sets CMSIS_OPTIMIZATION_LEVEL
+    with --cmake-def), so args.opt is only a fallback for a build dir with no cache.
+    """
+    requested = read_cmake_cache_value(build_dir, "CMSIS_OPTIMIZATION_LEVEL") or getattr(args, "opt", None)
+    cached_coverage = read_cmake_cache_value(build_dir, "ENABLE_COVERAGE")
+    coverage = cmake_truthy(cached_coverage) if cached_coverage is not None else bool(getattr(args, "coverage", False))
+    return optimization_metadata(requested, coverage)
 
 
 def _best_effort_artifact_sha256(generated_test_dir: Path) -> Optional[str]:
@@ -219,7 +244,7 @@ def run_tests_with_reporting(
         metadata = {
             "cpu": cpu,
             "suite": suite,
-            "optimization": args.opt,
+            **build_optimization_metadata(build_dir, args),
             "compiler": compiler_tag,
             "toolchain_file": str(toolchain_file),
             "cmsis5_path": str(cmsis5),

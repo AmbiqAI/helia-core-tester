@@ -3050,7 +3050,7 @@ use_bias: true
 expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 ---
 operator: Convolve
-name: convolve_float_route_small_c_declines_c4_f32
+name: convolve_float_route_small_c_declines_c4_oc9_f32
 entry: arm_convolve_small_c_nhwc_f32
 entry_sizer: arm_convolve_f32_get_buffer_size
 suite: float
@@ -3058,7 +3058,7 @@ activation_dtype: FP32
 weight_dtype: FP32
 tensor_dtypes: {input: FP32, output: FP32, weights: FP32, bias: FP32}
 input_shape: [1, 6, 6, 4]
-filter_shape: [3, 3, 4, 8]
+filter_shape: [3, 3, 4, 9]
 strides: [1, 1]
 padding: SAME
 use_bias: true

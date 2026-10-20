@@ -349,6 +349,10 @@ def conv_reference_case(op, kernel_info: Dict[str, Any], float_kernel: bool, flo
         return {**result, "output": output, "comparison": exact_comparison(op, call, k, float_dtype)}
 
     kind = "s16" if kernel_info["input_c_type"] == "int16_t" else "s8"
+    # An s16 case may pin an int32 bias (bias_dtype: S32): int32 accumulation, TFLite's int32 requantization.
+    wide_bias = kind == "s16" and kernel_info.get("bias_c_type") != "int32_t"
+    entry = "conv_s16_b32" if kind == "s16" and not wide_bias else f"conv_{kind}"
+    bias_np = np.int64 if wide_bias else np.int32
     weight_dtype = str(desc.get("weight_dtype", "S8")).upper()
     extras = _extras(desc) if weight_dtype == "S4" else {}
     x_float = op.generate_input_data()
@@ -366,19 +370,18 @@ def conv_reference_case(op, kernel_info: Dict[str, Any], float_kernel: bool, flo
         if not bool(extras.get("per_channel", True)):
             scales = np.full(out_c, scales[0], dtype=np.float32)
         qfilter = weighted.QuantizedFilter(values, scales, "S4")
-        bias_q = (wrng.integers(-128, 128, size=out_c).astype(np.int64 if kind == "s16" else np.int32)
-                  if use_bias else None)
+        bias_q = wrng.integers(-128, 128, size=out_c).astype(bias_np) if use_bias else None
     else:
         in_quant = op.activation_quant("input", input_calibration_range(desc), kind)
         weights = weighted.glorot_uniform(wrng, filter_shape, fan_in, fan_out, desc.get("weight_gain"))
         qfilter = weighted.quantize_filter(weights, "S4" if weight_dtype == "S4" else "S8", channel_axis=0)
         bias_q = (weighted.quantize_bias(weighted.signed_magnitude(wrng, out_c), in_quant.scale, qfilter.scales,
-                                         wide=kind == "s16") if use_bias else None)
+                                         wide=wide_bias) if use_bias else None)
         out_quant = None
     if bias_q is None and kind == "s16":
         # TFLite's int16 conv always carries a bias tensor (the converter writes zeros), and the
         # s16 wrapper reads its bias struct unconditionally.
-        bias_q = np.zeros(out_c, np.int64)
+        bias_q = np.zeros(out_c, bias_np)
     x_q = policy.quantize(x_float, in_quant)
 
     if out_quant is None:
@@ -397,9 +400,9 @@ def conv_reference_case(op, kernel_info: Dict[str, Any], float_kernel: bool, flo
     act_min, act_max = quantized_bounds(op, kind, out_quant.scale, out_quant.zero_point)
     params = {**window, "input_offset": -in_quant.zero_point, "output_offset": out_quant.zero_point,
               "activation_min": act_min, "activation_max": act_max}
-    bias_operand = bias_q if bias_q is not None else np.zeros(0, np.int64 if kind == "s16" else np.int32)
+    bias_operand = bias_q if bias_q is not None else np.zeros(0, bias_np)
     output = op.reference_golden(ReferenceCall(
-        f"conv_{kind}", params,
+        entry, params,
         {"input": np.ascontiguousarray(x_q), "filter": np.ascontiguousarray(qfilter.values), "bias": bias_operand,
          "multiplier": multiplier, "shift": shift},
         {"output": output_shape},
@@ -427,9 +430,11 @@ _DW_F16_ROUTERS = frozenset(
     f"arm_depthwise_{stem}f16{acc}" for stem in ("conv_", "nhwc_conv_", "conv_wrapper_") for acc in ("", "_acc16"))
 _DW_F16_ROUTE_ENTRIES = {
     **{f"arm_depthwise_conv_{r}_nhwc_f16{acc}": r for r in ("direct", "generic", "cin1") for acc in ("", "_acc16")},
-    "arm_depthwise_conv_1d_k3_nhwc_f16": "1d_k3",
-    "arm_depthwise_conv_2x5_nhwc_f16": "2x5",
+    **{f"arm_depthwise_conv_1d_k3_nhwc_f16{acc}": "1d_k3" for acc in ("", "_acc16")},
+    **{f"arm_depthwise_conv_2x5_nhwc_f16{acc}": "2x5" for acc in ("", "_acc16")},
 }
+# The default (not _acc16) entries accumulate every tap in float32 on every route from this ns-cmsis-nn feature.
+DEPTHWISE_F16_ACC32_MACRO = "ARM_NN_HAS_DEPTHWISE_F16_ACC32"
 
 
 def depthwise_f16_cin1_ctx_fits(op, kh: int, kw: int, window: Dict[str, int], input_shape, output_shape) -> bool:
@@ -447,8 +452,9 @@ def depthwise_f16_cin1_ctx_fits(op, kh: int, kw: int, window: Dict[str, int], in
 
 def depthwise_f16_route(op, kernel_info: Dict[str, Any], input_shape, output_shape, kh: int, kw: int, mult: int,
                         window: Dict[str, int]) -> Optional[Dict[str, Any]]:
-    """{route: 'chain' | 'cin1', acc16} for a float16 DepthwiseConv case on a Helium target, else None (a case
-    whose entry declines the shape keeps the exact golden: it asserts a status)."""
+    """{route: 'chain' | 'cin1', acc16, acc32} for a float16 DepthwiseConv case on a Helium target, else None (a
+    case whose entry declines the shape keeps the exact golden: it asserts a status). acc32: a default entry on an
+    ns-cmsis-nn that sums every route in float32 (ns-cmsis-nn#881), so the chain model with acc32 serves cin1 too."""
     from helia_core_tester.generation.ops._shared import kernel_faithful as kf
 
     if not kf.mve_float16_route(op):
@@ -474,7 +480,8 @@ def depthwise_f16_route(op, kernel_info: Dict[str, Any], input_shape, output_sha
         route = "cin1" if r == "cin1" else "chain"
     else:
         return None
-    return {"route": route, "acc16": acc16}
+    acc32 = not acc16 and kf.checkout_declares(DEPTHWISE_F16_ACC32_MACRO)
+    return {"route": "chain" if acc32 else route, "acc16": acc16, "acc32": acc32}
 
 
 def depthwise_taps(x: np.ndarray, kh: int, kw: int, window: Dict[str, int], out_hw) -> np.ndarray:
@@ -515,6 +522,7 @@ def depthwise_faithful_case(op, x, weights, bias, kh, kw, mult, window, output_s
     else:
         def call_for(xx, ww, bb):
             return kf.depthwise_f16_mve_call(xx, ww, bb, window=window, out_hw=out_hw, acc16=route["acc16"],
+                                             acc32=route.get("acc32", False),
                                              activation=activation)
     output = op.reference_golden(call_for(x, weights, bias)).reshape(output_shape)
 
@@ -693,7 +701,10 @@ def transpose_conv_reference_case(op, kernel_info: Dict[str, Any], float_kernel:
         raise ValueError(f"{name}: unknown padding {padding!r}")
     output_shape = (n, oh, ow, out_c)
     builder = TemplateContextBuilder()
-    geometry = builder.build_transpose_conv_params(desc, input_shape, (kh, kw), output_shape, {}, {})
+    # Geometry only: the clamp comes from the reference quantization below, not the builder's.
+    unclamped = {k: v for k, v in desc.items() if k not in ("activation_min", "activation_max")}
+    geometry = builder.build_transpose_conv_params({**unclamped, "activation": "NONE"}, input_shape, (kh, kw),
+                                                   output_shape, {}, {})
     window = {"stride_h": sh, "stride_w": sw, "dilation_h": 1, "dilation_w": 1,
               "pad_h": int(geometry["pad_h"]), "pad_w": int(geometry["pad_w"])}
     use_bias = bool(desc.get("use_bias", True))
@@ -739,10 +750,24 @@ def transpose_conv_reference_case(op, kernel_info: Dict[str, Any], float_kernel:
     in_range = (value_range(desc, "calibration_range", ()) if desc.get("calibration_range")
                 else value_range(desc, "input_range", ()) if desc.get("input_range") else (-8.0, 8.0))
     in_quant = op.activation_quant("input", in_range, kind)
-    x_q = policy.quantize(_uniform_input(op, in_range), in_quant)
-    qfilter = weighted.quantize_filter(draw(), "S8", channel_axis=0)
-    bias_q = (weighted.quantize_bias(wrng.uniform(-0.5, 0.5, out_c), in_quant.scale, qfilter.scales,
+    # The data may sit in a narrower band than the calibration (input_range).
+    data_range = value_range(desc, "input_range", ()) if desc.get("input_range") else in_range
+    x_q = policy.quantize(_uniform_input(op, data_range), in_quant)
+    weights_f = draw()
+    if desc.get("positive_weights"):
+        # Same bound, one sign.
+        weights_f = np.abs(weights_f)
+    qfilter = weighted.quantize_filter(weights_f, "S8", channel_axis=0)
+    bias_lo, bias_hi = value_range(desc, "bias_range", (-0.5, 0.5))
+    bias_q = (weighted.quantize_bias(wrng.uniform(bias_lo, bias_hi, out_c), in_quant.scale, qfilter.scales,
                                      wide=kind == "s16") if use_bias else None)
+    if desc.get("wide_bias"):
+        # Random-sign magnitudes in [lo, hi] accumulator steps: beyond int32, which a converter never emits.
+        if kind != "s16" or not use_bias:
+            raise ValueError(f"{name}: wide_bias needs an s16 case with a bias")
+        lo, hi = value_range(desc, "wide_bias", ())
+        signs = np.where(wrng.integers(0, 2, size=out_c) == 0, -1.0, 1.0)
+        bias_q = np.round(signs * wrng.uniform(lo, hi, size=out_c)).astype(np.int64)
     if bias_q is None and kind == "s16":
         bias_q = np.zeros(out_c, np.int64)
     f_lo, f_hi = float_bounds(op)
@@ -753,6 +778,16 @@ def transpose_conv_reference_case(op, kernel_info: Dict[str, Any], float_kernel:
                     "filter": qfilter.dequantized().astype(np.float32), "bias": real_bias.astype(np.float32)},
                    {"output": output_shape})["output"]
     out_quant = op.activation_quant("output", policy.data_range(real), kind)
+    w_scales = qfilter.scales.astype(np.float64)
+    if desc.get("wide_bias"):
+        # Widen the output scale so the largest reachable accumulator cannot saturate.
+        reach = (32768 * np.abs(qfilter.values.astype(np.int64)).reshape(out_c, -1).sum(axis=1)
+                 + np.abs(bias_q))
+        out_quant = policy.TensorQuant(float(np.float32(np.max(reach * in_quant.scale * w_scales) / 32767.0)), 0, kind)
+    if desc.get("min_effective_scale"):
+        # One accumulator step moves one output step on the smallest in * weight / out scale.
+        out_quant = policy.TensorQuant(
+            float(np.float32(in_quant.scale * np.min(w_scales) / float(desc["min_effective_scale"]))), 0, kind)
     multiplier, shift = per_channel_multipliers(in_quant.scale, out_quant.scale, qfilter.scales)
     act_min, act_max = quantized_bounds(op, kind, out_quant.scale, out_quant.zero_point)
     ref_params = {**window, "input_offset": -in_quant.zero_point, "output_offset": out_quant.zero_point,

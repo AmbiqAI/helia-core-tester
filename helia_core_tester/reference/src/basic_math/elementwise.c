@@ -149,6 +149,43 @@ int32_t hct_ref_mul_f16(const HctFloatActivationParams *params, const HctTensor 
     return mul_float(params, inputs, num_inputs, outputs, num_outputs, HCT_FLOAT16);
 }
 
+/* ------------------------------------------------------------------- Div */
+
+/* The binary64 quotient of the exactly widened operands, rounded once to the output type, then clamped. */
+static int32_t div_float(const HctFloatActivationParams *p, const HctTensor *inputs, int32_t num_inputs,
+                         HctTensor *outputs, int32_t num_outputs, int32_t dtype)
+{
+    if (p == NULL)
+    {
+        return HCT_E_NULL;
+    }
+    HctBroadcast2 bc;
+    HCT_TRY(hct_binary_setup(inputs, num_inputs, outputs, num_outputs, dtype, dtype, &bc));
+    HCT_TRY(hct_check_float_activation(p->activation_min, p->activation_max));
+    for (int64_t i = 0; i < bc.count; ++i)
+    {
+        int64_t o1 = 0;
+        int64_t o2 = 0;
+        hct_broadcast2_offsets(&bc, i, &o1, &o2);
+        const double q = (double)hct_load_f32(&inputs[0], o1) / (double)hct_load_f32(&inputs[1], o2);
+        const float rounded = dtype == HCT_FLOAT16 ? hct_f16_to_f32(hct_f64_to_f16(q)) : (float)q;
+        hct_store_f32(&outputs[0], i, hct_clamp_f32(rounded, p->activation_min, p->activation_max));
+    }
+    return HCT_OK;
+}
+
+int32_t hct_ref_div_f32(const HctFloatActivationParams *params, const HctTensor *inputs, int32_t num_inputs,
+                        HctTensor *outputs, int32_t num_outputs)
+{
+    return div_float(params, inputs, num_inputs, outputs, num_outputs, HCT_FLOAT32);
+}
+
+int32_t hct_ref_div_f16(const HctFloatActivationParams *params, const HctTensor *inputs, int32_t num_inputs,
+                        HctTensor *outputs, int32_t num_outputs)
+{
+    return div_float(params, inputs, num_inputs, outputs, num_outputs, HCT_FLOAT16);
+}
+
 /* ------------------------------------------------------- Maximum / Minimum */
 
 /* Quantized operands share one quantization, so the codes compare directly. Floats
@@ -342,6 +379,25 @@ int32_t hct_ref_comparison_prepare(const HctComparisonQuant *in, HctComparisonPa
                                                     &out->input2_shift);
 }
 
+static int32_t compare_values(int32_t operation, int32_t a, int32_t b)
+{
+    switch (operation)
+    {
+    case HCT_CMP_EQUAL:
+        return a == b;
+    case HCT_CMP_NOT_EQUAL:
+        return a != b;
+    case HCT_CMP_GREATER:
+        return a > b;
+    case HCT_CMP_GREATER_EQUAL:
+        return a >= b;
+    case HCT_CMP_LESS:
+        return a < b;
+    default:
+        return a <= b;
+    }
+}
+
 static int32_t comparison(const HctComparisonParams *p, const HctTensor *inputs, int32_t num_inputs,
                           HctTensor *outputs, int32_t num_outputs, int32_t dtype)
 {
@@ -375,29 +431,7 @@ static int32_t comparison(const HctComparisonParams *p, const HctTensor *inputs,
         const int32_t b = hct_multiply_by_quantized_multiplier(
             (p->input2_offset + hct_load_i32(&inputs[1], o2)) * (1 << p->left_shift), p->input2_multiplier,
             p->input2_shift);
-        int32_t result = 0;
-        switch (p->operation)
-        {
-        case HCT_CMP_EQUAL:
-            result = a == b;
-            break;
-        case HCT_CMP_NOT_EQUAL:
-            result = a != b;
-            break;
-        case HCT_CMP_GREATER:
-            result = a > b;
-            break;
-        case HCT_CMP_GREATER_EQUAL:
-            result = a >= b;
-            break;
-        case HCT_CMP_LESS:
-            result = a < b;
-            break;
-        default:
-            result = a <= b;
-            break;
-        }
-        hct_store_i32(&outputs[0], i, result);
+        hct_store_i32(&outputs[0], i, compare_values(p->operation, a, b));
     }
     return HCT_OK;
 }
@@ -412,6 +446,31 @@ int32_t hct_ref_comparison_s16(const HctComparisonParams *params, const HctTenso
                                HctTensor *outputs, int32_t num_outputs)
 {
     return comparison(params, inputs, num_inputs, outputs, num_outputs, HCT_INT16);
+}
+
+/* Unquantized int32: TFLite compares the raw values. */
+int32_t hct_ref_comparison_s32(const HctCompareOpParams *params, const HctTensor *inputs, int32_t num_inputs,
+                               HctTensor *outputs, int32_t num_outputs)
+{
+    if (params == NULL)
+    {
+        return HCT_E_NULL;
+    }
+    HctBroadcast2 bc;
+    HCT_TRY(hct_binary_setup(inputs, num_inputs, outputs, num_outputs, HCT_INT32, HCT_BOOL, &bc));
+    if (params->operation < HCT_CMP_EQUAL || params->operation > HCT_CMP_LESS_EQUAL)
+    {
+        return HCT_E_PARAM;
+    }
+    for (int64_t i = 0; i < bc.count; ++i)
+    {
+        int64_t o1 = 0;
+        int64_t o2 = 0;
+        hct_broadcast2_offsets(&bc, i, &o1, &o2);
+        hct_store_i32(&outputs[0], i,
+                      compare_values(params->operation, hct_load_i32(&inputs[0], o1), hct_load_i32(&inputs[1], o2)));
+    }
+    return HCT_OK;
 }
 
 /* --------------------------------------------------------------------- Abs */

@@ -13,14 +13,14 @@ _Static_assert(__builtin_types_compatible_p(__typeof__(arm_split_f16), arm_cmsis
 
 
 #define SPLIT_FLOAT_CHANNELS_PAIRS_F16_OUT_0_OUTPUT_SIZE (8)
-static struct {
+static struct __attribute__((aligned(16))) {
     uint8_t head[HELIA_GUARD_BYTES];
     float16_t body[SPLIT_FLOAT_CHANNELS_PAIRS_F16_OUT_0_OUTPUT_SIZE];
     uint8_t tail[HELIA_GUARD_BYTES];
 } split_float_channels_pairs_f16_out_0_output_guard;
 #define split_float_channels_pairs_f16_out_0_output (split_float_channels_pairs_f16_out_0_output_guard.body)
 #define SPLIT_FLOAT_CHANNELS_PAIRS_F16_OUT_1_OUTPUT_SIZE (8)
-static struct {
+static struct __attribute__((aligned(16))) {
     uint8_t head[HELIA_GUARD_BYTES];
     float16_t body[SPLIT_FLOAT_CHANNELS_PAIRS_F16_OUT_1_OUTPUT_SIZE];
     uint8_t tail[HELIA_GUARD_BYTES];

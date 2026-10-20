@@ -13,7 +13,7 @@ _Static_assert(__builtin_types_compatible_p(__typeof__(arm_softmax_f32), arm_cms
 
 
 #define SOFTMAX_FLOAT_DEFAULT_F32_OUTPUT_SIZE (1 * 4 * 4 * 3)
-static struct {
+static struct __attribute__((aligned(16))) {
     uint8_t head[HELIA_GUARD_BYTES];
     float body[SOFTMAX_FLOAT_DEFAULT_F32_OUTPUT_SIZE];
     uint8_t tail[HELIA_GUARD_BYTES];

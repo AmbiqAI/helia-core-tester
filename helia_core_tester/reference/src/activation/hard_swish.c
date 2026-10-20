@@ -167,13 +167,48 @@ int32_t hct_ref_hard_swish_s8(const HctHardSwishParams *params, const HctTensor 
 
 #define HCT_HARD_SWISH_MAX_ABS_X 65535
 
-int32_t hct_ref_hard_swish_precise_prepare(const HctHardSwishQuant *in, HctHardSwishPreciseParams *out)
+/* Whether, over every input code, x + relu_q3 and x * xr (xr the clamped relu6 term after the prescale
+ * rounding) stay inside int32; *nonzero reports whether xr is nonzero for some code. */
+static int prescale_fits(int32_t prescale, int64_t q3, int64_t q6, int32_t zp, int32_t qmin, int32_t qmax,
+                         int *nonzero)
+{
+    *nonzero = 0;
+    for (int64_t q = qmin; q <= qmax; ++q)
+    {
+        const int64_t x = q - zp;
+        const int64_t shifted = x + q3;
+        if (shifted < INT32_MIN || shifted > INT32_MAX)
+        {
+            return 0;
+        }
+        int64_t xr = shifted < 0 ? 0 : (shifted > q6 ? q6 : shifted);
+        if (prescale > 0)
+        {
+            xr = (xr + (1LL << (prescale - 1))) >> prescale;
+        }
+        const int64_t product = x * xr;
+        if (product < INT32_MIN || product > INT32_MAX)
+        {
+            return 0;
+        }
+        *nonzero |= xr != 0;
+    }
+    return 1;
+}
+
+int32_t hct_ref_hard_swish_precise_prepare(const HctHardSwishPreciseQuant *in, HctHardSwishPreciseParams *out)
 {
     if (in == NULL || out == NULL)
     {
         return HCT_E_NULL;
     }
-    HCT_TRY(check_quant(in));
+    const HctHardSwishQuant quant = {in->dtype, in->input_scale, in->input_zero_point, in->output_scale,
+                                     in->output_zero_point};
+    HCT_TRY(check_quant(&quant));
+    if (in->prescale < -1 || in->prescale > 31)
+    {
+        return HCT_E_PARAM;
+    }
     const double s_in = (double)in->input_scale;
     const double q3 = floor(3.0 / s_in + 0.5);
     const double q6 = floor(6.0 / s_in + 0.5);
@@ -181,10 +216,29 @@ int32_t hct_ref_hard_swish_precise_prepare(const HctHardSwishQuant *in, HctHardS
     {
         return HCT_E_PARAM;
     }
-    int32_t prescale = 0;
-    for (int64_t prod_max = 32767LL * (int64_t)q6; prod_max > INT32_MAX; prod_max >>= 1)
+    int32_t qmin = 0;
+    int32_t qmax = 0;
+    HCT_TRY(hct_dtype_range(in->dtype, &qmin, &qmax));
+    int nonzero = 0;
+    int32_t prescale = in->prescale;
+    if (prescale < 0)
     {
-        ++prescale;
+        for (prescale = 0; prescale <= 31; ++prescale)
+        {
+            if (prescale_fits(prescale, (int64_t)q3, (int64_t)q6, in->input_zero_point, qmin, qmax, &nonzero))
+            {
+                break;
+            }
+        }
+        if (prescale > 31)
+        {
+            return HCT_E_PARAM;
+        }
+    }
+    else if (!prescale_fits(prescale, (int64_t)q3, (int64_t)q6, in->input_zero_point, qmin, qmax, &nonzero) ||
+             !nonzero)
+    {
+        return HCT_E_PARAM;
     }
     out->input_offset = in->input_zero_point;
     out->output_offset = in->output_zero_point;

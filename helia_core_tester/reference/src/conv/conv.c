@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Conv2D: TFLite's reference_integer_ops::ConvPerChannel (int8 with an int32 accumulator,
- * int16 with an int64 one). Float: the exact sum (products of binary32/binary16 operands are
+ * int16 with an int64 one, or with an int32 one when the bias is int32: conv_s16_b32). Float: the exact sum (products of binary32/binary16 operands are
  * exact in binary64, accumulated there) plus bias, rounded once to the output type and then
  * clamped; summation order is not part of the reference.
  * Input NHWC, filter OHWI with I = input depth / groups, output NHWC.
@@ -118,15 +118,20 @@ static int32_t conv_shape(const HctTensor *input, const HctTensor *filter, const
         }                                                                                                              \
     } while (0)
 
+/* bias_dtype also picks the accumulator: int64 (with the int64 requantization) for an int64 bias, int32 otherwise. */
 static int32_t conv_quantized(const HctConvParams *p, const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs,
-                              int32_t num_outputs, int32_t dtype)
+                              int32_t num_outputs, int32_t dtype, int32_t bias_dtype)
 {
     if (p == NULL)
     {
         return HCT_E_NULL;
     }
     HCT_TRY(hct_check_io(inputs, num_inputs, 5, outputs, num_outputs, 1));
-    const int32_t bias_dtype = dtype == HCT_INT16 ? HCT_INT64 : HCT_INT32;
+    if (bias_dtype == HCT_INT64 && dtype != HCT_INT16)
+    {
+        return HCT_E_DTYPE;
+    }
+    const int wide = bias_dtype == HCT_INT64;
     int64_t n = 0;
     HCT_TRY(hct_check_tensor(&inputs[0], dtype, &n));
     HCT_TRY(hct_check_tensor(&inputs[1], HCT_INT8, &n));
@@ -135,7 +140,7 @@ static int32_t conv_quantized(const HctConvParams *p, const HctTensor *inputs, i
     HCT_TRY(conv_shape(&inputs[0], &inputs[1], &outputs[0], &s));
     int has_bias = 0;
     HCT_TRY(hct_check_bias(&inputs[2], bias_dtype, s.out_c, &has_bias));
-    HCT_TRY(hct_check_per_channel(&inputs[3], &inputs[4], s.out_c, -31, dtype == HCT_INT16 ? 7 : 30));
+    HCT_TRY(hct_check_per_channel(&inputs[3], &inputs[4], s.out_c, -31, wide ? 7 : 30));
     HCT_TRY(hct_check_window(p->stride_h, p->stride_w, p->dilation_h, p->dilation_w, p->pad_h, p->pad_w));
     int32_t qmin = 0;
     int32_t qmax = 0;
@@ -168,7 +173,7 @@ static int32_t conv_quantized(const HctConvParams *p, const HctTensor *inputs, i
                         acc += hct_load_i64(&inputs[2], oc);
                     }
                     int64_t scaled = 0;
-                    if (dtype == HCT_INT16)
+                    if (wide)
                     {
                         /* The int64 MultiplyByQuantizedMultiplier is specified for |acc| < 2^47. */
                         if (acc < -((int64_t)1 << 47) || acc >= ((int64_t)1 << 47))
@@ -203,13 +208,19 @@ static int32_t conv_quantized(const HctConvParams *p, const HctTensor *inputs, i
 int32_t hct_ref_conv_s8(const HctConvParams *params, const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs,
                         int32_t num_outputs)
 {
-    return conv_quantized(params, inputs, num_inputs, outputs, num_outputs, HCT_INT8);
+    return conv_quantized(params, inputs, num_inputs, outputs, num_outputs, HCT_INT8, HCT_INT32);
 }
 
 int32_t hct_ref_conv_s16(const HctConvParams *params, const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs,
                          int32_t num_outputs)
 {
-    return conv_quantized(params, inputs, num_inputs, outputs, num_outputs, HCT_INT16);
+    return conv_quantized(params, inputs, num_inputs, outputs, num_outputs, HCT_INT16, HCT_INT64);
+}
+
+int32_t hct_ref_conv_s16_b32(const HctConvParams *params, const HctTensor *inputs, int32_t num_inputs,
+                             HctTensor *outputs, int32_t num_outputs)
+{
+    return conv_quantized(params, inputs, num_inputs, outputs, num_outputs, HCT_INT16, HCT_INT32);
 }
 
 static int32_t conv_float(const HctConvFloatParams *p, const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs,

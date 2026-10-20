@@ -12,8 +12,10 @@
  * Every output: an accumulator starts at its bias in float16 and takes one fused multiply-add per in-range tap,
  * row by row then column by column, the in-range window found with the kernels' own start/end formulas
  * (arm_depthwise_direct_tap_start / _end). Folding (not acc16, more than 32 in-range taps) as in hct_f16_chain (hct_f16_mve.h).
- * The specialisations never reach 32 taps, so acc16 makes no difference there, as in the kernel. The activation
- * clamp is applied to non-NaN values (the generator masks nonfinite lanes).
+ * The specialisations never reach 32 taps, so acc16 makes no difference there, as in the kernel. acc32 is the
+ * default entries from ns-cmsis-nn#881 on every route: a float32 sum from the bias, one in-range tap at a time in
+ * (ky, kx) order, rounded to float16 once. The activation clamp is applied to non-NaN values (the generator masks
+ * nonfinite lanes).
  */
 #include <stdlib.h>
 
@@ -49,7 +51,8 @@ int32_t hct_ref_depthwise_f16_mve(const HctDepthwiseF16MveParams *p, const HctTe
     HCT_TRY(hct_check_tensor(&inputs[1], HCT_FLOAT16, &n));
     HCT_TRY(hct_check_tensor(&outputs[0], HCT_FLOAT16, &n));
     HCT_TRY(hct_check_window(p->stride_h, p->stride_w, p->dilation_h, p->dilation_w, p->pad_h, p->pad_w));
-    if ((p->acc16 != 0 && p->acc16 != 1) || !(p->activation_min <= p->activation_max))
+    if ((p->acc16 != 0 && p->acc16 != 1) || (p->acc32 != 0 && p->acc32 != 1) || (p->acc16 && p->acc32) ||
+        !(p->activation_min <= p->activation_max))
     {
         return HCT_E_PARAM;
     }
@@ -125,7 +128,18 @@ int32_t hct_ref_depthwise_f16_mve(const HctDepthwiseF16MveParams *p, const HctTe
                     }
                     const float bias = has_bias ? hct_load_f32(&inputs[2], oc) : 0.0f;
                     float acc = 0.0f;
-                    status = hct_f16_chain(xs, ws, taps, !p->acc16, bias, &acc);
+                    if (p->acc32)
+                    {
+                        acc = bias;
+                        for (int32_t t = 0; t < taps; ++t)
+                        {
+                            acc += xs[t] * ws[t];
+                        }
+                    }
+                    else
+                    {
+                        status = hct_f16_chain(xs, ws, taps, !p->acc16, bias, &acc);
+                    }
                     hct_store_f32(ot, hct_offset4(ot, b, oy, ox, oc), hct_f16_clamp_finite(acc, lo, hi));
                 }
             }

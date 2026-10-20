@@ -18,6 +18,7 @@ _OP_MAP = {
 _DTYPE_INFO = {
     "S8": ("int8", "int8_t", np.int8, -128, 127, "s8"),
     "S16": ("int16", "int16_t", np.int16, -32768, 32767, "s16"),
+    "S32": ("int32", "int32_t", np.int32, -(2**31), 2**31 - 1, "s32"),
 }
 
 
@@ -113,28 +114,51 @@ class ComparisonFamilyBase(OperationBase):
         input_2_dims = builder.nhwc_to_cmsis_dims(input_shape_2)
         output_dims = builder.nhwc_to_cmsis_dims(output_shape)
 
-        ref_params = self._quant_params(activation_dtype, op_enum)
-        params = {"left_shift": ref_params["left_shift"]}
-        for i in (1, 2):
-            params[f"input_{i}_offset"] = ref_params[f"input{i}_offset"]
-            params[f"input_{i}_mult"] = ref_params[f"input{i}_multiplier"]
-            params[f"input_{i}_shift"] = ref_params[f"input{i}_shift"]
-        entry = f"comparison_{ref_quant.kind(activation_dtype)}"
+        if activation_dtype == "S32":
+            from helia_core_tester.generation.ops._shared.int32_data import sample_int32
+            from helia_core_tester.generation.reference.abi import comparison_code
 
-        def call_for(input_1_q, input_2_q):
-            return ReferenceCall(entry, ref_params,
-                                 {"input1": np.ascontiguousarray(input_1_q), "input2": np.ascontiguousarray(input_2_q)},
-                                 {"output": output_shape})
+            # Unquantized: the kernel compares the raw values.
+            params = {}
+            rng = self._seeded_rng()
+            input_1_q = sample_int32(rng, input_shape_1)
+            input_2_q = sample_int32(rng, input_shape_2, phase=1)
+            if input_1_q.size == 1:
+                input_1_q[...] = 0
+            elif input_2_q.size == 1:
+                input_2_q[...] = 0
+            elif input_2_q.size >= input_1_q.size:
+                _pin_near(rng, input_1_q, input_2_q, output_shape, qmin, qmax, 1)
+            else:
+                _pin_near(rng, input_2_q, input_1_q, output_shape, qmin, qmax, 1)
+            expected = self.reference_golden(ReferenceCall(
+                "comparison_s32", {"operation": comparison_code(op_enum)},
+                {"input1": np.ascontiguousarray(input_1_q), "input2": np.ascontiguousarray(input_2_q)},
+                {"output": output_shape},
+            ))
+        else:
+            ref_params = self._quant_params(activation_dtype, op_enum)
+            params = {"left_shift": ref_params["left_shift"]}
+            for i in (1, 2):
+                params[f"input_{i}_offset"] = ref_params[f"input{i}_offset"]
+                params[f"input_{i}_mult"] = ref_params[f"input{i}_multiplier"]
+                params[f"input_{i}_shift"] = ref_params[f"input{i}_shift"]
+            entry = f"comparison_{ref_quant.kind(activation_dtype)}"
 
-        rng = self._seeded_rng()
-        # Redraw until the output mixes.
-        for _ in range(16):
-            input_1_q, input_2_q = self._sample_operands(
-                rng, input_shape_1, input_shape_2, output_shape, qmin, qmax, np_in_dtype, _near_step(params)
-            )
-            if np.unique(call_for(input_1_q, input_2_q).output()).size > 1:
-                break
-        expected = self.reference_golden(call_for(input_1_q, input_2_q))
+            def call_for(input_1_q, input_2_q):
+                return ReferenceCall(entry, ref_params,
+                                     {"input1": np.ascontiguousarray(input_1_q), "input2": np.ascontiguousarray(input_2_q)},
+                                     {"output": output_shape})
+
+            rng = self._seeded_rng()
+            # Redraw until the output mixes.
+            for _ in range(16):
+                input_1_q, input_2_q = self._sample_operands(
+                    rng, input_shape_1, input_shape_2, output_shape, qmin, qmax, np_in_dtype, _near_step(params)
+                )
+                if np.unique(call_for(input_1_q, input_2_q).output()).size > 1:
+                    break
+            expected = self.reference_golden(call_for(input_1_q, input_2_q))
 
         context = {
             "name": name,

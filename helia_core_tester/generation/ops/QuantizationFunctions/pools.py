@@ -97,9 +97,11 @@ def dequantize_f16_bits_pool(context: Mapping[str, Any]) -> ArgumentPool:
     file_scope = "\n".join([
         f"/* The NaN rule this build compiled for {kernel_fn}: the MVE vector conversion where the library",
         " * builds with float16, MVE float16 and no ARM_MATH_AUTOVECTORIZE, unless its assembler verdict needs",
-        " * the scalar form (Internal/arm_nn_vcvt_f16.h); the scalar conversion's rule everywhere else. */",
+        " * the scalar form (Internal/arm_nn_vcvt_f16.h); the scalar conversion's rule everywhere else. A library",
+        " * that defines ARM_NN_HAS_DEQUANTIZE_F16_NAN_PAYLOAD (ns-cmsis-nn#871) rebuilds NaN lanes on the vector",
+        " * path, so it gives the scalar rule there too. */",
         "#if ARM_NN_ENABLE_F16 && defined(ARM_MATH_MVE_FLOAT16) && !defined(HELIA_CMSIS_NN_FLOAT_AUTOVECTORIZE) && \\",
-        "    !defined(ARM_NN_VCVT_F16_SCALAR_FORM)",
+        "    !defined(ARM_NN_VCVT_F16_SCALAR_FORM) && !defined(ARM_NN_HAS_DEQUANTIZE_F16_NAN_PAYLOAD)",
         f"    #define {upper}_EXPECTED_BITS {n}_expected_vector_bits",
         f'    #define {upper}_NAN_RULE "vector: default NaN"',
         "#else",

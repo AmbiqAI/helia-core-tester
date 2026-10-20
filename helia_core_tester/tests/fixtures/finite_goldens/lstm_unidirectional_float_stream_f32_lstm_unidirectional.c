@@ -38,31 +38,31 @@ int32_t lstm_unidirectional_float_stream_f32_run(
 }
 
 
-static struct {
+static struct __attribute__((aligned(16))) {
     uint8_t head[HELIA_GUARD_BYTES];
     float body[16];
     uint8_t tail[HELIA_GUARD_BYTES];
 } lstm_unidirectional_float_stream_f32_output_guard;
 #define lstm_unidirectional_float_stream_f32_output (lstm_unidirectional_float_stream_f32_output_guard.body)
-static struct {
+static struct __attribute__((aligned(16))) {
     uint8_t head[HELIA_GUARD_BYTES];
     float body[4];
     uint8_t tail[HELIA_GUARD_BYTES];
 } lstm_unidirectional_float_stream_f32_temp1_guard;
 #define lstm_unidirectional_float_stream_f32_temp1 (lstm_unidirectional_float_stream_f32_temp1_guard.body)
-static struct {
+static struct __attribute__((aligned(16))) {
     uint8_t head[HELIA_GUARD_BYTES];
     float body[4];
     uint8_t tail[HELIA_GUARD_BYTES];
 } lstm_unidirectional_float_stream_f32_temp2_guard;
 #define lstm_unidirectional_float_stream_f32_temp2 (lstm_unidirectional_float_stream_f32_temp2_guard.body)
-static struct {
+static struct __attribute__((aligned(16))) {
     uint8_t head[HELIA_GUARD_BYTES];
     float body[4];
     uint8_t tail[HELIA_GUARD_BYTES];
 } lstm_unidirectional_float_stream_f32_cell_state_guard;
 #define lstm_unidirectional_float_stream_f32_cell_state (lstm_unidirectional_float_stream_f32_cell_state_guard.body)
-static struct {
+static struct __attribute__((aligned(16))) {
     uint8_t head[HELIA_GUARD_BYTES];
     float body[4];
     uint8_t tail[HELIA_GUARD_BYTES];

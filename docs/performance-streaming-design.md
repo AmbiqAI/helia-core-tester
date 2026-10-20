@@ -128,7 +128,7 @@ firmware byte for byte.
 | 3 | `KERNEL_CATALOG` | target -> host | one page of catalog entries; `HCTP_FLAG_MORE` on every non-final page |
 | 4 | `SESSION_PLAN` | host -> target | timing plan, PMU passes, case list (below) |
 | 5 | `REQUEST_CASE` | target -> host | `u16 case_index` |
-| 6 | `CASE_META` | host -> target | case id, kernel id, comparison config, scalars, blob descriptors, scratch bytes |
+| 6 | `CASE_META` | host -> target | case id, kernel id, comparison config, scalars, blob descriptors, scratch bytes, optional store keys (below) |
 | 7 | `REQUEST_BLOB` | target -> host | `u32 blob_id, u32 offset, u16 max_length` |
 | 8 | `BLOB_CHUNK` | host -> target | `u32 blob_id, u32 offset, raw data` |
 | 9 | `CASE_READY` | target -> host | `u32 blob_id, u32 bytes_received` |
@@ -146,6 +146,16 @@ firmware byte for byte.
 
 All integers are little-endian; `text` is `u16 length + UTF-8 bytes`; `raw` is
 `u32 length + bytes`.
+
+Each `CASE_META` blob descriptor must match the kernel's `blobs:` contract in
+`assets/kernel_registry.yaml` (rendered into `benchmark_server_catalog.c`): the role must
+be one the kernel accepts, at most once, with one of the dtypes listed for it (a role
+lists a single dtype unless the kernel can take more than one, like
+`arm_convolve_wrapper_s16`'s `cmsis_nn_bias_data` bias, `[S32, S64]`, where the adapter
+sets `is_int32_bias` from the blob's dtype). Adapters otherwise cast blob pointers by
+kernel id rather than by declared dtype, so the firmware answers any other descriptor
+with `INVALID_ARGUMENT` before allocating it. The bridge applies the same check on the
+host and raises `BlobContractError`.
 
 A kernel error during the correctness run or sampling (an adapter refusing a
 shape, say) ends only that case: the target sends `CASE_COMPLETE` with
@@ -189,6 +199,22 @@ and `arm_reduce_sum_f32` takes its MVE path only when FZ=1. The host stamps both
 values and the decoded control bits (`fp_mode`) in the manifest `boot` record; the
 board matrix shows the pinned `fpscr`. Batches must report the same pinned `fpscr`.
 A build without an FPU reports 0 for both.
+`capability_flags` bit 8 is `HCT_CAP_BLOB_STORE`: the firmware keeps an on-board
+cache of case blobs at the top of MRAM (`blob_store_bytes` in the board row; 2 MiB
+at 0x600000-0x800000 on apollo510_evb, off elsewhere). When the bit is set, the host
+appends a tail to `CASE_META`: `u8 kind` (1), then a `u64` digest per blob (the first
+8 bytes of the blob's SHA-256, little-endian). The firmware looks each blob up by
+`(length, crc32, digest)`, checks the stored copy's CRC32, and copies it into the
+workspace instead of sending `REQUEST_BLOB`; the host counts the blobs it was never
+asked for as hits. After a streamed blob passes its CRC, the firmware programs it into
+the store (data, read back, then a header that commits it). A head record (magic,
+version, region, generation, CRC) guards the region: a foreign or stale head starts a
+new generation, and a full store starts a new generation (a wipe). The host sends
+the tail only to firmware with the bit, and the firmware reads nothing past it, so old
+hosts and old firmware keep working. The store sits past the image and the 512 KiB
+weights pool; a build whose pool would reach it leaves it unused. `HCT_BLOB_STORE=0`
+on the host turns it off (no keys, so the board neither reads nor writes the store).
+All store reads and writes happen while blobs stream, never in a timed window.
 `capability_flags` bit 6 is `HCT_CAP_PMU_ARMV8M`, set only when the firmware was
 built for a core whose device header declares `__PMU_PRESENT == 1`;
 `pmu_counter_slots` is `__PMU_NUM_EVENTCNT` (8 on Cortex-M55, 0 without a PMU).
@@ -432,9 +458,11 @@ Key files:
 
 `session_manifest.json` (`hct.hardware.session_manifest`) records the build in
 `build`: kernel source, NSX version, `nsx.lock` digest, every locked module
-(`modules`: name, project, kind, revision, tag, commit, url) and the ARM GCC that
-built the image (`toolchain`). `hardware run --json` prints
-`hct.hardware.nightly_run`: totals and cases plus `generated_at`, the
+(`modules`: name, project, kind, revision, tag, commit, url) and the compiler that
+built the image (`toolchain`: `name` is `arm-none-eabi-gcc` or `atfe`, `version` its
+`-dumpversion`). `hardware run --json` prints
+`hct.hardware.nightly_run`: totals and cases plus `generated_at`, the build's
+`toolchain` (same shape, null when unknown), the
 `selection` the run used and the `github` run (null outside Actions); the nightly
 saves it as `hardware-nightly-run.json` beside the bundle. `selection` records
 values after defaults and board fitting: `precision` is the float precision

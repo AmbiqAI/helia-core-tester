@@ -38,19 +38,19 @@ int32_t gru_unidirectional_float_stream_f32_run(
 }
 
 
-static struct {
+static struct __attribute__((aligned(16))) {
     uint8_t head[HELIA_GUARD_BYTES];
     float32_t body[16];
     uint8_t tail[HELIA_GUARD_BYTES];
 } gru_unidirectional_float_stream_f32_output_guard;
 #define gru_unidirectional_float_stream_f32_output (gru_unidirectional_float_stream_f32_output_guard.body)
-static struct {
+static struct __attribute__((aligned(16))) {
     uint8_t head[HELIA_GUARD_BYTES];
     float32_t body[4];
     uint8_t tail[HELIA_GUARD_BYTES];
 } gru_unidirectional_float_stream_f32_temp1_guard;
 #define gru_unidirectional_float_stream_f32_temp1 (gru_unidirectional_float_stream_f32_temp1_guard.body)
-static struct {
+static struct __attribute__((aligned(16))) {
     uint8_t head[HELIA_GUARD_BYTES];
     float32_t body[4];
     uint8_t tail[HELIA_GUARD_BYTES];

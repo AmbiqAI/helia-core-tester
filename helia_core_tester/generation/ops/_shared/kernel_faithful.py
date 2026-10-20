@@ -6,6 +6,9 @@ rounding-error bound of the exact result, or generation fails instead of encodin
 
 from __future__ import annotations
 
+import functools
+import re
+from pathlib import Path
 from typing import Optional, Tuple
 
 import numpy as np
@@ -49,6 +52,22 @@ def shipped(op) -> bool:
     if numerics not in ("shipped", "bounded"):
         raise ValueError(f"kernel_numerics must be 'shipped' or 'bounded', got {numerics!r}")
     return numerics == "shipped"
+
+
+@functools.lru_cache(maxsize=32)
+def _header_defines(root: str, macro: str) -> bool:
+    pattern = re.compile(rf"^[ \t]*#[ \t]*define[ \t]+{re.escape(macro)}\b", re.M)
+    return any(pattern.search(path.read_text(encoding="utf-8", errors="replace"))
+               for path in sorted((Path(root) / "Include").glob("arm_nn*functions*.h")))
+
+
+def checkout_declares(macro: str) -> bool:
+    """Whether the ns-cmsis-nn checkout generation runs against defines `macro` in a public functions header
+    (a feature macro such as ARM_NN_HAS_DEPTHWISE_F16_ACC32); False without a checkout."""
+    from helia_core_tester.generation.utils.temp_sizer_probe import resolve_cmsis_nn_root
+
+    root = resolve_cmsis_nn_root()
+    return root is not None and _header_defines(str(root), macro)
 
 
 def mve_float16_route(op) -> bool:
@@ -440,7 +459,7 @@ def check_svdf_within_bound(name: str, emulated: np.ndarray, call: ReferenceCall
 
 def depthwise_f16_mve_call(x: np.ndarray, weights: np.ndarray, bias: Optional[np.ndarray], *,
                            window: dict, out_hw: Tuple[int, int], acc16: bool,
-                           activation: Tuple[float, float]) -> ReferenceCall:
+                           activation: Tuple[float, float], acc32: bool = False) -> ReferenceCall:
     """ns-cmsis-nn's float16 depthwise routes that chain over the in-range taps (direct ch_mult 1, generic,
     conv1d k3, 2x5) on Helium: x [N,H,W,C], weights [1,KH,KW,C*M], bias [C*M] or None; output [N,OH,OW,C*M]."""
     x = np.ascontiguousarray(x, dtype=np.float16)
@@ -450,7 +469,8 @@ def depthwise_f16_mve_call(x: np.ndarray, weights: np.ndarray, bias: Optional[np
     b = np.zeros((0,), np.float16) if bias is None else np.ascontiguousarray(bias, dtype=np.float16)
     params = {k: int(window[k]) for k in ("stride_h", "stride_w", "dilation_h", "dilation_w", "pad_h", "pad_w")}
     return ReferenceCall("depthwise_f16_mve",
-                         {**params, "acc16": int(bool(acc16)), "activation_min": float(activation[0]),
+                         {**params, "acc16": int(bool(acc16)), "acc32": int(bool(acc32)),
+                          "activation_min": float(activation[0]),
                           "activation_max": float(activation[1])},
                          {"input": x, "filter": weights, "bias": b},
                          {"output": (x.shape[0], int(out_hw[0]), int(out_hw[1]), weights.shape[3])})

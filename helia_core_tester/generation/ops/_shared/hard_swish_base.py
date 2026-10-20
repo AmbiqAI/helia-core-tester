@@ -5,12 +5,16 @@ reference entry since TFLite has no counterpart; f32/f16 follow the kernel's own
 arithmetic per target (kernel_faithful), the exact result as the oracle.
 """
 
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 import numpy as np
 from pathlib import Path
 from helia_core_tester.generation.ops._shared import kernel_faithful as kf
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.harness.simple import tensor_case_pool
+
+PRESCALE_MAX = 31
+# hint.extras keys that pin a precise case's quantization.
+QUANT_EXTRAS = ("input_scale", "output_scale", "input_zero_point", "output_zero_point")
 
 
 def hard_swish_values(context: Dict, variant: str) -> Dict:
@@ -60,6 +64,21 @@ class HardSwishFamilyBase(OperationBase):
                     'float_kernel': True}
         raise NotImplementedError(f"Unsupported HardSwish dtype: {activation_dtype}")
 
+    @classmethod
+    def _prescale_override(cls, extras: Dict, variant: str, float_kernel: bool = False) -> Optional[int]:
+        """Explicit hint.extras.prescale for the integer precise kernels, or None to derive it."""
+        if not isinstance(extras, dict) or "prescale" not in extras:
+            return None
+        name = cls.OPERATOR_NAME
+        if variant != "precise" or float_kernel:
+            raise ValueError(f"{name}: hint.extras.prescale applies only to the integer HardSwishPrecise kernels")
+        value = extras["prescale"]
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"{name}: hint.extras.prescale must be an integer, got {value!r}")
+        if not 0 <= value <= PRESCALE_MAX:
+            raise ValueError(f"{name}: hint.extras.prescale must be in [0, {PRESCALE_MAX}], got {value}")
+        return value
+
     def generate_c_files(self, output_dir: Path) -> None:
         from helia_core_tester.generation.reference import policy
         from helia_core_tester.generation.reference import quant as ref_quant
@@ -68,30 +87,54 @@ class HardSwishFamilyBase(OperationBase):
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
         kernel_info = self._select_cmsis_hard_swish_kernel()
+        extras = (self.desc.get("hint") or {}).get("extras") or {}
+        variant = self.variant_name()
         if kernel_info.get('float_kernel'):
+            self._prescale_override(extras, variant, float_kernel=True)
             self._generate_float_c_files(output_dir, kernel_info)
             return
 
         name = self.desc['name']
-        variant = self.variant_name()
         kind = "s16" if kernel_info["input_c_type"] == "int16_t" else "s8"
         input_shape = tuple(int(d) for d in self.desc['input_shape'])
         if not input_shape or any(d < 1 for d in input_shape):
             raise ValueError(f"{name}: invalid input_shape {input_shape}")
 
-        in_quant = self.activation_quant("input", self.INPUT_RANGE, kind)
-        out_quant = self.activation_quant("output", self.OUTPUT_RANGE, kind)
+        prescale_override = self._prescale_override(extras, variant)
+        if variant == "precise" and any(key in extras for key in QUANT_EXTRAS):
+            # The descriptor pins the quantization (the Unity suite's parameters, for instance).
+            in_quant = policy.TensorQuant(float(np.float32(extras.get("input_scale", 1.0))),
+                                          int(extras.get("input_zero_point", 0)), kind)
+            out_quant = policy.TensorQuant(float(np.float32(extras.get("output_scale", 1.0))),
+                                           int(extras.get("output_zero_point", 0)), kind)
+        else:
+            in_quant = self.activation_quant("input", self.INPUT_RANGE, kind)
+            out_quant = self.activation_quant("output", self.OUTPUT_RANGE, kind)
         qmin, qmax = policy.dtype_range(kind)
         # Stay inside the representable input range.
         bound = min(self.INPUT_RANGE[1], min(qmax - in_quant.zero_point, in_quant.zero_point - qmin) * in_quant.scale)
         input_q = policy.quantize(self._sample_uniform(input_shape, low=-bound, high=bound), in_quant)
 
         entry = f"hard_swish_{kind}" if variant == "compat" else f"hard_swish_precise_{kind}"
-        params = get_bindings().prepare(
-            "hard_swish_prepare" if variant == "compat" else "hard_swish_precise_prepare",
-            {"dtype": ref_quant.hct_dtype(kind.upper()), "input_scale": in_quant.scale,
-             "input_zero_point": in_quant.zero_point, "output_scale": out_quant.scale,
-             "output_zero_point": out_quant.zero_point})
+        fields = {"dtype": ref_quant.hct_dtype(kind.upper()), "input_scale": in_quant.scale,
+                  "input_zero_point": in_quant.zero_point, "output_scale": out_quant.scale,
+                  "output_zero_point": out_quant.zero_point}
+        if variant == "compat":
+            params = get_bindings().prepare("hard_swish_prepare", fields)
+        else:
+            from helia_core_tester.generation.reference.bindings import ReferenceKernelError
+
+            try:
+                params = get_bindings().prepare(
+                    "hard_swish_precise_prepare",
+                    {**fields, "prescale": -1 if prescale_override is None else prescale_override})
+            except ReferenceKernelError as exc:
+                if prescale_override is None:
+                    raise
+                raise ValueError(
+                    f"{self.OPERATOR_NAME}: hint.extras.prescale {prescale_override} either lets x + relu_q3 or "
+                    f"x * relu6 leave int32 for some input, or rounds the relu6 term to 0 for every input ({exc})"
+                ) from exc
         output_data = self.reference_golden(ReferenceCall(
             entry, params, {"input": np.ascontiguousarray(input_q)}, {"output": input_shape},
             quant={"input": in_quant.to_json(), "output": out_quant.to_json()},

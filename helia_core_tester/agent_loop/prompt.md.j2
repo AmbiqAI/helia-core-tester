@@ -10,11 +10,11 @@ every output bit-exact. The cases are the tester's {{ op }} {{ dtype }} cases
 Models reach the kernels through these routes (timed symbol -> inner kernel,
 measured on the base tree, {{ first_leg }} leg):
 {% for r in routes %}
-- `{{ r.timed }}`{% if r.inner and r.inner != r.timed %} -> `{{ r.inner }}`{% endif %}: {{ r.cases }} case{{ "s" if r.cases != 1 }}, median {{ r.median }} cycles/MAC, best {{ r.best }}{% if r.ceiling %}; ceiling {{ r.ceiling }}{% endif %}
+- `{{ r.timed }}`{% if r.inner and r.inner != r.timed %} -> `{{ r.inner }}`{% endif %}: {{ r.cases }} case{{ "s" if r.cases != 1 }}, median {{ r.median }} cycles/{{ unit }}, best {{ r.best }}{% if r.ceiling %}; ceiling {{ r.ceiling }}{% endif %}
 {%- endfor %}
 {%- if median is not none %}
 
-Overall median is {{ median }} cycles per MAC{% if ceilings %}; the hardware ceiling is {{ ceilings }}{% endif %}.
+Overall median is {{ median }} cycles per {{ unit }}{% if ceilings %}; the hardware ceiling is {{ ceilings }}{% endif %}.
 {%- endif %}
 {%- for basis in bases %}
 Ceiling basis: {{ basis }}.
@@ -42,7 +42,21 @@ leg (a few minutes in total):
 - leg `{{ leg.name }}`: {{ leg.text }}
 {%- endfor %}
 {%- if legs|length > 1 %}
-A later leg runs only when the earlier legs got as far as scoring.
+Once a leg fails, or stops before scoring, later legs are skipped.
+{%- if gates_mram %}
+An mram leg runs only after the tcm leg on its compiler passes.
+{%- endif %}
+{%- endif %}
+{%- if toolchains %}
+Each placement runs once per compiler: {{ toolchains|join(" and ") }} (atfe is Arm
+Toolchain for Embedded, clang). Pass needs every leg on every compiler, so
+write C that both compile well.
+{%- elif has_atfe %}
+Every leg builds with atfe (Arm Toolchain for Embedded, clang).
+{%- endif %}
+{%- if has_atfe %}
+Clang ignores gcc-only attributes such as
+`__attribute__((optimize(...)))`; `#pragma GCC unroll N` works in both.
 {%- endif %}
 Submit judges a copy of the tree taken when it starts; later edits wait
 for the next submit. A tree that fails the check or build is rejected
@@ -54,13 +68,20 @@ Before spending an eval, run `{{ check }}` (no arguments,
 foreground, Bash timeout 600000 ms). It costs no eval and no board time
 (about 30 s): it applies the evaluator's source rules, compiles your tree
 for the {{ cpu }} and reports `check.findings`, `build` (compiler errors and
-warnings) and `code_size`.
+warnings) and `code_size`{% if toolchains %}, each keyed by compiler{% endif %}.
 
 To see the machine code your C compiles to, run
 `{{ disasm }} <function_name>` after `check`. It prints that
 function's disassembly from the `check` build ({{ cpu }}, the same flags the
 evaluator uses). Costs no eval. Use it to confirm the compiler emits the
 {% if has_mve %}MVE {% endif %}instructions, unrolling and register use you intended.
+{%- if toolchains %}
+Add `--toolchain {{ toolchains|join("|") }}` to pick the build (default {{ toolchains[0] }}),
+e.g. `{{ disasm }} <function_name> --toolchain atfe`; clang code
+prints in llvm-objdump syntax.
+{%- elif has_atfe %}
+The build is clang, so it prints in llvm-objdump syntax.
+{%- endif %}
 
 `submit` prints one JSON verdict and saves the same text to
 `{{ results }}/NNN.json` (NNN = eval number), which you
@@ -69,10 +90,21 @@ may Read if the printed output was cut:
   rejected, refused, no_gain, error.
 - `evals_left`: you have {{ evals }} evaluations in total. Use them carefully.
 - `note`: present when the eval was not charged, and why.
+- `next`: after a pass{% if size_evals %}, and in the size phase after any charged eval once
+  something passed{% endif %}: the phase, its eval count, and the fastest pass so
+  far as speedup at code bytes added{% if toolchains %}, per compiler ({{ toolchains|join(" / ") }}){% endif %}.
+{%- if size_evals %}
+  In the size phase it also names the smallest pass.
+{%- endif %}
 - `code_size`: kernel library code bytes vs base, total and per changed
   object file, or an error when nothing was built.
+{%- if toolchains %}
+  Keyed by compiler; `toolchains` gives each compiler's geomean speedup
+  over its legs and its code bytes added.
+{%- endif %}
 - `legs.<leg>`, each with:
-  - `verdict`, `stage` (check, run, objects, score) and `score`.
+  - `verdict`, `stage` (check, run, objects, score) and `score`. A leg the
+    judge did not run has verdict `skipped` and a `reason`.
   - `findings`: why the checker rejected the tree.
   - `failures`: what failed, by kind: `comparison_failed` (output differs
     from baseline), `regression` (a case got slower beyond its noise band),
@@ -84,7 +116,7 @@ may Read if the printed output was cut:
     `untouched_cases` and `untouched_geomean`.
   - `cases`: one row per public case your change touched (see
     `cases_columns`): baseline vs candidate cycles, speedup, noise band (%),
-    cycles per MAC. `untouched_cases` gives only their count and speedup
+    cycles per {{ unit }}. `untouched_cases` gives only their count and speedup
     range.
   - `hints` (`{{ first_leg }}` leg only): for the ten slowest touched cases, % of peak, a
     diagnosis from PMU counters and suggested fixes.
@@ -99,7 +131,9 @@ may Read if the printed output was cut:
 Besides speed, weigh these, where they apply:
 - Code size. Flash is scarce on these chips. Prefer the smallest change that
   gets the gain: no per-shape copies of a kernel, no unrolling beyond what
-  pays off, share helpers. Report bytes added per % speedup.
+  pays off, share helpers. Report bytes added per % speedup{% if toolchains %} for each compiler{% endif %}.
+  Size never fails an eval;
+  {%- if size_evals %} in the size phase it is your main target.{% else %} keep each pass lean.{% endif %}
 - Memory and caching. Think about where each operand lives and how often it
   is read: reuse each loaded weight across several output pixels and each
   loaded input across several channels, keep loads contiguous, and avoid
@@ -132,8 +166,37 @@ Work plan:
    useful), reason about correctness (rounding, saturation, tails, odd
    channel counts, padding) before submitting.
 4. If a change fails or gives no gain, undo it or fix it before stacking more.
-5. Stop when further gains look small, or when evals run out.
+{%- if size_evals %}
+5. Chase speed first, then shrink code; see "Two phases" below. Stop
+   when evals run out, or in the size phase when no plausible cut remains.
 
-When you stop, leave the best passing version in the tree (or the starting tree if
-nothing passed) and write a short summary: what you changed, why,
-the verdicts you got per eval, and the final speedups.
+Two phases (of your {{ evals }} evals, the last {{ size_evals }} are for size):
+- Speed phase, while `evals_left` is above {{ size_evals }}: keep chasing speed
+  after a pass. A first pass is rarely the best one; a bolder rewrite
+  later can beat it by a wide margin. Keep the fastest pass as your
+  reference, note what it changed so you can restore it, and build on it
+  or try a new approach. Switch to size early only if you have no
+  plausible speed idea left, and say so.
+- Size phase, once `evals_left` is {{ size_evals }} or less: if something passed,
+  start from the fastest pass and cut code size while every leg still
+  passes: share helpers, merge specialized loops, unroll less, drop dead or
+  duplicated paths, and delete functions nothing calls any more. A change
+  that is both smaller and faster is welcome. If nothing passed yet, keep
+  working toward a pass.
+- Run `check` on each cut and compare `code_size`{% if toolchains %} per compiler
+  ({{ toolchains|join(" and ") }}); a cut that shrinks one compiler may grow the other{% endif %}.
+- With each cut, state the bytes saved{% if toolchains %} per compiler{% endif %} and the
+  speed lost per leg, both vs the reference.
+- Never trade correctness for size.
+- Do not stop early while evals and a plausible cut remain. The user
+  picks among your passing evals by speed and size, so each smaller pass
+  is a real option even when it is a bit slower.
+{%- else %}
+5. After a pass, keep chasing speed with the fastest pass as your
+   reference. Stop when evals run out or no plausible speed idea remains.
+{%- endif %}
+
+When you stop, leave the passing version you recommend in the tree (or the
+starting tree if nothing passed) and write a short summary: what you
+changed, why, the verdicts you got per eval, and for each passing eval its
+speedup and bytes added{% if toolchains %} per compiler{% endif %}.

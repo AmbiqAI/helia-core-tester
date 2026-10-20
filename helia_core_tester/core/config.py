@@ -13,14 +13,17 @@ from helia_core_tester.core.cpu_targets import get_cpu_profile, parse_cpu_list
 from helia_core_tester.core.discovery import find_repo_root
 from helia_core_tester.core.errors import ConfigurationError, PathNotFoundError
 from helia_core_tester.core.path_layout import (
+    VALID_TOOLCHAINS,
     artifacts_root,
     build_dir,
+    compiler_tag_for_toolchain,
     coverage_merged_dir,
     coverage_report_dir,
     generated_tests_dir,
     generated_tests_root,
     generation_report_dir,
     normalize_suite,
+    normalize_toolchain,
     reports_root,
     tests_report_dir,
 )
@@ -83,6 +86,7 @@ class Config:
     cpu: str = "cortex-m55"
     cpus: list[str] = field(default_factory=list)
     optimization: str = "-Ofast"
+    toolchain: str = "gcc"
     jobs: Optional[int] = None
     coverage: bool = False
     coverage_mve_float: bool = False
@@ -222,7 +226,7 @@ class Config:
             self.reports_root = Path(self.reports_root).resolve()
 
         if self.cmsis_nn_root is not None:
-            self.cmsis_nn_root = Path(self.cmsis_nn_root).resolve()
+            self.cmsis_nn_root = Path(self.cmsis_nn_root).expanduser().resolve()
         if self.hidden_dir is not None:
             self.hidden_dir = Path(self.hidden_dir).resolve()
         if self.hidden_seed_file is not None:
@@ -302,6 +306,8 @@ class Config:
         self._validate_float_precision_cpu_compatibility()
         self._validate_coverage_mve_float()
         self._validate_coverage_mve_int()
+        self.toolchain = self._normalize_toolchain(self.toolchain)
+        self._validate_toolchain_coverage()
 
         if not 0 <= self.verbosity <= 3:
             raise ValueError(f"verbosity must be between 0 and 3, got {self.verbosity}")
@@ -350,14 +356,14 @@ class Config:
             return
         if self.random_shapes < 1:
             raise ConfigurationError(f"random_shapes must be >= 1, got {self.random_shapes}")
-        if "int" not in self.suites:
-            raise ConfigurationError("random_shapes needs the int suite")
-        from helia_core_tester.generation.random_shapes import select_ops
+        from helia_core_tester.generation.random_shapes import op_suites
 
         try:
-            select_ops(self.op_filter, self.dtype_filter)
+            suites = op_suites(self.op_filter, self.dtype_filter)
         except ValueError as exc:
             raise ConfigurationError(str(exc)) from exc
+        if not suites & set(self.suites):
+            raise ConfigurationError(f"random_shapes needs the {' or '.join(sorted(suites))} suite")
 
     def _validate_hidden(self) -> None:
         if self.hidden_dir is None:
@@ -381,7 +387,8 @@ class Config:
 
         try:
             for cpu in self.cpus:
-                check_hidden_paths(self.hidden_dir, self.project_root, cpu)
+                for suite in self.suites:
+                    check_hidden_paths(self.hidden_dir, self.project_root, cpu, suite)
         except ValueError as exc:
             raise ConfigurationError(str(exc)) from exc
 
@@ -400,6 +407,21 @@ class Config:
                 f"Invalid float_precision: {float_precision!r} (expected one of: f16, f32, both)"
             )
         return normalized
+
+    def _normalize_toolchain(self, toolchain: str) -> str:
+        try:
+            return normalize_toolchain(toolchain)
+        except ValueError:
+            raise ConfigurationError(
+                f"Invalid toolchain: {toolchain!r} (expected one of: {', '.join(sorted(VALID_TOOLCHAINS))})"
+            ) from None
+
+    def _validate_toolchain_coverage(self) -> None:
+        # Mirrors the fvp orchestrator's guard: gcov instrumentation is GCC-only.
+        if self.coverage and self.toolchain != "gcc":
+            raise ConfigurationError(
+                f"--coverage is only supported with the gcc toolchain (got toolchain={self.toolchain!r})"
+            )
 
     def _validate_float_precision_cpu_compatibility(self) -> None:
         if "float" not in self.suites:
@@ -532,6 +554,27 @@ class Config:
         suite_name = normalize_suite(suite or self.default_suite())
         return generation_report_dir(self.project_root, cpu, suite=suite_name)
 
+    def cmsis_nn_root_error(self) -> Optional[str]:
+        """Why an explicit cmsis_nn_root is unusable, or None when it is unset or valid."""
+        if self.cmsis_nn_root is None:
+            return None
+        root = Path(self.cmsis_nn_root)
+        if not (root / "CMakeLists.txt").is_file():
+            return (
+                f"ns-cmsis-nn checkout not found: {root} (from {self._cmsis_nn_root_source()}) has no "
+                f"CMakeLists.txt. Set it with --cmsis-nn-root or {ENV_PREFIX}CMSIS_NN_ROOT "
+                "(a bare CMSIS_NN_ROOT is not read)."
+            )
+        return None
+
+    def _cmsis_nn_root_source(self) -> str:
+        # Mirrors __post_init__ precedence: explicit argument > env var > config file.
+        if "cmsis_nn_root" in (self._explicit_overrides or set()):
+            return "--cmsis-nn-root"
+        if os.environ.get(f"{ENV_PREFIX}CMSIS_NN_ROOT") is not None:
+            return f"{ENV_PREFIX}CMSIS_NN_ROOT"
+        return f"cmsis_nn_root in {self.config_file}" if self.config_file else "config"
+
     def tests_report_dir_for(self, cpu: str, suite: Optional[str] = None) -> Path:
         suite_name = normalize_suite(suite or self.default_suite())
         return tests_report_dir(self.project_root, cpu, suite=suite_name)
@@ -543,9 +586,13 @@ class Config:
     def coverage_merged_report_dir(self) -> Path:
         return coverage_merged_dir(self.project_root)
 
+    @property
+    def compiler_tag(self) -> str:
+        return compiler_tag_for_toolchain(self.toolchain)
+
     def build_dir_for(self, cpu: str, suite: Optional[str] = None) -> Path:
         suite_name = normalize_suite(suite or self.default_suite())
-        return build_dir(self.project_root, cpu, suite=suite_name)
+        return build_dir(self.project_root, cpu, self.compiler_tag, suite=suite_name)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -558,6 +605,7 @@ class Config:
             "cpu": self.cpu,
             "cpus": list(self.cpus),
             "optimization": self.optimization,
+            "toolchain": self.toolchain,
             "jobs": self.jobs,
             "coverage": self.coverage,
             "coverage_mve_float": self.coverage_mve_float,

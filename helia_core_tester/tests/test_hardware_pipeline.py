@@ -136,6 +136,7 @@ def test_generation_exports_the_kernel_root(tmp_path: Path, monkeypatch) -> None
     envs: list = []
     monkeypatch.setattr(generate, "run_command", lambda cmd, cwd, verbosity, env: envs.append(env))
     monkeypatch.delenv("HELIA_CORE_TESTER_CONFIG", raising=False)
+    (tmp_path / "CMakeLists.txt").write_text("project(cmsis-nn)\n")
     generate_tests_for_board(PROJECT_ROOT, BOARD, "int", cmsis_nn_root=tmp_path)
     assert envs and all(env["CMSIS_NN_ROOT"] == str(tmp_path.resolve()) for env in envs)
 
@@ -551,9 +552,11 @@ def test_json_summary_shape_from_fake_target_session(tmp_path: Path) -> None:
     encoded = json.loads(json.dumps(summary))  # must be JSON-serialisable as-is
 
     assert set(encoded) == {
-        "schema", "schema_version", "generated_at", "session_id", "board", "boot", "bundle", "totals", "timing",
-        "selection", "coverage", "github", "cases",
+        "schema", "schema_version", "generated_at", "session_id", "board", "toolchain", "boot", "bundle", "totals",
+        "timing", "selection", "coverage", "github", "cases",
     }
+    # No manifest: toolchain unknown.
+    assert encoded["toolchain"] is None
     assert encoded["boot"] == {"status": 0, "core_clock_hz": 250_000_000, "fpscr_boot": 0x03040000, "fpscr": 0x00040000, "fp_mode": {"ahp": 0, "dn": 0, "fz": 0, "rmode": 0, "fz16": 0}}
     assert encoded["session_id"] == "apollo510_evb-20260912T000000Z"
     assert encoded["board"] == "apollo510_evb"
@@ -562,10 +565,10 @@ def test_json_summary_shape_from_fake_target_session(tmp_path: Path) -> None:
     assert encoded["timing"] == timing
     ran, skip = encoded["cases"]
     assert set(ran) == {"case_id", "passed", "median_cycles", "valid_for_regression", "timing_status", "max_abs_diff", "diff_count",
-                        "skipped_reason"}
+                        "tolerance_fraction", "skipped_reason"}
     assert ran == {
         "case_id": "abs_json", "passed": True, "median_cycles": ran["median_cycles"], "valid_for_regression": True,
-        "timing_status": "valid", "max_abs_diff": 0.0, "diff_count": 0, "skipped_reason": None,
+        "timing_status": "valid", "max_abs_diff": 0.0, "diff_count": 0, "tolerance_fraction": None, "skipped_reason": None,
     }
     assert isinstance(ran["median_cycles"], float)
     assert skip["case_id"] == "conv_x" and skip["passed"] is None and skip["median_cycles"] is None
@@ -904,7 +907,9 @@ def test_golden_from_matches_inputs(tmp_path: Path, monkeypatch) -> None:
     digest = hashlib.sha256(past.tobytes()).hexdigest()
     assert judged.expected_output.sha256 == digest
     assert judged.comparison == {"mode": "exact_int"}
-    assert seen["compare"] == {"strict": True, "golden_from": str(golden_dir), "golden_session_id": "base-1"}
+    assert seen["compare"] == {
+        "strict": True, "golden_from": str(golden_dir), "golden_session_id": "base-1", "goldens": {"baseline": ["abs_ok"]},
+    }
 
 
 def test_golden_from_refuses_other_inputs(tmp_path: Path, monkeypatch) -> None:

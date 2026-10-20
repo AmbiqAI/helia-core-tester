@@ -15,6 +15,7 @@ from helia_core_tester.generation.harness import (
     SizeQuery,
 )
 from helia_core_tester.generation.harness.faults import common_fault, null_context_buffer, struct_copy, with_fault
+from helia_core_tester.generation.ops._shared.shape_checks import require_positive_int_dims
 from pathlib import Path
 
 TRANSPOSE_CONV_VALIDATION_KEY = "ConvolutionFunctions/transpose_conv/transpose_conv.c.j2"
@@ -87,18 +88,26 @@ def transpose_conv_argument_pool(context: Dict[str, Any]) -> ArgumentPool:
         Declaration(f"{n}_expected_output", context["output_dtype"], ArrayLiteral(context["expected_output_array"]),
                     array=True, comment="Expected output (golden)"),
     ]
-    reverse = Provider(
-        param="reverse_conv_ctx", aliases=("output_ctx",), expr=f"&{n}_reverse_conv_ctx",
-        declarations=(Declaration(f"{n}_reverse_conv_ctx", "cmsis_nn_context", storage="static",
-                                  comment="Reverse convolution context (output_ctx of the kernels)"),),
-        buffers=(GuardedBuffer(f"{n}_reverse_conv_ctx_buffer", "uint8_t", f"{upper}_REVERSE_CONV_CTX_SIZE",
-                               count_value=str(context["reverse_conv_ctx_size"]), label="reverse_conv_ctx"),),
-        setup=(f"    // Initialize reverse convolution context buffer (output_ctx parameter)\n"
-               f"    {n}_reverse_conv_ctx.buf = {n}_reverse_conv_ctx_buffer;\n"
-               f"    {n}_reverse_conv_ctx.size = {upper}_REVERSE_CONV_CTX_SIZE;"),
-        size_query=SizeQuery(context["kernel_get_reverse_buffer_size_fn"], "reverse_required_buffer_size",
-                             f"{upper}_REVERSE_CONV_CTX_SIZE"),
-    )
+    if context.get("direct_s16"):
+        # arm_transpose_conv_s16 never reads output_ctx and documents no size for it.
+        reverse = Provider(
+            param="reverse_conv_ctx", aliases=("output_ctx",), expr=f"&{n}_reverse_conv_ctx",
+            declarations=(Declaration(f"{n}_reverse_conv_ctx", "cmsis_nn_context", {"buf": "NULL", "size": 0},
+                                      storage="static", comment="output_ctx: not accessed by the s16 kernel"),),
+        )
+    else:
+        reverse = Provider(
+            param="reverse_conv_ctx", aliases=("output_ctx",), expr=f"&{n}_reverse_conv_ctx",
+            declarations=(Declaration(f"{n}_reverse_conv_ctx", "cmsis_nn_context", storage="static",
+                                      comment="Reverse convolution context (output_ctx of the kernels)"),),
+            buffers=(GuardedBuffer(f"{n}_reverse_conv_ctx_buffer", "uint8_t", f"{upper}_REVERSE_CONV_CTX_SIZE",
+                                   count_value=str(context["reverse_conv_ctx_size"]), label="reverse_conv_ctx"),),
+            setup=(f"    // Initialize reverse convolution context buffer (output_ctx parameter)\n"
+                   f"    {n}_reverse_conv_ctx.buf = {n}_reverse_conv_ctx_buffer;\n"
+                   f"    {n}_reverse_conv_ctx.size = {upper}_REVERSE_CONV_CTX_SIZE;"),
+            size_query=SizeQuery(context["kernel_get_reverse_buffer_size_fn"], "reverse_required_buffer_size",
+                                 f"{upper}_REVERSE_CONV_CTX_SIZE"),
+        )
     providers = [reverse]
     if context.get("has_weight_sum"):
         providers.append(Provider(
@@ -188,6 +197,34 @@ class OpTransposeConv(OperationBase):
     def uses_reference(self) -> bool:
         return True
 
+    def validate_descriptor(self) -> None:
+        self.declared_filter_shape()
+
+    def declared_filter_shape(self) -> tuple:
+        """Validated descriptor filter_shape [KH, KW, OutCh, InCh]; its InCh must be the input depth."""
+        name = self.desc.get('name', '<unnamed>')
+        filter_shape = self.desc.get('filter_shape')
+        input_shape = self.desc.get('input_shape')
+        if not isinstance(input_shape, (list, tuple)) or len(input_shape) != 4:
+            raise ValueError(f"{name}: TransposeConv input_shape must be [N, H, W, C], got {input_shape!r}")
+        if not isinstance(filter_shape, (list, tuple)) or len(filter_shape) != 4:
+            raise ValueError(
+                f"{name}: TransposeConv filter_shape must be [KH, KW, OutCh, InCh], got {filter_shape!r}"
+            )
+        require_positive_int_dims(name, "TransposeConv", input_shape=input_shape, filter_shape=filter_shape)
+        kh, kw, out_ch, in_ch = (int(dim) for dim in filter_shape)
+        channels = int(input_shape[3])
+        if in_ch != channels:
+            hint = ""
+            if out_ch == channels:
+                # Conv2D descriptors use [KH, KW, InCh, OutCh]; this looks like that order.
+                hint = f"; did you mean [{kh}, {kw}, {in_ch}, {channels}] (OutCh {in_ch})?"
+            raise ValueError(
+                f"{name}: TransposeConv filter_shape InCh ({in_ch}) must equal the "
+                f"input channel count ({channels}); filter_shape is [KH, KW, OutCh, InCh]{hint}"
+            )
+        return kh, kw, out_ch, in_ch
+
     def _select_cmsis_transpose_conv_kernel(self) -> Dict[str, str]:
         info = self._table_transpose_conv_kernel()
         entry = self.desc.get("entry")
@@ -259,6 +296,17 @@ class OpTransposeConv(OperationBase):
                 'weight_c_type': 'int8_t',
                 'bias_c_type': 'int32_t'
             }
+        if activation_dtype == 'S16' and weight_dtype == 'S8':
+            # Direct kernel: no wrapper, no reverse route.
+            return {
+                'kernel_fn': 'arm_transpose_conv_s16',
+                'kernel_get_buffer_size_fn': 'arm_transpose_conv_s16_get_buffer_size',
+                'kernel_get_reverse_buffer_size_fn': None,
+                'input_c_type': 'int16_t',
+                'output_c_type': 'int16_t',
+                'weight_c_type': 'int8_t',
+                'bias_c_type': 'int64_t',
+            }
         else:
             raise NotImplementedError(f"Unsupported TransposeConv dtype combo: {activation_dtype} x {weight_dtype}")
     
@@ -270,7 +318,8 @@ class OpTransposeConv(OperationBase):
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
         
         name = self.desc['name']
-        
+        self.declared_filter_shape()
+
         # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_transpose_conv_kernel()
         float_kernel = kernel_info["input_c_type"] in {"float", "float16_t"}
@@ -300,19 +349,8 @@ class OpTransposeConv(OperationBase):
             input_data_array_str = builder.format_array_as_c_literal(np.asarray(input_data, dtype=float_dtype))
             expected_output_array_str = builder.format_array_as_c_literal(np.asarray(output_data, dtype=float_dtype))
 
-            element_size = np.dtype(float_dtype).itemsize
-            buffer_size_max = max(
-                1024,
-                int(
-                    (input_dims['n'] * input_dims['h'] * input_dims['w'] * input_dims['c']
-                     + filter_dims['n'] * filter_dims['h'] * filter_dims['w'] * max(filter_dims['c'], 1)
-                     + output_dims['n'] * output_dims['h'] * output_dims['w'] * output_dims['c']) * element_size
-                ),
-            )
-            reverse_conv_ctx_size = max(
-                1024,
-                int(output_dims['w'] * output_dims['h'] * output_dims['c'] * element_size),
-            )
+            buffer_size_max, reverse_conv_ctx_size = builder.float_transpose_conv_scratch(
+                input_dims, filter_dims, output_dims)
 
             context = {
                 'name': name,
@@ -372,10 +410,12 @@ class OpTransposeConv(OperationBase):
         # Format weights and biases as C arrays
         weights_array_str = builder.format_array_as_c_literal(weights)
         has_biases = biases is not None and biases.size > 0
+        is_s16 = kernel_info["input_c_type"] == "int16_t"
         if has_biases:
-            # Convert biases to int32_t for CMSIS-NN
-            if biases.dtype != np.int32:
-                biases = biases.astype(np.int32)
+            # int64 bias for s16, int32 for s8.
+            bias_np_dtype = np.int64 if is_s16 else np.int32
+            if biases.dtype != bias_np_dtype:
+                biases = biases.astype(bias_np_dtype)
             biases_array_str = builder.format_array_as_c_literal(biases)
         else:
             biases_array_str = ""
@@ -442,6 +482,7 @@ class OpTransposeConv(OperationBase):
             'kernel_get_reverse_buffer_size_fn': kernel_info["kernel_get_reverse_buffer_size_fn"],
             'buffer_size_max': buffer_size_max,
             'reverse_conv_ctx_size': reverse_conv_ctx_size,
+            'direct_s16': is_s16,
         }
         self._render_transpose_conv(output_dir, context)
 

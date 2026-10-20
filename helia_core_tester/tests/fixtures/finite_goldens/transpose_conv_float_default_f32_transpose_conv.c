@@ -14,8 +14,8 @@ _Static_assert(__builtin_types_compatible_p(__typeof__(arm_transpose_conv_f32), 
 static cmsis_nn_context transpose_conv_float_default_f32_ctx;
 
 // Runtime scratch buffer (max upper bound; actual size queried at runtime)
-#define TRANSPOSE_CONV_FLOAT_DEFAULT_F32_BUFFER_SIZE_MAX 1112
-static struct {
+#define TRANSPOSE_CONV_FLOAT_DEFAULT_F32_BUFFER_SIZE_MAX 8192
+static struct __attribute__((aligned(16))) {
     uint8_t head[HELIA_GUARD_BYTES];
     uint8_t body[TRANSPOSE_CONV_FLOAT_DEFAULT_F32_BUFFER_SIZE_MAX];
     uint8_t tail[HELIA_GUARD_BYTES];
@@ -25,7 +25,7 @@ static struct {
 // Reverse convolution context (output_ctx of the kernels)
 static cmsis_nn_context transpose_conv_float_default_f32_reverse_conv_ctx;
 #define TRANSPOSE_CONV_FLOAT_DEFAULT_F32_REVERSE_CONV_CTX_SIZE 1024
-static struct {
+static struct __attribute__((aligned(16))) {
     uint8_t head[HELIA_GUARD_BYTES];
     uint8_t body[TRANSPOSE_CONV_FLOAT_DEFAULT_F32_REVERSE_CONV_CTX_SIZE];
     uint8_t tail[HELIA_GUARD_BYTES];
@@ -33,7 +33,7 @@ static struct {
 #define transpose_conv_float_default_f32_reverse_conv_ctx_buffer (transpose_conv_float_default_f32_reverse_conv_ctx_buffer_guard.body)
 
 #define TRANSPOSE_CONV_FLOAT_DEFAULT_F32_OUTPUT_SIZE (1 * 8 * 8 * 3)
-static struct {
+static struct __attribute__((aligned(16))) {
     uint8_t head[HELIA_GUARD_BYTES];
     float body[TRANSPOSE_CONV_FLOAT_DEFAULT_F32_OUTPUT_SIZE];
     uint8_t tail[HELIA_GUARD_BYTES];

@@ -320,8 +320,10 @@ static float exp_lut_f16(float x16)
     const float frac = idx_f - (float)idx;
     const float y0 = hct_f16_to_f32(hct_cmsis_exp2_lut_f16[idx]);
     const float y1 = hct_f16_to_f32(hct_cmsis_exp2_lut_f16[idx + 1]);
-    n = n > 15 ? 15 : (n < -14 ? -14 : n);
-    return h16(fmaf(frac, y1 - y0, y0) * hct_f16_to_f32((uint16_t)((n + 15) << 10)));
+    /* The 2^n scale stays float32 (exponent clamped to [-126, 15]) until the one float16 rounding, so a
+     * result below the float16 normal range keeps its subnormal or zero (ns-cmsis-nn#861). */
+    n = n > 15 ? 15 : (n < -126 ? -126 : n);
+    return h16(fmaf(frac, y1 - y0, y0) * ldexpf(1.0f, n));
 }
 
 static uint16_t mve_f16(uint16_t bits, int32_t type, float act_param)

@@ -48,7 +48,10 @@ def test_bits_case_carries_both_nan_rules_and_compares_bits(name: str, tmp_path:
     assert vector[0x7C00] == scalar[0x7C00] == 0x7F800000
     assert "arm_dequantize_f16_bits_f32(" in source and "HELIA_VALIDATE_FLOAT_BITS(" in source
     assert re.search(
-        r"#if ARM_NN_ENABLE_F16 && defined\(ARM_MATH_MVE_FLOAT16\).*?ARM_NN_VCVT_F16_SCALAR_FORM", source, re.S
+        r"#if ARM_NN_ENABLE_F16 && defined\(ARM_MATH_MVE_FLOAT16\).*?ARM_NN_VCVT_F16_SCALAR_FORM"
+        r"\) && !defined\(ARM_NN_HAS_DEQUANTIZE_F16_NAN_PAYLOAD\)",
+        source,
+        re.S,
     )
 
 

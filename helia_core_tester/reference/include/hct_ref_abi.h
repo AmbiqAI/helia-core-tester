@@ -217,6 +217,11 @@ typedef struct
 
 typedef struct
 {
+    int32_t operation;
+} HctCompareOpParams;
+
+typedef struct
+{
     int32_t dtype;
     float input_scale;
     int32_t input_zero_point;
@@ -314,6 +319,17 @@ typedef struct
     float output_scale;
     int32_t output_zero_point;
 } HctHardSwishQuant;
+
+/* HctHardSwishQuant plus the prescale: -1 derives the smallest one that keeps x + relu_q3 and x * relu6 inside int32 over every input code; 0..31 pins it (rejected if it overflows or rounds the relu6 term to 0 everywhere). */
+typedef struct
+{
+    int32_t dtype;
+    float input_scale;
+    int32_t input_zero_point;
+    float output_scale;
+    int32_t output_zero_point;
+    int32_t prescale;
+} HctHardSwishPreciseQuant;
 
 /* TFLite's HardSwishParams (int8); Q15 multipliers with frexp exponents, offsets are the zero points. */
 typedef struct
@@ -693,7 +709,7 @@ typedef struct
     int32_t route;
 } HctReduceF16AccParams;
 
-/* ns-cmsis-nn float16 depthwise convolution on Helium (named variant): the ch_mult 1 direct kernel, the generic kernel and the conv1d k3 / 2x5 specialisations, which all chain one float16 fused multiply-add per in-range tap from the bias. acc16 selects the _acc16 entries (never folding); otherwise more than 32 in-range taps fold into float32. */
+/* ns-cmsis-nn float16 depthwise convolution on Helium (named variant): the ch_mult 1 direct kernel, the generic kernel and the conv1d k3 / 2x5 specialisations, which all chain one float16 fused multiply-add per in-range tap from the bias. acc16 selects the _acc16 entries (never folding); otherwise more than 32 in-range taps fold into float32. acc32 is the default entries from ns-cmsis-nn#881 (ARM_NN_HAS_DEPTHWISE_F16_ACC32) on every route: each in-range tap added in float32 from the bias in (ky, kx) order (a product of halves is exact), one rounding to float16 before the clamp. acc16 and acc32 are exclusive. */
 typedef struct
 {
     int32_t stride_h;
@@ -703,6 +719,7 @@ typedef struct
     int32_t pad_h;
     int32_t pad_w;
     int32_t acc16;
+    int32_t acc32;
     float activation_min;
     float activation_max;
 } HctDepthwiseF16MveParams;
@@ -743,7 +760,7 @@ int32_t hct_ref_relu_prepare(const HctReluQuant *in, HctReluParams *out);
 int32_t hct_ref_leaky_relu_prepare(const HctLeakyReluQuant *in, HctLeakyReluParams *out);
 int32_t hct_ref_prelu_prepare(const HctPreluQuant *in, HctPreluParams *out);
 int32_t hct_ref_hard_swish_prepare(const HctHardSwishQuant *in, HctHardSwishParams *out);
-int32_t hct_ref_hard_swish_precise_prepare(const HctHardSwishQuant *in, HctHardSwishPreciseParams *out);
+int32_t hct_ref_hard_swish_precise_prepare(const HctHardSwishPreciseQuant *in, HctHardSwishPreciseParams *out);
 int32_t hct_ref_tanh_prepare(const HctTanhLogisticQuant *in, HctTanhLogisticParams *out);
 int32_t hct_ref_logistic_prepare(const HctTanhLogisticQuant *in, HctTanhLogisticParams *out);
 int32_t hct_ref_softmax_prepare(const HctSoftmaxQuant *in, HctSoftmaxParams *out);
@@ -780,6 +797,12 @@ int32_t hct_ref_sub_f32(const HctFloatActivationParams *params,
 int32_t hct_ref_sub_f16(const HctFloatActivationParams *params,
     const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
 /* inputs [input1:float32, input2:float32] -> outputs [output:float32] */
+int32_t hct_ref_div_f32(const HctFloatActivationParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input1:float16, input2:float16] -> outputs [output:float16] */
+int32_t hct_ref_div_f16(const HctFloatActivationParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input1:float32, input2:float32] -> outputs [output:float32] */
 int32_t hct_ref_mul_f32(const HctFloatActivationParams *params,
     const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
 /* inputs [input1:float16, input2:float16] -> outputs [output:float16] */
@@ -814,6 +837,9 @@ int32_t hct_ref_squared_difference_s8(const HctSquaredDifferenceParams *params,
     const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
 /* inputs [input1:int8, input2:int8] -> outputs [output:bool] */
 int32_t hct_ref_comparison_s8(const HctComparisonParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input1:int32, input2:int32] -> outputs [output:bool] */
+int32_t hct_ref_comparison_s32(const HctCompareOpParams *params,
     const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
 /* inputs [input:int8] -> outputs [output:int8] */
 int32_t hct_ref_abs_s8(const HctAbsParams *params,
@@ -886,6 +912,12 @@ int32_t hct_ref_hard_swish_f32(const HctNoParams *params,
     const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
 /* inputs [input:float16] -> outputs [output:float16] */
 int32_t hct_ref_hard_swish_f16(const HctNoParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float32] -> outputs [output:float32] */
+int32_t hct_ref_gelu_f32(const HctNoParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:float16] -> outputs [output:float16] */
+int32_t hct_ref_gelu_f16(const HctNoParams *params,
     const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
 /* inputs [input:int16] -> outputs [output:int16] */
 int32_t hct_ref_tanh_s16(const HctTanhLogisticParams *params,
@@ -970,6 +1002,9 @@ int32_t hct_ref_conv_s8(const HctConvParams *params,
     const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
 /* inputs [input:int16, filter:int8, bias:int64, multiplier:int32, shift:int32] -> outputs [output:int16] */
 int32_t hct_ref_conv_s16(const HctConvParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:int16, filter:int8, bias:int32, multiplier:int32, shift:int32] -> outputs [output:int16] */
+int32_t hct_ref_conv_s16_b32(const HctConvParams *params,
     const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
 /* inputs [input:float32, filter:float32, bias:float32] -> outputs [output:float32] */
 int32_t hct_ref_conv_f32(const HctConvFloatParams *params,
@@ -1147,6 +1182,9 @@ int32_t hct_ref_space_to_depth(const HctBlockParams *params,
     const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
 /* inputs [input:any] -> outputs [output:any] */
 int32_t hct_ref_resize_nearest_neighbor(const HctResizeParams *params,
+    const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
+/* inputs [input:int8] -> outputs [output:int8] */
+int32_t hct_ref_resize_bilinear_s8(const HctResizeParams *params,
     const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs);
 /* inputs [input:any, perm:int32] -> outputs [output:any] */
 int32_t hct_ref_transpose(const HctNoParams *params,

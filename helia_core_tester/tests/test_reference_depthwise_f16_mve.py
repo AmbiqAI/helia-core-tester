@@ -298,7 +298,7 @@ def test_infinity_reaches_only_its_receptive_field():
 
 def _dw_call(params=None, x=None, w=None, b=None, out=(1, 4, 4, 4)):
     x0, w0, b0 = _draw(1, 1, 6, 6, 2, 3, 3, mult=2)
-    p = {**_win(), "acc16": 0, "activation_min": -1.0, "activation_max": 1.0}
+    p = {**_win(), "acc16": 0, "acc32": 0, "activation_min": -1.0, "activation_max": 1.0}
     p.update(params or {})
     return get_bindings().run("depthwise_f16_mve", p,
                               {"input": x0 if x is None else x, "filter": w0 if w is None else w,
@@ -307,7 +307,8 @@ def _dw_call(params=None, x=None, w=None, b=None, out=(1, 4, 4, 4)):
 
 @pytest.mark.parametrize("params", [
     {"stride_h": 0}, {"stride_w": -1}, {"dilation_h": 0}, {"dilation_w": 0}, {"pad_h": -1}, {"pad_w": -2},
-    {"acc16": 2}, {"acc16": -1}, {"activation_min": 1.0, "activation_max": -1.0}, {"activation_min": float("nan")},
+    {"acc16": 2}, {"acc16": -1}, {"acc32": 2}, {"acc32": -1}, {"acc16": 1, "acc32": 1},
+    {"activation_min": 1.0, "activation_max": -1.0}, {"activation_min": float("nan")},
 ])
 def test_depthwise_rejects_bad_params(params):
     with pytest.raises(ReferenceKernelError, match="E_PARAM"):
@@ -405,11 +406,85 @@ def _route(fn, in_shape, kh, kw, mult, win=None, out_shape=None, op=None):
     ("arm_depthwise_conv_2x5_nhwc_f16", (1, 6, 6, 8), 3, 3, 1, None),                            # declines
     ("arm_depthwise_conv_s8", (1, 6, 6, 8), 3, 3, 1, None),
 ])
-def test_route_selection(fn, in_shape, kh, kw, mult, expect):
-    assert _route(fn, in_shape, kh, kw, mult) == expect
+def test_route_selection(fn, in_shape, kh, kw, mult, expect, monkeypatch):
+    # A checkout before ns-cmsis-nn#881: the default entries keep their float16 chains.
+    monkeypatch.setattr(kf, "checkout_declares", lambda macro: False)
+    got = _route(fn, in_shape, kh, kw, mult)
+    assert (got if got is None else {k: got[k] for k in ("route", "acc16")}) == expect
+    assert got is None or got["acc32"] is False
 
 
-def test_route_selection_ctx_target_and_padding():
+@pytest.mark.parametrize("fn, in_shape, kh, kw, mult", [
+    ("arm_depthwise_conv_f16", (1, 6, 6, 3), 3, 3, 1),
+    ("arm_depthwise_nhwc_conv_f16", (1, 6, 6, 1), 3, 3, 8),
+    ("arm_depthwise_conv_cin1_nhwc_f16", (1, 6, 6, 1), 3, 3, 8),
+    ("arm_depthwise_conv_1d_k3_nhwc_f16", (1, 1, 12, 8), 1, 3, 1),
+    ("arm_depthwise_conv_2x5_nhwc_f16", (1, 2, 9, 8), 2, 5, 1),
+])
+def test_default_entries_sum_in_float32_on_a_checkout_that_declares_it(fn, in_shape, kh, kw, mult, monkeypatch):
+    monkeypatch.setattr(kf, "checkout_declares", lambda macro: macro == cr.DEPTHWISE_F16_ACC32_MACRO)
+    assert _route(fn, in_shape, kh, kw, mult) == {"route": "chain", "acc16": False, "acc32": True}
+    acc16 = _route(fn + "_acc16", in_shape, kh, kw, mult)
+    assert acc16 is not None and acc16["acc16"] is True and acc16["acc32"] is False
+
+
+def _acc32(x, w, b, win):
+    """The default entries from ns-cmsis-nn#881: float32 from the bias, one in-range tap at a time in (ky, kx)
+    order, one rounding to float16."""
+    n, H, W, C = x.shape
+    _, KH, KW, OC = w.shape
+    mult = OC // C
+    oh, ow = _out_hw(x, w, win)
+    sh, sw, dh, dw, ph, pw = (win[k] for k in ("stride_h", "stride_w", "dilation_h", "dilation_w", "pad_h", "pad_w"))
+    out = np.zeros((n, oh, ow, OC), np.float16)
+    for bi, oy, ox, oc in np.ndindex(n, oh, ow, OC):
+        acc = np.float32(0.0 if b is None else b[oc])
+        by, bx = oy * sh - ph, ox * sw - pw
+        for ky in range(_start(by, dh), _end(by, dh, KH, H)):
+            for kx in range(_start(bx, dw), _end(bx, dw, KW, W)):
+                acc = np.float32(acc + np.float32(x[bi, by + dh * ky, bx + dw * kx, oc // mult]) * np.float32(w[0, ky, kx, oc]))
+        out[bi, oy, ox, oc] = np.float16(acc)
+    return out
+
+
+@pytest.mark.parametrize("shape", [(1, 6, 6, 3, 3, 3, 1), (2, 5, 7, 2, 3, 3, 3), (1, 1, 12, 8, 1, 3, 1),
+                                   (1, 2, 9, 4, 2, 5, 1), (1, 9, 9, 1, 7, 7, 4)])
+@pytest.mark.parametrize("win", [_win(), _win(stride=(2, 1), pad=(1, 1)), _win(dilation=(2, 2), pad=(2, 2))])
+def test_acc32_is_the_sequential_float32_sum(shape, win):
+    n, H, W, C, KH, KW, mult = shape
+    if (H + 2 * win["pad_h"] - (KH - 1) * win["dilation_h"] - 1) < 0 or (W + 2 * win["pad_w"] - (KW - 1) * win["dilation_w"] - 1) < 0:
+        pytest.skip("window larger than the padded input")
+    x, w, b = _draw(sum(shape), n, H, W, C, KH, KW, mult)
+    got = kf.depthwise_f16_mve_call(x, w, b, window=win, out_hw=_out_hw(x, w, win), acc16=False, acc32=True,
+                                    activation=UNBOUNDED).output()
+    np.testing.assert_array_equal(got.view(np.uint16), _acc32(x, w, b, win).view(np.uint16))
+
+
+def test_acc32_differs_from_the_float16_chain_where_lanes_round():
+    # 49 taps of +-1-ish data: a float16 lane loses bits a float32 sum keeps.
+    x, w, b = _draw(11, 1, 9, 9, 1, 7, 7)
+    win = _win()
+    acc32 = kf.depthwise_f16_mve_call(x, w, b, window=win, out_hw=_out_hw(x, w, win), acc16=False, acc32=True,
+                                      activation=UNBOUNDED).output()
+    acc16 = _run(x, w, b, win, acc16=True)
+    assert not np.array_equal(acc32, acc16)
+
+
+def test_checkout_declares_reads_the_public_headers(tmp_path, monkeypatch):
+    include = tmp_path / "Include"
+    include.mkdir()
+    (include / "arm_nnfunctions.h").write_text("#define ARM_NN_HAS_DEPTHWISE_F16_ACC32 1\n"
+                                               "// #define ARM_NN_HAS_SOMETHING_ELSE 1\n")
+    monkeypatch.setenv("CMSIS_NN_ROOT", str(tmp_path))
+    assert kf.checkout_declares("ARM_NN_HAS_DEPTHWISE_F16_ACC32")
+    assert not kf.checkout_declares("ARM_NN_HAS_SOMETHING_ELSE")
+    assert not kf.checkout_declares("ARM_NN_HAS_DEPTHWISE_F16")  # a prefix is not the macro
+    monkeypatch.setenv("CMSIS_NN_ROOT", str(tmp_path / "missing"))
+    assert not kf.checkout_declares("ARM_NN_HAS_DEPTHWISE_F16_ACC32")
+
+
+def test_route_selection_ctx_target_and_padding(monkeypatch):
+    monkeypatch.setattr(kf, "checkout_declares", lambda macro: False)
     # force_no_scratch: ctx 0, so the router falls back to the generic chain; the cin1 entry declines.
     no_scratch = _Op(hint={"force_no_scratch": True})
     assert _route("arm_depthwise_conv_f16", (1, 6, 6, 1), 3, 3, 8, op=no_scratch)["route"] == "chain"

@@ -225,9 +225,12 @@ def test_prelu_kernel_rejects_invalid_params(lib, field, value) -> None:
 # --------------------------------------------------------------------- HardSwish
 
 
-def _hs_prepare(lib, entry, kind, s_in, z_in, s_out, z_out):
-    return lib.prepare(entry, {"dtype": dtype_code("int8" if kind == "s8" else "int16"), "input_scale": s_in,
-                               "input_zero_point": z_in, "output_scale": s_out, "output_zero_point": z_out})
+def _hs_prepare(lib, entry, kind, s_in, z_in, s_out, z_out, prescale=-1):
+    fields = {"dtype": dtype_code("int8" if kind == "s8" else "int16"), "input_scale": s_in,
+              "input_zero_point": z_in, "output_scale": s_out, "output_zero_point": z_out}
+    if entry == "hard_swish_precise_prepare":
+        fields["prescale"] = prescale
+    return lib.prepare(entry, fields)
 
 
 def _sat16(v: int) -> int:

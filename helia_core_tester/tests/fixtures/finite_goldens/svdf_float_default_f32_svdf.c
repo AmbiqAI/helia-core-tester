@@ -53,25 +53,25 @@ int32_t svdf_float_default_f32_run(
 }
 
 
-static struct {
+static struct __attribute__((aligned(16))) {
     uint8_t head[HELIA_GUARD_BYTES];
     float body[12];
     uint8_t tail[HELIA_GUARD_BYTES];
 } svdf_float_default_f32_state_guard;
 #define svdf_float_default_f32_state (svdf_float_default_f32_state_guard.body)
-static struct {
+static struct __attribute__((aligned(16))) {
     uint8_t head[HELIA_GUARD_BYTES];
     float body[4];
     uint8_t tail[HELIA_GUARD_BYTES];
 } svdf_float_default_f32_scratch_input_guard;
 #define svdf_float_default_f32_scratch_input (svdf_float_default_f32_scratch_input_guard.body)
-static struct {
+static struct __attribute__((aligned(16))) {
     uint8_t head[HELIA_GUARD_BYTES];
     float body[4];
     uint8_t tail[HELIA_GUARD_BYTES];
 } svdf_float_default_f32_scratch_output_guard;
 #define svdf_float_default_f32_scratch_output (svdf_float_default_f32_scratch_output_guard.body)
-static struct {
+static struct __attribute__((aligned(16))) {
     uint8_t head[HELIA_GUARD_BYTES];
     float body[4];
     uint8_t tail[HELIA_GUARD_BYTES];

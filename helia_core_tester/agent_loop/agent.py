@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Iterable, Optional
 
 from .config import Campaign
-from .ledger import Ledger
+from .ledger import Ledger, passing_evals, phase_text, skipped
 from .workspace import Workspace
 
 TOOLS = "Read,Edit,Write,Glob,Grep,Bash"
@@ -37,9 +37,10 @@ def agent_settings(ws: Workspace, campaign: Campaign, extra_denies: Iterable[Pat
         f"Bash({ws.bin / 'check'})",
         f"Bash({ws.bin / 'disasm'}:*)",
     ]
-    dirs = (ws.tester, ws.base, root / "baselines", ws.ledger, ws.check_dir, ws.submit_dir, ws.logs, ws.size_build,
-            root / "agent.tmp")
-    files = (ws.size_ref, ws.state, ws.run_meta, ws.prompt, ws.settings)
+    sizes = [(ws.size_build_of(t), ws.size_ref_of(t)) for t in campaign.toolchains]
+    dirs = (ws.tester, ws.base, root / "baselines", ws.ledger, ws.check_dir, ws.submit_dir, ws.logs,
+            *(build for build, _ in sizes), root / "agent.tmp")
+    files = (*(ref for _, ref in sizes), ws.state, ws.run_meta, ws.prompt, ws.settings)
     deny = [f"Read({_rule_path(d)}/**)" for d in dirs] + [f"Read({_rule_path(f)})" for f in files]
     deny += [f"Read({_rule_path(ws.agent / 'Tests')}/**)", f"Read({_rule_path(campaign.secrets_dir)}/**)",
              f"Read({_rule_path(campaign.kernels_repo)}/**)", "Read(~/.claude/**)"]
@@ -51,8 +52,15 @@ def agent_settings(ws: Workspace, campaign: Campaign, extra_denies: Iterable[Pat
 def wrapper_text(ws: Workspace, name: str) -> str:
     """Tiny script the allow rules match."""
     cmd = shlex.join([*ws.tester_cmd(), "agent-loop", name, "--workspace", str(ws.root)])
-    arg = ' "$1"' if name == "disasm" else ""
-    return f"#!/bin/sh\n# Agent bridge to the trusted judge.\nexec {cmd}{arg}\n"
+    if name != "disasm":
+        return f"#!/bin/sh\n# Agent bridge to the trusted judge.\nexec {cmd}\n"
+    # Only <fn> [--toolchain T]; -- ends options.
+    return (f"#!/bin/sh\n# Agent bridge to the trusted judge.\n"
+            f'[ $# -le 1 ] || {{ [ $# -eq 3 ] && [ "$2" = --toolchain ]; }} || '
+            f'{{ echo "usage: disasm <function_name> [--toolchain gcc|atfe]"; exit 2; }}\n'
+            f'[ $# -eq 3 ] && exec {cmd} --toolchain "$3" -- "$1"\n'
+            # Older pinned testers lack --toolchain.
+            f'exec {cmd} -- "$1"\n')
 
 
 def write_wrappers(ws: Workspace) -> None:
@@ -186,10 +194,18 @@ def status(ws: Workspace, tail: int = 10) -> dict[str, Any]:
     ledger = Ledger(ws.ledger)
     meta = read_meta(ws)
     events = stream_events(Path(meta["log"])) if meta.get("log") else []
+    saved = ledger.rows()
     rows = [{"eval": r["eval"], "verdict": r["verdict"], "charged": r.get("charged"),
-             "geomean": {leg: v.get("geomean") for leg, v in (r.get("legs") or {}).items()},
-             "size_delta": r.get("size_delta")} for r in ledger.rows()]
-    return {"campaign": campaign.name, "evals_used": ledger.charged(), "evals": campaign.evals, "rows": rows,
+             "geomean": {leg: v.get("geomean") or {} for leg, v in (r.get("legs") or {}).items()},
+             "skipped": [leg for leg, v in (r.get("legs") or {}).items() if skipped(v)],
+             "size_delta": r.get("size_delta"), "toolchains": r.get("toolchains")} for r in saved]
+    passes = passing_evals(saved, campaign.runs)
+    for pick in passes:
+        pick["diff"] = str(ws.ledger / f"{pick['eval']}.diff")
+    used = ledger.charged()
+    return {"campaign": campaign.name, "evals_used": used, "evals": campaign.evals, "rows": rows,
+            "size_evals": campaign.size_budget, "phase": phase_text(campaign.evals - used, campaign.size_budget),
+            "passes": passes,
             "pid": meta.get("pid"), "running": pid_alive(meta.get("pid")), "session_id": meta.get("session_id"),
             "cost": run_cost(events), "spent_usd": round(spent_usd(meta), 2), "recent": readable(events)[-tail:] if tail else []}
 
@@ -206,6 +222,8 @@ def probes(ws: Workspace, campaign: Campaign, token: str) -> list[dict[str, Any]
         {"tool": "Read", "arg": str(ws.agent / "README.md"), "allow": True},
         {"tool": "Write", "arg": str(scratch), "allow": True},
         {"tool": "Bash", "arg": f"{ws.bin / 'disasm'} selftest_probe", "allow": True},
+        *([{"tool": "Bash", "arg": f"{ws.bin / 'disasm'} selftest_probe --toolchain atfe", "allow": True}]
+          if "atfe" in campaign.toolchains else []),
         {"tool": "Read", "arg": str(ws.ledger / "ledger.jsonl"), "allow": False},
         {"tool": "Read", "arg": str(ws.state), "allow": False},
         {"tool": "Read", "arg": str(ws.baseline(campaign.legs[0]) / "baseline.json"), "allow": False},

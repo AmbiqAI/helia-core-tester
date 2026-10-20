@@ -2,9 +2,11 @@
 FullyConnected operation implementation with dtype-aware quantization.
 """
 
+import math
 from typing import Dict, Any, Optional
 import numpy as np
 from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.ops._shared.shape_checks import require_positive_int_dims
 from helia_core_tester.generation.entry import check_entry_fault, resolve_entry
 from helia_core_tester.generation.harness import ArgumentPool, ArrayLiteral, Declaration, Define, GuardedBuffer, Provider, SizeQuery
 from helia_core_tester.generation.harness.faults import common_fault, struct_copy, with_fault
@@ -303,6 +305,45 @@ class OpFullyConnected(OperationBase):
     def uses_reference(self) -> bool:
         return True
 
+    def declared_filter_shape(self) -> tuple:
+        """Validated descriptor filter_shape [OutCh, InFeatures]; InFeatures must be the flattened input width.
+
+        A 4-D input is flattened to prod(input_shape[1:]) features, so a descriptor InFeatures that differs
+        from the flattened count would be silently replaced; reject it.
+        """
+        name = self.desc.get('name', '<unnamed>')
+        filter_shape = self.desc.get('filter_shape')
+        input_shape = self.desc.get('input_shape')
+        if not isinstance(input_shape, (list, tuple)) or len(input_shape) not in (2, 4):
+            raise ValueError(
+                f"{name}: FullyConnected input_shape must be [N, C] or [N, H, W, C], got {input_shape!r}"
+            )
+        if not isinstance(filter_shape, (list, tuple)) or len(filter_shape) != 2:
+            raise ValueError(
+                f"{name}: FullyConnected filter_shape must be [OutCh, InFeatures], got {filter_shape!r}"
+            )
+        require_positive_int_dims(name, "FullyConnected", input_shape=input_shape, filter_shape=filter_shape)
+        out_ch, in_features = (int(dim) for dim in filter_shape)
+        features = math.prod(int(dim) for dim in input_shape[1:])
+        if in_features != features:
+            shape = [int(dim) for dim in input_shape]
+            if len(shape) == 2:
+                raise ValueError(
+                    f"{name}: FullyConnected filter_shape InFeatures ({in_features}) must equal "
+                    f"input_shape[1] ({features}) of input_shape {shape}"
+                )
+            hint = ""
+            if in_features == shape[3]:
+                hint = f"; a 4-D input is flattened over H*W*C, did you mean [{out_ch}, {features}]?"
+            raise ValueError(
+                f"{name}: FullyConnected filter_shape InFeatures ({in_features}) must equal the "
+                f"flattened input feature count ({features}) of input_shape {shape}{hint}"
+            )
+        return out_ch, in_features
+
+    def validate_descriptor(self) -> None:
+        self.declared_filter_shape()
+
     def _select_cmsis_fc_kernel(self) -> Dict[str, str]:
         info = resolve_fully_connected_kernel(
             activation_dtype=self.desc.get('activation_dtype', 'S8'),
@@ -359,6 +400,8 @@ class OpFullyConnected(OperationBase):
         """
         from helia_core_tester.generation.ops._shared.fc_reference import fc_reference_case
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
+
+        self.declared_filter_shape()
 
         name = self.desc['name']
         kernel_info = self._select_cmsis_fc_kernel()

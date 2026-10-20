@@ -1,0 +1,110 @@
+# Exact float16 GELU cases for arm_nn_gelu_f16 (ns-cmsis-nn #761, v7.43.0):
+# status fn(input, output, size). The kernel widens each element to float32,
+# evaluates 0.5f * x * erfcf(x * -1/sqrt(2)) and rounds to float16 once.
+#
+# Every case checks the ns-cmsis-nn #743 FP16 contract directly: with
+# FPSCR.FZ16 clear, each finite result lies within 2^-10 * |ref| + 2^-24 of
+# ref = x * Phi(x) at the widened input. contract_interval turns that into the
+# lowest and highest float16 outputs allowed per element, computed from a
+# float64 reference, so no golden rounding term enters the comparison. An input
+# zero must give the zero of its own sign. Over the whole float16 domain a
+# double-narrowing kernel (the erfc term rounded to float16 before the final
+# multiply) leaves this contract on 72 inputs, all with subnormal results in
+# [-5.6, -4.45]; a golden-plus-tolerance comparison would hide 62 of them.
+#
+# The four sweep cases hold every finite float16 input, split by sign and
+# magnitude to fit target memory: positive [0x0000, 0x3E00) and
+# [0x3E00, 0x7C00), negative [0x8000, 0xBE00) and [0xBE00, 0xFC00) (-1.5 and
+# below). Float16 arithmetic, the tanh approximation and double narrowing leave
+# the contract only for negative inputs in [-5.6, -0.58], across the two
+# negative cases.
+#
+# required_kernel_symbols gates each case on the target ns-cmsis-nn checkout
+# declaring the kernel, so checkouts before v7.43.0 skip them.
+operator: Gelu
+name: gelu_float16_sweep_pos_small_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 1, 1, 15872]
+input_bits: [[0x0000, 0x3E00]]
+contract_interval: {rtol: 0.0009765625, atol: 5.960464477539063e-08}
+required_kernel_symbols: [arm_nn_gelu_f16]
+---
+operator: Gelu
+name: gelu_float16_sweep_pos_large_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 1, 1, 15872]
+input_bits: [[0x3E00, 0x7C00]]
+contract_interval: {rtol: 0.0009765625, atol: 5.960464477539063e-08}
+required_kernel_symbols: [arm_nn_gelu_f16]
+---
+operator: Gelu
+name: gelu_float16_sweep_neg_small_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 1, 1, 15872]
+input_bits: [[0x8000, 0xBE00]]
+contract_interval: {rtol: 0.0009765625, atol: 5.960464477539063e-08}
+required_kernel_symbols: [arm_nn_gelu_f16]
+---
+operator: Gelu
+name: gelu_float16_sweep_neg_large_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 1, 1, 15872]
+input_bits: [[0xBE00, 0xFC00]]
+contract_interval: {rtol: 0.0009765625, atol: 5.960464477539063e-08}
+required_kernel_symbols: [arm_nn_gelu_f16]
+---
+# Short odd count (7) of uniform draws: a size case for the scalar loop.
+operator: Gelu
+name: gelu_float16_tail_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 1, 1, 7]
+contract_interval: {rtol: 0.0009765625, atol: 5.960464477539063e-08}
+required_kernel_symbols: [arm_nn_gelu_f16]
+---
+# Non-finite inputs. Include/arm_nnfunctions_flt.h (v7.43.0) documents NaN ->
+# NaN, +Inf -> +Inf and -Inf -> NaN, with NaN payloads unspecified, the same
+# mapping as arm_nn_gelu_f32 and TFLite's exact GELU (see gelu_float.yaml).
+operator: Gelu
+name: gelu_float16_nonfinite_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 4, 4, 8]
+input_mode: nonfinite_sweep
+nonfinite_policy: strict
+contract_interval: {rtol: 0.0009765625, atol: 5.960464477539063e-08}
+required_kernel_symbols: [arm_nn_gelu_f16]
+---
+# FPSCR.FZ16 set: a result whose reference is FP16-subnormal (|ref| < 2^-14)
+# may instead be a zero of the reference's sign; every other result must still
+# meet the contract. The inputs are the three runs of float16 values with
+# subnormal results, (0, 2^-13), [-2^-13, 0) and [-38.5, -4.18]; below -38.5
+# the contract already allows a zero. The case asserts the clause, not that a
+# flush happens: arm_nn_gelu_f16 computes in float32 and only converts.
+operator: Gelu
+name: gelu_float16_fz16_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 1, 1, 7330]
+input_bits: [[0x0001, 0x0800], [0x8001, 0x8801], [0xC42E, 0xD0D1]]
+contract_interval: {rtol: 0.0009765625, atol: 5.960464477539063e-08}
+fpscr_fz16: true
+required_kernel_symbols: [arm_nn_gelu_f16]

@@ -13,7 +13,7 @@ _Static_assert(__builtin_types_compatible_p(__typeof__(arm_reduce_sum_f32), arm_
 
 
 #define REDUCE_SUM_FLOAT_AXIS_C_F32_OUTPUT_SIZE (1 * 3 * 4 * 1)
-static struct {
+static struct __attribute__((aligned(16))) {
     uint8_t head[HELIA_GUARD_BYTES];
     float body[REDUCE_SUM_FLOAT_AXIS_C_F32_OUTPUT_SIZE];
     uint8_t tail[HELIA_GUARD_BYTES];

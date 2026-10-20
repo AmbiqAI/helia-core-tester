@@ -1,11 +1,59 @@
 """Shared helpers for binary basic-math operators."""
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
 from helia_core_tester.generation.entry import check_entry_fault, resolve_entry
 from helia_core_tester.generation.ops._shared.base import OperationBase
+
+TensorQuant = Tuple[Sequence[float], Sequence[int]]
+QuantPresets = Mapping[str, Mapping[str, Mapping[str, TensorQuant]]]
+
+# Every tensor takes the builder's default quantization.
+SHARED_QUANT_PRESET = "shared"
+_PRESET_TENSORS = ("input_1_quant", "input_2_quant", "output_quant")
+
+
+def resolve_quant_preset(
+    operator: str,
+    presets: QuantPresets,
+    quant_preset: Any,
+    activation_dtype: str,
+) -> Dict[str, TensorQuant]:
+    """Per-tensor quantization for `quant_preset`; empty for the shared default.
+
+    An unknown preset, or a preset that has no quantization for this activation
+    dtype (float cases included), is a descriptor error.
+    """
+    if quant_preset is None or quant_preset == SHARED_QUANT_PRESET:
+        return {}
+    if not isinstance(quant_preset, str) or quant_preset not in presets:
+        known = sorted({SHARED_QUANT_PRESET, *presets})
+        raise ValueError(f"{operator} has no quant_preset {quant_preset!r}; known: {known}")
+    by_dtype = presets[quant_preset]
+    if activation_dtype not in by_dtype:
+        raise ValueError(
+            f"{operator} quant_preset {quant_preset!r} has no {activation_dtype} quantization; "
+            f"it applies to {sorted(by_dtype)}"
+        )
+    tensors = by_dtype[activation_dtype]
+    if set(tensors) != set(_PRESET_TENSORS):
+        raise ValueError(f"{operator} quant_preset {quant_preset!r} must define {list(_PRESET_TENSORS)}")
+    return dict(tensors)
+
+
+def operand_quant(preset: Mapping[str, TensorQuant], default: Tuple[float, int]) -> Dict[str, Tuple[float, int]]:
+    """Per-tensor (scale, zero_point) of input1, input2 and output: the preset's, else `default` for all three."""
+    if not preset:
+        return {role: default for role in ("input1", "input2", "output")}
+    quant: Dict[str, Tuple[float, int]] = {}
+    for role, key in (("input1", "input_1_quant"), ("input2", "input_2_quant"), ("output", "output_quant")):
+        scales, zero_points = preset[key]
+        if len(scales) != 1 or len(zero_points) != 1:
+            raise ValueError(f"{key} must be per-tensor (one scale and one zero point), got {preset[key]!r}")
+        quant[role] = (float(scales[0]), int(zero_points[0]))
+    return quant
 
 
 class BinaryBasicMathBase(OperationBase):

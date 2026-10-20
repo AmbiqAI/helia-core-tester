@@ -52,7 +52,24 @@ _EXPECTED_MIN_ID = 7
 _EXPECTED_MAX_OPERATOR = "Maximum"
 _EXPECTED_MIN_OPERATOR = "Minimum"
 
-_HEADER = '#include "benchmark_server_catalog.h"\n'
+_HEADER = (
+    '#include "benchmark_server_catalog.h"\n'
+    '#include "benchmark_server_blob_types.h"\n'
+    '#include "benchmark_server_mram.h"\n'
+)
+
+# CASE_META wire role names, in HCT_BLOB_ROLE_* order (benchmark_server_blob_types.h).
+_BLOB_ROLES = ("input_0", "weights", "bias", "multiplier", "shift", "input_1", "input_2", "meta_0")
+_BLOB_DTYPE_MACROS = {
+    "S8": "HCT_DTYPE_S8",
+    "S16": "HCT_DTYPE_S16",
+    "S32": "HCT_DTYPE_S32",
+    "S64": "HCT_DTYPE_S64",
+    "S4": "HCT_DTYPE_S4",
+    "BOOL": "HCT_DTYPE_BOOL",
+    "FP32": "HCT_DTYPE_F32",
+    "FP16": "HCT_DTYPE_F16",
+}
 
 
 def _load_registry(project_root: Path) -> list[KernelEntry]:
@@ -66,6 +83,9 @@ def _validate_registry(kernels: list[KernelEntry]) -> None:
     missing_family = [entry.kernel_id for entry in kernels if not entry.family]
     if missing_family:
         raise ValueError(f"assets/kernel_registry.yaml rows without a family: kernel_id={missing_family}")
+
+    for entry in kernels:
+        _validate_blob_contract({"kernel_id": entry.kernel_id, "blobs": {role: list(dtypes) for role, dtypes in entry.blobs}})
 
     by_id = {entry.kernel_id: entry for entry in kernels}
     max_entry = by_id.get(_EXPECTED_MAX_ID)
@@ -132,6 +152,85 @@ def splice_kernel_id_block(header_text: str, block: str) -> str:
     return header_text[:begin] + block + header_text[end:]
 
 
+def _contract_dtypes(kernel_id, role: str, dtype) -> tuple[str, ...]:
+    """Normalise one role's contract value (a dtype or a non-empty list of distinct dtypes)."""
+    dtypes = tuple(dtype) if isinstance(dtype, (list, tuple)) else (dtype,)
+    if not dtypes:
+        raise ValueError(f"kernel_id={kernel_id} blobs: role {role!r} has an empty dtype list")
+    if len(set(dtypes)) != len(dtypes):
+        raise ValueError(f"kernel_id={kernel_id} blobs: role {role!r} lists a dtype more than once: {list(dtypes)}")
+    for item in dtypes:
+        if item not in _BLOB_DTYPE_MACROS:
+            raise ValueError(
+                f"kernel_id={kernel_id} blobs: role {role!r} has unknown dtype {item!r} "
+                f"(allowed: {sorted(_BLOB_DTYPE_MACROS)})"
+            )
+    return dtypes
+
+
+def _validate_blob_contract(entry: dict) -> None:
+    """Every kernel declares the CASE_META roles it accepts and the dtype(s) each may carry."""
+    kernel_id = entry.get("kernel_id")
+    blobs = entry.get("blobs")
+    if not isinstance(blobs, dict) or not blobs:
+        raise ValueError(f"kernel_id={kernel_id} needs a non-empty `blobs:` map of role -> dtype")
+    for role, dtype in blobs.items():
+        if role not in _BLOB_ROLES:
+            raise ValueError(f"kernel_id={kernel_id} blobs: unknown role {role!r} (allowed: {list(_BLOB_ROLES)})")
+        _contract_dtypes(kernel_id, role, dtype)
+
+
+def _render_blob_contracts(kernels: list[KernelEntry]) -> list[str]:
+    lines = [
+        "/* Per-kernel CASE_META blob contracts: a bit per HCT_DTYPE_* each accepted role may",
+        " * carry, 0 for a role the kernel does not take. */",
+        "typedef struct",
+        "{",
+        "    uint32_t kernel_id;",
+        "    uint16_t accepted[HCT_BLOB_ROLE_COUNT];",
+        "} hct_kernel_blob_contract_t;",
+        "",
+        "#define HCT_DTYPE_BIT(dtype) ((uint16_t)(1u << (dtype)))",
+        "",
+        "static const hct_kernel_blob_contract_t g_hct_kernel_blob_contracts[] = {",
+    ]
+    for kernel in kernels:
+        blobs = dict(kernel.blobs)
+        fields = ", ".join(
+            f"[HCT_BLOB_ROLE_{role.upper()}] = "
+            + " | ".join(
+                f"HCT_DTYPE_BIT({_BLOB_DTYPE_MACROS[dtype]})"
+                for dtype in _contract_dtypes(kernel.kernel_id, role, blobs[role])
+            )
+            for role in _BLOB_ROLES
+            if role in blobs
+        )
+        lines.append(f"    {{{kernel.kernel_id}u, {{{fields}}}}},")
+    lines += [
+        "};",
+        "",
+        "bool hct_kernel_blob_accepts(uint32_t kernel_id, uint8_t role, uint8_t dtype)",
+        "{",
+        "    size_t index;",
+        "    if (role == HCT_BLOB_ROLE_UNKNOWN || role >= HCT_BLOB_ROLE_COUNT || dtype == HCT_DTYPE_UNKNOWN ||",
+        "        dtype >= 8u * sizeof(uint16_t))",
+        "    {",
+        "        return false;",
+        "    }",
+        "    for (index = 0u; index < sizeof(g_hct_kernel_blob_contracts) / sizeof(g_hct_kernel_blob_contracts[0]); ++index)",
+        "    {",
+        "        if (g_hct_kernel_blob_contracts[index].kernel_id == kernel_id)",
+        "        {",
+        "            return (g_hct_kernel_blob_contracts[index].accepted[role] & HCT_DTYPE_BIT(dtype)) != 0u;",
+        "        }",
+        "    }",
+        "    return false;",
+        "}",
+        "",
+    ]
+    return lines
+
+
 def _catalog_entry(kernel: KernelEntry) -> dict:
     """Build one canonical catalog entry (shared by the JSON and C emitters) from a
     registry kernel record. The registry itself doesn't carry catalog-only metadata
@@ -171,7 +270,7 @@ def _format_c_bool(value: bool) -> str:
     return "true" if value else "false"
 
 
-def _render_catalog_c(entries: list[dict]) -> str:
+def _render_catalog_c(entries: list[dict], kernels: list[KernelEntry]) -> str:
     lines = [_HEADER]
     lines.append("")
     lines.append("/* The PMU capability is decided by the device header of the hardware build")
@@ -191,6 +290,11 @@ def _render_catalog_c(entries: list[dict]) -> str:
     lines.append("#define HCT_PLACEMENT_CAPABILITY_FLAGS HCT_CAP_WEIGHTS_MRAM")
     lines.append("#else")
     lines.append("#define HCT_PLACEMENT_CAPABILITY_FLAGS 0u")
+    lines.append("#endif")
+    lines.append("#if HCT_BLOB_STORE_BYTES > 0")
+    lines.append("#define HCT_STORE_CAPABILITY_FLAGS HCT_CAP_BLOB_STORE")
+    lines.append("#else")
+    lines.append("#define HCT_STORE_CAPABILITY_FLAGS 0u")
     lines.append("#endif")
     lines.append("")
     lines.append("#ifndef HCT_BENCHMARK_SERVER_BOARD_ID")
@@ -249,6 +353,7 @@ def _render_catalog_c(entries: list[dict]) -> str:
     lines.append("    return g_hct_kernel_catalog_hash;")
     lines.append("}")
     lines.append("")
+    lines.extend(_render_blob_contracts(kernels))
     lines.append("const char *hct_benchmark_server_board_id(void)")
     lines.append("{")
     lines.append("    return HCT_BENCHMARK_SERVER_BOARD_ID;")
@@ -278,7 +383,8 @@ def _render_catalog_c(entries: list[dict]) -> str:
     lines.append("         | HCT_CAP_KERNEL_CATALOG")
     lines.append("         | HCT_CAP_ABS_S8")
     lines.append("         | HCT_PMU_CAPABILITY_FLAGS")
-    lines.append("         | HCT_PLACEMENT_CAPABILITY_FLAGS;")
+    lines.append("         | HCT_PLACEMENT_CAPABILITY_FLAGS")
+    lines.append("         | HCT_STORE_CAPABILITY_FLAGS;")
     lines.append("}")
     lines.append("")
     lines.append("uint8_t hct_benchmark_server_pmu_counter_slots(void)")
@@ -299,7 +405,7 @@ def generate(*, check: bool, project_root: Path = PROJECT_ROOT, cmsis_nn_root: O
     catalog_c_path = project_root / CATALOG_C_RELPATH
     adapters_h_path = project_root / ADAPTERS_H_RELPATH
     json_bytes = _canonical_json_bytes(entries)
-    c_text = _render_catalog_c(entries)
+    c_text = _render_catalog_c(entries, kernels)
     if not adapters_h_path.exists():
         raise ValueError(f"{adapters_h_path} does not exist; the kernel-id block has nowhere to go")
     header_before = adapters_h_path.read_text(encoding="utf-8")

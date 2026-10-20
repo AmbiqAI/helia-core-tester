@@ -148,6 +148,22 @@ def test_data_movement_adapters_validate_all_meta_and_output_shapes() -> None:
     assert "const size_t required_meta_ints = is_batch_to_space ? 6u : 7u;" in block
 
 
+def test_reverse_sequence_adapter_bounds_axes_and_seq_lengths() -> None:
+    """The kernel indexes seq_lengths[coord[batch_dim]] and reverses up to seq_len steps
+    along seq_dim without checks (#145, folded in from #136)."""
+    block = render_generated_adapters_source()
+    start = block.index("case HCT_KERNEL_ID_REVERSE_SEQUENCE_S8:")
+    body = block[start:block.index("return arm_reverse_sequence_s8(", start)]
+    assert "params.seq_dim < 0 || params.seq_dim >= rank" in body
+    assert "params.batch_dim < 0 ||\n                params.batch_dim >= rank" in body
+    assert "params.seq_dim == params.batch_dim" in body
+    assert "input1->dtype != HCT_DTYPE_S32" in body
+    assert "input1->byte_length / sizeof(int32_t) < (uint32_t)shape[params.batch_dim]" in body
+    assert "seq_lengths[batch] < 0 || seq_lengths[batch] > shape[params.seq_dim]" in body
+    # Every check runs before either kernel call.
+    assert body.index("seq_lengths[batch] > shape[params.seq_dim]") < body.index("return arm_reverse_sequence_s16(")
+
+
 def test_every_registered_adapter_has_a_unique_function_name() -> None:
     names = [adapter.function_name for adapter in FIRMWARE_ADAPTERS]
     assert len(names) == len(set(names)), f"duplicate function_name entries: {names}"

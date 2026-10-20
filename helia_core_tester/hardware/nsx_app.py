@@ -31,16 +31,16 @@ from .boards import BoardSpec
 from .boards import repo_root as tester_repo_root
 from .firmware_build import BUILD_ID_TXT, IMAGE_SUBDIR, SERVER_TARGET
 from .pathutil import is_relative_to
+from .toolchain import DEFAULT_TOOLCHAIN, TOOLCHAINS, toolchain_spec
 
 APP_NAME = "hct_benchmark_server"
 SIZE_PROBE_TARGET = "hct_universal_size_probe"
-TOOLCHAIN = "arm-none-eabi-gcc"
 
 # Kernel identity per neuralspotx registry.lock.yaml.
 CMSIS_NN_MODULE = "nsx-cmsis-nn"
 CMSIS_NN_PROJECT = "ns-cmsis-nn"
 CMSIS_NN_METADATA = "modules/ns-cmsis-nn/nsx/nsx-module.yaml"
-CMSIS_NN_REF = "v7.40.0"
+CMSIS_NN_REF = "v7.47.0"
 # The pin while records lacked the flag.
 _PRE_FLAG_PIN = "v7.35.1"
 
@@ -83,6 +83,7 @@ _SERVER_SOURCES = (
     "benchmark_server_messages.c",
     "benchmark_server_adapter.c",
     "benchmark_server_session.c",
+    "benchmark_server_mram.c",
     "benchmark_server_adapters.gen.c",
     "benchmark_server_transport_rtt.c",
     "hct_build_id.c",
@@ -107,10 +108,12 @@ class AppOptions:
     enable_f16: bool = True
     build_size_probe: bool = False
     placement: str = "tcm"
+    toolchain: str = DEFAULT_TOOLCHAIN
 
     def __post_init__(self) -> None:
         if self.placement not in PLACEMENTS:
             raise ValueError(f"placement must be one of: {', '.join(PLACEMENTS)}")
+        toolchain_spec(self.toolchain)
         # One spelling per checkout.
         if self.cmsis_nn_root is not None:
             object.__setattr__(self, "cmsis_nn_root", Path(self.cmsis_nn_root).expanduser().resolve())
@@ -134,7 +137,10 @@ class AppOptions:
 
     def summary(self) -> str:
         """Kernel source and inline asm, as printed."""
-        return f"{self.kernel_source()}, inline asm {_on_off(self.requantize_inline_asm)}, placement {self.placement}"
+        return (
+            f"{self.kernel_source()}, inline asm {_on_off(self.requantize_inline_asm)}, "
+            f"placement {self.placement}, toolchain {self.toolchain}"
+        )
 
     def changes_from(self, old: "AppOptions") -> list[str]:
         """What differs from old, as printed."""
@@ -182,6 +188,8 @@ def _field_type_ok(name: str, value: Any) -> bool:
         return value is None or (isinstance(value, str) and bool(value))
     if name == "placement":
         return value in PLACEMENTS
+    if name == "toolchain":
+        return value in TOOLCHAINS
     return isinstance(value, bool)
 
 
@@ -212,6 +220,7 @@ def resolve_options(
     cmsis_nn_root: Optional[Path] = None,
     inline_asm: Optional[bool] = None,
     placement: Optional[str] = None,
+    toolchain: Optional[str] = None,
     follow_pin: bool = True,
 ) -> AppOptions:
     """Flags win; kernel source then saved, switches then defaults.
@@ -239,6 +248,8 @@ def resolve_options(
         base = dataclasses.replace(base, requantize_inline_asm=inline_asm)
     if placement is not None:
         base = dataclasses.replace(base, placement=placement)
+    if toolchain is not None:
+        base = dataclasses.replace(base, toolchain=toolchain)
     return base
 
 
@@ -539,7 +550,7 @@ def render_app(
     nsx_yml = env.get_template("nsx.yml.j2").render(
         app_name=APP_NAME,
         board=board.nsx_board,
-        toolchain=TOOLCHAIN,
+        toolchain=toolchain_spec(options.toolchain).name,
         channel=profile.get("channel"),
         modules=modules,
         vendored=[CMSIS_NN_MODULE] if options.cmsis_nn_root else [],

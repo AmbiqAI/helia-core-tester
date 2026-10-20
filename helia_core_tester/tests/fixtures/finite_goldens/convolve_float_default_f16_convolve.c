@@ -86,7 +86,7 @@ static cmsis_nn_context convolve_float_default_f16_ctx;
 
 // Runtime scratch buffer (max upper bound; actual size queried at runtime)
 #define CONVOLVE_FLOAT_DEFAULT_F16_BUFFER_SIZE_MAX 1024
-static struct {
+static struct __attribute__((aligned(16))) {
     uint8_t head[HELIA_GUARD_BYTES];
     uint8_t body[CONVOLVE_FLOAT_DEFAULT_F16_BUFFER_SIZE_MAX];
     uint8_t tail[HELIA_GUARD_BYTES];
@@ -95,7 +95,7 @@ static struct {
 
 
 #define CONVOLVE_FLOAT_DEFAULT_F16_OUTPUT_SIZE (1 * 6 * 6 * 5)
-static struct {
+static struct __attribute__((aligned(16))) {
     uint8_t head[HELIA_GUARD_BYTES];
     float16_t body[CONVOLVE_FLOAT_DEFAULT_F16_OUTPUT_SIZE];
     uint8_t tail[HELIA_GUARD_BYTES];

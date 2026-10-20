@@ -5,7 +5,25 @@ Multiply (elementwise) operation implementation for Helia-Core Tester.
 from typing import Dict
 import numpy as np
 from pathlib import Path
-from helia_core_tester.generation.ops._shared.binary_basic_math_base import BinaryBasicMathBase 
+from helia_core_tester.generation.ops._shared.binary_basic_math_base import (
+    BinaryBasicMathBase,
+    operand_quant,
+    resolve_quant_preset,
+)
+
+# `distinct` gives each operand its own scale and zero point (#349), so a kernel that
+# swaps the two input offsets changes the output. The output scale keeps the
+# effective scale s1*s2/so off a power of two and the saturated share near the
+# shared preset's.
+MUL_QUANT_PRESETS = {
+    "distinct": {
+        "S8": {
+            "input_1_quant": ([1.0 / 64.0], [-23]),
+            "input_2_quant": ([3.0 / 64.0], [17]),
+            "output_quant": ([0.005], [7]),
+        },
+    },
+}
 
 
 class OpMul(BinaryBasicMathBase):
@@ -16,7 +34,13 @@ class OpMul(BinaryBasicMathBase):
     SIGN_SPAN_OPERANDS = ("input_1", "input_2")
     # Keeps about a fifth saturated.
     S8_REACH = 48
-    
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._preset_quant = resolve_quant_preset(
+            "Mul", MUL_QUANT_PRESETS, self.desc.get("quant_preset"), self.tensor_dtype("input")
+        )
+
     def uses_reference(self) -> bool:
         return True
 
@@ -106,14 +130,13 @@ class OpMul(BinaryBasicMathBase):
             activation_max_literal = builder.format_float_literal(activation_max)
             input1_zp = input2_zp = output_zp = output_mult = output_shift = 0
         else:
-            scale, zero_point = ref_quant.preset_quant(activation_dtype)
-            input1_scale = input2_scale = scale
-            input1_zp = input2_zp = output_zp = zero_point
+            quant = operand_quant(self._preset_quant, ref_quant.preset_quant(activation_dtype))
+            (input1_scale, input1_zp), (input2_scale, input2_zp) = quant["input1"], quant["input2"]
+            output_zp = quant["output"][1]
             params = get_bindings().prepare("mul_prepare", {
                 "dtype": ref_quant.hct_dtype(activation_dtype), "activation": activation_code("NONE"),
-                "input1_scale": scale, "input1_zero_point": zero_point,
-                "input2_scale": scale, "input2_zero_point": zero_point,
-                "output_scale": scale, "output_zero_point": zero_point,
+                **{f"{role}_{field}": value for role, (scale, zero_point) in quant.items()
+                   for field, value in (("scale", scale), ("zero_point", zero_point))},
             })
             output_mult, output_shift = params["output_multiplier"], params["output_shift"]
             activation_min, activation_max = params["activation_min"], params["activation_max"]
@@ -141,7 +164,7 @@ class OpMul(BinaryBasicMathBase):
                 params,
                 {"input1": np.ascontiguousarray(input1_q), "input2": np.ascontiguousarray(input2_q)},
                 {"output": output_shape},
-                quant={role: {"scale": scale, "zero_point": zero_point} for role in ("input1", "input2", "output")},
+                quant={role: {"scale": scale, "zero_point": zero_point} for role, (scale, zero_point) in quant.items()},
             ))
 
         # Format arrays

@@ -13,7 +13,7 @@ _Static_assert(__builtin_types_compatible_p(__typeof__(arm_concatenation_f32_x),
 
 
 #define CONCATENATION_AXIS_X_F32_OUTPUT_SIZE (1 * 2 * 6 * 3)
-static struct {
+static struct __attribute__((aligned(16))) {
     uint8_t head[HELIA_GUARD_BYTES];
     float body[CONCATENATION_AXIS_X_F32_OUTPUT_SIZE];
     uint8_t tail[HELIA_GUARD_BYTES];

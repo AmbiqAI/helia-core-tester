@@ -137,6 +137,13 @@ class OperationBase(ABC):
         """The ReferenceCall recorded by reference_golden(), or None."""
         return self._reference_call
 
+    def validate_descriptor(self) -> None:
+        """Reject a descriptor whose fields disagree with each other, before any file is written.
+
+        The schema checks each field alone; operators override this for the cross-field rules
+        a schema cannot express.
+        """
+
     def reference_golden(self, call):
         """Run `call` on the C reference, record it as this case's golden, and return its output.
 
@@ -572,9 +579,10 @@ class OperationBase(ABC):
         low: float = -1.0,
         high: float = 1.0,
         dtype=np.float32,
+        rng: Optional[np.random.Generator] = None,
     ) -> np.ndarray:
         """Sample reproducible uniform input data without mutating self.rng state."""
-        sampled = self._seeded_rng().uniform(low, high, size=tuple(shape)).astype(dtype)
+        sampled = (rng or self._seeded_rng()).uniform(low, high, size=tuple(shape)).astype(dtype)
         return self._maybe_apply_input_mode(sampled)
 
     def _sample_dual_uniform_inputs(

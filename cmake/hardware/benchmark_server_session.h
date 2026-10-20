@@ -72,6 +72,9 @@ typedef struct
     /* Second input copy, if twinned. */
     uint32_t twin_offset;
     uint8_t twinned;
+    /* CASE_META sent a store digest. */
+    uint8_t keyed;
+    uint64_t digest;
 } hct_server_blob_t;
 
 /* One PMU measurement pass from SESSION_PLAN: which event ids to program into the
@@ -289,6 +292,16 @@ typedef struct
     uint32_t output_stream_checksum;
     /* Next free MRAM address this case. */
     uintptr_t mram_cursor;
+    /* MRAM bytes this case's blobs take, each from a cache line. */
+    uint32_t mram_case_bytes;
+    /* Operand the adapter derives once per case (packed FC stream); MRAM placement
+     * programs it after the blobs and the kernel reads it from there (#377). */
+    uint32_t derived_bytes;
+    const uint8_t *derived_source;
+    uint32_t derived_built;
+    const uint8_t *derived;
+    /* Next adapter call builds the derived operand and returns before the kernel. */
+    uint8_t deriving;
     uint8_t output_stream_active;
     uint8_t *workspace;
     uint32_t workspace_bytes;

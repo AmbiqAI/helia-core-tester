@@ -100,6 +100,14 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
     "LeakyRelu": _spec("LeakyRelu", "ActivationFunctions", "leaky_relu", "OpLeakyRelu", "ActivationFunctions/leaky_relu.yaml", None),
     "Tanh": _spec("Tanh", "ActivationFunctions", "tanh", "OpTanh", "ActivationFunctions/tanh.yaml", None),
     "Logistic": _spec("Logistic", "ActivationFunctions", "logistic", "OpLogistic", "ActivationFunctions/logistic.yaml", None),
+    "Gelu": _spec(
+        "Gelu",
+        "ActivationFunctions",
+        "gelu",
+        "OpGelu",
+        descriptor_relpaths=("ActivationFunctions/gelu_float.yaml", "ActivationFunctions/gelu_float16.yaml"),
+        template_relpath=None,
+    ),
     "HardSwishPrecise": _spec(
         "HardSwishPrecise",
         "ActivationFunctions",
@@ -134,6 +142,10 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "OpSub",
         descriptor_relpaths=("BasicMathFunctions/sub.yaml", "BasicMathFunctions/sub_float.yaml"),
         template_relpath=None,
+    ),
+    "Div": _spec(
+        "Div", "BasicMathFunctions", "div", "OpDiv",
+        "BasicMathFunctions/div_float.yaml", None,
     ),
     "Mul": _spec(
         "Mul",
@@ -389,6 +401,10 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "OpReshape",
         descriptor_relpaths=("ReshapeFunctions/reshape.yaml", "ReshapeFunctions/reshape_float.yaml"),
         template_relpath=None,
+    ),
+    "ResizeBilinear": _spec(
+        "ResizeBilinear", "ReshapeFunctions", "resize_bilinear", "OpResizeBilinear",
+        "ReshapeFunctions/resize_bilinear.yaml", None,
     ),
     "ResizeNearestNeighbor": _spec(
         "ResizeNearestNeighbor",

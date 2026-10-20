@@ -35,7 +35,9 @@ enum
      * DWT-only cores such as Cortex-M4, where SAMPLE_RESULT only carries cycles. */
     HCT_CAP_PMU_ARMV8M = (1u << 6),
     /* Weights and bias live in MRAM. */
-    HCT_CAP_WEIGHTS_MRAM = (1u << 7)
+    HCT_CAP_WEIGHTS_MRAM = (1u << 7),
+    /* CASE_META store keys skip known blobs. */
+    HCT_CAP_BLOB_STORE = (1u << 8)
 };
 
 const hct_kernel_catalog_entry_t *hct_benchmark_server_catalog(size_t *count);
@@ -47,6 +49,9 @@ uint32_t hct_benchmark_server_capability_flags(void);
 /* Number of 16-bit PMU event-counter slots (__PMU_NUM_EVENTCNT, 8 on Cortex-M55);
  * 0 when HCT_CAP_PMU_ARMV8M is not set. */
 uint8_t hct_benchmark_server_pmu_counter_slots(void);
+/* Whether a CASE_META blob with HCT_BLOB_ROLE_* `role` may carry HCT_DTYPE_* `dtype` for
+ * `kernel_id`; false when the kernel is unknown or does not take that role. */
+bool hct_kernel_blob_accepts(uint32_t kernel_id, uint8_t role, uint8_t dtype);
 
 #ifdef __cplusplus
 }

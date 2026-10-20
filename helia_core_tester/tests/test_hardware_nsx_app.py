@@ -6,6 +6,7 @@ installed NSX registry.
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import shutil
 import time
@@ -469,6 +470,12 @@ def test_synced_modules_cmake_is_left_alone(tmp_path: Path) -> None:
 def test_mram_placement_defines_the_switch(tmp_path: Path) -> None:
     assert "HCT_PLACEMENT_MRAM" not in _render(tmp_path / "tcm").cmakelists
     assert "    HCT_PLACEMENT_MRAM\n" in _render(tmp_path / "mram", placement="mram").cmakelists
+
+
+def test_board_blob_store_defines_its_size(tmp_path: Path) -> None:
+    assert "    HCT_BLOB_STORE_BYTES=2097152u\n" in _render(tmp_path / "on").cmakelists
+    off = nsx_app.render_app(dataclasses.replace(BOARD, blob_store_bytes=0), nsx_app.AppOptions(), tmp_path / "off" / "app")
+    assert "HCT_BLOB_STORE_BYTES" not in off.cmakelists
 
 
 def test_mram_placement_needs_cached_mram(tmp_path: Path) -> None:

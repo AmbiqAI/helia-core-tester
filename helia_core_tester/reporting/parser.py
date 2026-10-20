@@ -18,6 +18,7 @@ class TestResultParser:
     # capture keeps them even when the per-element body is cut.
     SUMMARY_LINE_PREFIXES = (
         'HELIA_FLOAT_MAXDIFF',
+        'HELIA_FLOAT_INTERVAL',
         'HELIA_MASKED_LANES',
         'HELIA_NONFINITE_MISMATCHES',
         'GuardBreach[',

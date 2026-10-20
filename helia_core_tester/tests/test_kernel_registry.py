@@ -70,6 +70,7 @@ def _registry_text(rows=_ROWS) -> str:
         if weight_dtype is not None:
             lines.append(f"    weight_dtype: {weight_dtype}")
         lines.append(f"    cmsis_function: {function}")
+        lines.append("    blobs: {input_0: S8}")
     return "\n".join(lines) + "\n"
 
 

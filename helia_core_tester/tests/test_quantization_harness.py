@@ -132,3 +132,15 @@ def test_passes_refuse_the_benchmark_form_and_void_kernels() -> None:
     with pytest.raises(HarnessError, match="post-pass needs a status to stop on"):
         plan_harness(ArgumentPool(name="x", values={}, scratch_buffer=False, benchmark=False, post_call="    x;"),
                      kernel_fn="arm_fx_void", sizer_fn=None, scratch_bytes=0, contracts=contracts)
+
+
+
+def test_cleanup_refuses_the_benchmark_form_and_void_kernels() -> None:
+    with pytest.raises(HarnessError, match="pre- and post-passes have no benchmark or fault form"):
+        ArgumentPool(name="x", values={}, scratch_buffer=False, cleanup="    x;").validate()
+    decl = FunctionDecl(name="arm_fx_void", header="Include/arm_nnfunctions.h", line=1, guards=(), returns="void",
+                        params=(ParamDecl("input", "const int8_t *", "in"), ParamDecl("output", "int8_t *", "out")))
+    contracts = ContractSet(status=STATUS_PRESENT, root=Path("."), path=None, functions={decl.name: decl})
+    with pytest.raises(HarnessError, match="cleanup needs a status to stop on"):
+        plan_harness(ArgumentPool(name="x", values={}, scratch_buffer=False, benchmark=False, cleanup="    x;"),
+                     kernel_fn="arm_fx_void", sizer_fn=None, scratch_bytes=0, contracts=contracts)

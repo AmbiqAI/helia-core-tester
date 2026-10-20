@@ -5,7 +5,25 @@ Add operation implementation.
 from typing import Dict
 import numpy as np
 from pathlib import Path
-from helia_core_tester.generation.ops._shared.binary_basic_math_base import BinaryBasicMathBase
+from helia_core_tester.generation.ops._shared.binary_basic_math_base import (
+    BinaryBasicMathBase,
+    operand_quant,
+    resolve_quant_preset,
+)
+
+# `distinct` gives each operand its own scale and zero point (#349): the offsets
+# differ in sign and size, and the scale ratio makes input1/input2 differ in both
+# multiplier and shift, so a kernel that swaps one operand's parameters for the
+# other's changes the output.
+ADD_QUANT_PRESETS = {
+    "distinct": {
+        "S8": {
+            "input_1_quant": ([1.0 / 64.0], [-23]),
+            "input_2_quant": ([3.0 / 64.0], [17]),
+            "output_quant": ([5.0 / 64.0], [7]),
+        },
+    },
+}
 
 
 class OpAdd(BinaryBasicMathBase):
@@ -17,6 +35,12 @@ class OpAdd(BinaryBasicMathBase):
     
     # Fixed per-tensor quantization of the integer cases (every tensor alike).
     INT_QUANT = {"S8": (0.125, 0), "S16": (1.0 / 32768.0, 0)}
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._preset_quant = resolve_quant_preset(
+            "Add", ADD_QUANT_PRESETS, self.desc.get("quant_preset"), self.tensor_dtype("input")
+        )
 
     def uses_reference(self) -> bool:
         return True
@@ -121,16 +145,15 @@ class OpAdd(BinaryBasicMathBase):
             mult1 = shift1 = mult2 = shift2 = output_mult = output_shift = left_shift = 0
             input1_zp = input2_zp = output_zp = 0
         else:
-            scale, zero_point = self.INT_QUANT[activation_dtype]
+            quant = operand_quant(self._preset_quant, self.INT_QUANT[activation_dtype])
             params = get_bindings().prepare("add_prepare", {
                 "dtype": dtype_code("int8" if activation_dtype == "S8" else "int16"),
                 "activation": activation_code("NONE"),
-                "input1_scale": scale, "input1_zero_point": zero_point,
-                "input2_scale": scale, "input2_zero_point": zero_point,
-                "output_scale": scale, "output_zero_point": zero_point,
+                **{f"{role}_{field}": value for role, (scale, zero_point) in quant.items()
+                   for field, value in (("scale", scale), ("zero_point", zero_point))},
             })
-            input1_scale = input2_scale = scale
-            input1_zp = input2_zp = output_zp = zero_point
+            (input1_scale, input1_zp), (input2_scale, input2_zp) = quant["input1"], quant["input2"]
+            output_zp = quant["output"][1]
             mult1, shift1 = params["input1_multiplier"], params["input1_shift"]
             mult2, shift2 = params["input2_multiplier"], params["input2_shift"]
             output_mult, output_shift = params["output_multiplier"], params["output_shift"]
@@ -157,9 +180,7 @@ class OpAdd(BinaryBasicMathBase):
                 params,
                 {"input1": np.ascontiguousarray(input1_q), "input2": np.ascontiguousarray(input2_q)},
                 {"output": output_shape},
-                quant={"input1": {"scale": scale, "zero_point": zero_point},
-                       "input2": {"scale": scale, "zero_point": zero_point},
-                       "output": {"scale": scale, "zero_point": zero_point}},
+                quant={role: {"scale": scale, "zero_point": zero_point} for role, (scale, zero_point) in quant.items()},
             ))
 
         # Format arrays

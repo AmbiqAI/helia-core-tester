@@ -232,7 +232,8 @@ def exp_lut16(x):
     idx = min(max(int(idx_f), 0), 255)
     frac = f32(idx_f - f32(idx))
     y = fma(frac, f32(f32(EXP2_F16[idx + 1]) - f32(EXP2_F16[idx])), EXP2_F16[idx])
-    return h(f32(f32(y) * f32(2.0 ** min(max(n, -14), 15))))
+    # The 2^n scale stays float32 down to 2^-126 (ns-cmsis-nn#861).
+    return h(f32(f32(y) * f32(2.0 ** min(max(n, -126), 15))))
 
 
 def sigmoid16(x):
@@ -278,6 +279,14 @@ def test_hard_swish_f16_matches_the_restatement(lib) -> None:
     x = f16_inputs(9)
     got = ReferenceCall("hard_swish_f16_mve", {"unused": 0}, {"input": x}, {"output": x.shape}).output()
     assert_bits(got, np.array([hard_swish16(float(v)) for v in x], np.float16))
+
+
+def test_f16_sigmoid_underflows_to_a_subnormal_or_zero(lib) -> None:
+    # Below the float16 normal range the result keeps its subnormal, and -inf reaches 0, as the kernel's
+    # float32 2^n scale gives (ns-cmsis-nn#861); a scale clamped at 2^-14 would floor both near 6e-5.
+    got = run_act16(np.array([-12.0, -np.inf], np.float16), SIGMOID).astype(np.float64)
+    assert 0 < got[0] < 6.1e-5 and abs(got[0] - np.exp(-12.0)) <= 2.0**-24 * 4
+    assert got[1] == 0.0
 
 
 def test_f16_hand_checked(lib) -> None:

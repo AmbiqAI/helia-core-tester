@@ -158,6 +158,67 @@ void helia_test_nonfinite_mismatch_summary(int count)
     }
 }
 
+static uint32_t helia_test_bits_at(const void *base, int index, int width)
+{
+    if (width == 2) {
+        uint16_t bits;
+        memcpy(&bits, (const uint8_t *)base + (size_t)index * 2u, sizeof(bits));
+        return bits;
+    }
+    uint32_t bits;
+    memcpy(&bits, (const uint8_t *)base + (size_t)index * 4u, sizeof(bits));
+    return bits;
+}
+
+/* Sign-magnitude order on raw bits: -0 maps below +0, larger magnitudes further out. */
+static int64_t helia_test_bits_key(uint32_t bits, uint32_t sign_bit)
+{
+    const int64_t magnitude = (int64_t)(bits & (sign_bit - 1u));
+    return (bits & sign_bit) ? -magnitude - 1 : magnitude;
+}
+
+int helia_test_float_interval(
+    const void *actual,
+    const void *lo,
+    const void *hi,
+    const uint8_t *zero_ok,
+    int count,
+    int width,
+    int max_reports
+)
+{
+    const uint32_t sign_bit = width == 2 ? 0x8000u : 0x80000000u;
+    const uint32_t exp_mask = width == 2 ? 0x7C00u : 0x7F800000u;
+    int failures = 0;
+    for (int i = 0; i < count; ++i) {
+        const uint32_t a = helia_test_bits_at(actual, i, width);
+        const uint32_t l = helia_test_bits_at(lo, i, width);
+        const uint32_t h = helia_test_bits_at(hi, i, width);
+        const bool a_special = (a & exp_mask) == exp_mask;
+        const bool a_nan = a_special && (a & ~(sign_bit | exp_mask)) != 0u;
+        bool ok;
+        if ((l & exp_mask) == exp_mask) {
+            const bool l_nan = (l & ~(sign_bit | exp_mask)) != 0u;
+            ok = l_nan ? a_nan : a == l;
+        } else {
+            const int64_t key = helia_test_bits_key(a, sign_bit);
+            ok = !a_special && key >= helia_test_bits_key(l, sign_bit) && key <= helia_test_bits_key(h, sign_bit);
+            if (!ok && zero_ok != NULL && zero_ok[i] != 0u) {
+                ok = a == (zero_ok[i] == 2u ? sign_bit : 0u);
+            }
+        }
+        if (!ok) {
+            ++failures;
+            if (failures <= max_reports) {
+                printf("Mismatch[%d]: lo=0x%lx hi=0x%lx got=0x%lx\r\n", i, (unsigned long)l, (unsigned long)h,
+                       (unsigned long)a);
+            }
+        }
+    }
+    printf("HELIA_FLOAT_INTERVAL failures=%d n=%d\r\n", failures, count);
+    return failures;
+}
+
 void helia_guard_arm(uint8_t *head, uint8_t *tail, void *body, size_t body_bytes, bool poison_body)
 {
     memset(head, HELIA_GUARD_CANARY_BYTE, HELIA_GUARD_BYTES);

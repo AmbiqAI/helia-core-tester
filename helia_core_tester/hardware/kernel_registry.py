@@ -10,7 +10,9 @@ stays centralized. Each row also carries the `c_define` name of the firmware's
 
 from __future__ import annotations
 
+import functools
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -37,10 +39,20 @@ class KernelEntry:
     c_define: str
     # Reached only through a descriptor's `entry:`.
     direct_entry: bool = False
+    # CASE_META contract: (role, accepted dtypes) per role the kernel takes; firmware rejects any other.
+    blobs: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
 
 class UnknownKernelError(Exception):
     """Raised when a (family, operator, dtype) tuple has no registered kernel_id."""
+
+
+class BlobContractError(ValueError):
+    """A case's streamed blobs break its kernel's `blobs:` contract in the registry.
+
+    Firmware rejects such a CASE_META with INVALID_ARGUMENT, so this is a bridge or
+    registry bug rather than an unsupported case, and it is not converted to a skip.
+    """
 
 
 class AmbiguousKernelError(UnknownKernelError):
@@ -82,6 +94,9 @@ def _parse_entry(path: Path, index: int, entry: object) -> KernelEntry:
     direct_entry = entry.get("direct_entry", False)
     if not isinstance(direct_entry, bool):
         raise KernelRegistryError(f"{where} direct_entry {direct_entry!r} must be a boolean")
+    blobs = entry.get("blobs") or {}
+    if not isinstance(blobs, dict):
+        raise KernelRegistryError(f"{where} needs a non-empty `blobs:` map of role -> dtype, got {blobs!r}")
     return KernelEntry(
         kernel_id=kernel_id,
         family=None if entry.get("family") is None else str(entry["family"]),
@@ -91,17 +106,27 @@ def _parse_entry(path: Path, index: int, entry: object) -> KernelEntry:
         cmsis_function=cmsis_function,
         c_define=c_define,
         direct_entry=direct_entry,
+        blobs=tuple((str(role), _contract_dtypes(dtype)) for role, dtype in blobs.items()),
     )
+
+
+_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 
 
 def load_kernel_registry(project_root: Path) -> list[KernelEntry]:
     """Load and validate the registry: every row carries an integer kernel_id, operator,
     dtype, cmsis_function and c_define, and no kernel_id or c_define appears twice."""
     path = _registry_path(project_root)
-    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    return list(_parse_registry(str(path), path.read_bytes()))
+
+
+@functools.lru_cache(maxsize=8)
+def _parse_registry(path: str, raw: bytes) -> tuple[KernelEntry, ...]:
+    """Parse and validate once per distinct (path, content)."""
+    data = yaml.load(raw, Loader=_LOADER)
     if not isinstance(data, dict) or not isinstance(data.get("kernels"), list):
         raise KernelRegistryError(f"{path}: expected a mapping with a `kernels` list")
-    entries = [_parse_entry(path, index, entry) for index, entry in enumerate(data["kernels"])]
+    entries = tuple(_parse_entry(Path(path), index, entry) for index, entry in enumerate(data["kernels"]))
     for attribute in ("kernel_id", "c_define"):
         seen: dict[object, int] = {}
         for entry in entries:
@@ -168,3 +193,34 @@ def lookup_entry_id(project_root: Path, entry: str) -> int | None:
         if kernel.direct_entry and kernel.cmsis_function == entry:
             return kernel.kernel_id
     return None
+
+
+def _contract_dtypes(dtype) -> tuple[str, ...]:
+    return tuple(str(item) for item in dtype) if isinstance(dtype, list) else (str(dtype),)
+
+
+def blob_contract(project_root: Path, kernel_id: int) -> dict[str, tuple[str, ...]]:
+    """Role -> dtypes the kernel accepts in CASE_META; empty for an unknown kernel_id."""
+    for kernel in load_kernel_registry(project_root):
+        if kernel.kernel_id == kernel_id:
+            return dict(kernel.blobs)
+    return {}
+
+
+def check_blob_contract(project_root: Path, kernel_id: int, blobs: Iterable[tuple[str, str]]) -> None:
+    """Raise BlobContractError unless every (role, dtype) streamed for kernel_id is allowed, once."""
+    contract = blob_contract(project_root, kernel_id)
+    if not contract:
+        raise BlobContractError(f"kernel_id={kernel_id} has no `blobs:` contract in {_REGISTRY_RELATIVE_PATH}")
+    problems: list[str] = []
+    seen: set[str] = set()
+    for role, dtype in blobs:
+        if role in seen:
+            problems.append(f"role {role!r} appears more than once")
+        seen.add(role)
+        if role not in contract:
+            problems.append(f"role {role!r} is not accepted (contract: {contract})")
+        elif dtype not in contract[role]:
+            problems.append(f"role {role!r} is {dtype}, contract requires {' or '.join(contract[role])}")
+    if problems:
+        raise BlobContractError(f"kernel_id={kernel_id}: " + "; ".join(problems))

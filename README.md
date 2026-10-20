@@ -37,6 +37,15 @@ Removed interfaces:
 - `--include-float` (replaced by `--suite float` or `--suite both`)
 - the `perf-stream` command group and `scripts/run_hardware_perf_suite.sh` (replaced by `hardware run`, see below)
 
+INT32 predicate tests are available through the FVP pipeline with
+`generate --op Comparison,SelectV2 --dtype s32`. They cover all six
+comparisons and SELECT_V2, including scalar operands, broadcasting, tails and
+signed integer boundaries. S32 references come from LiteRT and use exact output
+validation; generation fails if that reference cannot run. These descriptors
+require their corresponding `arm_*_s32` declarations and are reported as
+capability skips with an older Core checkout. This adds generated FVP tests;
+hardware streaming adapters for these S32 operators are not added here.
+
 ## Hardware CLI
 
 The FVP commands above simulate; `hardware` runs the generated kernel tests on a
@@ -64,11 +73,14 @@ activation dtype, or `S4` for s4-weight cases),
 with `--suite int` or `float`, `--op`/`--dtype`/`--case-id` also narrow generation; other cases stay in the tree),
 `--skip-generate`, `--skip-flash`, `--force-flash`.
 
-Held-out shapes: `generate --random-shapes N --shape-seed S` draws N s8
-Convolve and N s8 DepthwiseConv cases (`rs<S>_conv_*`, `rs<S>_dw_*`) instead of
-the `assets/` descriptors. `--op`/`--dtype` limit the draw to matching ops
-(e.g. `--op Convolve` draws only `rs<S>_conv_*`, the same cases as an
-unfiltered draw). Every `--op` token must name a registered op by operator,
+Held-out shapes: `generate --random-shapes N --shape-seed S` draws N cases per
+generator: s8 Convolve, s8 and s16 DepthwiseConv, s16, FP32 and FP16
+TransposeConv, and s8 Softmax (`rs<S>_conv_*`, `rs<S>_dw_*`, `rs<S>_dw16_*`,
+`rs<S>_tc16_*`, `rs<S>_tcf32_*`, `rs<S>_tcf16_*`, `rs<S>_sm8_*`) instead of the
+`assets/` descriptors. `--op`/`--dtype`
+limit the draw to matching generators (e.g. `--op Convolve` draws only
+`rs<S>_conv_*`, the same cases as an unfiltered draw; `--op DepthwiseConv --dtype S16`
+draws only `rs<S>_dw16_*`). Every `--op` token must name a registered op by operator,
 descriptor stem or path; case-name prefixes such as `rs7_conv` are refused,
 since drawn names (and hidden ids) cannot be filtered. Each op draws
 from its own seeded stream, cycling through every wrapper route and sized to fit
@@ -77,9 +89,10 @@ the smallest board workspace. The descriptors, the drawn ops (`ops`) and a per-r
 the fixed ones. Run them with
 `hardware run --skip-generate --test-name rs<S>_`. A draw with a flat golden is
 dropped and counted as `skipped_degenerate`. To add an op, register its route
-list and layer sampler in `GENERATORS` (`generation/random_shapes.py`) with a
-new stream id, and teach the op-specific helpers (`layer_route`, `footprint`,
-`layer_macs`, `_relu6_gain`, `_descriptor`) its layout.
+list and layer sampler in `GENERATORS` (`generation/random_shapes.py`), keyed by
+(op, dtype), with a new stream id and tag, and teach the op-specific helpers
+(`layer_route`, `footprint`, `layer_macs`, `_relu6_gain`, `_descriptor`) its layout.
+An op without layers sets `layerless` and draws whole case bodies (Softmax: `_sm_draw`).
 
 Hidden shapes: `generate --random-shapes N --hidden-dir DIR` draws the same
 kind of cases from a secret seed instead (env `HCT_HIDDEN_SEED`, or
@@ -100,9 +113,16 @@ Correctness: int cases use the per-operator LSB tolerance in
 (elements differing at all) in `case_summary.csv` and `cases.json`; both are null
 when unknown (unvalidated outputs, wrong output size).
 `--strict-compare` drops the tolerance so int outputs must match the golden
-exactly. `--golden-from <bundle dir>` judges each case against that past run's
-`outputs/` instead (bit-exact for int, the usual tolerance for float), which pins
-the current kernels' rounding where the TFLite golden differs by design.
+exactly. `--golden-from <bundle dir>` judges each int case against that past
+run's `outputs/` instead, bit for bit, which pins the current kernels' rounding
+where the TFLite golden differs by design. Float cases (FP32/FP16 outputs, float
+compare mode) keep the generated TFLite golden and their tolerance, so a
+candidate's error never stacks on the baseline's; under `--golden-from` they
+also fail when the error spends more than 0.8 of the tolerance (the headroom
+rule in `assets/descriptors/ConvolutionFunctions/convolve_float.yaml`). Every
+float case records `tolerance_fraction`, the worst
+`|out - ref| / (atol + rtol * |ref|)`, in `case_summary.csv`, `cases.json` and
+`correctness/<case>.json`; the nightly run records it without the 0.8 gate.
 
 `--golden-from` is the compare mode for kernel changes: run the baseline
 kernels once, then judge the changed kernels against that bundle. Strict
@@ -115,10 +135,13 @@ Every bundle records a per-case `input_digest` in `cases.json` and
 everything streamed to the board except the expected output (input, weight,
 bias and quant blobs, scalar parameters, kernel id). Before flashing,
 `--golden-from` refuses a case that the baseline lacks, that the baseline run
-failed (unless `--golden-allow-failed`), whose baseline `input_digest` differs
+failed (unless `--golden-allow-failed`, which also skips the next check), that
+is a float case whose baseline `tolerance_fraction` is over 0.8 (no candidate
+could pass it), whose baseline `input_digest` differs
 or is absent (bundles from before this field must be rerun), or whose output is
 missing or wrong-sized. The session manifest's `compare` block records which
-mode ran, plus the baseline path (`golden_from`) and `golden_session_id`; each
+mode ran, plus the baseline path (`golden_from`), `golden_session_id` and
+`goldens` (case ids per golden: `baseline`, `generator` or `status`); each
 case's `expected_output_sha256` is the digest of the output it was compared
 against. The steps are also available individually as
 `hardware build`, `hardware flash [--force]`, `hardware stream` and
@@ -129,7 +152,7 @@ The firmware builds as a neuralspotx (NSX) app rendered into
 
 - Nested layout (the tester at `ns-cmsis-nn/Tests/helia-core-tester`): the
   enclosing ns-cmsis-nn checkout, working-tree edits included.
-- Standalone clone: the pinned ns-cmsis-nn release (`v7.40.0`).
+- Standalone clone: the pinned ns-cmsis-nn release (`v7.47.0`).
 - `--cmsis-nn-ref REF` builds another tag or commit; `--cmsis-nn-root PATH`
   builds another local checkout.
 
@@ -152,7 +175,14 @@ differs from the saved build rebuilds and prints one line naming the change.
 `--skip-flash` keeps the flashed build's options and refuses a different flag. A
 saved ref you did not pass with `--cmsis-nn-ref` follows the pinned release, so
 a pin bump rebuilds those build dirs the same way. Every build, flash, run and
-stream prints the kernel source, inline asm setting and placement.
+stream prints the kernel source, inline asm setting, placement and toolchain.
+
+`--toolchain atfe` builds with Arm Toolchain for Embedded clang (from
+`$ATFE_ROOT/bin`) instead of `gcc`, the default. Like placement it is a switch.
+Each toolchain has its own default build dir (`build/hardware/<board>-atfe` for
+atfe), and a build dir whose CMake cache holds the other compiler drops that
+cache and reconfigures. The bundle records the compiler in
+`session_manifest.json` `build.toolchain`.
 
 `--placement` picks where operands live. `tcm` (the default) keeps every operand
 in one workspace: DTCM on Apollo510 and Apollo330P, and SRAM (`RWMEM`) on
@@ -161,9 +191,17 @@ measures kernel-only cost. `mram` (Apollo510, Apollo330P)
 programs each case's weights and bias into a reserved MRAM pool past the image
 and evicts them from the D-cache before every timed call, as a large model's
 layer sees them; activations, scratch, multipliers and shifts stay in DTCM, as
-hpx places a TCM-sized arena. Neither programming nor eviction counts toward
+hpx places a TCM-sized arena. The packed fully-connected kernel reads a stream
+packed from its weights, so that stream is packed on the device once per case,
+before any timing, and placed in the pool after the bias; the per-call pack
+still runs, so `prepare_cycles` matches `tcm`. Neither programming nor eviction counts toward
 the timed cycles or `prepare_cycles`. Give each placement its own `--build-dir`. The
 bundle records it in `session_manifest.json` `target.placement`.
+
+On boards with `blob_store_bytes` in `assets/hardware_boards.yaml` (apollo510_evb),
+the firmware caches every streamed blob in MRAM and skips blobs it already holds,
+across runs, placements and reflashes; the timing line reports `store hits`.
+`HCT_BLOB_STORE=0` turns it off. See `docs/performance-streaming-design.md`.
 
 PMU counters are selected with `--pmu-counters GROUP:SELECTION` (repeatable, on
 `hardware run` and `hardware stream`; hpx syntax). `GROUP` is `cpu`, `memory` or
@@ -266,7 +304,18 @@ boards; `hct-mram-<board>-...`) and a kernel leg built from ns-cmsis-nn `main`,
 resolved to one SHA at plan time (`hct-main-<board>-...`, session
 `nightly-main-<run>-<board>`). `-f cmsis_nn_ref=<branch, tag or full SHA>` swaps the
 ref; any ref but `main` uploads as `hct-ref-<board>-...`. The kernel leg does not
-gate the run: its failures show only in the summary table.
+gate the run: its failures show only in the summary table. A last leg builds
+the TCM suite with `--toolchain atfe` (pinned kernels, `$ATFE_ROOT` from the
+runner) and uploads `hct-atfe-<board>-...` in the `hct-hardware-*` layout; it
+does not gate the run either.
+The summary job also lists, per board, the TCM leg's skipped cases per family
+and its untimed deployed entry points (`scripts/nightly_skip_report.py`). Each
+board is compared with the newest of the last three non-cancelled scheduled runs
+on `main` that has a readable result with the same selection (`limit`, `suite`,
+...); `nightly_skip_report.py select-baselines` pages the run history until it
+has three earlier runs (also on a rerun), at most 10 pages. A family whose skip count grew, or a newly untimed entry point, gets a
+workflow warning, as does a board whose growth went unchecked: no current result,
+an unreadable result, or no baseline because the earlier runs left no result.
 `gh workflow run hardware-nightly.yml -f boards=apollo510_evb -f limit=2` runs
 it by hand.
 
@@ -444,20 +493,22 @@ Needs, on the bench host: `uv`, `git`, `patch`, `bench-agent`, the
 
 ### 1. Write a campaign file
 
-Start from `assets/campaigns/conv-s8.example.yaml` or `dw-s8.example.yaml`:
+Start from `assets/campaigns/conv-s8.example.yaml`, `dw-s8.example.yaml`, `dw-s16.example.yaml`
+or `softmax-s8.example.yaml`:
 
 ```yaml
 name: conv-s8                  # lowercase, digits, dashes
 board: apollo510_evb           # tester board id
 bench_id: apollo510_evb        # bench-agent board id (default: board)
 legs: [tcm, mram]              # default: both when the board has MRAM
+toolchains: [gcc]              # or [gcc, atfe]; atfe needs ATFE_ROOT
 target:
   op: Convolve                 # `hardware run --op`
   dtype: S8                    # `hardware run --dtype`
   case_ids: []                 # optional `--case-id` filters
 kernels:
   repo: ~/ns-cmsis-nn          # any checkout that has the ref
-  ref: v7.40.0                 # tag, branch or SHA
+  ref: v7.47.0                 # tag, branch or SHA
 evals: 12                      # charged board evals
 cost_usd: 25                   # claude --max-budget-usd
 model: claude-opus-5-5
@@ -473,9 +524,18 @@ Optional: `min_score` (passed to `candidate eval`), `lock_timeout_s`
 (board lock wait, default 600), `eval_timeout_s` (per leg, default 300),
 `submit_deadline_s` (whole submit, default 540, at most 570, under the
 agent's 10 minute Bash limit), `retries` (per leg, default 1) and `max_infra_errors` (busy or
-failing board results in a row, default 5). The hidden set holds only the
-target op and dtype. Hidden shapes exist for `Convolve` and `DepthwiseConv`
-S8 only; set `hidden_shapes: 0` for other targets.
+failing board results in a row, default 5) and `size_evals` (the last evals,
+which go to cutting code size once something passed; default a third of
+`evals`, below `evals`, 0 for none). The hidden set holds only the
+target op and dtype. Hidden shapes exist for `Convolve` S8, `DepthwiseConv`
+S8 and S16, `TransposeConv` S16, FP32 and FP16, `NNActivationFloat` FP32 and
+FP16, and `Softmax` S8 only; set
+`hidden_shapes: 0` for other targets. Ops without MACs (Softmax) report and
+score cycles per op (one per element) instead of cycles per MAC.
+With `toolchains: [gcc, atfe]` every placement runs once per compiler:
+gcc legs keep their names (`tcm`, `mram`), atfe legs are `tcm-atfe` and
+`mram-atfe`. Each atfe leg has its own baseline, build dir and size
+reference (`W/size-ref-atfe.json`), and `pass` needs every leg.
 `agent-loop validate FILE` checks a file without side effects.
 
 ### 2. Initialize the workspace
@@ -500,8 +560,10 @@ uv run helia_core_tester agent-loop init conv-s8.yaml -w ~/campaigns/conv-s8
    seed 0600). The dir must be new or empty. The workspace records that
    it owns the dir, and only that workspace's rerun reuses its seed.
 4. Records one `candidate baseline` per leg under `bench-agent run`.
-5. Builds the base kernel library once and saves per-object code sizes
-   (`W/size-ref.json`).
+5. Builds the base kernel library once per toolchain and saves per-object
+   code sizes (`W/size-ref.json`, `W/size-ref-atfe.json`). It records each
+   compiler's version; a baseline recorded with another version is
+   re-recorded, and submit refuses, uncharged, once a compiler changes.
 6. Renders `W/prompt.md` from a template filled with the routes seen in
    the first leg's baseline (timed and inner symbols, median and best
    cycles per MAC) and the ceiling from `assets/scoring/ceilings.yaml`.
@@ -557,17 +619,21 @@ uv run helia_core_tester agent-loop stop -w ~/campaigns/conv-s8
 - `W/bin/check`: copies the agent's `Source/`, `Include/`, `cmake/` and
   `nsx/` into a fresh clone of the base, runs `candidate check`, builds
   the kernels with `hardware build` and reports code size against the
-  base. No board, no eval.
-- `W/bin/disasm FN`: one function from the last check build, up to 600
-  lines.
+  base, once per toolchain. No board, no eval.
+- `W/bin/disasm FN [--toolchain gcc|atfe]`: one function from the last
+  check build, up to 600 lines (`llvm-objdump` from `$ATFE_ROOT/bin` for
+  atfe).
 - `W/bin/submit`: stages a copy of the agent's trees in `W/submit/tree`
   and runs check on it. A tree that fails, or a check that runs past the
   deadline, is rejected and costs no eval.
   Every leg then judges that frozen copy, so edits made during a submit
   wait for the next one. Each leg runs under `bench-agent run --timeout`
-  and `timeout`, both cut to fit `submit_deadline_s`. A later leg runs
-  only when the earlier legs reached stage `score`. The overall verdict is
-  the worst leg, and `pass` needs every leg.
+  and `timeout`, both cut to fit `submit_deadline_s`. Once a leg ends
+  below stage `score` or with a verdict worse than `no_gain`, later legs
+  are skipped. An `mram` leg runs only after the `tcm` leg on the same
+  toolchain passes; other toolchains still run. Skipped legs show as
+  `{"verdict": "skipped", "reason": ...}` in the view and the ledger. The
+  overall verdict is the worst leg that ran, and `pass` needs every leg.
   - A submit that cannot take the submit lock in time (another submit is
     running) returns a free `error` and a ledger row without an id.
   - No verdict at all (board busy past the lock wait, bench-agent or
@@ -630,6 +696,33 @@ Run both suites as separate flows:
 uv run helia_core_tester full --cpu cortex-m0,cortex-m4,cortex-m55 --suite both
 ```
 
+## Toolchain Selection
+
+### GCC release (`setup_dependencies.py`)
+
+`helia_core_tester/scripts/setup_dependencies.py` installs one Arm GNU toolchain release into `artifacts/downloads/arm_gcc_download`; the default is 14.3.rel1.
+
+- `--gcc-version 13.2.rel1` (or `HELIA_GCC_VERSION=13.2.rel1`; flag wins over env) selects the release. Case-insensitive, must match `<major>.<minor>.rel<N>`. `full`/`build`/`run` call the script with the inherited environment, so exporting `HELIA_GCC_VERSION` before them is enough.
+- SHA-256 pins ship for 13.2, 13.3, 14.2, 14.3, 15.2 and 15.3.rel1 (both x86_64 and aarch64). Releases up to 15.2.rel1 download from `developer.arm.com`; 15.3.rel1 and later come from Arm's GitLab package registry (`gitlab.arm.com`), where Arm moved them. For any other release the digest comes from `--gcc-sha256 <hex>` / `HELIA_GCC_SHA256`, or, failing that, from Arm's published `<archive>.sha256asc` sidecar (same origin as the archive, so it guards against corruption but is not an independent pin; the script says so when it does this).
+- The installed release is recorded in `arm_gcc_download/.hct-arm-gcc-version`. An install of another release, or one with no marker, is replaced: the new release is downloaded, verified and extracted next to it first, so a failed download leaves the old install in place. `--force` reinstalls the same release.
+
+```bash
+uv run python -m helia_core_tester.scripts.setup_dependencies --gcc-version 13.2.rel1
+HELIA_GCC_VERSION=15.2.rel1 uv run helia_core_tester full --cpu cortex-m55
+```
+
+### Source dependencies (CMSIS-5, Ethos-U core platform)
+
+`setup_dependencies.py` fetches CMSIS-5 and ethos-u-core-platform at the fixed commits listed in `SOURCE_PINS` in that script and checks `git rev-parse HEAD` after checkout. Run directly, it moves an existing clean checkout at another commit to the pin. It rejects a checkout with local changes (edits, untracked files, or assume-unchanged/skip-worktree entries) or a directory that is not a git checkout; `--force` replaces it, and the old checkout is restored if the replacement fails. The setup that `build`, `run` and `full` start enforces the pins the same way, so a run fails on a modified checkout until it is cleaned or replaced. Run directly with `--source-pins warn`, setup fetches missing sources at the pin but only reports an existing checkout that is off its pin. Bumping a pin means editing `SOURCE_PINS`.
+
+### Compiler (`--toolchain`)
+
+`build`, `run` and `full` take `--toolchain gcc|armclang` (default `gcc`; also `toolchain` in `helia_core_tester.toml` and `HELIA_CORE_TESTER_TOOLCHAIN`). `armclang` selects ethos-u-core-platform's `armclang.cmake` and needs Arm Compiler 6 (`armclang`) on `PATH`; it is not fetched by `setup_dependencies.py`. Build output goes to `artifacts/build-<suite>-<cpu>-arm-compiler/`. `--toolchain armclang` is mutually exclusive with `--coverage` (gcov instrumentation is GCC-only). `doctor` reports which of `arm-none-eabi-gcc` / `armclang` it finds.
+
+### ns-cmsis-nn checkout (`--cmsis-nn-root`)
+
+The FVP build compiles the ns-cmsis-nn checkout two levels up (`../..`, the nested layout) by default. `generate`, `build` and `full` take `--cmsis-nn-root <path>` to use another checkout; the environment form is `HELIA_CORE_TESTER_CMSIS_NN_ROOT` (also `cmsis_nn_root` in `helia_core_tester.toml`). A bare `CMSIS_NN_ROOT` environment variable does not reach the build. A path with no `CMakeLists.txt` fails before CMake runs.
+
 ## Canonical Artifacts
 
 Generated tests:
@@ -657,6 +750,16 @@ Generation report files (always emitted):
 Use `tensor_dtypes` for new float-aware descriptors. Legacy `activation_dtype` and `weight_dtype`
 still work, but the loader now normalizes both styles into `resolved_tensor_dtypes` and
 `resolved_comparison`.
+
+Every descriptor document read from YAML (`load_descriptor` / `load_all_descriptors`), and every
+base+variation merge in it, is validated against
+`helia_core_tester/generation/descriptors/schema.json`; a violation fails the load with the
+descriptor name, file and JSON path. Descriptors built as dicts in code skip the schema and rely on
+the loader's and operators' own checks. Every document needs a `name`. An unusable schema raises
+`DescriptorSchemaError` once, even with `best_effort=True`. The operator and `required_capabilities`
+enums are taken from the op catalog and `known_capabilities()` when the validator is built.
+Integer-suite descriptors (no `suite: float` and no `_float` file stem) must give
+`act_min`/`act_max` as integers.
 
 Example:
 
@@ -752,8 +855,8 @@ at flat index 72 of a `[1, 5, 5, 3]` input, the one real element of the bottom-r
 non-finite output may be pinned is a per-kernel question.
 
 - `strict` asserts the reference value on every lane. It is only legitimate where ns-cmsis-nn
-  documents the behaviour -- the elementwise family, the standalone hard swish, the
-  RELU/RELU6/LEAKY_RELU activations, `arm_reduce_sum_*` and `arm_nn_mean_*`, and
+  documents the behaviour -- the elementwise family, the standalone hard swish,
+  `arm_nn_gelu_f32`/`_f16`, the RELU/RELU6/LEAKY_RELU activations, `arm_reduce_sum_*` and `arm_nn_mean_*`, and
   `arm_gru_unidirectional_f32`/`_f16`, whose public declarations carry a NaN contract for a
   token in the input, the previous state or the candidate gate's weight or bias, and state that
   Inf follows the arithmetic (a token confined to the update or reset gate's weight or bias is
@@ -800,9 +903,9 @@ strict bundles need no migration. Matching NaNs and same-sign infinities pass st
 comparison; other non-finite pairings fail. This does not impose NaN-payload or signed-zero
 bit equality.
 
-`nonfinite_policy` is required by `OperationBase.nonfinite_policy()`, not by the schema: the
-`if`/`then` gate in `schema.json` is documentation until the descriptor loader validates the whole
-schema (#100).
+`nonfinite_policy` is required whenever `input_mode` is `nonfinite_sweep`: the descriptor loader
+enforces the `if`/`then` gate in `schema.json`, and `OperationBase.nonfinite_policy()` checks it
+again at generation time.
 
 To scaffold a new tester op, start from `helia_core_tester/scripts/scaffold_operator.py`. It
 emits a reference-backed skeleton (`uses_reference()`, the `REFERENCE_ENTRY` it calls on the C
@@ -817,8 +920,8 @@ element is classified before that tolerance is computed. A NaN or infinite opera
 run through the tolerance, because `rtol * |Inf|` is `Inf` and `0 * |Inf|` is `NaN`, and
 `diff > tol` is false against either. Matched non-finite operands pass: NaN against NaN, or
 two infinities of the same sign. For the families whose ns-cmsis-nn header notes state it
-(elementwise add/sub/mul, `arm_nn_activation` RELU/RELU6/LEAKY_RELU, hard_swish, and
-mean/reduce_sum), `Include/arm_nnfunctions_flt.h` guarantees the NaN-ness of an element and not
+(elementwise add/sub/mul, `arm_nn_activation` RELU/RELU6/LEAKY_RELU, hard_swish,
+`arm_nn_gelu_f32`/`_f16`, and mean/reduce_sum), `Include/arm_nnfunctions_flt.h` guarantees the NaN-ness of an element and not
 its payload, so a matched NaN passes regardless of sign or payload (see AmbiqAI/ns-cmsis-nn#333).
 Minimum and maximum are documented as unspecified for non-finite inputs, so a matched NaN there
 is a property of the implementation rather than a guarantee. Every other pairing fails, including
@@ -858,6 +961,20 @@ classify-after-widening validator actually loses lanes, so it is what holds the 
 smaller probes stay correct on the same compiler either way. The Arm targets are compiled and
 their classification call sites counted, not executed, with the toolchains and results recorded
 in the pull request.
+
+### Contract intervals
+
+Where ns-cmsis-nn states a numerical contract of the form `|out - ref| <= rtol * |ref| + atol`, a
+descriptor can assert it directly with `contract_interval: {rtol, atol}` (Gelu only today). The
+generator turns the float64 reference into the lowest and highest output bit patterns the contract
+allows for each element, deciding candidates near the edge in exact rational arithmetic and
+refusing any that stay within the reference's own error, and `helia_test_float_interval` compares
+the output's bits against them in sign-magnitude order. There is no golden rounding term to derive,
+an input zero must keep its sign, and NaN and infinite results are classified by their bits. Two
+companion keys serve these cases: `input_bits` lists `[start, stop)` bit-pattern ranges to use as
+inputs instead of uniform draws (the float16 GELU cases sweep every finite input this way), and
+`fpscr_fz16` sets FPSCR.FZ16 around the kernel call on targets with half-precision arithmetic,
+where a result whose reference is float16-subnormal may also be a zero of the reference's sign.
 
 ## Operand sign span
 
@@ -911,8 +1028,8 @@ operand_sign_span_exempt:
 The reason is required, and the key must name an operand the operator actually submits to the
 rule: each wired operator declares those labels as `SIGN_SPAN_OPERANDS`, and a waiver on
 anything else fails generation instead of silently waiving nothing. `operand_sign_span_exempt`
-is also declared in `helia_core_tester/generation/descriptors/schema.json`, but that schema is
-not enforced at load time (#100), so the rule lives in code.
+is also declared in `helia_core_tester/generation/descriptors/schema.json`, which the loader
+enforces, but the operand check needs the operator's labels, so it lives in code.
 
 ## Reference goldens (C reference library)
 
@@ -1102,6 +1219,7 @@ Compiler cache (opt-in):
 - `HELIA_CORE_TESTER_COMPILER_LAUNCHER` names a specific tool; a name that is not on `PATH` fails the configure rather than building uncached. Set it to `none` (or empty) to build without a launcher even where one is installed, which is what a reproducibility build wants.
 - no image ships either tool; a host without one builds exactly as before.
 - With `ENABLE_COVERAGE=ON` (including `--coverage`), the instrumented `cmsis-nn` target bypasses `CMAKE_C_COMPILER_LAUNCHER`: cached objects can contain another build's profile-output paths. Uninstrumented harness targets and non-coverage builds retain their launcher. This does not bypass caches hidden inside compiler wrappers or custom compile rules.
+- A coverage build compiles `cmsis-nn` at `-O0` whatever `--opt` asks for, because the last `-O` wins. The run report's metadata and the JUnit `<properties>` record both levels: `optimization` is the requested `CMSIS_OPTIMIZATION_LEVEL`, and `cmsis_nn_optimization` is the level the kernels were compiled at. `coverage` records whether the build was instrumented (`true`/`false` in both JSON and JUnit). All three are read from the build directory's `CMakeCache.txt`, falling back to the run's own flags when there is no cache.
 
 ## Coverage Merge
 

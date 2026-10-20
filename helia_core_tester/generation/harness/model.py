@@ -178,6 +178,9 @@ class ArgumentPool:
     # declarations) and after every call succeeded; a post-pass forces the status-checked form.
     pre_call: str = ""
     post_call: str = ""
+    # C statements the run executes before it returns, whatever the status (undoing a pre_call
+    # state change); forces the status-checked form like a post-pass.
+    cleanup: str = ""
     # A property case: the pool supplies the whole body of the test function (arming, the
     # `<name>_run(...)` calls, checks, validation; it declares `int failures`) and every guarded
     # buffer, so the harness contributes the bound kernel call, the parity assert and the frame.
@@ -278,7 +281,8 @@ class ArgumentPool:
                     raise HarnessError(f"{self.name}: output slot {slot} collides with the declaration {slot}_output")
             if any(slot.count < 0 for slot in self.outputs):
                 raise HarnessError(f"{self.name}: an output slot cannot hold a negative element count")
-        if (self.pre_call.strip() or self.post_call.strip()) and (self.benchmark or self.fault is not None):
+        if (self.pre_call.strip() or self.post_call.strip() or self.cleanup.strip()) and (
+                self.benchmark or self.fault is not None):
             raise HarnessError(f"{self.name}: pre- and post-passes have no benchmark or fault form")
         if self.calls is not None:
             if not self.calls:

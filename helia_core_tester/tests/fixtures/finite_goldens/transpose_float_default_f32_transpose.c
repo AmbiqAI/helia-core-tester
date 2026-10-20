@@ -13,7 +13,7 @@ _Static_assert(__builtin_types_compatible_p(__typeof__(arm_transpose_f32), arm_c
 
 
 #define TRANSPOSE_FLOAT_DEFAULT_F32_OUTPUT_SIZE (1 * 3 * 2 * 4)
-static struct {
+static struct __attribute__((aligned(16))) {
     uint8_t head[HELIA_GUARD_BYTES];
     float body[TRANSPOSE_FLOAT_DEFAULT_F32_OUTPUT_SIZE];
     uint8_t tail[HELIA_GUARD_BYTES];
