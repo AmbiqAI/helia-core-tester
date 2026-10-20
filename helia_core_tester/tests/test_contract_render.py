@@ -22,6 +22,7 @@ from helia_core_tester.contract.render import (
 )
 from helia_core_tester.generation.ops._shared.base import template_environment
 from helia_core_tester.generation.utils.temp_sizer_probe import resolve_cmsis_nn_root
+from helia_core_tester.tests.contract_checkout import install_reader
 from helia_core_tester.tests.test_contract_ir import FIXTURE, HEADERS
 
 # Enough of the ns-cmsis-nn types for the fixture prototypes to compile on the host.
@@ -44,7 +45,7 @@ def checkout(tmp_path: Path) -> Path:
         (root / relative).write_text(text)
     (root / CONTRACT_RELPATH).parent.mkdir(parents=True)
     shutil.copy(FIXTURE, root / CONTRACT_RELPATH)
-    return root
+    return install_reader(root)
 
 
 def test_render_call_orders_by_prototype(checkout: Path) -> None:

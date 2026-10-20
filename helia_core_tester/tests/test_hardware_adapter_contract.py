@@ -26,6 +26,7 @@ from helia_core_tester.hardware.adapter_specs import (
     render_adapter_body,
     render_generated_adapters_source,
 )
+from helia_core_tester.tests.contract_checkout import install_reader
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 GENERATOR_SCRIPT = PROJECT_ROOT / "scripts" / "generate_hardware_adapters.py"
@@ -186,6 +187,7 @@ def test_generator_script_reports_a_corrupt_contract(tmp_path: Path) -> None:
     root = tmp_path / "ns-cmsis-nn"
     (root / CONTRACT_RELPATH).parent.mkdir(parents=True)
     (root / CONTRACT_RELPATH).write_text("{not json")
+    install_reader(root)
     result = subprocess.run([sys.executable, str(GENERATOR_SCRIPT), "--check", "--cmsis-nn-root", str(root)],
                             cwd=PROJECT_ROOT, capture_output=True, text=True)
     assert result.returncode == 1 and "not valid JSON" in result.stderr

@@ -119,19 +119,6 @@ def _public_header_corpus(cmsis_nn_root: Optional[Path]) -> Optional[str]:
     return "\n".join(corpus)
 
 
-def undeclared_in_header(header: Path, symbols: Iterable[str]) -> list[str]:
-    """Return the subset of ``symbols`` not declared (declaration shape) in one header.
-
-    Sibling of missing_header_symbols() for callers that already know which header a
-    symbol must live in (the exported kernel contract names it per function), so the
-    check is exact rather than corpus-wide. Raises OSError when the header cannot be
-    read: the caller decides whether that is a skip or a contradiction.
-    """
-    text = _strip_comments(Path(header).read_text(encoding="utf-8", errors="replace"))
-    return [symbol for symbol in symbols
-            if re.search(rf"\b{re.escape(symbol)}\s*\(", text) is None]
-
-
 def probe_header_symbols(symbols: Iterable[str], cmsis_nn_root: Optional[Path] = None) -> bool:
     """True iff every symbol is declared in the checkout's public Include/
     headers (declaration shape: ``symbol(`` -- see _symbol_declared).
@@ -146,44 +133,16 @@ def probe_header_symbols(symbols: Iterable[str], cmsis_nn_root: Optional[Path] =
     return all(_symbol_declared(symbol, text) for symbol in symbols)
 
 
-def missing_header_symbols(symbols: Iterable[str], cmsis_nn_root: Optional[Path] = None) -> list[str]:
-    """Return the subset of ``symbols`` NOT declared in the checkout's public
-    Include/ headers, preserving input order (deduplicated).
-
-    Per-symbol sibling of probe_header_symbols() for descriptor-level gating
-    (helia-core-tester float mean / hard_swish support): one tester pin is
-    used across several in-flight ns-cmsis-nn kernel branches, each declaring
-    only its own kernels, so generation must skip exactly the descriptors
-    whose kernels the target checkout does not declare. Missing checkout,
-    missing Include/, or unreadable headers mean every symbol is reported
-    missing -- skipping is always the safe answer.
-    """
-    ordered: list[str] = []
-    seen = set()
-    for symbol in symbols:
-        name = str(symbol).strip()
-        if name and name not in seen:
-            ordered.append(name)
-            seen.add(name)
-    if not ordered:
-        return []
-    root = cmsis_nn_root if cmsis_nn_root is not None else resolve_cmsis_nn_root()
-    text = _public_header_corpus(root)
-    if text is None:
-        return list(ordered)
-    return [symbol for symbol in ordered if not _symbol_declared(symbol, text)]
-
-
 def kernel_source_exists(symbol: str, cmsis_nn_root: Optional[Path] = None) -> bool:
     """True iff the checkout ships a kernel source file named after ``symbol``
     (``Source/**/<symbol>.c``) that actually defines it.
 
-    Backstop for the per-symbol declaration probe: kernel sources in
-    ns-cmsis-nn are named after their public symbol, so a symbol that is
-    "undeclared" per the probed public headers while its source file exists
-    means the probe missed a declaration (renamed symbol, or a public header
-    outside _PUBLIC_HEADER_NAMES) -- a contradiction the caller must surface
-    loudly instead of silently skipping every dependent test case.
+    Backstop for the generation gate (kernel_gate): kernel sources in
+    ns-cmsis-nn are named after their public symbol, so a symbol the signature
+    export lacks while its source file exists means the export missed a
+    declaration (stale export, or a header outside the exported set) -- a
+    contradiction the caller must surface loudly instead of silently skipping
+    every dependent test case.
 
     The filename alone is not enough, because an umbrella file is named after
     a symbol family rather than a symbol: on ns-cmsis-nn 7.32.0

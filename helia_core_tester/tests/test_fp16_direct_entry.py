@@ -13,7 +13,8 @@ from helia_core_tester.contract.render import load_current_contracts
 from helia_core_tester.generation.entry import EntryError, check_entry_fault, resolve_entry
 from helia_core_tester.generation.test_ops import _required_kernel_symbols, generate_test
 from helia_core_tester.generation.entry import CONTRACT_BOUND_OPERATORS
-from helia_core_tester.generation.utils.temp_sizer_probe import probe_header_symbols
+from helia_core_tester.contract.render import load_current_contracts
+from helia_core_tester.generation.kernel_gate import gate_kernel_symbols
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -76,6 +77,13 @@ def test_acc16_case_is_gated_on_the_checkout() -> None:
     ]
 
 
+
+def _undeclared(required: list[str]) -> tuple[str, ...]:
+    """What the generation gate would skip this case for on this checkout's contract; without a
+    contract the gate does not decide and the entry cannot be rendered, so all of it."""
+    gate = gate_kernel_symbols(load_current_contracts(), required, "cortex-m55")
+    return gate.missing_symbols if gate.decided else tuple(required)
+
 @pytest.mark.parametrize(
     ("name", "entry", "sizer", "call_has_layout", "sizer_has_layout"),
     [
@@ -118,7 +126,7 @@ def test_entry_case_calls_the_entry_with_its_layout_arguments(
     # contract-bound operator's template renders its call from the contract, which cannot name one.
     desc = _descriptors()[name]
     required = _required_kernel_symbols(desc)
-    if desc.get("operator") in CONTRACT_BOUND_OPERATORS and required and not probe_header_symbols(required):
+    if desc.get("operator") in CONTRACT_BOUND_OPERATORS and _undeclared(required):
         pytest.skip(f"{name}: this ns-cmsis-nn checkout does not declare {required}")
     source = _source(name, tmp_path)
 
@@ -150,7 +158,7 @@ def test_cases_without_an_entry_keep_the_layout_argument(name: str, tmp_path: Pa
 def test_invalid_layout_fault_calls_the_entry_with_a_bad_layout(name: str, entry: str, tmp_path: Path) -> None:
     desc = _descriptors()[name]
     required = _required_kernel_symbols(desc)
-    if required and not probe_header_symbols(required):
+    if _undeclared(required):
         pytest.skip(f"{name}: this ns-cmsis-nn checkout does not declare {required}")
     source = _source(name, tmp_path)
 
@@ -168,7 +176,7 @@ def test_invalid_layout_fault_calls_the_entry_with_a_bad_layout(name: str, entry
 def test_other_entry_faults_are_rejected(name: str, fault: str, tmp_path: Path) -> None:
     desc = _descriptors()[name]
     required = _required_kernel_symbols(desc)
-    if required and not probe_header_symbols(required):
+    if _undeclared(required):
         pytest.skip(f"{name}: this ns-cmsis-nn checkout does not declare {required}")
     desc = {**desc, "fault": fault, "expected_status": "ARM_CMSIS_NN_ARG_ERROR"}
 

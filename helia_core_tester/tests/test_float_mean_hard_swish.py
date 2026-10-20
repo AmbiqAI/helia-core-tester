@@ -22,22 +22,35 @@ from helia_core_tester.generation.ops._shared import kernel_faithful as kf
 from helia_core_tester.generation.ops._shared.hard_swish_base import HardSwishFamilyBase
 from helia_core_tester.generation.ops.ActivationFunctions.hard_swish_precise import OpHardSwishPrecise
 from helia_core_tester.generation.ops.BasicMathFunctions.mean import OpMean
-from helia_core_tester.generation.utils.temp_sizer_probe import missing_header_symbols
+from helia_core_tester.contract.ir import load_contract_set
+from helia_core_tester.generation.kernel_gate import gate_kernel_symbols
+from helia_core_tester.tests.contract_checkout import function, implementation, write_checkout
 
 TESTER_ROOT = Path(__file__).resolve().parents[2]
 
 
+MEAN_F32 = function("arm_nn_mean_f32", [("const float32_t *", "input_data", "in"),
+                                        ("const cmsis_nn_dims *", "input_dims", "in"),
+                                        ("const cmsis_nn_dims *", "axis_dims", "in"),
+                                        ("float32_t *", "output_data", "out"),
+                                        ("const cmsis_nn_dims *", "output_dims", "in")])
+OTHER = function("arm_mean_s8", [("const int8_t *", "input", "in")])
+
+
 def _fake_cmsis_nn_root(
-    tmp_path: Path, header_text: str, source_symbols: tuple[str, ...] = ()
+    tmp_path: Path, functions=(OTHER,), source_symbols: tuple[str, ...] = (), *, implementations=None,
+    library_version: str = "7.47.0", export: bool = True,
 ) -> Path:
     root = tmp_path / "ns-cmsis-nn-fake"
-    include = root / "Include"
-    include.mkdir(parents=True, exist_ok=True)
-    (include / "arm_nnfunctions.h").write_text(header_text)
+    if export:
+        write_checkout(root, list(functions), implementations=implementations, library_version=library_version)
+    else:
+        (root / "Include").mkdir(parents=True, exist_ok=True)
+        (root / "Include" / "arm_nnfunctions.h").write_text("/* an ns-cmsis-nn without the export */\n")
     for symbol in source_symbols:
         source_dir = root / "Source" / "BasicMathFunctions"
         source_dir.mkdir(parents=True, exist_ok=True)
-        # A real kernel source, not just a file with the right name: the probe's
+        # A real kernel source, not just a file with the right name: the gate's
         # backstop asks whether the file DEFINES the symbol, so the doxygen
         # banner alone must not be enough to claim it (see the umbrella-file
         # case in test_kernel_source_exists_matches_only_shipped_sources).
@@ -67,35 +80,21 @@ def _parse_c_float_array(header_text: str, array_name: str) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 
-def test_missing_header_symbols_reports_only_undeclared_symbols(tmp_path: Path) -> None:
-    root = _fake_cmsis_nn_root(
-        tmp_path,
-        """
-        arm_cmsis_nn_status arm_nn_mean_f32(const float32_t *input_data,
-                                            const cmsis_nn_dims *input_dims,
-                                            const cmsis_nn_dims *axis_dims,
-                                            float32_t *output_data,
-                                            const cmsis_nn_dims *output_dims);
-        /* doc mention only: arm_hard_swish_f32(input, output, size) */
-        // line mention only: arm_nn_mean_f16(...)
-        """,
-    )
+def test_gate_reports_only_symbols_the_export_lacks(tmp_path: Path) -> None:
+    contracts = load_contract_set(_fake_cmsis_nn_root(tmp_path, (MEAN_F32,)))
 
-    assert missing_header_symbols(["arm_nn_mean_f32"], cmsis_nn_root=root) == []
-    # Comment-form mentions must not look like declarations.
-    assert missing_header_symbols(
-        ["arm_hard_swish_f32", "arm_nn_mean_f16"], cmsis_nn_root=root
-    ) == ["arm_hard_swish_f32", "arm_nn_mean_f16"]
-    # Mixed: only the undeclared symbol is reported, input order preserved.
-    assert missing_header_symbols(
-        ["arm_hard_swish_f16", "arm_nn_mean_f32"], cmsis_nn_root=root
-    ) == ["arm_hard_swish_f16"]
+    assert gate_kernel_symbols(contracts, ["arm_nn_mean_f32"], "cortex-m55").passes
+    # Input order preserved, duplicates and blanks dropped.
+    gate = gate_kernel_symbols(
+        contracts, ["arm_hard_swish_f16", " ", "arm_nn_mean_f32", "arm_hard_swish_f16"], "cortex-m55")
+    assert gate.missing_symbols == ("arm_hard_swish_f16",)
+    assert gate_kernel_symbols(contracts, [], "cortex-m55").passes
 
 
-def test_missing_header_symbols_treats_unresolvable_checkout_as_all_missing(tmp_path: Path) -> None:
-    assert missing_header_symbols(
-        ["arm_nn_mean_f32"], cmsis_nn_root=tmp_path / "does-not-exist"
-    ) == ["arm_nn_mean_f32"]
+def test_gate_does_not_decide_without_an_export(tmp_path: Path) -> None:
+    for root in (_fake_cmsis_nn_root(tmp_path, export=False), tmp_path / "does-not-exist", None):
+        gate = gate_kernel_symbols(load_contract_set(root), ["arm_nn_mean_f32"], "cortex-m55")
+        assert not gate.decided and gate.passes and gate.missing_symbols == ()
 
 
 # ---------------------------------------------------------------------------
@@ -170,9 +169,7 @@ def _run_generation(tmp_path, monkeypatch, cmsis_nn_root: Path):
 def test_generation_skips_descriptor_when_kernel_symbol_is_undeclared(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    root = _fake_cmsis_nn_root(
-        tmp_path, "/* no float mean here */\n", source_symbols=("arm_mean_s8",)
-    )
+    root = _fake_cmsis_nn_root(tmp_path, source_symbols=("arm_mean_s8",))
     generated, summary, manifest, generated_tests_dir = _run_generation(tmp_path, monkeypatch, root)
 
     assert generated == []
@@ -193,14 +190,7 @@ def test_generation_skips_descriptor_when_kernel_symbol_is_undeclared(
 def test_generation_generates_descriptor_when_kernel_symbol_is_declared(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    root = _fake_cmsis_nn_root(
-        tmp_path,
-        "arm_cmsis_nn_status arm_nn_mean_f32(const float32_t *input_data,\n"
-        "                                    const cmsis_nn_dims *input_dims,\n"
-        "                                    const cmsis_nn_dims *axis_dims,\n"
-        "                                    float32_t *output_data,\n"
-        "                                    const cmsis_nn_dims *output_dims);\n",
-    )
+    root = _fake_cmsis_nn_root(tmp_path, (MEAN_F32,))
     generated, summary, manifest, _ = _run_generation(tmp_path, monkeypatch, root)
 
     assert generated == ["mean_float_axis_c_f32"]
@@ -212,15 +202,11 @@ def test_generation_generates_descriptor_when_kernel_symbol_is_declared(
 def test_generation_fails_loudly_when_undeclared_symbol_has_kernel_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """hct#92 review backstop: declaration missing from the probed public
-    headers while Source/**/<symbol>.c ships means the probe missed a
-    declaration (renamed symbol / unprobed header). That must fail generation
-    with a nonzero outcome, never silently skip with green CI."""
-    root = _fake_cmsis_nn_root(
-        tmp_path,
-        "/* declaration lives in some unprobed header */\n",
-        source_symbols=("arm_nn_mean_f32",),
-    )
+    """hct#92 review backstop: a symbol the signature export lacks while
+    Source/**/<symbol>.c ships means the export missed a declaration (stale
+    export / unexported header). That must fail generation with a nonzero
+    outcome, never silently skip with green CI."""
+    root = _fake_cmsis_nn_root(tmp_path, source_symbols=("arm_nn_mean_f32",))
 
     # With every filtered descriptor contradicted, the run has zero generated
     # models and zero skips, so the "no generated tests" guard fires first;
@@ -245,10 +231,77 @@ def test_generation_fails_loudly_when_undeclared_symbol_has_kernel_source(
     assert summary["counts"]["generation_failures"] == 1
 
 
+def test_generation_leaves_a_checkout_without_the_export_to_rendering(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No export, no gate answer: the case goes on to rendering, which refuses there (the
+    absent contract leg), instead of being skipped as if the kernel were missing."""
+    root = _fake_cmsis_nn_root(tmp_path, export=False)
+    generated, summary, manifest, _ = _run_generation(tmp_path, monkeypatch, root)
+
+    assert generated == ["mean_float_axis_c_f32"]
+    assert summary["counts"]["skipped_kernel_symbol"] == 0 and manifest["skipped_count"] == 0
+
+
+def test_generation_skips_where_a_manifest_requirement_is_unmet(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _fake_cmsis_nn_root(tmp_path, (MEAN_F32,), implementations=[
+        implementation("mean_f32_dsp_less", "arm_nn_mean_f32", op="avg_pool", requires=["!mvei", "f32_api"]),
+    ])
+    generated, summary, manifest, generated_tests_dir = _run_generation(tmp_path, monkeypatch, root)
+
+    assert generated == []
+    assert summary["counts"]["skipped_capability"] == 1 and summary["counts"]["skipped_kernel_symbol"] == 0
+    entry = manifest["skipped"][0]
+    assert entry["status"] == "skipped_capability" and entry["missing_capabilities"] == []
+    assert entry["unmet_kernel_requirements"] == [
+        {"symbol": "arm_nn_mean_f32", "implementation": "mean_f32_dsp_less", "unmet": ["!mvei"]}]
+    assert "mean_float_axis_c_f32" not in (generated_tests_dir / "tests.cmake").read_text()
+
+
+def test_generation_keeps_a_case_whose_manifest_requirements_hold(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _fake_cmsis_nn_root(tmp_path, (MEAN_F32,), implementations=[
+        implementation("mean_f32_mve", "arm_nn_mean_f32", op="avg_pool",
+                       requires=["mvef", "f32_api", "!autovectorize", "!single_rounding"]),
+    ])
+    generated, summary, _, _ = _run_generation(tmp_path, monkeypatch, root)
+
+    assert generated == ["mean_float_axis_c_f32"] and summary["counts"]["skipped_capability"] == 0
+
+
+def test_generation_fails_on_a_record_newer_than_the_checkout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _fake_cmsis_nn_root(tmp_path, (MEAN_F32,), library_version="7.40.0", implementations=[
+        implementation("mean_f32", "arm_nn_mean_f32", op="avg_pool", since="7.41.0"),
+    ])
+    with pytest.raises(AssertionError, match="No test cases were generated|Generation failures occurred"):
+        _run_generation(tmp_path, monkeypatch, root)
+
+    report_dir = tmp_path / "repo" / "artifacts" / "reports" / "generation" / "float" / "cortex-m55"
+    failures = json.loads((report_dir / "generation_failures.json").read_text())
+    assert [f["name"] for f in failures] == ["mean_float_axis_c_f32"]
+    assert "record mean_f32 is since 7.41.0, after the checkout's library version 7.40.0" in failures[0]["exception"]
+
+
+def test_generation_refuses_a_corrupt_export_up_front(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _fake_cmsis_nn_root(tmp_path, (MEAN_F32,))
+    (root / "Tests" / "KernelContracts" / "kernel_contracts.json").write_text("{broken")
+    from helia_core_tester.contract.ir import ContractError
+
+    with pytest.raises(ContractError, match="not valid JSON"):
+        _run_generation(tmp_path, monkeypatch, root)
+
+
 def test_kernel_source_exists_matches_only_shipped_sources(tmp_path: Path) -> None:
     from helia_core_tester.generation.utils.temp_sizer_probe import kernel_source_exists
 
-    root = _fake_cmsis_nn_root(tmp_path, "", source_symbols=("arm_nn_mean_f32",))
+    root = _fake_cmsis_nn_root(tmp_path, source_symbols=("arm_nn_mean_f32",))
     assert kernel_source_exists("arm_nn_mean_f32", cmsis_nn_root=root) is True
     assert kernel_source_exists("arm_hard_swish_f32", cmsis_nn_root=root) is False
     assert kernel_source_exists("arm_nn_mean_f32", cmsis_nn_root=tmp_path / "nope") is False

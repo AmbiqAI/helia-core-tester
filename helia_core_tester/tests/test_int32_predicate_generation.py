@@ -9,7 +9,9 @@ import yaml
 
 from helia_core_tester.generation.ops.ComparisonFunctions.comparison import OpComparison
 from helia_core_tester.generation.ops.SelectFunctions.select_v2 import OpSelectV2
-from helia_core_tester.generation.utils.temp_sizer_probe import missing_header_symbols
+from helia_core_tester.contract.ir import load_contract_set
+from helia_core_tester.generation.kernel_gate import gate_kernel_symbols
+from helia_core_tester.tests.contract_checkout import function, write_checkout
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -65,16 +67,11 @@ def test_int32_reference_and_call(desc, tmp_path):
 
 
 def test_required_symbols_skip_older_core(tmp_path):
-    include = tmp_path / "Include"
-    include.mkdir()
-    (include / "arm_nnfunctions.h").write_text(
-        "/* no INT32 predicate declarations */\n"
-    )
+    root = write_checkout(tmp_path, [function("arm_equal_s8", [("const int8_t *", "input", "in")])])
+    contracts = load_contract_set(root)
     for desc in descriptors():
-        assert (
-            missing_header_symbols(desc["required_kernel_symbols"], tmp_path)
-            == desc["required_kernel_symbols"]
-        )
+        gate = gate_kernel_symbols(contracts, desc["required_kernel_symbols"], "cortex-m55")
+        assert gate.missing_symbols == tuple(desc["required_kernel_symbols"])
 
 
 @pytest.mark.parametrize(
