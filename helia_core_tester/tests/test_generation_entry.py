@@ -8,7 +8,14 @@ import pytest
 
 from helia_core_tester.contract.ir import STATUS_ABSENT, STATUS_PRESENT, ContractSet, FunctionDecl, ParamDecl
 from helia_core_tester.generation import entry as entry_module
-from helia_core_tester.generation.entry import SCRATCHLESS_OPERATORS, EntryError, entry_scratch_bytes, resolve_entry
+from helia_core_tester.generation.entry import (
+    ENTRY_IMPLEMENTATION_KEY,
+    SCRATCHLESS_OPERATORS,
+    EntryError,
+    apply_entry_manifest,
+    entry_scratch_bytes,
+    resolve_entry,
+)
 from helia_core_tester.generation.io.descriptors import load_all_descriptors
 from helia_core_tester.generation.test_ops import _required_kernel_symbols
 
@@ -53,7 +60,10 @@ def test_every_shipped_entry_resolves_from_the_contract_with_its_declared_scratc
     root = Path(__file__).resolve().parents[2] / "assets" / "descriptors"
     entries = [d for d in load_all_descriptors(str(root)) if d.get("entry")]
     assert len(entries) >= 50
+    covered = 0
     for desc in entries:
+        desc = apply_entry_manifest(desc, contracts)
+        covered += ENTRY_IMPLEMENTATION_KEY in desc
         entry, sizer = desc["entry"], desc.get("entry_sizer")
         scratchless = desc["operator"] in SCRATCHLESS_OPERATORS
         own = contracts.sizer_for(entry, "cortex-m55")
@@ -70,10 +80,9 @@ def test_every_shipped_entry_resolves_from_the_contract_with_its_declared_scratc
         assert got["kernel_fn"] == entry and got["entry_family"] == "contract"
         if scratchless:
             assert got["kernel_get_buffer_size_fn"] is None and got["entry_scratch_bytes"] == 0
-        elif isinstance(sizer, list):
-            assert got["kernel_get_buffer_size_fn"] == sizer[0] and got["entry_extra_sizers"] == sizer[1:]
         elif sizer is not None:
             assert got["kernel_get_buffer_size_fn"] == sizer
+    assert covered >= 20, "the FC, depthwise and pooling pilot entries take their terms from the manifest"
 
 
 def test_operators_outside_the_contract_path_are_refused() -> None:
@@ -142,3 +151,104 @@ def test_entry_scratch_bytes() -> None:
 def test_entry_sizer_gates_the_case_like_the_entry() -> None:
     assert _required_kernel_symbols({"entry": "arm_fx_nosizer_s16", "entry_sizer": "arm_fx_other_get_buffer_size"}) == [
         "arm_fx_nosizer_s16", "arm_fx_other_get_buffer_size"]
+
+
+# --- terms from the implementation manifest ------------------------------------------------
+
+from helia_core_tester.contract.ir import BufferDecl, ImplementationDecl  # noqa: E402
+
+CTX_QUERY = BufferDecl("scratch", "ctx", "arm_fx_other_get_buffer_size", "call")
+
+
+def _manifest(*records: ImplementationDecl) -> ContractSet:
+    return ContractSet(status=STATUS_PRESENT, root=None, path=None, functions=CONTRACTS.functions,
+                       implementations={r.id: r for r in records}, library_version="7.47.0")
+
+
+def _record(buffers=(CTX_QUERY,), requires=(), declines_on_build=False, impl_id="fx", entry="arm_fx_nosizer_s16",
+            wrapper=None) -> ImplementationDecl:
+    return ImplementationDecl(id=impl_id, entry=entry, wrapper=wrapper, requires=frozenset(requires), since="7.0.0",
+                              declines_on_build=declines_on_build, buffers=tuple(buffers))
+
+
+def _apply(contracts: ContractSet, **desc) -> dict:
+    return apply_entry_manifest({"name": "fx_case", "entry": "arm_fx_nosizer_s16", **desc}, contracts)
+
+
+def test_the_record_names_the_scratch_query_and_stamps_the_descriptor() -> None:
+    got = _apply(_manifest(_record()))
+    assert got["entry_sizer"] == "arm_fx_other_get_buffer_size" and got[ENTRY_IMPLEMENTATION_KEY] == "fx"
+    assert "entry_scratch" not in got and "required_capabilities" not in got and "autovectorize_declines" not in got
+    assert _apply(_manifest(_record()), **{ENTRY_IMPLEMENTATION_KEY: "fx", "entry_sizer": "x"})["entry_sizer"] == "x"
+
+
+@pytest.mark.parametrize("buffers", [
+    (),
+    (BufferDecl("ctx", "ctx", None, "call", True),),
+    (BufferDecl("sums", None, "arm_fx_other_get_buffer_size", "prepare"),
+     BufferDecl("packed", "packed_data", "arm_fx_other_get_buffer_size", "prepared")),
+])
+def test_an_entry_given_no_sized_ctx_takes_no_scratch(buffers) -> None:
+    got = _apply(_manifest(_record(buffers=buffers)))
+    assert got["entry_scratch"] == "none" and "entry_sizer" not in got
+
+
+def test_a_prepared_ctx_buffer_is_sized_by_its_query() -> None:
+    sums = BufferDecl("kernel_sums", "ctx", "arm_fx_other_get_buffer_size", "prepared", True)
+    assert _apply(_manifest(_record(buffers=(sums,))))["entry_sizer"] == "arm_fx_other_get_buffer_size"
+
+
+@pytest.mark.parametrize("requires, declines, status, caps, autovec", [
+    (("mvei", "!autovectorize"), True, None, ["mve"], True),
+    (("mvei", "!autovectorize"), False, None, ["mve"], None),
+    (("dsp", "mvei"), True, None, ["dsp", "mve"], None),
+    (("mve_f16", "f16_api"), True, None, ["fp16_execution", "mve"], None),
+    (("f32_api", "mvef"), True, None, ["fp32_execution", "mve"], None),
+    (("!mvei",), True, None, None, None),
+    (("mvei", "!autovectorize"), True, "ARM_CMSIS_NN_NO_IMPL_ERROR", None, None),
+    (("mvei", "!autovectorize"), True, "ARM_CMSIS_NN_ARG_ERROR", ["mve"], None),
+])
+def test_capabilities_and_the_autovectorize_decline_follow_requires(requires, declines, status, caps, autovec) -> None:
+    extra = {"expected_status": status} if status else {}
+    got = _apply(_manifest(_record(requires=requires, declines_on_build=declines)), **extra)
+    assert got.get("required_capabilities") == caps and got.get("autovectorize_declines") == autovec
+
+
+@pytest.mark.parametrize("key, value", [("entry_sizer", "arm_fx_other_get_buffer_size"), ("entry_scratch", "none"),
+                                        ("required_capabilities", ["mve"]), ("autovectorize_declines", False)])
+def test_an_authored_term_on_a_covered_entry_is_refused(key: str, value) -> None:
+    with pytest.raises(EntryError, match=rf"record fx .* decides \['{key}'\]; remove them"):
+        _apply(_manifest(_record()), **{key: value})
+
+
+@pytest.mark.parametrize("contracts, message", [
+    (lambda: _manifest(_record(impl_id="a"), _record(impl_id="b")), "has 2 records for it \\(a, b\\)"),
+    (lambda: _manifest(_record(buffers=(CTX_QUERY, BufferDecl("other", "ctx", None, "call")))),
+     "binds 2 buffers to ctx \\(scratch, other\\)"),
+    (lambda: _manifest(_record(requires=("helium9",))), "requires 'helium9', which no CPU capability expresses"),
+])
+def test_a_record_the_tester_cannot_apply_fails_closed(contracts, message: str) -> None:
+    with pytest.raises(EntryError, match=message):
+        _apply(contracts())
+
+
+@pytest.mark.parametrize("contracts, stamped", [(lambda: _manifest(_record(impl_id="other")), "fx"),
+                                                (lambda: _manifest(), "fx")])
+def test_a_stale_stamp_fails_closed(contracts, stamped: str) -> None:
+    with pytest.raises(EntryError, match=f"stamped with manifest record '{stamped}'"):
+        _apply(contracts(), **{ENTRY_IMPLEMENTATION_KEY: stamped})
+
+
+def test_without_a_record_the_descriptor_is_unchanged() -> None:
+    desc = {"name": "fx_case", "entry": "arm_fx_nosizer_s16", "entry_sizer": "arm_fx_other_get_buffer_size"}
+    for contracts in (_manifest(), CONTRACTS, ContractSet(status=STATUS_ABSENT, root=None, path=None),
+                      _manifest(_record(wrapper="arm_fx_nosizer_s16"))):
+        assert apply_entry_manifest(desc, contracts) == desc
+    assert apply_entry_manifest({"name": "plain"}, _manifest(_record())) == {"name": "plain"}
+
+
+def test_resolve_entry_takes_the_query_from_the_record(bound) -> None:
+    got = _resolve("arm_fx_nosizer_s16", contracts=_manifest(_record()))
+    assert got["kernel_get_buffer_size_fn"] == "arm_fx_other_get_buffer_size"
+    with pytest.raises(EntryError, match="decides \\['entry_scratch'\\]"):
+        _resolve("arm_fx_nosizer_s16", {"entry_scratch": "none"}, contracts=_manifest(_record()))

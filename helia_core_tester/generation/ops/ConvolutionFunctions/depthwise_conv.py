@@ -410,7 +410,6 @@ class OpDepthwiseConv(OperationBase):
                 'buffer_size_max': buffer_size_max,
                 'force_no_scratch': bool(self._hint().get("force_no_scratch", False)),
                 'entry_scratch_bytes': kernel_info.get("entry_scratch_bytes"),
-                'entry_extra_sizers': kernel_info.get("entry_extra_sizers"),
                 'float_kernel': True,
                 'expected_status': self.expected_status(),
                 'autovectorize_declines': bool(self.desc.get("autovectorize_declines", False)),
@@ -453,9 +452,9 @@ class OpDepthwiseConv(OperationBase):
         )
         if kernel_info.get("entry_scratch_bytes") is not None:
             buffer_size_max = max(buffer_size_max, int(kernel_info["entry_scratch_bytes"]))
-        # The 3x3 entries size their own path from the input dims; scratch takes the larger answer.
+        # The 3x3 entries size their own path from the input dims.
         buffer_size_max = max(buffer_size_max,
-                              depthwise_3x3_scratch_bytes(kernel_info.get("entry_extra_sizers"), input_dims))
+                              depthwise_3x3_scratch_bytes(kernel_info.get("kernel_get_buffer_size_fn"), input_dims))
         # An entry gets the weight-sum context exactly when its prototype takes one; the wrapper
         # keeps the rule it always had.
         takes_weight_sum_ctx = kernel_info["kernel_fn"] == "arm_depthwise_conv_wrapper_s8"
@@ -466,7 +465,6 @@ class OpDepthwiseConv(OperationBase):
             takes_weight_sum_ctx = takes(
                 contract_render.load_current_contracts().require(kernel_info["kernel_fn"]), "weight_sum_ctx")
 
-        self.reject_autovectorize_declines()
         context = {
             'name': name,
             'input_dims': input_dims,
@@ -491,14 +489,10 @@ class OpDepthwiseConv(OperationBase):
             'buffer_size_max': buffer_size_max,
             'takes_weight_sum_ctx': takes_weight_sum_ctx,
             'entry_scratch_bytes': kernel_info.get("entry_scratch_bytes"),
-            'entry_extra_sizers': kernel_info.get("entry_extra_sizers"),
             'expected_status': self.expected_status(),
             # A Core that declares the macro declines the opt_3x3 entries under AUTOVECTORIZE; older
             # releases run them, so their numerical check stays (ns-cmsis-nn#814).
-            'autovectorize_declines': (
-                "arm_depthwise_conv_s8_opt_3x3_get_buffer_size" in (kernel_info.get("entry_extra_sizers") or ())
-                and self.expected_status() == "ARM_CMSIS_NN_SUCCESS"
-            ),
+            'autovectorize_declines': bool(self.desc.get("autovectorize_declines", False)),
             'autovectorize_declines_if': (
                 "defined(HELIA_CMSIS_NN_INT_AUTOVECTORIZE) && "
                 "defined(ARM_NN_DEPTHWISE_CONV_S8_OPT_3X3_AUTOVECTORIZE_DECLINES)"

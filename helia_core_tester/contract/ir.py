@@ -104,8 +104,21 @@ class FunctionDecl:
 
 
 @dataclass(frozen=True)
+class BufferDecl:
+    """A buffer of a manifest record: the parameter it binds to (None for one the call never
+    sees), its size query, and whether it lives for the call, for the prepared data or only
+    while the prepare steps run."""
+
+    name: str
+    param: Optional[str]
+    size_query: Optional[str]
+    lifetime: str
+    optional: bool = False
+
+
+@dataclass(frozen=True)
 class ImplementationDecl:
-    """One implementation-manifest record, as far as generation gating reads it."""
+    """One implementation-manifest record, as far as generation reads it."""
 
     id: str
     entry: str
@@ -113,6 +126,7 @@ class ImplementationDecl:
     requires: frozenset[str]
     since: str
     declines_on_build: bool = False
+    buffers: tuple[BufferDecl, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -257,7 +271,10 @@ def _adapt_implementation(raw, path: Path, causes: frozenset[str]) -> Implementa
                             f"in {sorted(causes)}")
     return ImplementationDecl(id=raw.id, entry=raw.entry, wrapper=raw.wrapper,
                               requires=frozenset(raw.requires), since=raw.since,
-                              declines_on_build=any(d["cause"] == "build" for d in declines))
+                              declines_on_build=any(d["cause"] == "build" for d in declines),
+                              buffers=tuple(BufferDecl(name=b.name, param=b.param, size_query=b.size_query,
+                                                       lifetime=b.lifetime, optional=b.optional)
+                                            for b in raw.buffers))
 
 
 _CACHE: dict[tuple, ContractSet] = {}

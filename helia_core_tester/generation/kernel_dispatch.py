@@ -23,8 +23,8 @@ DEPTHWISE_CONV_S8_3X3_SIZER = "arm_depthwise_conv_s8_opt_3x3_get_buffer_size"
 
 
 def depthwise_3x3_scratch_bytes(sizers: object, input_dims: Dict[str, int]) -> int:
-    """Mirror the 3x3 depthwise entries' own scratch query when a descriptor lists it beside the
-    family's (`entry_sizer: [<family query>, <entry query>]`); zero for every other entry."""
+    """Mirror the 3x3 depthwise entries' own scratch query when it is the case's sizer (a string, or
+    a list naming it); zero for every other entry."""
     listed = [sizers] if isinstance(sizers, str) else list(sizers or ())
     if DEPTHWISE_CONV_S8_3X3_SIZER not in listed:
         return 0

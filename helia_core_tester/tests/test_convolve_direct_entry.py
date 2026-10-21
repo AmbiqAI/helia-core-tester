@@ -56,9 +56,12 @@ def test_an_entry_of_another_precision_is_rejected() -> None:
 def test_an_entry_of_another_operator_fails_to_bind(tmp_path: Path) -> None:
     from helia_core_tester.contract.bind import ContractBindError
 
+    from helia_core_tester.generation.entry import MANIFEST_ENTRY_KEYS
+
+    name = "convolve_entry_small_cin3_8x8_k3x3_co16_s8"
+    desc = {k: v for k, v in _descriptor(name).items() if k not in MANIFEST_ENTRY_KEYS}
     with pytest.raises((ContractBindError, RuntimeError, ValueError), match="dw_conv_params|cannot supply"):
-        _source("convolve_entry_small_cin3_8x8_k3x3_co16_s8", tmp_path, entry="arm_depthwise_conv_s8_opt_3x3",
-                entry_sizer="arm_depthwise_conv_s8_opt_get_buffer_size")
+        generate_test({**desc, "entry": "arm_depthwise_conv_s8_opt_3x3"}, str(tmp_path))
 
 
 def test_entry_gates_the_case_on_the_checkout() -> None:

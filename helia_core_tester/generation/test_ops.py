@@ -32,6 +32,7 @@ from helia_core_tester.generation.reuse import (
     write_stamp,
 )
 from helia_core_tester.contract import render as contract_render
+from helia_core_tester.generation.entry import EntryError, apply_entry_manifest
 from helia_core_tester.generation.kernel_gate import gate_kernel_symbols
 from helia_core_tester.generation.utils.temp_sizer_probe import kernel_source_exists
 
@@ -241,6 +242,17 @@ def _resolved_comparison(desc: Dict[str, Any]) -> Dict[str, Any]:
     return dict(desc.get("resolved_comparison") or resolve_comparison(desc, _resolved_tensor_dtypes(desc)))
 
 
+def _entry_manifest_failure(desc: Dict[str, Any], error: Exception) -> Dict[str, Any]:
+    return {
+        "name": desc.get("name"),
+        "operator": desc.get("operator"),
+        "family": _descriptor_family(desc),
+        "parity_kind": _descriptor_parity_kind(desc),
+        "stage": "entry_manifest",
+        "exception": str(error),
+    }
+
+
 def _skip_manifest_entry(
     desc: Dict[str, Any],
     *,
@@ -385,6 +397,13 @@ def generate_test(
         raise ValueError(f"kernel_numerics must be 'shipped' or 'bounded', got {kernel_numerics!r}")
     if seed is None:
         seed = default_seed_for_case(name, run_seed)
+    try:
+        desc = apply_entry_manifest(desc)
+    except EntryError as e:
+        if generation_failures is not None:
+            generation_failures.append(_entry_manifest_failure(desc, e))
+        print(f"ERROR: {e}")
+        raise
     op = op_class(desc, seed, target_cpu=cpu)
     op.run_seed = int(run_seed)
     op.kernel_numerics = kernel_numerics
@@ -527,6 +546,12 @@ def test_generation(test_filters):
     contracts = contract_render.load_current_contracts()
     symbol_source_cache: Dict[str, bool] = {}
     for desc in filtered_descriptors:
+        try:
+            desc = apply_entry_manifest(desc, contracts)
+        except EntryError as error:
+            print(f"ERROR: {error}")
+            generation_failures.append(_entry_manifest_failure(desc, error))
+            continue
         missing_capabilities = missing_required_capabilities(target_cpu, _required_capabilities(desc))
         if missing_capabilities:
             skipped_entries.append(
@@ -541,7 +566,8 @@ def test_generation(test_filters):
                 f"{', '.join(missing_capabilities)}"
             )
             continue
-        gate = gate_kernel_symbols(contracts, _required_kernel_symbols(desc), target_cpu)
+        gate = gate_kernel_symbols(contracts, _required_kernel_symbols(desc), target_cpu,
+                                   expected_status=str(desc.get("expected_status", "ARM_CMSIS_NN_SUCCESS")))
         missing_symbols = list(gate.missing_symbols)
         # Backstop (hct#92 review): a symbol the signature export lacks while its
         # kernel source ships in the checkout means the export is stale or the

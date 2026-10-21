@@ -18,6 +18,7 @@ from helia_core_tester.contract.ir import (
 from helia_core_tester.generation.kernel_gate import (
     BUILD_DECIDED_FEATURES,
     CPU_DECIDED_FEATURES,
+    NO_IMPL,
     cpu_features,
     gate_kernel_symbols,
     unmet_features,
@@ -110,10 +111,18 @@ def test_unmet_requirements_name_the_record() -> None:
 def test_an_entry_that_declines_on_the_build_still_runs() -> None:
     """MVE-only entries return ARM_CMSIS_NN_NO_IMPL_ERROR elsewhere; a case expecting that decline must run."""
     contracts = _contracts(_impl(requires=("mvei", "!autovectorize"), declines_on_build=True))
-    gate = gate_kernel_symbols(contracts, ["arm_k_s8"], "cortex-m0")
+    gate = gate_kernel_symbols(contracts, ["arm_k_s8"], "cortex-m0", expected_status=NO_IMPL)
     assert gate.passes and gate.unmet == ()
     assert [u.as_dict() for u in gate.declined] == [{"symbol": "arm_k_s8", "implementation": "k_s8", "unmet": ["mvei"]}]
-    assert gate_kernel_symbols(contracts, ["arm_k_s8"], "cortex-m55").declined == ()
+    assert gate_kernel_symbols(contracts, ["arm_k_s8"], "cortex-m55", expected_status=NO_IMPL).declined == ()
+
+
+@pytest.mark.parametrize("expected", ["ARM_CMSIS_NN_SUCCESS", "ARM_CMSIS_NN_ARG_ERROR"])
+def test_a_case_expecting_more_than_the_decline_is_skipped_where_the_entry_declines(expected: str) -> None:
+    contracts = _contracts(_impl(requires=("!mvei",), declines_on_build=True))
+    gate = gate_kernel_symbols(contracts, ["arm_k_s8"], "cortex-m55", expected_status=expected)
+    assert [u.unmet for u in gate.unmet] == [("!mvei",)] and gate.declined == () and not gate.passes
+    assert gate_kernel_symbols(contracts, ["arm_k_s8"], "cortex-m4", expected_status=expected).passes
 
 
 def test_every_record_of_a_symbol_must_hold() -> None:
@@ -167,7 +176,7 @@ def test_the_gate_reads_a_real_manifest(tmp_path: Path) -> None:
     assert gate_kernel_symbols(contracts, ["arm_k_wrapper_s8", "arm_k_s8"], "cortex-m55").passes
     gate = gate_kernel_symbols(contracts, ["arm_k_wrapper_s8", "arm_k_s8"], "cortex-m55-dsp")
     assert [u.as_dict() for u in gate.unmet] == [{"symbol": "arm_k_s8", "implementation": "k_s8", "unmet": ["mvei"]}]
-    declining = gate_kernel_symbols(contracts, ["arm_d_s8"], "cortex-m55-dsp")
+    declining = gate_kernel_symbols(contracts, ["arm_d_s8"], "cortex-m55-dsp", expected_status=NO_IMPL)
     assert declining.passes and [u.implementation for u in declining.declined] == ["d_s8"]
 
 
@@ -177,5 +186,6 @@ def test_the_shipped_mve_entries_decline_rather_than_skip() -> None:
     for entry in ("arm_depthwise_conv_s8_opt_3x3", "arm_depthwise_conv_s8_opt_3x3_c64_s1",
                   "arm_depthwise_conv_s8_opt_planar", "arm_fully_connected_per_channel_packed_s8"):
         for cpu in ("cortex-m0", "cortex-m4", "cortex-m55-dsp"):
-            gate = gate_kernel_symbols(contracts, [entry], cpu)
+            gate = gate_kernel_symbols(contracts, [entry], cpu, expected_status=NO_IMPL)
             assert gate.passes and gate.declined, (entry, cpu)
+            assert not gate_kernel_symbols(contracts, [entry], cpu).passes, (entry, cpu)

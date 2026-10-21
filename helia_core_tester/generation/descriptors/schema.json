@@ -115,7 +115,7 @@
       "enum": ["default", "float"]
     },
     "required_capabilities": {
-      "description": "CPU capabilities the case needs; it is skipped on CPUs that lack any of them. Names must match core/cpu_targets.py known_capabilities().",
+      "description": "CPU capabilities the case needs; it is skipped on CPUs that lack any of them. Names must match core/cpu_targets.py known_capabilities(). Not allowed on a case whose entry the implementation manifest has a record for: they follow from the record's requires.",
       "type": "array",
       "minItems": 1,
       "uniqueItems": true,
@@ -251,21 +251,19 @@
       "type": "string"
     },
     "entry_sizer": {
-      "description": "Public ns-cmsis-nn scratch-size query for an entry that has no <entry>_get_buffer_size of its own (a variant sized by its family's query), or a list of queries whose largest answer sizes the scratch (the first is the family query). Mutually exclusive with entry_scratch; the case is skipped when the checkout does not declare them.",
-      "oneOf": [
-        {"type": "string", "pattern": "^arm_[a-z0-9_]+$"},
-        {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^arm_[a-z0-9_]+$"}}
-      ]
+      "description": "Public ns-cmsis-nn scratch-size query for an entry that has no <entry>_get_buffer_size of its own (a variant sized by its family's query). Mutually exclusive with entry_scratch; the case is skipped when the checkout does not declare it. Not allowed for an entry the ns-cmsis-nn implementation manifest has a record for: the record's ctx buffer names the query.",
+      "type": "string",
+      "pattern": "^arm_[a-z0-9_]+$"
     },
     "entry_scratch": {
-      "description": "Scratch for an entry that takes no sizer: 'none', or a fixed byte count. Mutually exclusive with entry_sizer.",
+      "description": "Scratch for an entry that takes no sizer: 'none', or a fixed byte count. Mutually exclusive with entry_sizer. Not allowed for an entry the implementation manifest has a record for.",
       "oneOf": [
         {"type": "string", "enum": ["none"]},
         {"type": "integer", "minimum": 0}
       ]
     },
     "autovectorize_declines": {
-      "description": "The entry declines (ARM_CMSIS_NN_NO_IMPL_ERROR, output untouched) on a build without the MVE paths it lives on: for an integer entry, a build whose ns-cmsis-nn integer sources have ARM_MATH_AUTOVECTORIZE (the default coverage build); for a float entry, a build without MVE float or whose float sources have ARM_MATH_AUTOVECTORIZE. The case expects that there and the full result elsewhere.",
+      "description": "The entry declines (ARM_CMSIS_NN_NO_IMPL_ERROR, output untouched) on a build without the MVE paths it lives on: for an integer entry, a build whose ns-cmsis-nn integer sources have ARM_MATH_AUTOVECTORIZE (the default coverage build); for a float entry, a build without MVE float or whose float sources have ARM_MATH_AUTOVECTORIZE. The case expects that there and the full result elsewhere. Not allowed for an entry the implementation manifest has a record for: it follows from the record's requires and declines.",
       "type": "boolean"
     },
     "planar_supported": {

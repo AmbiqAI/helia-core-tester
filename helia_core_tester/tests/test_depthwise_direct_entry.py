@@ -8,14 +8,19 @@ from pathlib import Path
 import pytest
 
 from helia_core_tester.generation.io.descriptors import load_all_descriptors
-from helia_core_tester.generation.entry import EntryError, resolve_entry
+from helia_core_tester.generation.entry import MANIFEST_ENTRY_KEYS, EntryError, apply_entry_manifest, resolve_entry
 from helia_core_tester.generation.kernel_dispatch import DEPTHWISE_CONV_S8_PLANAR_RULE
 
 from helia_core_tester.generation.test_ops import _required_kernel_symbols, generate_test
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEPTHWISE_CONV_S8_ENTRIES = ("arm_depthwise_conv_s8_opt_3x3", "arm_depthwise_conv_s8_opt_3x3_c64_s1",
-                             "arm_depthwise_conv_s8_opt_planar", "arm_depthwise_conv_s8_opt_channelwise")
+OPT_SIZER = "arm_depthwise_conv_s8_opt_get_buffer_size"
+SIZER_3X3 = "arm_depthwise_conv_s8_opt_3x3_get_buffer_size"
+# Each pilot entry and the scratch query its manifest record binds to ctx.
+DEPTHWISE_CONV_S8_ENTRIES = {"arm_depthwise_conv_s8_opt_3x3": SIZER_3X3,
+                             "arm_depthwise_conv_s8_opt_3x3_c64_s1": SIZER_3X3,
+                             "arm_depthwise_conv_s8_opt_planar": OPT_SIZER,
+                             "arm_depthwise_conv_s8_opt_channelwise": OPT_SIZER}
 
 
 def _descriptor(name: str) -> dict:
@@ -33,11 +38,11 @@ def _resolve(entry: str, act: str = "S8", weight: str = "S8", **desc) -> dict:
                          desc={"name": "x", **desc})
 
 
-def test_entries_resolve_from_the_contract_with_the_opt_scratch_query() -> None:
-    for entry in DEPTHWISE_CONV_S8_ENTRIES:
-        assert _resolve(entry, entry_sizer="arm_depthwise_conv_s8_opt_get_buffer_size") == {
+def test_entries_resolve_with_the_scratch_query_of_their_manifest_record() -> None:
+    for entry, sizer in DEPTHWISE_CONV_S8_ENTRIES.items():
+        assert _resolve(entry) == {
             "kernel_fn": entry,
-            "kernel_get_buffer_size_fn": "arm_depthwise_conv_s8_opt_get_buffer_size",
+            "kernel_get_buffer_size_fn": sizer,
             "entry_family": "contract",
             "kernel_needs_layout": False,
             "buffer_size_needs_layout": False,
@@ -53,36 +58,41 @@ def test_entries_resolve_from_the_contract_with_the_opt_scratch_query() -> None:
 )
 def test_unknown_or_mismatched_entries_are_rejected(entry, act, message) -> None:
     with pytest.raises(EntryError, match=message):
-        _resolve(entry, act, entry_sizer="arm_depthwise_conv_s8_opt_get_buffer_size")
+        _resolve(entry, act)
 
 
 def test_entry_and_planar_rule_gate_the_case_on_the_checkout() -> None:
-    desc = _descriptor("depthwise_conv_entry_planar_48x48_c8_s8")
+    desc = apply_entry_manifest(_descriptor("depthwise_conv_entry_planar_48x48_c8_s8"))
 
-    assert _required_kernel_symbols(desc) == ["arm_depthwise_conv_s8_opt_planar", "arm_depthwise_conv_s8_opt_get_buffer_size",
+    assert _required_kernel_symbols(desc) == ["arm_depthwise_conv_s8_opt_planar", OPT_SIZER,
                                               DEPTHWISE_CONV_S8_PLANAR_RULE]
     assert _required_kernel_symbols(_descriptor("depthwise_conv_dilated_1d_k7_d2_c24_s8")) == []
 
 
-def test_3x3_entry_gates_on_both_queries_it_calls() -> None:
-    assert _required_kernel_symbols(_descriptor("depthwise_conv_entry_3x3_25x5_c64_s8")) == [
-        "arm_depthwise_conv_s8_opt_3x3",
-        "arm_depthwise_conv_s8_opt_get_buffer_size",
-        "arm_depthwise_conv_s8_opt_3x3_get_buffer_size",
-    ]
+def test_3x3_entry_gates_on_the_query_its_record_names() -> None:
+    desc = apply_entry_manifest(_descriptor("depthwise_conv_entry_3x3_25x5_c64_s8"))
+    assert _required_kernel_symbols(desc) == ["arm_depthwise_conv_s8_opt_3x3", SIZER_3X3]
+    assert desc["required_capabilities"] == ["mve"] and desc["autovectorize_declines"] is True
+    assert desc["entry_implementation"] == "depthwise_conv_s8_opt_3x3"
 
 
-def test_a_second_query_resolves_as_an_extra_sizer() -> None:
-    resolved = _resolve("arm_depthwise_conv_s8_opt_3x3", entry_sizer=[
-        "arm_depthwise_conv_s8_opt_get_buffer_size", "arm_depthwise_conv_s8_opt_3x3_get_buffer_size"])
+def test_a_decline_case_runs_everywhere_and_never_expects_the_full_result() -> None:
+    desc = apply_entry_manifest(_descriptor("depthwise_conv_entry_3x3_declines_c15_s8"))
+    assert desc["entry_sizer"] == SIZER_3X3
+    assert "required_capabilities" not in desc and "autovectorize_declines" not in desc
 
-    assert resolved["kernel_get_buffer_size_fn"] == "arm_depthwise_conv_s8_opt_get_buffer_size"
-    assert resolved["entry_extra_sizers"] == ["arm_depthwise_conv_s8_opt_3x3_get_buffer_size"]
-    with pytest.raises(EntryError, match="is a kernel, not a scratch-size query"):
-        _resolve("arm_depthwise_conv_s8_opt_3x3", entry_sizer=[
-            "arm_depthwise_conv_s8_opt_get_buffer_size", "arm_depthwise_conv_s8_opt_planar"])
-    with pytest.raises(EntryError, match="must name a scratch-size query or a list"):
-        _resolve("arm_depthwise_conv_s8_opt_3x3", entry_sizer=[])
+
+@pytest.mark.parametrize("key, value", [("entry_sizer", OPT_SIZER), ("entry_scratch", "none"),
+                                        ("required_capabilities", ["mve"]), ("autovectorize_declines", True)])
+def test_a_covered_entry_refuses_the_terms_its_record_decides(key: str, value) -> None:
+    assert key in MANIFEST_ENTRY_KEYS
+    with pytest.raises(EntryError, match=rf"record depthwise_conv_s8_opt_3x3 .* decides \['{key}'\]"):
+        _resolve("arm_depthwise_conv_s8_opt_3x3", **{key: value})
+
+
+def test_a_sizer_list_is_refused() -> None:
+    with pytest.raises(EntryError, match="must name one scratch-size query"):
+        _resolve("arm_depthwise_conv_s16", "S16", entry_sizer=["arm_depthwise_conv_s16_get_buffer_size"])
 
 
 def test_entry_case_calls_the_entry_with_weight_sums_and_its_scratch_query(tmp_path: Path) -> None:
@@ -93,27 +103,25 @@ def test_entry_case_calls_the_entry_with_weight_sums_and_its_scratch_query(tmp_p
     code = re.sub(r"/\*.*?\*/|//[^\n]*", " ", source, flags=re.S)
     call = re.search(r"return (\w+)\(\s*&\w+_ctx,\s*&(\w+)_weight_sum_ctx,", code)
     assert call and call.group(1) == "arm_depthwise_conv_s8_opt_3x3"
-    assert re.search(r"arm_depthwise_conv_s8_opt_get_buffer_size\(\s*&\w+_input_dims,\s*&\w+_filter_dims\s*\)", code)
+    assert re.search(r"arm_depthwise_conv_s8_opt_3x3_get_buffer_size\(\s*&\w+_input_dims\s*\)", code)
+    assert "arm_depthwise_conv_s8_opt_get_buffer_size(" not in code
     assert "arm_depthwise_conv_wrapper_s8(" not in source
     assert "HELIA_VALIDATE_OUTPUTS(" in source
 
 
 @pytest.mark.parametrize(
-    ("name", "calls_3x3_sizer"),
+    ("name", "sizer"),
     [
-        ("depthwise_conv_entry_3x3_28x28_c64_stride2_s8", True),
-        ("depthwise_conv_entry_3x3_c64_s1_14x28_s8", True),
-        ("depthwise_conv_entry_channelwise_25x5_c64_s8", False),
+        ("depthwise_conv_entry_3x3_28x28_c64_stride2_s8", SIZER_3X3),
+        ("depthwise_conv_entry_3x3_c64_s1_14x28_s8", SIZER_3X3),
+        ("depthwise_conv_entry_channelwise_25x5_c64_s8", OPT_SIZER),
     ],
 )
-def test_3x3_entries_also_query_their_own_size(tmp_path: Path, name: str, calls_3x3_sizer: bool) -> None:
-    source = _source(name, tmp_path)
-    code = re.sub(r"/\*.*?\*/|//[^\n]*", " ", source, flags=re.S)
+def test_each_entry_queries_only_the_size_its_record_names(tmp_path: Path, name: str, sizer: str) -> None:
+    code = re.sub(r"/\*.*?\*/|//[^\n]*", " ", _source(name, tmp_path), flags=re.S)
 
-    assert re.search(r"arm_depthwise_conv_s8_opt_get_buffer_size\(", code)
-    assert bool(re.search(r"arm_depthwise_conv_s8_opt_3x3_get_buffer_size\(\s*&\w+_input_dims\s*\)", code)) == calls_3x3_sizer
-    # The entry's answer raises the family's when larger, before the sizer checks.
-    assert ("scratch takes the larger answer" in source) == calls_3x3_sizer
+    queried = set(re.findall(r"(arm_depthwise_conv_s8_opt(?:_3x3)?_get_buffer_size)\(", code))
+    assert queried == {sizer}
 
 
 def test_declined_case_checks_the_status_and_an_untouched_output(tmp_path: Path) -> None:

@@ -149,10 +149,13 @@ def test_float_coverage_build_flags_the_harness() -> None:
     )
 
 
-@pytest.mark.parametrize(
-    "name",
-    ["depthwise_conv_entry_3x3_5x8_c64_s8", "fully_connected_float_entry_nhwc_k24_n17_f16"],
-)
-def test_declines_flag_is_rejected_where_the_template_does_not_render_it(name: str, tmp_path: Path) -> None:
+def test_declines_flag_is_rejected_where_the_template_does_not_render_it(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="autovectorize_declines is not supported"):
-        generate_test({**_descriptor(name), "autovectorize_declines": True}, str(tmp_path))
+        generate_test({**_descriptor("fully_connected_float_entry_nhwc_k24_n17_f16"), "autovectorize_declines": True},
+                      str(tmp_path))
+
+
+def test_a_manifest_covered_entry_takes_its_decline_from_the_record(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match=r"record depthwise_conv_s8_opt_3x3 .* decides \['autovectorize_declines'\]"):
+        generate_test({**_descriptor("depthwise_conv_entry_3x3_5x8_c64_s8"), "autovectorize_declines": True},
+                      str(tmp_path))
