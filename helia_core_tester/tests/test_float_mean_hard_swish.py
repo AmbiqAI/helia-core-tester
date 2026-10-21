@@ -136,7 +136,7 @@ def _filters(generated_tests_dir: Path) -> dict:
     }
 
 
-def _run_generation(tmp_path, monkeypatch, cmsis_nn_root: Path):
+def _run_generation(tmp_path, monkeypatch, cmsis_nn_root: Path, descriptors=None):
     repo_root = tmp_path / "repo"
     generated_tests_dir = repo_root / "artifacts" / "generated_tests" / "float" / "cortex-m55"
 
@@ -145,7 +145,7 @@ def _run_generation(tmp_path, monkeypatch, cmsis_nn_root: Path):
         generation_module, "find_descriptors_dir", lambda: repo_root / "assets" / "descriptors"
     )
     monkeypatch.setattr(
-        generation_module, "load_all_descriptors", lambda _path: [_float_mean_descriptor()]
+        generation_module, "load_all_descriptors", lambda _path: descriptors or [_float_mean_descriptor()]
     )
     monkeypatch.setenv("CMSIS_NN_ROOT", str(cmsis_nn_root))
 
@@ -495,3 +495,35 @@ def test_hard_swish_compat_rejects_float_dtypes() -> None:
     )
     with pytest.raises(NotImplementedError, match="only supported for S8"):
         op._select_cmsis_hard_swish_kernel()
+
+
+def _conformance_descriptor() -> dict:
+    return {**_float_mean_descriptor(), "name": "mean_float_conformance_f32", "conformance": True}
+
+
+def _run_conformance(tmp_path, monkeypatch, root):
+    return _run_generation(tmp_path, monkeypatch, root, descriptors=[_conformance_descriptor()])
+
+
+def test_a_conformance_case_skips_with_a_reason_without_a_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _fake_cmsis_nn_root(tmp_path, export=False)
+    monkeypatch.delenv("HELIA_CORE_TESTER_REQUIRE_CONTRACT", raising=False)
+    generated, summary, manifest, _ = _run_conformance(tmp_path, monkeypatch, root)
+    assert generated == []
+    assert summary["counts"]["skipped_conformance"] == 1
+    entry = manifest["skipped"][0]
+    assert entry["status"] == "skipped_conformance" and "no kernel contract" in entry["reason"]
+
+
+def test_a_conformance_case_fails_without_a_contract_where_the_leg_requires_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _fake_cmsis_nn_root(tmp_path, export=False)
+    monkeypatch.setenv("HELIA_CORE_TESTER_REQUIRE_CONTRACT", "1")
+    with pytest.raises(AssertionError, match="No test cases were generated|Generation failures occurred"):
+        _run_conformance(tmp_path, monkeypatch, root)
+    report_dir = tmp_path / "repo" / "artifacts" / "reports" / "generation" / "float" / "cortex-m55"
+    failures = json.loads((report_dir / "generation_failures.json").read_text())
+    assert [(f["name"], f["stage"]) for f in failures] == [("mean_float_conformance_f32", "conformance")]

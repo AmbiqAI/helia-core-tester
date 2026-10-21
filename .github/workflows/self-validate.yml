@@ -12,7 +12,9 @@ name: Self-Validate Against ns-cmsis-nn
 # execution) for one representative Cortex-M55 int + float profile. That is
 # enough to catch every class of breakage described in #50 without paying for
 # a full FVP run in this repo (the full FVP suite still runs downstream in
-# ns-cmsis-nn's own CI once the submodule pointer is bumped).
+# ns-cmsis-nn's own CI once the submodule pointer is bumped). The one exception is
+# the contract-conformance job, which runs its small case grid on the FVP for each
+# library build the planner plans.
 
 on:
   # Draft PRs skip every job (see each job's `if`). `ready_for_review` runs
@@ -259,4 +261,99 @@ jobs:
             artifacts/reports/contracts/inventory.json
             contract-*.log
             contract-junit.xml
+          if-no-files-found: ignore
+
+  # Contract conformance (Phase 2 T4a/T5, AmbiqAI/ns-cmsis-nn#829). The `conformance: true` cases run on the FVP for
+  # each build the planner plans: m0 scalar, m4 DSP, m55 MVE, and m55 MVE with ARM_MATH_AUTOVECTORIZE (the coverage
+  # build). Each asserts on the target that ctx is exactly the planned size, that the wrapper's own selector takes
+  # the planned route, and, for the packed FC entry, that the stream equals the host packer's
+  # (generation/conformance.py). `present` legs require the contract
+  # (HELIA_CORE_TESTER_REQUIRE_CONTRACT turns a missing planner into a failure). The `absent` leg runs against the
+  # last ns-cmsis-nn tag without the export and proves the cases skip with a reason instead of passing by omission.
+  # scripts/conformance_leg.py turns the generation manifest into the verdict.
+  contract-conformance:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {leg: present, profile: m0, cpu: cortex-m0, coverage: false}
+          - {leg: present, profile: m4, cpu: cortex-m4, coverage: false}
+          - {leg: present, profile: m55, cpu: cortex-m55, coverage: false}
+          - {leg: present, profile: m55-autovec, cpu: cortex-m55, coverage: true}
+          - {leg: absent, profile: absent, cpu: cortex-m55, coverage: false}
+
+    env:
+      CMSIS_NN_ROOT: ${{ github.workspace }}/ns-cmsis-nn-scratch
+
+    steps:
+      - name: Checkout helia-core-tester
+        uses: actions/checkout@v4
+
+      - name: Checkout ns-cmsis-nn
+        uses: actions/checkout@v4
+        with:
+          repository: AmbiqAI/ns-cmsis-nn
+          # The export, the manifest and ns_cmsis_nn_contracts live on dev/kernel-contracts until it merges to main.
+          ref: ${{ matrix.leg == 'absent' && 'v7.35.1' || github.event.inputs.ns_cmsis_nn_ref || 'dev/kernel-contracts' }}
+          path: ns-cmsis-nn-scratch
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Cache helia-core-tester downloads
+        uses: actions/cache@v4
+        with:
+          path: artifacts/downloads
+          key: helia-core-tester-downloads-${{ runner.os }}-${{ hashFiles('scripts/setup_ci.sh', 'helia_core_tester/scripts/setup_dependencies.py') }}
+          restore-keys: |
+            helia-core-tester-downloads-${{ runner.os }}-
+
+      - name: Setup build dependencies
+        run: ./scripts/setup_ci.sh
+
+      - name: List the conformance cases
+        id: cases
+        run: echo "names=$(uv run python scripts/conformance_leg.py names)" >> "$GITHUB_OUTPUT"
+
+      - name: Run the conformance cases on the FVP (${{ matrix.profile }})
+        if: matrix.leg == 'present'
+        env:
+          HELIA_CORE_TESTER_REQUIRE_CONTRACT: '1'
+        run: |
+          uv run helia_core_tester full \
+            --cpu ${{ matrix.cpu }} \
+            --suite int \
+            --seed ${{ github.run_id }} \
+            --name "${{ steps.cases.outputs.names }}" \
+            --cmsis-nn-root "${CMSIS_NN_ROOT}" \
+            ${{ matrix.coverage && '--coverage' || '' }} \
+            --verbosity 1 2>&1 | tee conformance-${{ matrix.profile }}.log
+          exit "${PIPESTATUS[0]}"
+
+      - name: Generate the conformance cases against a checkout without the contract (absent leg)
+        if: matrix.leg == 'absent'
+        run: |
+          uv run helia_core_tester generate \
+            --cpu ${{ matrix.cpu }} \
+            --suite int \
+            --name "${{ steps.cases.outputs.names }}" \
+            --verbosity 1 2>&1 | tee conformance-${{ matrix.profile }}.log
+          exit "${PIPESTATUS[0]}"
+
+      - name: Assert the ${{ matrix.leg }} leg (${{ matrix.profile }})
+        run: uv run python scripts/conformance_leg.py check --expect ${{ matrix.leg }} --cpu ${{ matrix.cpu }}
+
+      - name: Upload conformance reports and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: contract-conformance-${{ matrix.profile }}
+          path: |
+            conformance-*.log
+            artifacts/reports/generation/int/${{ matrix.cpu }}/
+            artifacts/generated_tests/int/${{ matrix.cpu }}/manifest.json
           if-no-files-found: ignore
