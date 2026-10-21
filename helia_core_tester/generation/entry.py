@@ -3,20 +3,25 @@
 Every entry is resolved from the kernel contract, for operators whose pool binds its call from
 the contract (CONTRACT_BOUND_OPERATORS): the entry must be a declared kernel, its tensor
 pointers must match the descriptor's dtypes, and its scratch comes from
-`<entry>_get_buffer_size[_mve|_dsp]`, from `entry_sizer` (one query, or a list whose first
-answer the others may raise), or is declared absent with `entry_scratch`; the operators whose
-cases pass no context (SCRATCHLESS_OPERATORS) take neither. Every other case fails at
-generation, naming what is missing. Whether an entry takes weight sums, a struct-typed bias
-or a layout follows from its prototype, so no per-entry table exists any more.
+`<entry>_get_buffer_size[_mve|_dsp]`, from `entry_sizer`, or is declared absent with
+`entry_scratch`; the operators whose cases pass no context (SCRATCHLESS_OPERATORS) take
+neither. Every other case fails at generation, naming what is missing. Whether an entry takes
+weight sums, a struct-typed bias or a layout follows from its prototype, so no per-entry table
+exists any more.
+
+An entry the implementation manifest has a record for takes those terms from the record
+instead (`apply_entry_manifest`): the scratch query of the buffer bound to its `ctx`, the CPU
+capabilities its `requires` name and whether it declines under ARM_MATH_AUTOVECTORIZE. Its
+descriptor must not set them itself, so the manifest stays the one authority.
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from helia_core_tester.contract import render
 from helia_core_tester.contract.bind import ContractBindError, check_types, takes
-from helia_core_tester.contract.ir import ContractSet
+from helia_core_tester.contract.ir import ContractSet, ImplementationDecl
 
 # Operators whose template renders its kernel and sizer calls by binding from the contract.
 CONTRACT_BOUND_OPERATORS: frozenset[str] = frozenset(
@@ -25,10 +30,77 @@ CONTRACT_BOUND_OPERATORS: frozenset[str] = frozenset(
 SCRATCHLESS_OPERATORS: frozenset[str] = frozenset({"Add", "Mul", "Dequantize"})
 
 ENTRY_SCRATCH_NONE = "none"
+# Descriptor keys the implementation manifest decides for an entry it has a record for.
+MANIFEST_ENTRY_KEYS = ("entry_sizer", "entry_scratch", "required_capabilities", "autovectorize_declines")
+# The record that decided them, stamped on the descriptor the generation step works from.
+ENTRY_IMPLEMENTATION_KEY = "entry_implementation"
+# The capability a CPU needs for each positive manifest feature token (see core/cpu_targets.py).
+FEATURE_CAPABILITIES = {"mvei": ("mve",), "mvef": ("mve",), "mve_f16": ("mve", "fp16_execution"),
+                        "dsp": ("dsp",), "f32_api": ("fp32_execution",), "f16_api": ("fp16_execution",)}
+SUCCESS = "ARM_CMSIS_NN_SUCCESS"
 
 
 class EntryError(ValueError):
     """A descriptor's entry cannot be called by the operator's generated case."""
+
+
+def manifest_record(contracts: ContractSet, entry: str, where: str) -> Optional[ImplementationDecl]:
+    records = contracts.implementations_of(entry) if contracts.present else []
+    if len(records) > 1:
+        raise EntryError(f"{where}: the implementation manifest has {len(records)} records for it "
+                         f"({', '.join(r.id for r in records)}); a direct call needs exactly one")
+    return records[0] if records else None
+
+
+def apply_entry_manifest(desc: Mapping[str, Any], contracts: Optional[ContractSet] = None) -> Dict[str, Any]:
+    """The descriptor with the terms the manifest decides for its entry filled in, stamped with the
+    record id; unchanged when it names no entry or the manifest has no record for it.
+
+    Scratch: the size query of the record's buffer bound to `ctx`, or `entry_scratch: none` when
+    the entry is given no ctx or one without a query. A case that expects the full result also gets
+    the capabilities of the record's positive `requires` tokens, and declines under
+    ARM_MATH_AUTOVECTORIZE when the record needs `!autovectorize` and declines on a build cause. A
+    case expecting ARM_CMSIS_NN_NO_IMPL_ERROR runs wherever the entry declines, so it gets neither.
+    """
+    entry = str(desc.get("entry") or "").strip()
+    if not entry:
+        return dict(desc)
+    where = f"{desc.get('name', '<unnamed>')}: entry {entry!r}"
+    contracts = contracts if contracts is not None else render.load_current_contracts()
+    record = manifest_record(contracts, entry, where)
+    stamped = desc.get(ENTRY_IMPLEMENTATION_KEY)
+    if stamped is not None:
+        if record is None or record.id != stamped:
+            raise EntryError(f"{where}: stamped with manifest record {stamped!r}, but this checkout's manifest "
+                             f"has {record.id if record else 'none'}")
+        return dict(desc)
+    if record is None:
+        return dict(desc)
+    authored = [key for key in MANIFEST_ENTRY_KEYS if key in desc]
+    if authored:
+        raise EntryError(f"{where}: the implementation manifest record {record.id} ({contracts.manifest_path}) "
+                         f"decides {authored}; remove them from the descriptor")
+    derived: Dict[str, Any] = {ENTRY_IMPLEMENTATION_KEY: record.id}
+    ctx = [b for b in record.buffers if b.param == "ctx" and b.lifetime != "prepare"]
+    if len(ctx) > 1:
+        raise EntryError(f"{where}: record {record.id} binds {len(ctx)} buffers to ctx "
+                         f"({', '.join(b.name for b in ctx)}); one sizes the scratch")
+    if ctx and ctx[0].size_query is not None:
+        derived["entry_sizer"] = ctx[0].size_query
+    else:
+        derived["entry_scratch"] = ENTRY_SCRATCH_NONE
+    expected = str(desc.get("expected_status", SUCCESS)).strip()
+    if expected != "ARM_CMSIS_NN_NO_IMPL_ERROR":
+        capabilities: List[str] = []
+        for token in sorted(t for t in record.requires if not t.startswith("!")):
+            if token not in FEATURE_CAPABILITIES:
+                raise EntryError(f"{where}: record {record.id} requires {token!r}, which no CPU capability expresses")
+            capabilities.extend(c for c in FEATURE_CAPABILITIES[token] if c not in capabilities)
+        if capabilities:
+            derived["required_capabilities"] = capabilities
+    if expected == SUCCESS and "!autovectorize" in record.requires and record.declines_on_build:
+        derived["autovectorize_declines"] = True
+    return {**desc, **derived}
 
 
 def entry_scratch_bytes(value: Any, where: str) -> int:
@@ -53,15 +125,15 @@ def resolve_entry(
     """Kernel-info overrides for a case that calls `entry` instead of the operator's wrapper."""
     entry = str(entry).strip()
     where = f"{desc.get('name', '<unnamed>')}: entry {entry!r}"
-    sizer, scratch = desc.get("entry_sizer"), desc.get("entry_scratch")
-    if sizer is not None and scratch is not None:
-        raise EntryError(f"{where}: set entry_sizer or entry_scratch, not both")
-
     if operator not in CONTRACT_BOUND_OPERATORS:
         raise EntryError(f"{where}: {operator} does not resolve entries from the kernel contract; the operators "
                          f"that do are {sorted(CONTRACT_BOUND_OPERATORS)}")
 
     contracts = contracts if contracts is not None else render.load_current_contracts()
+    desc = apply_entry_manifest({**desc, "entry": entry}, contracts) if contracts.present else desc
+    sizer, scratch = desc.get("entry_sizer"), desc.get("entry_scratch")
+    if sizer is not None and scratch is not None:
+        raise EntryError(f"{where}: set entry_sizer or entry_scratch, not both")
     if not contracts.present:
         raise EntryError(f"{where} is resolved from the kernel contract, but the ns-cmsis-nn checkout "
                          f"({contracts.root or 'unresolved'}) has no Tests/KernelContracts/kernel_contracts.json")
@@ -90,15 +162,11 @@ def resolve_entry(
         resolved["entry_scratch_bytes"] = entry_scratch_bytes(scratch, where)
         return resolved
     if sizer is not None:
-        # One query, or the family's followed by the entry's own: scratch takes the larger answer.
-        names = [sizer] if isinstance(sizer, str) else list(sizer) if isinstance(sizer, list) else []
-        if not names or not all(isinstance(name, str) and name.strip() for name in names):
-            raise EntryError(f"{where}: entry_sizer must name a scratch-size query or a list of them, got {sizer!r}")
-        decls = [_sizer_decl(contracts, name.strip(), where) for name in names]
-        resolved["kernel_get_buffer_size_fn"] = decls[0].name
-        resolved["buffer_size_needs_layout"] = takes(decls[0], "layout")
-        if len(decls) > 1:
-            resolved["entry_extra_sizers"] = [decl.name for decl in decls[1:]]
+        if not isinstance(sizer, str) or not sizer.strip():
+            raise EntryError(f"{where}: entry_sizer must name one scratch-size query, got {sizer!r}")
+        decl_sizer = _sizer_decl(contracts, sizer.strip(), where)
+        resolved["kernel_get_buffer_size_fn"] = decl_sizer.name
+        resolved["buffer_size_needs_layout"] = takes(decl_sizer, "layout")
         return resolved
     found = contracts.sizer_for(entry, cpu)
     if found is None:

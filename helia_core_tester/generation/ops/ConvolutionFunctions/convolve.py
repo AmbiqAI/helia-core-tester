@@ -478,7 +478,6 @@ class OpConvolve(OperationBase):
             or (contract_decl is not None and takes(contract_decl, "weight_sum_ctx")),
             'bias_is_struct': bias_is_struct,
             'entry_scratch_bytes': entry_scratch_bytes,
-            'entry_extra_sizers': kernel_info.get("entry_extra_sizers"),
             'expected_status': self.expected_status(),
             # The entry lives only on ns-cmsis-nn's MVE paths, so it declines on a build without them.
             'autovectorize_declines': bool(self.desc.get("autovectorize_declines", False)),

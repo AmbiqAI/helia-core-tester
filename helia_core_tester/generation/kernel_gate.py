@@ -5,9 +5,9 @@ checkout's signature export. Where the implementation manifest has a record for 
 its ``since`` must not be after the checkout's library version (a contradiction, never a
 skip), and its ``requires`` decide what the case meets on the target CPU: when they do not
 hold and the record declines on a build cause, the entry is still callable and returns
-ARM_CMSIS_NN_NO_IMPL_ERROR there, so the case runs (``declined``; a descriptor expecting that
-decline tests it); otherwise the implementation is absent from that build and the case is
-skipped (``unmet``).
+ARM_CMSIS_NN_NO_IMPL_ERROR there, so a case expecting that status runs (``declined``) and any
+other is skipped (``unmet``); without a build decline the implementation is absent from that
+build and the case is skipped.
 
 ``requires`` tokens split by who decides them. The CPU profile decides the ISA and float API
 tokens. ``autovectorize`` and ``single_rounding`` are compile options of one generated tree
@@ -95,8 +95,12 @@ def unmet_features(requires: Iterable[str], features: frozenset[str]) -> tuple[s
     return tuple(unmet)
 
 
+NO_IMPL = "ARM_CMSIS_NN_NO_IMPL_ERROR"
+
+
 def gate_kernel_symbols(contracts: ContractSet, symbols: Iterable[str], cpu: str,
-                        *, features: Optional[frozenset[str]] = None) -> GateResult:
+                        *, features: Optional[frozenset[str]] = None,
+                        expected_status: str = "ARM_CMSIS_NN_SUCCESS") -> GateResult:
     symbols = list(dict.fromkeys(str(symbol).strip() for symbol in symbols if str(symbol).strip()))
     if not contracts.present:
         return GateResult(decided=False)
@@ -122,6 +126,7 @@ def gate_kernel_symbols(contracts: ContractSet, symbols: Iterable[str], cpu: str
                 continue
             if failed:
                 requirement = UnmetRequirement(symbol=symbol, implementation=impl.id, unmet=failed)
-                (declined if impl.declines_on_build else unmet).append(requirement)
+                runs_to_decline = impl.declines_on_build and expected_status.strip() == NO_IMPL
+                (declined if runs_to_decline else unmet).append(requirement)
     return GateResult(missing_symbols=missing, unmet=tuple(unmet), contradictions=tuple(contradictions),
                       declined=tuple(declined))

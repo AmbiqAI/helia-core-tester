@@ -28,8 +28,9 @@ def _source(name: str, tmp_path: Path, **overrides) -> str:
 
 
 def test_packed_entry_resolves_from_the_contract_without_scratch() -> None:
+    """The manifest record binds no buffer to ctx (the kernel sums live only while packing)."""
     assert resolve_entry("FullyConnected", _ENTRY, activation_dtype="S8", weight_dtype="S8", cpu="cortex-m55",
-                         desc={"name": "x", "entry_scratch": "none"}) == {
+                         desc={"name": "x"}) == {
         "kernel_fn": _ENTRY,
         "entry_family": "contract",
         "kernel_needs_layout": False,

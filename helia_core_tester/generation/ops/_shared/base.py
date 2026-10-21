@@ -937,7 +937,6 @@ class OperationBase(ABC):
             sizer_fn=sizer,
             scratch_bytes=None if sizer else int(context.get("entry_scratch_bytes") or 0),
             contracts=contract_render.load_current_contracts(),
-            extra_sizer_fns=tuple(context.get("entry_extra_sizers") or ()),
         )
         expected = str(context.get("expected_status", "ARM_CMSIS_NN_SUCCESS"))
         if plan.void_return and expected != "ARM_CMSIS_NN_SUCCESS":

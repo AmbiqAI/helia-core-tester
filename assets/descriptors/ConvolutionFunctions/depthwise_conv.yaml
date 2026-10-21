@@ -2067,7 +2067,6 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_depthwise_conv_s8_opt_3x3
-entry_sizer: [arm_depthwise_conv_s8_opt_get_buffer_size, arm_depthwise_conv_s8_opt_3x3_get_buffer_size]
 hint:
   call_style: per_tensor
 input_shape:
@@ -2089,8 +2088,6 @@ depth_multiplier: 1
 dilation:
 - 1
 - 1
-required_capabilities:
-- mve
 ---
 operator: DepthwiseConv
 name: depthwise_conv_entry_3x3_48x48_c16_stride2_s8
@@ -2098,7 +2095,6 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_depthwise_conv_s8_opt_3x3
-entry_sizer: [arm_depthwise_conv_s8_opt_get_buffer_size, arm_depthwise_conv_s8_opt_3x3_get_buffer_size]
 hint:
   call_style: per_tensor
 input_shape:
@@ -2120,8 +2116,6 @@ depth_multiplier: 1
 dilation:
 - 1
 - 1
-required_capabilities:
-- mve
 ---
 operator: DepthwiseConv
 name: depthwise_conv_entry_3x3_14x10_c36_stride2_s8
@@ -2129,7 +2123,6 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_depthwise_conv_s8_opt_3x3
-entry_sizer: [arm_depthwise_conv_s8_opt_get_buffer_size, arm_depthwise_conv_s8_opt_3x3_get_buffer_size]
 hint:
   call_style: per_tensor
 input_shape:
@@ -2151,8 +2144,6 @@ depth_multiplier: 1
 dilation:
 - 1
 - 1
-required_capabilities:
-- mve
 ---
 operator: DepthwiseConv
 name: depthwise_conv_entry_3x3_6x6_c68_s8
@@ -2160,7 +2151,6 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_depthwise_conv_s8_opt_3x3
-entry_sizer: [arm_depthwise_conv_s8_opt_get_buffer_size, arm_depthwise_conv_s8_opt_3x3_get_buffer_size]
 hint:
   call_style: per_tensor
 input_shape:
@@ -2182,8 +2172,6 @@ depth_multiplier: 1
 dilation:
 - 1
 - 1
-required_capabilities:
-- mve
 ---
 operator: DepthwiseConv
 name: depthwise_conv_entry_3x3_5x8_c64_s8
@@ -2191,7 +2179,6 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_depthwise_conv_s8_opt_3x3
-entry_sizer: [arm_depthwise_conv_s8_opt_get_buffer_size, arm_depthwise_conv_s8_opt_3x3_get_buffer_size]
 hint:
   call_style: per_tensor
 input_shape:
@@ -2213,8 +2200,6 @@ depth_multiplier: 1
 dilation:
 - 1
 - 1
-required_capabilities:
-- mve
 ---
 operator: DepthwiseConv
 name: depthwise_conv_entry_3x3_28x28_c64_stride2_s8
@@ -2223,7 +2208,6 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_depthwise_conv_s8_opt_3x3
-entry_sizer: [arm_depthwise_conv_s8_opt_get_buffer_size, arm_depthwise_conv_s8_opt_3x3_get_buffer_size]
 hint:
   call_style: per_tensor
 input_shape:
@@ -2245,8 +2229,6 @@ depth_multiplier: 1
 dilation:
 - 1
 - 1
-required_capabilities:
-- mve
 ---
 operator: DepthwiseConv
 name: depthwise_conv_entry_3x3_declines_c15_s8
@@ -2255,7 +2237,6 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_depthwise_conv_s8_opt_3x3
-entry_sizer: [arm_depthwise_conv_s8_opt_get_buffer_size, arm_depthwise_conv_s8_opt_3x3_get_buffer_size]
 hint:
   call_style: per_tensor
 input_shape:
@@ -2285,7 +2266,6 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_depthwise_conv_s8_opt_3x3_c64_s1
-entry_sizer: [arm_depthwise_conv_s8_opt_get_buffer_size, arm_depthwise_conv_s8_opt_3x3_get_buffer_size]
 hint:
   call_style: per_tensor
 input_shape:
@@ -2307,8 +2287,6 @@ depth_multiplier: 1
 dilation:
 - 1
 - 1
-required_capabilities:
-- mve
 ---
 operator: DepthwiseConv
 name: depthwise_conv_entry_3x3_c64_s1_12x12_s8
@@ -2316,7 +2294,6 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_depthwise_conv_s8_opt_3x3_c64_s1
-entry_sizer: [arm_depthwise_conv_s8_opt_get_buffer_size, arm_depthwise_conv_s8_opt_3x3_get_buffer_size]
 hint:
   call_style: per_tensor
 input_shape:
@@ -2338,8 +2315,6 @@ depth_multiplier: 1
 dilation:
 - 1
 - 1
-required_capabilities:
-- mve
 ---
 operator: DepthwiseConv
 name: depthwise_conv_entry_3x3_c64_s1_14x28_s8
@@ -2348,7 +2323,6 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_depthwise_conv_s8_opt_3x3_c64_s1
-entry_sizer: [arm_depthwise_conv_s8_opt_get_buffer_size, arm_depthwise_conv_s8_opt_3x3_get_buffer_size]
 hint:
   call_style: per_tensor
 input_shape:
@@ -2370,8 +2344,6 @@ depth_multiplier: 1
 dilation:
 - 1
 - 1
-required_capabilities:
-- mve
 ---
 operator: DepthwiseConv
 name: depthwise_conv_entry_3x3_c64_s1_declines_stride2_s8
@@ -2379,7 +2351,6 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_depthwise_conv_s8_opt_3x3_c64_s1
-entry_sizer: [arm_depthwise_conv_s8_opt_get_buffer_size, arm_depthwise_conv_s8_opt_3x3_get_buffer_size]
 hint:
   call_style: per_tensor
 input_shape:
@@ -2409,7 +2380,6 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_depthwise_conv_s8_opt_planar
-entry_sizer: arm_depthwise_conv_s8_opt_get_buffer_size
 hint:
   call_style: per_tensor
 input_shape:
@@ -2431,8 +2401,6 @@ depth_multiplier: 1
 dilation:
 - 1
 - 1
-required_capabilities:
-- mve
 planar_supported: true
 ---
 operator: DepthwiseConv
@@ -2441,7 +2409,6 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_depthwise_conv_s8_opt_planar
-entry_sizer: arm_depthwise_conv_s8_opt_get_buffer_size
 hint:
   call_style: per_tensor
 input_shape:
@@ -2463,8 +2430,6 @@ depth_multiplier: 1
 dilation:
 - 1
 - 1
-required_capabilities:
-- mve
 planar_supported: true
 ---
 operator: DepthwiseConv
@@ -2473,7 +2438,6 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_depthwise_conv_s8_opt_planar
-entry_sizer: arm_depthwise_conv_s8_opt_get_buffer_size
 hint:
   call_style: per_tensor
 input_shape:
@@ -2504,7 +2468,6 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_depthwise_conv_s8_opt_channelwise
-entry_sizer: arm_depthwise_conv_s8_opt_get_buffer_size
 hint:
   call_style: per_tensor
 input_shape:
@@ -2533,7 +2496,6 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_depthwise_conv_s8_opt_channelwise
-entry_sizer: arm_depthwise_conv_s8_opt_get_buffer_size
 hint:
   call_style: per_tensor
 input_shape:
