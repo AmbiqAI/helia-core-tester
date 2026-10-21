@@ -621,8 +621,36 @@ class OpFullyConnected(OperationBase):
             'autovectorize_declines': bool(self.desc.get("autovectorize_declines", False)),
             'autovectorize_declines_if': autovectorize_declines_if(kernel_info["input_c_type"]),
         }
+        if self.desc.get("conformance"):
+            layer_bias = folded_bias if has_weight_sum and folded_bias is not None else biases if has_biases else None
+            context["conformance"] = self._conformance_request(
+                name, kernel_info["kernel_fn"], context, weights, multipliers, shifts, layer_bias)
         self._render_fully_connected(output_dir, context)
         self._write_cmake(output_dir)
+
+    def _conformance_request(self, name: str, kernel_fn: str, context: Dict[str, Any], weights: np.ndarray,
+                             multipliers: list, shifts: list, layer_bias: Optional[np.ndarray]):
+        """The planner request of a conformance case: the s8 wrapper, or the packed entry."""
+        from helia_core_tester.generation.conformance import PlanRequest
+
+        filter_dims, fc = context["filter_dims"], context["fc_params"]
+        if kernel_fn == "arm_fully_connected_wrapper_s8":
+            layer = {"input_dims": _dims_tuple(context["input_dims"]), "filter_dims": _dims_tuple(filter_dims),
+                     "output_dims": _dims_tuple(context["output_dims"]),
+                     "per_channel": bool(context["quant_params"].get("per_channel"))}
+            return PlanRequest("fully_connected_wrapper_s8", layer,
+                               selector=f"arm_nn_{kernel_fn[len('arm_'):]}_select(&{name}_quant_params_wrapper)")
+        if fc_packed_entry(context):
+            k, c = int(filter_dims["n"]), int(filter_dims["c"])
+            packed = {"filter_data": np.ascontiguousarray(weights, dtype=np.int8).tobytes(),
+                      "filter_dims": (k, 1, 1, c),
+                      "input_offset": int(fc["input_offset"]), "filter_offset": int(fc["filter_offset"]),
+                      "bias": None if layer_bias is None else [int(v) for v in np.asarray(layer_bias).ravel()],
+                      "multipliers": multipliers, "shifts": shifts}
+            layer = {"filter_dims": (k, 1, 1, c), "filter_offset": int(fc["filter_offset"]),
+                     "multipliers": multipliers, "shifts": shifts}
+            return PlanRequest("fully_connected_per_channel_packed_s8", layer, takes_ctx=False, packed=packed)
+        return None
 
     def _write_cmake(self, output_dir: Path) -> None:
         cmake_context = {

@@ -772,3 +772,72 @@ hint:
 input_shape: [3, 20]
 filter_shape: [9, 20]
 use_bias: true
+---
+# Contract conformance (Phase 2 T4a, AmbiqAI/ns-cmsis-nn#829): arm_fully_connected_wrapper_s8's two routes and
+# the packed entry, checked on the target against the checkout's planner on every build (see
+# generation/conformance.py). The packed cases also compare the stream and kernel sums the target builds with
+# the host packer's.
+operator: FullyConnected
+name: fully_connected_conformance_per_channel_k24_c7_s8
+conformance: true
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint: {call_style: per_tensor}
+input_shape: [2, 24]
+filter_shape: [7, 24]
+use_bias: true
+---
+operator: FullyConnected
+name: fully_connected_conformance_per_tensor_k17_c5_s8
+conformance: true
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint: {call_style: per_tensor, force_per_tensor: true}
+input_shape: [1, 17]
+filter_shape: [5, 17]
+use_bias: true
+---
+# Fault: on MVE the wrapper's context holds the kernel sums, so a NULL ctx->buf is the argument error.
+operator: FullyConnected
+name: fully_connected_conformance_fault_null_ctx_buf_s8
+conformance: true
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+required_capabilities: [mve]
+hint: {call_style: per_tensor}
+input_shape: [1, 20]
+filter_shape: [6, 20]
+use_bias: true
+fault: null_ctx_buf
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: FullyConnected
+name: fully_connected_conformance_packed_k29_c7_s8
+conformance: true
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_fully_connected_per_channel_packed_s8
+hint: {call_style: per_tensor}
+input_shape: [2, 29]
+filter_shape: [7, 29]
+use_bias: true
+comparison: {tolerance: 0}
+---
+# A rejection: a non-zero filter offset is outside the packed path, so every build declines.
+operator: FullyConnected
+name: fully_connected_conformance_packed_declines_filter_offset_s8
+conformance: true
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_fully_connected_per_channel_packed_s8
+hint: {call_style: per_tensor, extras: {force_filter_offset: 3}}
+input_shape: [2, 13]
+filter_shape: [5, 13]
+use_bias: true
+comparison: {tolerance: 0}
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR

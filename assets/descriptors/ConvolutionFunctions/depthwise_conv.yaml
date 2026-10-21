@@ -2867,3 +2867,146 @@ strides: [2, 1]
 padding: VALID
 use_bias: true
 depth_multiplier: 2
+---
+# Contract conformance (Phase 2 T4a, AmbiqAI/ns-cmsis-nn#829): arm_depthwise_conv_wrapper_s8 on a grid that
+# crosses every route boundary of its selector. Each case checks on the target that the wrapper's own selector
+# picks the route the checkout's planner plans and that ctx is exactly the planned size, on every build.
+# MVE: one input channel with more than one output channel goes to conv.
+operator: DepthwiseConv
+name: depthwise_conv_conformance_to_conv_cin1_mult8_s8
+conformance: true
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint: {call_style: per_tensor}
+input_shape: [1, 10, 10, 1]
+filter_shape: [3, 3, 1, 8]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+depth_multiplier: 8
+---
+# The to_conv boundary: one input and one output channel stays on the depthwise routes.
+operator: DepthwiseConv
+name: depthwise_conv_conformance_cin1_mult1_5x5_s8
+conformance: true
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint: {call_style: per_tensor}
+input_shape: [1, 8, 8, 1]
+filter_shape: [5, 5, 1, 1]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+---
+# Not MVE: a 3x3 filter with padding at most 1 runs arm_depthwise_conv_3x3_s8; MVE runs opt.
+operator: DepthwiseConv
+name: depthwise_conv_conformance_3x3_pad1_c16_s8
+conformance: true
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint: {call_style: per_tensor}
+input_shape: [1, 9, 11, 16]
+filter_shape: [3, 3, 16, 1]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+---
+# Every build: opt.
+operator: DepthwiseConv
+name: depthwise_conv_conformance_opt_5x5_c8_s8
+conformance: true
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint: {call_style: per_tensor}
+input_shape: [1, 12, 12, 8]
+filter_shape: [5, 5, 8, 1]
+strides: [2, 1]
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+---
+# A dilated 1D layer the opt dilation rule accepts.
+operator: DepthwiseConv
+name: depthwise_conv_conformance_dilated_1d_k5_d2_c8_s8
+conformance: true
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint: {call_style: per_tensor}
+input_shape: [1, 1, 64, 8]
+filter_shape: [1, 5, 8, 1]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+depth_multiplier: 1
+dilation: [1, 2]
+---
+# A 2D dilation the opt rule rejects: generic.
+operator: DepthwiseConv
+name: depthwise_conv_conformance_dilated_2d_c8_s8
+conformance: true
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint: {call_style: per_tensor}
+input_shape: [1, 10, 10, 8]
+filter_shape: [3, 3, 8, 1]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+depth_multiplier: 1
+dilation: [2, 2]
+---
+# A channel multiplier: generic.
+operator: DepthwiseConv
+name: depthwise_conv_conformance_mult2_c4_s8
+conformance: true
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint: {call_style: per_tensor}
+input_shape: [1, 8, 8, 4]
+filter_shape: [3, 3, 4, 2]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+depth_multiplier: 2
+---
+# Batch 2: generic.
+operator: DepthwiseConv
+name: depthwise_conv_conformance_batch2_c8_s8
+conformance: true
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint: {call_style: per_tensor}
+input_shape: [2, 6, 6, 8]
+filter_shape: [5, 5, 8, 1]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+---
+# Fault: a NULL ctx->buf where every DSP and MVE build plans a context gives the argument error.
+operator: DepthwiseConv
+name: depthwise_conv_conformance_fault_null_ctx_buf_s8
+conformance: true
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+required_capabilities: [dsp]
+hint: {call_style: per_tensor}
+input_shape: [1, 12, 12, 8]
+filter_shape: [5, 5, 8, 1]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+fault: null_ctx_buf
+expected_status: ARM_CMSIS_NN_ARG_ERROR
