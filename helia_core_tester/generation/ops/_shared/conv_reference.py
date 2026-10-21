@@ -69,6 +69,33 @@ def per_channel_multipliers(input_scale: float, output_scale: float, filter_scal
     return r["multiplier"], r["shift"]
 
 
+# TFLite's int16 requantization (MultiplyByQuantizedMultiplier on the int64 accumulator) takes shift <= 7 and a
+# scaled accumulator inside int32; the s16 reference entries refuse anything else.
+S16_MAX_SHIFT = 7
+
+
+def output_quant(op, kind: str, real_output, input_scale: float, filter_scales: np.ndarray):
+    """The output quantization calibrated, as the converter would, on `real_output(lo, hi)`: the float op over the
+    dequantized operands with its fused clamp [lo, hi].
+
+    For s16 the range is widened just enough that the requantization stays inside TFLite's int16 contract. A
+    clamp that zeroes (nearly) every output, RELU over negative-bias channels, otherwise calibrates a scale that
+    no shift <= 7 reaches. Non-degenerate draws calibrate exactly as before."""
+    from helia_core_tester.generation.reference import policy
+
+    f_lo, f_hi = float_bounds(op)
+    lo, hi = policy.data_range(real_output(f_lo, f_hi))
+    if kind == "s16":
+        unclamped = float(np.max(np.abs(real_output(-FLOAT_UNBOUNDED, FLOAT_UNBOUNDED)), initial=0.0))
+        acc_step = float(input_scale) * float(np.max(np.asarray(filter_scales, dtype=np.float64), initial=0.0))
+        # Factor 2 covers the float32 scale and the multiplier rounding up to the next power of two.
+        min_scale = 2.0 * max(acc_step / 2.0 ** S16_MAX_SHIFT, unclamped / 2.0 ** 31)
+        floor = min_scale * policy.dtype_range("s16")[1]
+        if max(abs(lo), abs(hi)) < floor:
+            hi = floor
+    return op.activation_quant("output", (lo, hi), kind)
+
+
 def operand_magnitude(call) -> np.ndarray:
     """sum|terms| per output of an exact accumulating entry: `call` re-run on its operands' absolute values with
     the activation clamp off (+-inf, so a lane a nonfinite token reaches stays nonfinite and linear_bound skips
@@ -387,14 +414,15 @@ def conv_reference_case(op, kernel_info: Dict[str, Any], float_kernel: bool, flo
     if out_quant is None:
         # Calibrate the output as the converter would: the float conv of the dequantized
         # operands with the fused activation, over this draw.
-        f_lo, f_hi = float_bounds(op)
         real_bias = (bias_q.astype(np.float64) * in_quant.scale * qfilter.scales.astype(np.float64)
                      if bias_q is not None else np.zeros(0))
-        real = lib.run("conv_f32", {**window, "activation_min": f_lo, "activation_max": f_hi},
-                       {"input": policy.dequantize(x_q, in_quant).astype(np.float32),
-                        "filter": qfilter.dequantized().astype(np.float32),
-                        "bias": real_bias.astype(np.float32)}, {"output": output_shape})["output"]
-        out_quant = op.activation_quant("output", policy.data_range(real), kind)
+        out_quant = output_quant(
+            op, kind, lambda lo, hi: lib.run(
+                "conv_f32", {**window, "activation_min": lo, "activation_max": hi},
+                {"input": policy.dequantize(x_q, in_quant).astype(np.float32),
+                 "filter": qfilter.dequantized().astype(np.float32),
+                 "bias": real_bias.astype(np.float32)}, {"output": output_shape})["output"],
+            in_quant.scale, qfilter.scales)
 
     multiplier, shift = per_channel_multipliers(in_quant.scale, out_quant.scale, qfilter.scales)
     act_min, act_max = quantized_bounds(op, kind, out_quant.scale, out_quant.zero_point)
@@ -638,15 +666,16 @@ def depthwise_reference_case(op, kernel_info: Dict[str, Any], float_kernel: bool
         bias_q = np.zeros(out_c, np.int64)
     x_q = policy.quantize(x_float, in_quant)
 
-    f_lo, f_hi = float_bounds(op)
     filt_real = qfilter.values.astype(np.float64) * qfilter.scales.astype(np.float64).reshape(1, 1, 1, -1)
     real_bias = (bias_q.astype(np.float64) * in_quant.scale * qfilter.scales.astype(np.float64)
                  if bias_q is not None else np.zeros(0))
-    real = lib.run("depthwise_conv_f32", {**window, "activation_min": f_lo, "activation_max": f_hi},
-                   {"input": policy.dequantize(x_q, in_quant).astype(np.float32),
-                    "filter": filt_real.astype(np.float32), "bias": real_bias.astype(np.float32)},
-                   {"output": output_shape})["output"]
-    out_quant = op.activation_quant("output", policy.data_range(real), kind)
+    out_quant = output_quant(
+        op, kind, lambda lo, hi: lib.run(
+            "depthwise_conv_f32", {**window, "activation_min": lo, "activation_max": hi},
+            {"input": policy.dequantize(x_q, in_quant).astype(np.float32),
+             "filter": filt_real.astype(np.float32), "bias": real_bias.astype(np.float32)},
+            {"output": output_shape})["output"],
+        in_quant.scale, qfilter.scales)
 
     multiplier, shift = per_channel_multipliers(in_quant.scale, out_quant.scale, qfilter.scales)
     act_min, act_max = quantized_bounds(op, kind, out_quant.scale, out_quant.zero_point)
@@ -770,14 +799,15 @@ def transpose_conv_reference_case(op, kernel_info: Dict[str, Any], float_kernel:
         bias_q = np.round(signs * wrng.uniform(lo, hi, size=out_c)).astype(np.int64)
     if bias_q is None and kind == "s16":
         bias_q = np.zeros(out_c, np.int64)
-    f_lo, f_hi = float_bounds(op)
     real_bias = (bias_q.astype(np.float64) * in_quant.scale * qfilter.scales.astype(np.float64)
                  if bias_q is not None else np.zeros(0))
-    real = lib.run("transpose_conv_f32", {**window, "activation_min": f_lo, "activation_max": f_hi},
-                   {"input": policy.dequantize(x_q, in_quant).astype(np.float32),
-                    "filter": qfilter.dequantized().astype(np.float32), "bias": real_bias.astype(np.float32)},
-                   {"output": output_shape})["output"]
-    out_quant = op.activation_quant("output", policy.data_range(real), kind)
+    out_quant = output_quant(
+        op, kind, lambda lo, hi: lib.run(
+            "transpose_conv_f32", {**window, "activation_min": lo, "activation_max": hi},
+            {"input": policy.dequantize(x_q, in_quant).astype(np.float32),
+             "filter": qfilter.dequantized().astype(np.float32), "bias": real_bias.astype(np.float32)},
+            {"output": output_shape})["output"],
+        in_quant.scale, qfilter.scales)
     w_scales = qfilter.scales.astype(np.float64)
     if desc.get("wide_bias"):
         # Widen the output scale so the largest reachable accumulator cannot saturate.
