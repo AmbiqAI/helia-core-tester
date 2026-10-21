@@ -117,6 +117,16 @@ class BufferDecl:
 
 
 @dataclass(frozen=True)
+class PrepareDecl:
+    """A preparation step of a manifest record: the public function, its arguments as references
+    (an operand, `operand.field`, `buffer:<name>`, or None for NULL) and the buffer it fills."""
+
+    symbol: str
+    args: Mapping[str, Optional[str]]
+    fills: Optional[str]
+
+
+@dataclass(frozen=True)
 class ImplementationDecl:
     """One implementation-manifest record, as far as generation reads it."""
 
@@ -127,6 +137,13 @@ class ImplementationDecl:
     since: str
     declines_on_build: bool = False
     buffers: tuple[BufferDecl, ...] = ()
+    prepare: tuple[PrepareDecl, ...] = ()
+
+    def buffer(self, name: str) -> BufferDecl:
+        for buffer in self.buffers:
+            if buffer.name == name:
+                return buffer
+        raise KeyError(f"{self.id} has no buffer {name!r}")
 
 
 @dataclass(frozen=True)
@@ -263,6 +280,21 @@ def _adapt_function(raw) -> FunctionDecl:
                                                extent=p.extent) for p in raw.params))
 
 
+def _adapt_prepare(raw, path: Path) -> tuple[PrepareDecl, ...]:
+    steps = raw.record.get("prepare")
+    if not isinstance(steps, list) or len(steps) != len(raw.prepare):
+        raise ContractError(f"{path}: {raw.id}: prepare {steps!r} does not match the reader's steps")
+    adapted = []
+    for step, record in zip(raw.prepare, steps):
+        args = record.get("args") if isinstance(record, Mapping) else None
+        if not isinstance(args, Mapping) or not all(isinstance(k, str) and (v is None or isinstance(v, str) and v)
+                                                    for k, v in args.items()):
+            raise ContractError(f"{path}: {raw.id}: prepare step {step.symbol} args {args!r} are not "
+                                "parameter -> reference (or null) bindings")
+        adapted.append(PrepareDecl(symbol=step.symbol, args=dict(args), fills=step.fills))
+    return tuple(adapted)
+
+
 def _adapt_implementation(raw, path: Path, causes: frozenset[str]) -> ImplementationDecl:
     declines = raw.record.get("declines")
     if not isinstance(declines, list) or not all(isinstance(d, Mapping) and d.get("cause") in causes
@@ -274,7 +306,8 @@ def _adapt_implementation(raw, path: Path, causes: frozenset[str]) -> Implementa
                               declines_on_build=any(d["cause"] == "build" for d in declines),
                               buffers=tuple(BufferDecl(name=b.name, param=b.param, size_query=b.size_query,
                                                        lifetime=b.lifetime, optional=b.optional)
-                                            for b in raw.buffers))
+                                            for b in raw.buffers),
+                              prepare=_adapt_prepare(raw, path))
 
 
 _CACHE: dict[tuple, ContractSet] = {}

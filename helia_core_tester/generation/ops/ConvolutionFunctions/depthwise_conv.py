@@ -1,8 +1,9 @@
 """DepthwiseConv operation implementation."""
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from pathlib import Path
 import numpy as np
+from helia_core_tester.contract import planner
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.entry import check_entry_fault, resolve_entry
 from helia_core_tester.generation.harness import (
@@ -150,9 +151,9 @@ def _opt_dilation_supported(
     filter_dims: Dict[str, int],
     output_dims: Dict[str, int],
 ) -> bool:
-    """Mirror of ns-cmsis-nn arm_nn_dw_conv_opt_dilation_supported() (v7.36.0): the s8 opt and
-    s16 fast depthwise kernels take unit dilation, or a dilated 1D layer with no vertical
-    extent, unit stride and no vertical padding."""
+    """Mirror of ns-cmsis-nn arm_nn_dw_conv_opt_dilation_supported() (v7.36.0) for the s16 fast
+    kernel, which the host planner does not plan yet: unit dilation, or a dilated 1D layer with
+    no vertical extent, unit stride and no vertical padding."""
     if params["dilation_w"] == 1 and params["dilation_h"] == 1:
         return True
     return (
@@ -167,42 +168,32 @@ def _opt_dilation_supported(
     )
 
 
-def vector_sum_s8(
-    vector_data: np.ndarray,
-    vector_cols: int,
-    vector_rows: int,
-    lhs_offset: int,
-    rhs_offset: int,
-    bias_data: Optional[np.ndarray] = None,
-) -> np.ndarray:
-    """
-    Pure-Python port of CMSIS-NN's arm_vector_sum_s8 helper.
+DW_WRAPPER_S8_OPT_ROUTE = "dw_wrapper_s8:opt"
 
-    Args:
-        vector_data: Flattened (rows * cols) int8 buffer containing the kernel matrix.
-        vector_cols: Number of columns per output channel (accumulation depth).
-        vector_rows: Number of rows/output channels.
-        lhs_offset: Input offset applied during accumulation.
-        rhs_offset: Filter/weight offset applied during accumulation.
-        bias_data: Optional per-output bias (length == vector_rows), int32.
-    
-    Returns:
-        np.ndarray: int32 array with the kernel sums, matching CMSIS-NN behaviour.
-    """
-    kernel = np.asarray(vector_data, dtype=np.int8).reshape(vector_rows, vector_cols)
-    
-    if bias_data is not None:
-        vector_sum_buf = np.asarray(bias_data, dtype=np.int32).copy()
-    else:
-        vector_sum_buf = np.zeros(vector_rows, dtype=np.int32)
-    
-    if lhs_offset != 0:
-        sums = kernel.astype(np.int32).sum(axis=1)
-        if rhs_offset != 0:
-            sums = sums + vector_cols * rhs_offset
-        vector_sum_buf += sums * lhs_offset
-    
-    return vector_sum_buf
+
+def _dims(d: Dict[str, int]) -> tuple[int, int, int, int]:
+    return (int(d["n"]), int(d["h"]), int(d["w"]), int(d["c"]))
+
+
+def dw_layer(params: Dict[str, Any], input_dims: Dict[str, int], filter_dims: Dict[str, int],
+             output_dims: Dict[str, int]) -> Dict[str, Any]:
+    """The planner's depthwise layer arguments for a case's dims and dw_conv_params."""
+    return {
+        "input_dims": _dims(input_dims), "filter_dims": _dims(filter_dims), "output_dims": _dims(output_dims),
+        "ch_mult": int(params["ch_mult"]),
+        "stride": (int(params["stride_h"]), int(params["stride_w"])),
+        "padding": (int(params["pad_h"]), int(params["pad_w"])),
+        "dilation": (int(params["dilation_h"]), int(params["dilation_w"])),
+    }
+
+
+def wrapper_s8_routes(context: Dict[str, Any]) -> set:
+    """The routes arm_depthwise_conv_wrapper_s8 takes for the case's layer on an MVE and a non-MVE
+    build, from the checkout's planner."""
+    package, _ = planner.current_planner()
+    layer = dw_layer(context["dw_conv_params"], context["input_dims"], context["filter_dims"], context["output_dims"])
+    return {planner.plan("depthwise_conv_wrapper_s8", target, **layer).route
+            for target in (package.Target("mve"), package.Target("dsp"))}
 
 
 class OpDepthwiseConv(OperationBase):
@@ -240,14 +231,7 @@ class OpDepthwiseConv(OperationBase):
         filter_dims = context["filter_dims"]
         unit_dilation = params["dilation_w"] == 1 and params["dilation_h"] == 1
         if kernel_fn == "arm_depthwise_conv_wrapper_s8":
-            is_3x3 = filter_dims["w"] == 3 and filter_dims["h"] == 3
-            optimized = (
-                params["ch_mult"] == 1
-                and input_dims["n"] == 1
-                and _opt_dilation_supported(params, input_dims, filter_dims, context["output_dims"])
-                and not (is_3x3 and params["pad_h"] <= 1 and params["pad_w"] <= 1 and unit_dilation)
-                and input_dims["c"] != 1
-            )
+            optimized = wrapper_s8_routes(context) == {DW_WRAPPER_S8_OPT_ROUTE}
         elif kernel_fn == "arm_depthwise_conv_wrapper_s16":
             optimized = (
                 params["ch_mult"] == 1
@@ -434,22 +418,27 @@ class OpDepthwiseConv(OperationBase):
         has_weight_sum = False
         if weight_dtype != "S4" and kernel_info["input_c_type"] == "int8_t":
             kernel_matrix = weights.transpose(3, 0, 1, 2).reshape(output_channels, -1)
-            weight_sum = vector_sum_s8(
-                vector_data=kernel_matrix,
-                vector_cols=kernel_matrix.shape[1],
-                vector_rows=output_channels,
+            weight_sum = np.asarray(planner.vector_sum_s8(
+                np.ascontiguousarray(kernel_matrix, dtype=np.int8).tobytes(),
+                cols=kernel_matrix.shape[1],
+                rows=output_channels,
                 lhs_offset=-int(case["input_zero_point"]),
                 rhs_offset=0,
-                bias_data=biases.astype(np.int32) if has_biases else None,
-            ).astype(np.int32)
+                bias=biases.astype(np.int32).tolist() if has_biases else None,
+            ), dtype=np.int32)
             weight_sum_array_str = builder.format_array_as_c_literal(weight_sum)
             has_weight_sum = True
 
         activation_dtype = self.desc.get('activation_dtype', 'S8')
-        buffer_size_max = builder.calculate_depthwise_buffer_size_max(
-            input_dims, filter_dims, output_dims,
-            output_dtype=activation_dtype
-        )
+        if kernel_info["kernel_fn"] == "arm_depthwise_conv_wrapper_s8" and weight_dtype == "S8":
+            # The wrapper's own scratch on every build of the target CPU, from the checkout's planner.
+            layer = dw_layer(dw_conv_params, input_dims, filter_dims, output_dims)
+            buffer_size_max = planner.planned_ctx_bytes("depthwise_conv_wrapper_s8", self.target_cpu, **layer)
+        else:
+            buffer_size_max = builder.calculate_depthwise_buffer_size_max(
+                input_dims, filter_dims, output_dims,
+                output_dtype=activation_dtype
+            )
         if kernel_info.get("entry_scratch_bytes") is not None:
             buffer_size_max = max(buffer_size_max, int(kernel_info["entry_scratch_bytes"]))
         # The 3x3 entries size their own path from the input dims.

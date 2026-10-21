@@ -217,7 +217,7 @@ def test_s8_fully_connected_bias_reaches_the_kernel_via_the_weight_sum(tmp_path:
     the bias array, because the hardware bridge rebuilds the sum on device
     from it, so the two have to agree.
     """
-    from helia_core_tester.generation.ops.ConvolutionFunctions.depthwise_conv import vector_sum_s8
+    from helia_core_tester.contract import planner
 
     header = _generate("fully_connected_mve_case_01_s8", tmp_path, "cortex-m55")
 
@@ -228,14 +228,13 @@ def test_s8_fully_connected_bias_reaches_the_kernel_via_the_weight_sum(tmp_path:
 
     rows = len(emitted)
     weights = np.asarray(_int_array(header, "weights"), dtype=np.int8).reshape(rows, -1)
-    bias_free = vector_sum_s8(
-        vector_data=weights,
-        vector_cols=weights.shape[1],
-        vector_rows=rows,
+    bias_free = np.asarray(planner.vector_sum_s8(
+        weights.tobytes(),
+        cols=weights.shape[1],
+        rows=rows,
         lhs_offset=int(re.search(r"\.input_offset\s*=\s*(-?\d+)", header).group(1)),
         rhs_offset=int(re.search(r"\.filter_offset\s*=\s*(-?\d+)", header).group(1)),
-        bias_data=None,
-    ).astype(np.int64)
+    ), dtype=np.int64)
 
     folded_bias = np.asarray(emitted, dtype=np.int64) - bias_free
     assert np.all(folded_bias != 0), "s8 FC weight sum carries no bias contribution"
