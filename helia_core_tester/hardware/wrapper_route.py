@@ -4,8 +4,9 @@ The s8 depthwise wrapper's route comes from the checkout's host
 planner (contract/planner.py). The rest mirrors the dispatch of the
 s8 conv and FC wrappers and the s4 and s16 conv and depthwise wrappers
 in ns-cmsis-nn v7.38.0 and later (GCC builds; MVE vs not). The 1xN padding gate (v7.38.1,
-s8 and s4) is read from the built tree; an unknown tree gives no
-route. Names the wrapper's direct callee. Off MVE,
+s8 and s4) is read from the built tree: from the s8 conv wrapper, or
+from its route selector once the tree has one (ns-cmsis-nn#886). An
+unknown tree gives no route. Names the wrapper's direct callee. Off MVE,
 arm_convolve_1_x_n_s8 just forwards to arm_convolve_s8.
 
 inner_variant goes one level down: arm_depthwise_conv_s8_opt runs a
@@ -48,19 +49,33 @@ CH_IN_BLOCK_MVE = 124
 # Fast s16 needs fewer taps.
 FAST_S16_TAPS = 512
 CONV_SOURCE = Path("Source/ConvolutionFunctions/arm_convolve_wrapper_s8.c")
+DISPATCH_HEADER = Path("Include/Internal/arm_nn_dispatch.h")
+CONV_SELECTOR = "arm_nn_convolve_wrapper_s8_select("
 # Known 1xN conditions: padding gate or not.
 GATES_1XN = {
     "arm_nn_is_convolve_1_x_n(conv_params, input_dims, filter_dims)": False,
     "arm_nn_is_convolve_1_x_n(conv_params, input_dims, filter_dims) && "
     "arm_nn_convolve_1_x_n_s8_padding_supported(conv_params, filter_dims, output_dims)": True,
 }
-_GATE_1XN = re.compile(r"else if \((arm_nn_is_convolve_1_x_n\(.*?)\)\s*\{", re.S)
+_GATE_1XN = re.compile(r"\bif \((arm_nn_is_convolve_1_x_n\(.*?)\)\s*\{", re.S)
+
+
+def _conv_dispatch(kernel_root: Path) -> str:
+    """The text that holds the s8 conv wrapper's routing: its selector if the tree has one, else the wrapper."""
+    try:
+        header = (kernel_root / DISPATCH_HEADER).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        header = ""
+    start = header.find(CONV_SELECTOR)
+    if start >= 0:
+        return header[start:]
+    return (kernel_root / CONV_SOURCE).read_text(encoding="utf-8")
 
 
 def tree_gate(kernel_root: Optional[Path]) -> Optional[bool]:
     """A tree's 1xN padding gate; None if unknown."""
     try:
-        text = (kernel_root / CONV_SOURCE).read_text(encoding="utf-8")
+        text = _conv_dispatch(kernel_root)
     except (OSError, TypeError):
         return None
     match = _GATE_1XN.search(text)
