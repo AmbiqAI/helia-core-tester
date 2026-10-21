@@ -546,6 +546,11 @@ def doctor(
                 kinds[decl.kind] = kinds.get(decl.kind, 0) + 1
             typer.echo(f"✓ {contracts.path}: {len(contracts.functions)} public functions "
                        f"({', '.join(f'{v} {k}' for k, v in sorted(kinds.items()))})")
+            if contracts.manifest_path is not None:
+                typer.echo(f"✓ {contracts.manifest_path}: {len(contracts.implementations)} implementations "
+                           f"(ns-cmsis-nn {contracts.library_version})")
+            else:
+                typer.echo("⚠ implementation manifest: absent (generation gates on the signature export only)")
         else:
             typer.echo(f"⚠ kernel contract: absent ({cmsis_root or 'no ns-cmsis-nn checkout resolved'}; "
                        "contract-driven commands are unavailable)")

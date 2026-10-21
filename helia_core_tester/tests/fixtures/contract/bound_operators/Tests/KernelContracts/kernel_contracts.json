@@ -13080,6 +13080,89 @@
       ]
     },
     {
+      "name": "arm_vector_sum_s8",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 3296,
+      "guards": [],
+      "returns": "arm_cmsis_nn_status",
+      "params": [
+        {
+          "direction": "in,out",
+          "name": "vector_sum_buf",
+          "type": "int32_t *"
+        },
+        {
+          "direction": "in",
+          "name": "vector_cols",
+          "type": "const int32_t"
+        },
+        {
+          "direction": "in",
+          "name": "vector_rows",
+          "type": "const int32_t"
+        },
+        {
+          "direction": "in",
+          "name": "vector_data",
+          "type": "const int8_t *"
+        },
+        {
+          "direction": "in",
+          "name": "lhs_offset",
+          "type": "const int32_t"
+        },
+        {
+          "direction": "in",
+          "name": "rhs_offset",
+          "type": "const int32_t"
+        },
+        {
+          "direction": "in",
+          "name": "bias_data",
+          "type": "const int32_t *"
+        }
+      ]
+    },
+    {
+      "name": "arm_vector_sum_s8_s64",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 3315,
+      "guards": [],
+      "returns": "arm_cmsis_nn_status",
+      "params": [
+        {
+          "direction": "in,out",
+          "name": "vector_sum_buf",
+          "type": "int64_t *"
+        },
+        {
+          "direction": "in",
+          "name": "vector_cols",
+          "type": "const int32_t"
+        },
+        {
+          "direction": "in",
+          "name": "vector_rows",
+          "type": "const int32_t"
+        },
+        {
+          "direction": "in",
+          "name": "vector_data",
+          "type": "const int8_t *"
+        },
+        {
+          "direction": "in",
+          "name": "lhs_offset",
+          "type": "const int32_t"
+        },
+        {
+          "direction": "in",
+          "name": "bias_data",
+          "type": "const int64_t *"
+        }
+      ]
+    },
+    {
       "name": "arm_where_s16",
       "header": "Include/arm_nnfunctions.h",
       "line": 8585,

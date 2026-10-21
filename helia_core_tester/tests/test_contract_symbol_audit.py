@@ -21,6 +21,7 @@ from helia_core_tester.contract.symbol_audit import (
 from helia_core_tester.core.discovery import find_descriptors_dir, find_repo_root
 from helia_core_tester.generation.io.descriptors import load_all_descriptors
 from helia_core_tester.generation.utils.temp_sizer_probe import resolve_cmsis_nn_root
+from helia_core_tester.tests.contract_checkout import install_reader
 from helia_core_tester.tests.test_contract_ir import FIXTURE, HEADERS
 
 # Symbols the tester still hard-codes although no public header declares them. Each
@@ -47,7 +48,7 @@ def checkout(tmp_path: Path) -> Path:
         (root / relative).write_text(text)
     (root / CONTRACT_RELPATH).parent.mkdir(parents=True)
     shutil.copy(FIXTURE, root / CONTRACT_RELPATH)
-    return root
+    return install_reader(root)
 
 
 def _module(tmp_path: Path, name: str, text: str) -> Path:

@@ -1,48 +1,50 @@
-"""Load the ns-cmsis-nn kernel contract export into a frozen, validated IR.
+"""The tester's view of an ns-cmsis-nn checkout's kernel contracts.
 
-ns-cmsis-nn commits ``Tests/KernelContracts/kernel_contracts.json`` (schema
-``ns-cmsis-nn/kernel-contracts/1``): one record per public function with its return
-type, the ``#if`` conditions it sits under and every parameter's C type, array extent
-and doc-resolved direction. This module is the only place the tester reads that file.
+ns-cmsis-nn ships the signature export ``Tests/KernelContracts/kernel_contracts.json``, the
+implementation manifest ``Tests/KernelContracts/kernel_implementations.json`` and their one
+reader, the ``ns_cmsis_nn_contracts`` package under ``python/`` (RFC AmbiqAI/ns-cmsis-nn#829).
+This module imports that package from the same checkout it reads (the one CMSIS_NN_ROOT
+names), so the reader always matches the files it validates, and adapts what it returns to
+the tester-facing ContractSet. Validation lives in the package; the tester checks only what
+it reads beyond the package's loader (a manifest record's decline causes).
 
-Fail-closed by design. A checkout without the file is an explicit ``absent`` status
-that callers count; a file that is present but unreadable, of an unsupported schema,
-internally inconsistent, or that names a symbol the checkout's own header does not
-declare is a ContractError, never a skip -- a contract that silently lost a kernel
-would be consumed as if that kernel did not exist.
+The reader is taken from the checkout rather than pinned as a dependency: ns-cmsis-nn runs
+this tester as a submodule against its own tree, so a pin would need a tester release before
+an ns-cmsis-nn change to the reader could be tested, and the host planner (a later consumer)
+binds to the C sources of the checkout it is built from.
+
+Fail-closed by design. A checkout without the export is an explicit ``absent`` status that
+callers count. An export with no package to read it, a package that cannot be imported or
+reads a schema this tester does not, and every error the package raises are ContractErrors,
+never a skip: a contract that silently lost a kernel would be consumed as if that kernel did
+not exist.
 """
 
 from __future__ import annotations
 
-import json
+import hashlib
+import importlib.util
 import re
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import ModuleType
 from typing import Mapping, Optional
 
 from helia_core_tester import __version__
 from helia_core_tester.core.errors import GenerationError
 from helia_core_tester.generation.kernel_dispatch import _cpu_buffer_api
-from helia_core_tester.generation.utils.temp_sizer_probe import undeclared_in_header
 
 SUPPORTED_CONTRACT_SCHEMAS = frozenset({"ns-cmsis-nn/kernel-contracts/1"})
+SUPPORTED_MANIFEST_SCHEMAS = frozenset({"ns-cmsis-nn/kernel-implementations/1"})
 CONTRACT_RELPATH = Path("Tests") / "KernelContracts" / "kernel_contracts.json"
-DIRECTIONS = frozenset({"in", "out", "in,out"})
+MANIFEST_RELPATH = Path("Tests") / "KernelContracts" / "kernel_implementations.json"
+PACKAGE_RELPATH = Path("python") / "ns_cmsis_nn_contracts"
 STATUS_PRESENT = "present"
 STATUS_ABSENT = "absent"
 
-_SCALAR_TYPES = frozenset({
-    "void", "bool", "char", "int", "size_t",
-    "int8_t", "int16_t", "int32_t", "int64_t",
-    "uint8_t", "uint16_t", "uint32_t", "uint64_t",
-    "float", "double", "float32_t", "float16_t",
-})
-_TYPEDEF_RE = re.compile(r"^(cmsis_nn_|arm_nn_|arm_cmsis_nn_)\w+$")
-_TYPE_RE = re.compile(r"^(?:const )?(?P<base>\w+)(?: const)?(?: \*(?: const)?)*$")
+_PACKAGE_API = ("ContractError", "ContractSchemaError", "load_signatures", "load_implementations")
 _FUNCTION_POINTER_RE = re.compile(r"^.+\(\s*\*\s*\w*\s*\)\s*\(.*\)$")
-_PUBLIC_HEADER_RE = re.compile(r"^Include/arm_nn[^/]*functions[^/]*\.h$")
-_IDENTIFIER_RE = re.compile(r"^[A-Za-z_]\w*$")
-_EXTENT_RE = re.compile(r"^(\[[^\]]*\])+$")
 
 
 class ContractError(GenerationError):
@@ -51,16 +53,6 @@ class ContractError(GenerationError):
 
 class ContractSchemaError(ContractError):
     """The export declares a schema this tester does not read."""
-
-
-def _type_is_known(c_type: str) -> bool:
-    if _FUNCTION_POINTER_RE.match(c_type):
-        return True
-    match = _TYPE_RE.match(c_type)
-    if match is None:
-        return False
-    base = match.group("base")
-    return base in _SCALAR_TYPES or bool(_TYPEDEF_RE.match(base))
 
 
 @dataclass(frozen=True)
@@ -112,11 +104,26 @@ class FunctionDecl:
 
 
 @dataclass(frozen=True)
+class ImplementationDecl:
+    """One implementation-manifest record, as far as generation gating reads it."""
+
+    id: str
+    entry: str
+    wrapper: Optional[str]
+    requires: frozenset[str]
+    since: str
+    declines_on_build: bool = False
+
+
+@dataclass(frozen=True)
 class ContractSet:
     status: str
     root: Optional[Path]
     path: Optional[Path]
     functions: Mapping[str, FunctionDecl] = field(default_factory=dict)
+    implementations: Mapping[str, ImplementationDecl] = field(default_factory=dict)
+    library_version: Optional[str] = None
+    manifest_path: Optional[Path] = None
 
     @property
     def present(self) -> bool:
@@ -146,86 +153,111 @@ class ContractSet:
                 return candidate
         return None
 
-
-def _fail(path: Path, message: str) -> ContractError:
-    return ContractError(f"{path}: {message}")
-
-
-def _parse_param(path: Path, function: str, raw: object) -> ParamDecl:
-    if not isinstance(raw, dict):
-        raise _fail(path, f"{function}: parameter record is not an object: {raw!r}")
-    unknown = set(raw) - {"name", "type", "direction", "extent"}
-    if unknown:
-        raise _fail(path, f"{function}: parameter has unknown keys {sorted(unknown)}")
-    name, c_type, direction = raw.get("name"), raw.get("type"), raw.get("direction")
-    extent = raw.get("extent", "")
-    if not isinstance(name, str) or not _IDENTIFIER_RE.match(name):
-        raise _fail(path, f"{function}: parameter name {name!r} is not an identifier")
-    if not isinstance(c_type, str) or not c_type:
-        raise _fail(path, f"{function}.{name}: type missing")
-    if not _type_is_known(c_type):
-        raise _fail(path, f"{function}.{name}: type {c_type!r} is outside the known vocabulary "
-                          "(scalar C types, cmsis_nn_*/arm_nn_* typedefs, pointers to them, "
-                          "function pointers); extend ir.py if ns-cmsis-nn added a type")
-    if direction not in DIRECTIONS:
-        raise _fail(path, f"{function}.{name}: direction {direction!r} not in {sorted(DIRECTIONS)}")
-    if not isinstance(extent, str) or (extent and not _EXTENT_RE.match(extent)):
-        raise _fail(path, f"{function}.{name}: extent {extent!r} is not an array extent")
-    return ParamDecl(name=name, c_type=c_type, direction=direction, extent=extent)
+    def implementations_of(self, symbol: str) -> list[ImplementationDecl]:
+        """Manifest records that ``symbol`` itself implements, in id order. A record that only
+        names ``symbol`` as the wrapper routing to it (the depthwise wrapper's to_conv route)
+        describes a route, not a direct call, and is left out."""
+        return [impl for _, impl in sorted(self.implementations.items())
+                if impl.entry == symbol and impl.wrapper != symbol]
 
 
-def _parse_function(path: Path, raw: object) -> FunctionDecl:
-    if not isinstance(raw, dict):
-        raise _fail(path, f"function record is not an object: {raw!r}")
-    missing = {"name", "header", "line", "guards", "returns", "params"} - set(raw)
+def _fingerprint(paths: list[Path]) -> Optional[tuple]:
+    """Path, size and mtime of each file, or None when one cannot be stat'ed."""
+    entries = []
+    try:
+        for path in paths:
+            stat = path.stat()
+            entries.append((str(path), stat.st_size, stat.st_mtime_ns))
+    except OSError:
+        return None
+    return tuple(entries)
+
+
+def _package_files(package_dir: Path) -> list[Path]:
+    return sorted(package_dir.glob("*.py"))
+
+
+_PACKAGES: dict[tuple, ModuleType] = {}
+
+
+def _forget_module(name: str) -> None:
+    for loaded in [key for key in sys.modules if key == name or key.startswith(name + ".")]:
+        del sys.modules[loaded]
+
+
+def load_contracts_package(cmsis_nn_root: Optional[Path]) -> Optional[ModuleType]:
+    """The checkout's own ``ns_cmsis_nn_contracts``, or None when the checkout ships none.
+
+    Each checkout's package is imported under a private module name derived from its files,
+    so several checkouts (and an edited one) can be read in one process without one reader
+    standing in for another."""
+    if cmsis_nn_root is None:
+        return None
+    package_dir = Path(cmsis_nn_root) / PACKAGE_RELPATH
+    init = package_dir / "__init__.py"
+    if not init.is_file():
+        return None
+    key = _fingerprint(_package_files(package_dir))
+    if key is None:
+        raise ContractError(f"{package_dir}: the reader's files cannot be read")
+    cached = _PACKAGES.get(key)
+    if cached is not None:
+        return cached
+    name = "_hct_ns_cmsis_nn_contracts_" + hashlib.sha256(repr(key).encode()).hexdigest()[:16]
+    spec = importlib.util.spec_from_file_location(name, init, submodule_search_locations=[str(package_dir)])
+    if spec is None or spec.loader is None:
+        raise ContractError(f"{package_dir}: not importable as a package")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception as error:
+        _forget_module(name)
+        raise ContractError(f"{package_dir}: cannot be imported ({type(error).__name__}: {error})") from None
+    missing = [attribute for attribute in _PACKAGE_API if not hasattr(module, attribute)]
     if missing:
-        raise _fail(path, f"{raw.get('name', '<unnamed>')}: record lacks {sorted(missing)}")
-    name = raw["name"]
-    if not isinstance(name, str) or not _IDENTIFIER_RE.match(name):
-        raise _fail(path, f"function name {name!r} is not an identifier")
-    header = raw["header"]
-    if not isinstance(header, str) or not _PUBLIC_HEADER_RE.match(header):
-        raise _fail(path, f"{name}: header {header!r} is not a public functions header")
-    line = raw["line"]
-    if not isinstance(line, int) or isinstance(line, bool) or line < 1:
-        raise _fail(path, f"{name}: line {line!r} is not a positive integer")
-    guards = raw["guards"]
-    if not isinstance(guards, list) or not all(isinstance(g, str) and g for g in guards):
-        raise _fail(path, f"{name}: guards {guards!r} is not a list of conditions")
-    returns = raw["returns"]
-    if not isinstance(returns, str) or not returns or not _type_is_known(returns):
-        raise _fail(path, f"{name}: return type {returns!r} is missing or outside the known vocabulary")
-    params_raw = raw["params"]
-    if not isinstance(params_raw, list):
-        raise _fail(path, f"{name}: params is not a list")
-    params = tuple(_parse_param(path, name, item) for item in params_raw)
-    names = [param.name for param in params]
-    if len(set(names)) != len(names):
-        raise _fail(path, f"{name}: duplicate parameter names {names}")
-    return FunctionDecl(name=name, header=header, line=line, guards=tuple(guards),
-                        returns=returns, params=params)
+        _forget_module(name)
+        raise ContractError(f"{package_dir}: does not export {missing}; it is not an ns_cmsis_nn_contracts this "
+                            f"tester reads")
+    _PACKAGES[key] = module
+    return module
 
 
-def _cross_check_headers(root: Path, path: Path, functions: Mapping[str, FunctionDecl]) -> None:
-    """Every exported symbol must be declared in the header the export names; the
-    export was generated from these headers, so a miss means the checkout and its
-    export disagree (a stale export, or the wrong checkout)."""
-    by_header: dict[str, list[str]] = {}
-    for decl in functions.values():
-        by_header.setdefault(decl.header, []).append(decl.name)
-    for header, symbols in sorted(by_header.items()):
-        header_path = root / header
-        if not header_path.is_file():
-            raise _fail(path, f"names {header}, which the checkout {root} does not have")
-        try:
-            missing = undeclared_in_header(header_path, symbols)
-        except OSError as error:
-            raise _fail(path, f"{header} cannot be read ({error})") from None
-        if missing:
-            shown = ", ".join(missing[:5]) + (" ..." if len(missing) > 5 else "")
-            raise _fail(path, f"{len(missing)} symbol(s) not declared in {header}: {shown}; "
-                              "the export is stale for this checkout "
-                              "(python3 scripts/check_kernel_contract.py export)")
+def _schema_of(package: ModuleType, submodule: str) -> Optional[str]:
+    return getattr(getattr(package, submodule, None), "SCHEMA", None)
+
+
+def _check_reader_schemas(package: ModuleType, package_dir: Path) -> frozenset[str]:
+    """The reader's decline causes, once both schemas it reads are ones this tester reads."""
+    for submodule, supported in (("signatures", SUPPORTED_CONTRACT_SCHEMAS),
+                                 ("vocabulary", SUPPORTED_MANIFEST_SCHEMAS)):
+        schema = _schema_of(package, submodule)
+        if schema not in supported:
+            raise ContractSchemaError(
+                f"{package_dir}: reads schema {schema!r}, which helia-core-tester {__version__} does not "
+                f"(supported: {sorted(supported)}); update the tester pin or the checkout")
+    causes = getattr(package.vocabulary, "DECLINE_CAUSES", None)
+    if not isinstance(causes, (set, frozenset)) or "build" not in causes:
+        raise ContractError(f"{package_dir}: vocabulary.DECLINE_CAUSES {causes!r} has no 'build' cause")
+    return frozenset(causes)
+
+
+def _adapt_function(raw) -> FunctionDecl:
+    return FunctionDecl(name=raw.name, header=raw.header, line=raw.line, guards=tuple(raw.guards),
+                        returns=raw.returns,
+                        params=tuple(ParamDecl(name=p.name, c_type=p.c_type, direction=p.direction,
+                                               extent=p.extent) for p in raw.params))
+
+
+def _adapt_implementation(raw, path: Path, causes: frozenset[str]) -> ImplementationDecl:
+    declines = raw.record.get("declines")
+    if not isinstance(declines, list) or not all(isinstance(d, Mapping) and d.get("cause") in causes
+                                                 for d in declines):
+        raise ContractError(f"{path}: {raw.id}: declines {declines!r} is not a list of {{cause, when}} with a cause "
+                            f"in {sorted(causes)}")
+    return ImplementationDecl(id=raw.id, entry=raw.entry, wrapper=raw.wrapper,
+                              requires=frozenset(raw.requires), since=raw.since,
+                              declines_on_build=any(d["cause"] == "build" for d in declines))
 
 
 _CACHE: dict[tuple, ContractSet] = {}
@@ -233,17 +265,16 @@ _HEADER_GLOB = "arm_nn*.h"
 
 
 def _cache_key(root: Path, path: Path) -> Optional[tuple]:
-    """Identity of everything a load reads: the export and the public headers it is checked
-    against, each by path, size and mtime. None when any of them cannot be stat'ed, so the
-    load runs uncached and reports the failure itself."""
-    try:
-        entries = [(str(path), path.stat().st_size, path.stat().st_mtime_ns)]
-        for header in sorted((root / "Include").glob(_HEADER_GLOB)):
-            stat = header.stat()
-            entries.append((str(header), stat.st_size, stat.st_mtime_ns))
-    except OSError:
+    """Identity of everything a load reads: the export, the manifest, the reader package and the
+    public headers the export is checked against, each by path, size and mtime. None when any
+    of them cannot be stat'ed, so the load runs uncached and reports the failure itself."""
+    manifest = root / MANIFEST_RELPATH
+    files = [path] + _package_files(root / PACKAGE_RELPATH) + sorted((root / "Include").glob(_HEADER_GLOB))
+    key = _fingerprint(files)
+    if key is None:
         return None
-    return tuple(entries)
+    manifest_key = _fingerprint([manifest]) if manifest.exists() else ("no manifest",)
+    return None if manifest_key is None else key + manifest_key
 
 
 def clear_contract_cache() -> None:
@@ -254,8 +285,8 @@ def load_contract_set(cmsis_nn_root: Optional[Path]) -> ContractSet:
     """Load the checkout's kernel contract, or an ``absent`` set when it has none.
 
     A present set is cached per checkout for the life of the process and reloaded when the
-    export or any public header changes on disk (size or mtime), so generating a suite
-    pays the header cross-check once instead of per case."""
+    export, the manifest, the reader or any public header changes on disk (size or mtime), so
+    generating a suite pays the header cross-check once instead of per case."""
     if cmsis_nn_root is None:
         return ContractSet(status=STATUS_ABSENT, root=None, path=None)
     root = Path(cmsis_nn_root)
@@ -274,29 +305,34 @@ def load_contract_set(cmsis_nn_root: Optional[Path]) -> ContractSet:
 
 
 def _load_contract_set(root: Path, path: Path) -> ContractSet:
+    package = load_contracts_package(root)
+    package_dir = root / PACKAGE_RELPATH
+    if package is None:
+        raise ContractError(
+            f"{path}: the checkout has the signature export but no {PACKAGE_RELPATH} to read it; it needs an "
+            "ns-cmsis-nn that ships ns_cmsis_nn_contracts (AmbiqAI/ns-cmsis-nn#889 or later)")
+    decline_causes = _check_reader_schemas(package, package_dir)
+    manifest = root / MANIFEST_RELPATH
     try:
-        document = json.loads(path.read_text(encoding="utf-8"))
-    except OSError as error:
-        raise _fail(path, f"cannot be read ({error})") from None
-    except ValueError as error:
-        raise _fail(path, f"is not valid JSON ({error})") from None
-    if not isinstance(document, dict):
-        raise _fail(path, "top level is not an object")
-    schema = document.get("schema")
-    if schema not in SUPPORTED_CONTRACT_SCHEMAS:
-        raise ContractSchemaError(
-            f"{path}: schema {schema!r} is not readable by helia-core-tester {__version__} "
-            f"(supported: {sorted(SUPPORTED_CONTRACT_SCHEMAS)}); update the tester pin or "
-            "the export"
-        )
-    raw_functions = document.get("functions")
-    if not isinstance(raw_functions, list) or not raw_functions:
-        raise _fail(path, "has no functions; an export never writes an empty contract")
-    functions: dict[str, FunctionDecl] = {}
-    for raw in raw_functions:
-        decl = _parse_function(path, raw)
-        if decl.name in functions:
-            raise _fail(path, f"{decl.name} appears twice")
-        functions[decl.name] = decl
-    _cross_check_headers(root, path, functions)
-    return ContractSet(status=STATUS_PRESENT, root=root, path=path, functions=functions)
+        signatures = package.load_signatures(root)
+        if not signatures.present:
+            raise ContractError(f"{path}: exists, but {package_dir} reports it absent")
+        implementations = package.load_implementations(root, signatures) if manifest.exists() else None
+        functions = {name: _adapt_function(decl) for name, decl in signatures.functions.items()}
+        records = {} if implementations is None else {
+            impl_id: _adapt_implementation(impl, manifest, decline_causes)
+            for impl_id, impl in implementations.implementations.items()}
+    except ContractError:
+        raise
+    except package.ContractSchemaError as error:
+        raise ContractSchemaError(f"{error} (helia-core-tester {__version__} reads "
+                                  f"{sorted(SUPPORTED_CONTRACT_SCHEMAS | SUPPORTED_MANIFEST_SCHEMAS)})") from None
+    except package.ContractError as error:
+        raise ContractError(str(error)) from None
+    except Exception as error:
+        raise ContractError(f"{package_dir} failed reading {root}: {type(error).__name__}: {error}") from None
+    return ContractSet(
+        status=STATUS_PRESENT, root=root, path=path, functions=functions, implementations=records,
+        library_version=None if implementations is None else implementations.library_version,
+        manifest_path=None if implementations is None else manifest,
+    )

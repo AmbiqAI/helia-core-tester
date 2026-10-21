@@ -4,15 +4,21 @@ the real ns-cmsis-nn export when one is present."""
 from __future__ import annotations
 
 import dataclasses
+import hashlib
+import json
 import os
 import shutil
 from pathlib import Path
 
 import pytest
 
-from helia_core_tester.contract.ir import CONTRACT_RELPATH, load_contract_set
+from helia_core_tester.contract.ir import CONTRACT_RELPATH, MANIFEST_RELPATH, PACKAGE_RELPATH, load_contract_set
+from helia_core_tester.contract.symbol_audit import gated_symbols_from_descriptors
+from helia_core_tester.core.discovery import find_descriptors_dir
+from helia_core_tester.generation.io.descriptors import load_all_descriptors
 from helia_core_tester.contract.render import ContractRenderError, contract_globals
 from helia_core_tester.generation.utils.temp_sizer_probe import resolve_cmsis_nn_root
+from helia_core_tester.tests.contract_checkout import install_reader
 from helia_core_tester.tests.contract_fallback import BOUND_PREFIXES, FIXTURE_ROOT, fallback_resolver
 
 
@@ -74,3 +80,55 @@ def test_bound_operator_fixture_matches_the_real_tree() -> None:
     for name in sorted(kernels):
         mine = fixture.require(name)
         assert mine == dataclasses.replace(real.require(name), line=mine.line), f"{name}: refresh the fixture from {real.path}"
+
+
+def _real_checkout_with(relative: Path) -> Path:
+    root = resolve_cmsis_nn_root()
+    if root is None or not (root / relative).exists():
+        if os.environ.get("HELIA_CORE_TESTER_REQUIRE_CONTRACT"):
+            pytest.fail(f"HELIA_CORE_TESTER_REQUIRE_CONTRACT is set but {root} has no {relative}")
+        pytest.skip(f"no ns-cmsis-nn checkout with {relative}")
+    return root
+
+
+def test_vendored_reader_matches_the_real_tree() -> None:
+    root = _real_checkout_with(PACKAGE_RELPATH / "__init__.py")
+    real = {path.name: path.read_bytes() for path in sorted((root / PACKAGE_RELPATH).glob("*.py"))}
+    mine = {path.name: path.read_bytes() for path in sorted((FIXTURE_ROOT / PACKAGE_RELPATH).glob("*.py"))}
+    stale = sorted(name for name in real.keys() | mine.keys() if real.get(name) != mine.get(name))
+    assert not stale, f"{stale} differ from {root / PACKAGE_RELPATH}; run scripts/refresh_contract_fixture.py {root}"
+
+
+def test_fixture_manifest_matches_the_real_tree() -> None:
+    root = _real_checkout_with(MANIFEST_RELPATH)
+    real = json.loads((root / MANIFEST_RELPATH).read_text(encoding="utf-8"))
+    mine = json.loads((FIXTURE_ROOT / MANIFEST_RELPATH).read_text(encoding="utf-8"))
+    sliced = (FIXTURE_ROOT / CONTRACT_RELPATH).read_bytes()
+    assert mine.pop("signature_sha256") == hashlib.sha256(sliced).hexdigest()
+    real.pop("signature_sha256")
+    assert mine == real, f"refresh the fixture manifest: scripts/refresh_contract_fixture.py {root}"
+
+
+def test_fixture_carries_every_manifest_record() -> None:
+    contracts = load_contract_set(FIXTURE_ROOT)
+    assert contracts.implementations and contracts.library_version
+    for impl in contracts.implementations.values():
+        assert contracts.find(impl.entry) is not None, impl.id
+
+
+def test_every_gated_symbol_of_the_real_tree_is_in_the_fixture() -> None:
+    """A gated symbol the fixture lacks would skip, in the fallback, a case the real tree generates."""
+    real = load_contract_set(resolve_cmsis_nn_root())
+    if not real.present:
+        pytest.skip("no ns-cmsis-nn checkout with a kernel contract")
+    descriptors = load_all_descriptors(str(find_descriptors_dir()))
+    gated = gated_symbols_from_descriptors(descriptors)
+    outside = sorted(symbol for symbol in gated if symbol in real.functions and not symbol.startswith(BOUND_PREFIXES))
+    assert not outside, f"add prefixes for {outside} to BOUND_PREFIXES and refresh the fixture"
+
+
+def test_the_fixture_reader_is_the_one_tests_install(tmp_path: Path) -> None:
+    root = install_reader(tmp_path / "ns-cmsis-nn")
+    assert sorted(p.name for p in (root / PACKAGE_RELPATH).glob("*.py")) == \
+        sorted(p.name for p in (FIXTURE_ROOT / PACKAGE_RELPATH).glob("*.py"))
+    assert (FIXTURE_ROOT.parent / "hardware_pilot" / "python").resolve() == (FIXTURE_ROOT / "python").resolve()

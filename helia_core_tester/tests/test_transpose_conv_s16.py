@@ -11,7 +11,9 @@ import pytest
 from helia_core_tester.generation import random_shapes as rs
 from helia_core_tester.generation.io.descriptors import load_all_descriptors
 from helia_core_tester.generation.test_ops import _required_kernel_symbols
-from helia_core_tester.generation.utils.temp_sizer_probe import missing_header_symbols
+from helia_core_tester.contract.ir import load_contract_set
+from helia_core_tester.generation.kernel_gate import gate_kernel_symbols
+from helia_core_tester.tests.contract_checkout import function, write_checkout
 from helia_core_tester.hardware.adapter_specs import generated_test_bridge_scalar_fields, render_generated_adapters_source
 from helia_core_tester.hardware.generated_test_bridge import (
     _build_transpose_conv_case,
@@ -47,13 +49,12 @@ def test_descriptors_hold_the_fastenhancer_tuple() -> None:
         assert _required_kernel_symbols(desc) == rs.TC16_SYMBOLS
 
 
-def test_symbol_probe_skips_without_kernel(tmp_path: Path) -> None:
-    (tmp_path / "Include").mkdir()
-    header = tmp_path / "Include" / "arm_nnfunctions.h"
-    header.write_text("int32_t arm_transpose_conv_s8_get_buffer_size(void);\n")
-    assert missing_header_symbols(rs.TC16_SYMBOLS, tmp_path) == rs.TC16_SYMBOLS
-    header.write_text("".join(f"int32_t {name}(void);\n" for name in rs.TC16_SYMBOLS))
-    assert missing_header_symbols(rs.TC16_SYMBOLS, tmp_path) == []
+def test_symbol_gate_skips_without_kernel(tmp_path: Path) -> None:
+    older = write_checkout(tmp_path / "older", [function("arm_transpose_conv_s8_get_buffer_size", returns="int32_t")])
+    gate = gate_kernel_symbols(load_contract_set(older), rs.TC16_SYMBOLS, "cortex-m55")
+    assert list(gate.missing_symbols) == list(rs.TC16_SYMBOLS)
+    newer = write_checkout(tmp_path / "newer", [function(name, returns="int32_t") for name in rs.TC16_SYMBOLS])
+    assert gate_kernel_symbols(load_contract_set(newer), rs.TC16_SYMBOLS, "cortex-m55").passes
 
 
 def test_registry_maps_s16_to_direct_kernel() -> None:

@@ -31,7 +31,9 @@ from helia_core_tester.generation.reuse import (
     reset_case_dir,
     write_stamp,
 )
-from helia_core_tester.generation.utils.temp_sizer_probe import kernel_source_exists, missing_header_symbols
+from helia_core_tester.contract import render as contract_render
+from helia_core_tester.generation.kernel_gate import gate_kernel_symbols
+from helia_core_tester.generation.utils.temp_sizer_probe import kernel_source_exists
 
 
 RUN_SEED_ENV = "HCT_SEED"
@@ -198,8 +200,9 @@ def _required_kernel_symbols(desc: Dict[str, Any]) -> list[str]:
     """Public ns-cmsis-nn kernel symbols a descriptor's generated test calls.
 
     Descriptors listing ``required_kernel_symbols`` are generated only when
-    every symbol is declared in the target ns-cmsis-nn checkout's public
-    headers (per-symbol codegen probe, see temp_sizer_probe). This lets one
+    the target ns-cmsis-nn checkout's signature export has every symbol and
+    the implementation manifest's records for them hold on the target (see
+    kernel_gate). This lets one
     tester pin serve several in-flight ns-cmsis-nn kernel branches: each
     branch declares only its own kernels and the rest skip cleanly instead
     of failing the build with references to missing symbols.
@@ -521,9 +524,7 @@ def test_generation(test_filters):
     manifest_entries: List[Dict[str, Any]] = []
     skipped_entries: List[Dict[str, Any]] = []
     generation_failures: List[Dict[str, Any]] = []
-    # Per-run cache for the per-symbol codegen probe (one header scan per
-    # distinct kernel symbol, however many descriptors require it).
-    symbol_declared_cache: Dict[str, bool] = {}
+    contracts = contract_render.load_current_contracts()
     symbol_source_cache: Dict[str, bool] = {}
     for desc in filtered_descriptors:
         missing_capabilities = missing_required_capabilities(target_cpu, _required_capabilities(desc))
@@ -540,32 +541,29 @@ def test_generation(test_filters):
                 f"{', '.join(missing_capabilities)}"
             )
             continue
-        missing_symbols: List[str] = []
-        for symbol in _required_kernel_symbols(desc):
-            if symbol not in symbol_declared_cache:
-                symbol_declared_cache[symbol] = not missing_header_symbols([symbol])
-            if not symbol_declared_cache[symbol]:
-                missing_symbols.append(symbol)
-        # Backstop (hct#92 review): a symbol the header probe reports as
-        # undeclared while its kernel source ships in the checkout means the
-        # probe missed a declaration (renamed symbol, or a public header
-        # outside the probed set). Silently skipping would delete every
-        # dependent case with exit 0 and green CI, so fail generation loudly
-        # instead. Genuinely absent kernels (no source file) keep the skip.
+        gate = gate_kernel_symbols(contracts, _required_kernel_symbols(desc), target_cpu)
+        missing_symbols = list(gate.missing_symbols)
+        # Backstop (hct#92 review): a symbol the signature export lacks while its
+        # kernel source ships in the checkout means the export is stale or the
+        # symbol is declared outside the exported headers. Silently skipping would
+        # delete every dependent case with exit 0 and green CI, so fail generation
+        # loudly instead. Genuinely absent kernels (no source file) keep the skip.
         contradicted_symbols: List[str] = []
         for symbol in missing_symbols:
             if symbol not in symbol_source_cache:
-                symbol_source_cache[symbol] = kernel_source_exists(symbol)
+                symbol_source_cache[symbol] = kernel_source_exists(symbol, contracts.root)
             if symbol_source_cache[symbol]:
                 contradicted_symbols.append(symbol)
-        if contradicted_symbols:
-            message = (
-                f"Kernel symbol probe contradiction for {desc['name']}: "
-                f"{', '.join(contradicted_symbols)} declared in no probed public header, "
-                f"but the checkout ships Source/**/<symbol>.c. The probe missed a "
-                f"declaration (renamed symbol or unprobed public header); refusing to "
-                f"silently skip. Update _PUBLIC_HEADER_NAMES / required_kernel_symbols."
-            )
+        if contradicted_symbols or gate.contradictions:
+            message = f"Kernel contract contradiction for {desc['name']}: "
+            if contradicted_symbols:
+                message += (
+                    f"{', '.join(contradicted_symbols)} not in the signature export ({contracts.path}), "
+                    f"but the checkout ships Source/**/<symbol>.c; the export is stale or the symbol is "
+                    f"declared outside the exported headers. Refusing to silently skip."
+                )
+            if gate.contradictions:
+                message += ("; " if contradicted_symbols else "") + "; ".join(gate.contradictions)
             print(f"ERROR: {message}")
             generation_failures.append({
                 "name": desc.get("name"),
@@ -589,6 +587,15 @@ def test_generation(test_filters):
             print(
                 f"Skipping {desc['name']}: ns-cmsis-nn checkout does not declare "
                 f"{', '.join(missing_symbols)}"
+            )
+            continue
+        if gate.unmet:
+            entry = _skip_manifest_entry(desc, cpu=target_cpu, missing_capabilities=[])
+            entry["unmet_kernel_requirements"] = [unmet.as_dict() for unmet in gate.unmet]
+            skipped_entries.append(entry)
+            print(
+                f"Skipping {desc['name']} on {target_cpu}: "
+                + "; ".join(f"{u.symbol} ({u.implementation}) requires {', '.join(u.unmet)}" for u in gate.unmet)
             )
             continue
         case_name = str(desc["name"])

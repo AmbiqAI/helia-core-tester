@@ -23,6 +23,7 @@ from helia_core_tester.hardware.kernel_registry import (
     load_kernel_registry,
     lookup_kernel_id,
 )
+from helia_core_tester.tests.contract_checkout import install_reader
 from helia_core_tester.tests.test_contract_ir import FIXTURE as CONTRACT_FIXTURE
 from helia_core_tester.tests.test_contract_ir import HEADERS as CONTRACT_HEADERS
 
@@ -93,7 +94,7 @@ def checkout(tmp_path: Path) -> Path:
     target = root / CONTRACT_RELPATH
     target.parent.mkdir(parents=True)
     shutil.copy(CONTRACT_FIXTURE, target)
-    return root
+    return install_reader(root)
 
 
 def _set_registry(root: Path, text: str) -> None:

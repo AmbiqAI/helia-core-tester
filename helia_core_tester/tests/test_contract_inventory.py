@@ -18,6 +18,7 @@ from helia_core_tester.contract.inventory import (
     discover_case_dirs,
 )
 from helia_core_tester.contract.ir import CONTRACT_RELPATH, load_contract_set
+from helia_core_tester.tests.contract_checkout import install_reader
 from helia_core_tester.tests.test_contract_ir import FIXTURE, HEADERS
 
 runner = CliRunner()
@@ -35,7 +36,7 @@ def checkout(tmp_path: Path) -> Path:
         (root / relative).write_text(text)
     (root / CONTRACT_RELPATH).parent.mkdir(parents=True)
     shutil.copy(FIXTURE, root / CONTRACT_RELPATH)
-    return root
+    return install_reader(root)
 
 
 def _case(tree: Path, suite: str, cpu: str, family: str, name: str, *, c_source: str = "",
