@@ -3,10 +3,11 @@
 The s8 depthwise wrapper's route comes from the checkout's host
 planner (contract/planner.py). The rest mirrors the dispatch of the
 s8 conv and FC wrappers and the s4 and s16 conv and depthwise wrappers
-in ns-cmsis-nn v7.38.0 and later (GCC builds; MVE vs not). The 1xN padding gate (v7.38.1,
-s8 and s4) is read from the built tree: from the s8 conv wrapper, or
-from its route selector once the tree has one (ns-cmsis-nn#886). An
-unknown tree gives no route. Names the wrapper's direct callee. Off MVE,
+in ns-cmsis-nn v7.38.0 and later (GCC builds; MVE vs not). The 1xN
+padding gate (v7.38.1, s8 and s4) is read from the built tree: from
+the s8 conv wrapper, or from its route selector once the tree has one
+(ns-cmsis-nn#886). An unknown tree gives no route. Names the wrapper's
+direct callee. Off MVE,
 arm_convolve_1_x_n_s8 just forwards to arm_convolve_s8.
 
 inner_variant goes one level down: arm_depthwise_conv_s8_opt runs a
