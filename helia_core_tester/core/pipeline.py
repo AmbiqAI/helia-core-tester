@@ -177,11 +177,10 @@ class FullTestPipeline:
 
         return plans
 
-    def print_plan(self) -> None:
-        """Print a human-readable execution plan."""
-        plans = self.build_plan()
+    def plan_lines(self) -> list[str]:
+        """Render the execution plan as human-readable lines."""
         lines = ["Plan:"]
-        for idx, plan in enumerate(plans, start=1):
+        for idx, plan in enumerate(self.build_plan(), start=1):
             will = "will run" if plan.will_run else "skipped"
             lines.append(f"{idx}. {plan.name}: {will} ({plan.reason})")
             if plan.commands:
@@ -195,5 +194,9 @@ class FullTestPipeline:
                 details = ", ".join(f"{k}={v}" for k, v in plan.details.items() if v is not None)
                 if details:
                     lines.append(f"   details: {details}")
-        for line in lines:
-            self.logger.info(line)
+        return lines
+
+    def print_plan(self) -> None:
+        """Print the execution plan to stdout; it is the requested output, so verbosity does not gate it."""
+        for line in self.plan_lines():
+            print(line)
