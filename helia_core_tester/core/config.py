@@ -36,6 +36,31 @@ FALSE_VALUES = {"0", "false", "no", "off"}
 VALID_SUITE_MODES = {"int", "float", "both"}
 VALID_FLOAT_PRECISION = {"f16", "f32", "both"}
 VALID_HOST_KERNELS = ("m0", "dsp")
+VALID_REPORT_FORMATS = ("json", "html", "md", "junit")
+
+
+def parse_report_formats(values: Any) -> list[str]:
+    """Split comma-separated report formats into a de-duplicated list, keeping first-seen order."""
+    expected = ", ".join(VALID_REPORT_FORMATS)
+    if isinstance(values, str):
+        values = [values]
+    if not isinstance(values, (list, tuple)):
+        raise ValueError(f"report formats must be a string or a list of strings, got {values!r}")
+    formats: list[str] = []
+    for value in values:
+        if not isinstance(value, str):
+            raise ValueError(f"report format must be a string, got {value!r}")
+        for token in value.split(","):
+            token = token.strip()
+            if not token:
+                raise ValueError(f"empty report format in {value!r}; expected a comma-separated list of: {expected}")
+            if token not in VALID_REPORT_FORMATS:
+                raise ValueError(f"unknown report format {token!r} in {value!r}; expected a comma-separated list of: {expected}")
+            formats.append(token)
+    if not formats:
+        raise ValueError(f"at least one report format is required; expected a comma-separated list of: {expected}")
+    return list(dict.fromkeys(formats))
+
 
 # FVP boot dominates per-case wall time, so parallel run jobs are the lever that
 # matters -- but an unbounded default on a shared or metered runner is a cost
@@ -266,7 +291,9 @@ class Config:
             "enable_reporting",
         }:
             return self._parse_bool(key, value)
-        if key in {"report_formats", "host_kernels"}:
+        if key == "report_formats":
+            return parse_report_formats(value)
+        if key == "host_kernels":
             return [item.strip() for item in value.split(",") if item.strip()]
         return value
 
@@ -313,6 +340,10 @@ class Config:
             raise ValueError(f"verbosity must be between 0 and 3, got {self.verbosity}")
         self._validate_random_shapes()
         self._validate_host_kernels()
+        try:
+            self.report_formats = parse_report_formats(self.report_formats)
+        except ValueError as e:
+            raise ConfigurationError(f"report_formats: {e}") from e
 
         if self.jobs is None:
             self.jobs = os.cpu_count() or 4

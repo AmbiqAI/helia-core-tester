@@ -13,7 +13,7 @@ from typing import Optional
 
 import typer
 
-from helia_core_tester.core.config import DEFAULT_RUN_JOBS_CAP, DEFAULT_TIMEOUT_SECONDS, Config
+from helia_core_tester.core.config import DEFAULT_RUN_JOBS_CAP, DEFAULT_TIMEOUT_SECONDS, Config, parse_report_formats
 from helia_core_tester.core.discovery import ensure_arm_toolchain_on_path
 from helia_core_tester.core.logging import setup_logger
 from helia_core_tester.core.path_layout import artifacts_root
@@ -59,6 +59,13 @@ def _print_plan_item(plan_item) -> None:
         outputs = ", ".join(f"{k}={v}" for k, v in plan_item.outputs.items() if v)
         if outputs:
             typer.echo(f"   outputs: {outputs}")
+
+
+def _report_formats_callback(values: list[str]) -> list[str]:
+    try:
+        return parse_report_formats(values)
+    except ValueError as e:
+        raise typer.BadParameter(str(e)) from e
 
 
 def get_config(
@@ -268,7 +275,11 @@ def run(
     suite: str = typer.Option("int", "--suite", help="Test suite selection: int, float, or both"),
     toolchain: str = typer.Option("gcc", "--toolchain", help="Toolchain: gcc (default) or armclang (Arm Compiler 6 on PATH; not combinable with --coverage)"),
     no_report: bool = typer.Option(False, "--no-report", help="Disable test reporting"),
-    report_formats: list[str] = typer.Option(["json"], help="Report formats (json, html, md, junit)"),
+    report_formats: list[str] = typer.Option(
+        ["json"],
+        callback=_report_formats_callback,
+        help="Report formats from json, html, md, junit: comma-separated (--report-formats json,html) or repeated (--report-formats json --report-formats html)",
+    ),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help="Verbosity level (0-3)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be done"),
     plan: bool = typer.Option(False, "--plan", help="Print execution plan and exit"),
@@ -329,7 +340,11 @@ def full(
     skip_build: bool = typer.Option(False, "--skip-build", help="Skip FVP build"),
     skip_run: bool = typer.Option(False, "--skip-run", help="Skip FVP test execution"),
     no_report: bool = typer.Option(False, "--no-report", help="Disable test reporting"),
-    report_formats: list[str] = typer.Option(["json"], help="Report formats (json, html, md, junit)"),
+    report_formats: list[str] = typer.Option(
+        ["json"],
+        callback=_report_formats_callback,
+        help="Report formats from json, html, md, junit: comma-separated (--report-formats json,html) or repeated (--report-formats json --report-formats html)",
+    ),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help="Verbosity level (0-3)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be done"),
     plan: bool = typer.Option(False, "--plan", help="Print execution plan and exit"),
