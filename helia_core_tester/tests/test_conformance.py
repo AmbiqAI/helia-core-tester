@@ -11,11 +11,12 @@ import pytest
 
 from helia_core_tester.contract import planner
 from helia_core_tester.generation import conformance
-from helia_core_tester.generation.conformance import ROUTE_ENUMS, ConformanceError, PlanRequest
+from helia_core_tester.generation.conformance import ConformanceError, PlanRequest
 from helia_core_tester.generation.harness import ArgumentPool
 from helia_core_tester.generation.io.descriptors import load_all_descriptors
 from helia_core_tester.generation.test_ops import generate_test
 from helia_core_tester.tests.contract_fallback import FIXTURE_ROOT
+from helia_core_tester.tests.contract_required import P1E_PLAN_FIELDS, P1dPlan, require_planner
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 # Every T4a implementation of the pilot manifest. The direct depthwise entries and arm_depthwise_conv_s8_opt's own
@@ -114,15 +115,58 @@ def test_the_grid_has_a_rejection_and_faults(fixture_planner) -> None:
     assert {d["operator"] for d in faults} == {"DepthwiseConv", "FullyConnected"}
 
 
-def test_every_planned_route_has_its_enum() -> None:
+def _routes_checked(extra_checks: str) -> list[tuple[str, str]]:
+    return re.findall(r'"([a-z0-9_]+:[a-z0-9_]+)", (\w+), sel\(\)\);', extra_checks)
+
+
+def test_route_checks_name_the_packages_route_constants(fixture_planner) -> None:
+    package, _ = fixture_planner
     header = (FIXTURE_ROOT / "Include" / "Internal" / "arm_nn_dispatch.h").read_text()
-    assert set(ROUTE_ENUMS.values()) <= set(re.findall(r"\b(ARM_NN_\w+_ROUTE_\w+)\s*=", header))
-    assert all(route.startswith(("dw_wrapper_s8:", "fc_wrapper_s8:")) for route in ROUTE_ENUMS)
+    constants = set(re.findall(r"\b(ARM_NN_\w+_ROUTE_\w+)\s*=", header))
+    for method, layer, cpu in [("depthwise_conv_wrapper_s8", DW, "cortex-m55"),
+                               ("depthwise_conv_wrapper_s8", dict(DW, filter_dims=(1, 3, 3, 8), padding=(1, 1)),
+                                "cortex-m4"),
+                               ("fully_connected_wrapper_s8", dict(input_dims=(1, 1, 1, 16), filter_dims=(16, 1, 1, 4),
+                                                                   output_dims=(1, 1, 1, 4), per_channel=False),
+                                "cortex-m0")]:
+        pool = conformance.apply(_pool(), {"name": "x", "conformance": PlanRequest(method, layer, selector="sel()")},
+                                 {"name": "x", "conformance": True}, cpu)
+        plans = [planner.plan(method, t, **layer) for t in planner.build_targets(package, cpu)]
+        assert _routes_checked(pool.extra_checks) == [(p.route, p.route_name) for p in plans]
+        assert {p.route_name for p in plans} <= constants
+
+
+def test_route_checks_take_the_name_from_the_plan_not_a_local_table(
+    fixture_planner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = planner.plan
+    monkeypatch.setattr(planner, "plan", lambda *a, **k: dataclasses.replace(real(*a, **k),
+                                                                             route_name="ARM_NN_RENAMED_ROUTE"))
+    pool = conformance.apply(_pool(), {"name": "x", "conformance": PlanRequest("depthwise_conv_wrapper_s8", DW,
+                                                                               selector="sel()")},
+                             {"name": "x", "conformance": True}, "cortex-m55")
+    assert _routes_checked(pool.extra_checks) == [("dw_wrapper_s8:opt", "ARM_NN_RENAMED_ROUTE")] * 2
+    assert not hasattr(conformance, "ROUTE_ENUMS")
+
+
+def test_a_package_whose_plans_name_no_route_is_unavailable(fixture_planner, monkeypatch: pytest.MonkeyPatch) -> None:
+    real = planner.plan
+    monkeypatch.setattr(planner, "plan", lambda *a, **k: P1dPlan(
+        **{f.name: getattr(real(*a, **k), f.name) for f in dataclasses.fields(P1dPlan)}))
+    with pytest.raises(planner.PlannerUnavailable, match=r"names no route constant \(Plan.route_name\)"):
+        conformance.apply(_pool(), {"name": "x", "conformance": PlanRequest("depthwise_conv_wrapper_s8", DW,
+                                                                            selector="sel()")},
+                          {"name": "x", "conformance": True}, "cortex-m55")
+    # A case without a selector checks no route, so it still renders on such a package.
+    pool = conformance.apply(_pool(), {"name": "x", "conformance": PlanRequest("depthwise_conv_wrapper_s8", DW)},
+                             {"name": "x", "conformance": True}, "cortex-m55")
+    assert "planned bytes" in pool.extra_checks and not _routes_checked(pool.extra_checks)
 
 
 @pytest.mark.parametrize("name", [d["name"] for d in _grid()])
 @pytest.mark.parametrize("cpu", PROFILES)
 def test_every_grid_case_generates(name: str, cpu: str, tmp_path: Path) -> None:
+    require_planner(plan_fields=P1E_PLAN_FIELDS)
     desc = next(d for d in _grid() if d["name"] == name)
     from helia_core_tester.core.cpu_targets import missing_required_capabilities
     from helia_core_tester.generation.entry import apply_entry_manifest
@@ -219,7 +263,8 @@ def test_the_host_stream_is_written_as_signed_bytes() -> None:
 
 
 def test_an_unknown_route_has_no_enum_to_check(fixture_planner, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(conformance, "ROUTE_ENUMS", {})
+    real = planner.plan
+    monkeypatch.setattr(planner, "plan", lambda *a, **k: dataclasses.replace(real(*a, **k), route_name=None))
     with pytest.raises(ConformanceError, match="planned route 'dw_wrapper_s8:opt' has no route enum"):
         request = PlanRequest("depthwise_conv_wrapper_s8", DW, selector="sel()")
         conformance.apply(_pool(), {"name": "x", "conformance": request}, {"name": "x", "conformance": True},

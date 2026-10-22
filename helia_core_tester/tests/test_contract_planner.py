@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import shutil
 from pathlib import Path
 
@@ -10,7 +11,7 @@ import pytest
 from helia_core_tester.contract import planner
 from helia_core_tester.contract.planner import PlannerUnavailable, PlanRefusedError
 from helia_core_tester.tests.contract_fallback import FIXTURE_ROOT
-from helia_core_tester.tests.contract_required import P1E_CALLS, require_planner
+from helia_core_tester.tests.contract_required import P1E_CALLS, P1E_PLAN_FIELDS, P1dPlan, require_planner
 
 DW = dict(input_dims=(1, 8, 8, 16), filter_dims=(1, 3, 3, 16), output_dims=(1, 8, 8, 16), ch_mult=1, padding=(1, 1))
 
@@ -220,3 +221,30 @@ def test_a_planner_without_the_p1e_calls_skips_naming_them(fixture_planner, monk
     with pytest.raises(pytest.skip.Exception, match="planner has no buffer_bytes$"):
         require_planner(*P1E_CALLS)
     require_planner("depthwise_conv_s8_opt")
+
+
+def test_a_package_whose_plans_name_no_route_skips_naming_the_fields(
+    fixture_planner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("HELIA_CORE_TESTER_REQUIRE_CONTRACT", raising=False)
+    package, _ = fixture_planner
+    require_planner(plan_fields=P1E_PLAN_FIELDS)
+    monkeypatch.setattr(package, "Plan", P1dPlan)
+    with pytest.raises(pytest.skip.Exception, match="planner has no Plan.route_value, Plan.route_name$"):
+        require_planner(plan_fields=P1E_PLAN_FIELDS)
+    require_planner(*P1E_CALLS)
+    monkeypatch.setenv("HELIA_CORE_TESTER_REQUIRE_CONTRACT", "1")
+    with pytest.raises(pytest.fail.Exception, match="REQUIRE_CONTRACT is set but .*has no Plan.route_value"):
+        require_planner(plan_fields=P1E_PLAN_FIELDS)
+
+
+def test_a_plan_without_a_route_name_is_unavailable_not_guessed(fixture_planner) -> None:
+    package, _ = fixture_planner
+    plan = planner.plan("depthwise_conv_wrapper_s8", package.Target("mve"), **DW)
+    assert planner.route_name(plan) == plan.route_name and plan.route_name.startswith("ARM_NN_DW_CONV_S8_ROUTE_")
+    old = P1dPlan(**{f.name: getattr(plan, f.name) for f in dataclasses.fields(P1dPlan)})
+    with pytest.raises(PlannerUnavailable, match=r"names no route constant \(Plan.route_name\).*P1e"):
+        planner.route_name(old)
+    direct = planner.plan("fully_connected_per_channel_packed_s8", package.Target("mve"), filter_dims=(16, 1, 1, 4),
+                          filter_offset=0, multipliers=[1 << 30] * 4, shifts=[-1] * 4)
+    assert direct.route is None and planner.route_name(direct) is None
