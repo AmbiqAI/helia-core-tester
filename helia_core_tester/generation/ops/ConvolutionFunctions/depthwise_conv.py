@@ -5,7 +5,12 @@ from pathlib import Path
 import numpy as np
 from helia_core_tester.contract import planner
 from helia_core_tester.generation.ops._shared.base import OperationBase
-from helia_core_tester.generation.entry import check_entry_fault, resolve_entry
+from helia_core_tester.generation.entry import (
+    ENTRY_CTX_BUFFER_KEY,
+    ENTRY_IMPLEMENTATION_KEY,
+    check_entry_fault,
+    resolve_entry,
+)
 from helia_core_tester.generation.harness import (
     ArgumentPool,
     ArrayLiteral,
@@ -18,7 +23,6 @@ from helia_core_tester.generation.harness.faults import common_fault, null_conte
 from helia_core_tester.generation.kernel_dispatch import (
     DEPTHWISE_CONV_S8_PLANAR_RULE,
     autovectorize_declines_if,
-    depthwise_3x3_scratch_bytes,
     resolve_depthwise_conv_kernel,
 )
 
@@ -185,6 +189,13 @@ def dw_layer(params: Dict[str, Any], input_dims: Dict[str, int], filter_dims: Di
         "padding": (int(params["pad_h"]), int(params["pad_w"])),
         "dilation": (int(params["dilation_h"]), int(params["dilation_w"])),
     }
+
+
+def dw_operands(layer: Dict[str, Any]) -> Dict[str, Any]:
+    """The operands a manifest size query may name, from dw_layer()'s arguments."""
+    return {"input_dims": layer["input_dims"], "filter_dims": layer["filter_dims"],
+            "output_dims": layer["output_dims"],
+            "dw_conv_params": {key: layer[key] for key in ("ch_mult", "stride", "padding", "dilation")}}
 
 
 def wrapper_s8_routes(context: Dict[str, Any]) -> set:
@@ -434,6 +445,12 @@ class OpDepthwiseConv(OperationBase):
             # The wrapper's own scratch on every build of the target CPU, from the checkout's planner.
             layer = dw_layer(dw_conv_params, input_dims, filter_dims, output_dims)
             buffer_size_max = planner.planned_ctx_bytes("depthwise_conv_wrapper_s8", self.target_cpu, **layer)
+        elif kernel_info.get(ENTRY_CTX_BUFFER_KEY):
+            # A manifest entry's scratch on every build of the target CPU: its record's size query, from the planner.
+            layer = dw_layer(dw_conv_params, input_dims, filter_dims, output_dims)
+            buffer_size_max = planner.planned_buffer_bytes(
+                kernel_info[ENTRY_IMPLEMENTATION_KEY], kernel_info[ENTRY_CTX_BUFFER_KEY], self.target_cpu,
+                **dw_operands(layer))
         else:
             buffer_size_max = builder.calculate_depthwise_buffer_size_max(
                 input_dims, filter_dims, output_dims,
@@ -441,9 +458,6 @@ class OpDepthwiseConv(OperationBase):
             )
         if kernel_info.get("entry_scratch_bytes") is not None:
             buffer_size_max = max(buffer_size_max, int(kernel_info["entry_scratch_bytes"]))
-        # The 3x3 entries size their own path from the input dims.
-        buffer_size_max = max(buffer_size_max,
-                              depthwise_3x3_scratch_bytes(kernel_info.get("kernel_get_buffer_size_fn"), input_dims))
         # An entry gets the weight-sum context exactly when its prototype takes one; the wrapper
         # keeps the rule it always had.
         takes_weight_sum_ctx = kernel_info["kernel_fn"] == "arm_depthwise_conv_wrapper_s8"

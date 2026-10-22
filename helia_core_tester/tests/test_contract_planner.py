@@ -102,3 +102,70 @@ def test_a_planner_that_cannot_build_fails_closed(tmp_path: Path) -> None:
     planner.clear_planner_cache()
     with pytest.raises(PlannerUnavailable, match="cannot be built or loaded"):
         planner.load_planner(root)
+
+
+DW_3X3 = dict(input_dims=(1, 5, 7, 16), filter_dims=(1, 3, 3, 16), output_dims=(1, 5, 7, 16),
+              dw_conv_params={"ch_mult": 1, "padding": (1, 1)})
+
+
+def test_the_3x3_entries_scratch_is_their_size_query_on_every_build(fixture_planner) -> None:
+    package, _ = fixture_planner
+    # 16 groups of (3 x 52 + 32) bytes, a pad row of W x C bytes and 16 for alignment, alike on every build.
+    want = 16 * (3 * 52 + 32) + 7 * 16 + 16
+    for record in ("depthwise_conv_s8_opt_3x3", "depthwise_conv_s8_opt_3x3_c64_s1"):
+        for target in planner.build_targets(package, None):
+            assert planner.buffer_bytes(target, record, "scratch", **DW_3X3) == want
+        assert planner.planned_buffer_bytes(record, "scratch", "cortex-m4", **DW_3X3) == want
+
+
+def test_the_opt_entries_scratch_is_the_largest_build(fixture_planner) -> None:
+    package, _ = fixture_planner
+    per_build = {t.isa: planner.buffer_bytes(t, "depthwise_conv_s8_opt_channelwise", "scratch", **DW_3X3)
+                 for t in planner.build_targets(package, None)}
+    # MVE: 4 x 124 x 3 x 3 bytes; DSP: C x 3 x 3 int16; the plain build takes none.
+    assert per_build == {"mve": 4 * 124 * 9, "dsp": 16 * 9 * 2, "scalar": 0}
+    assert planner.planned_buffer_bytes("depthwise_conv_s8_opt_planar", "scratch", "cortex-m55", **DW_3X3) == 4464
+    assert planner.planned_buffer_bytes("depthwise_conv_s8_opt_planar", "scratch", None, **DW_3X3) == 4464
+    assert planner.planned_buffer_bytes("depthwise_conv_s8_opt_planar", "weight_sums", "cortex-m55", **DW_3X3) == 64
+    assert planner.planned_buffer_bytes("depthwise_conv_s8_opt_planar", "weight_sums", "cortex-m4", **DW_3X3) == 0
+
+
+@pytest.mark.parametrize("args, layer, status, match", [
+    (("no_such_record", "scratch"), DW_3X3, "arguments", "no such implementation"),
+    (("depthwise_conv_s8_opt_3x3", "no_such_buffer"), DW_3X3, "arguments", "no_such_buffer"),
+    (("depthwise_conv_s8", "ctx"), DW_3X3, "arguments", "no size query"),
+    (("depthwise_conv_s8_opt", "scratch"), dict(input_dims=(1, 4, 4, 8)), "arguments", "no \\['filter_dims'\\] given"),
+    (("depthwise_conv_s8_opt_3x3", "scratch"), dict(input_dims=(1, 4, 4)), "arguments", "input_dims"),
+    (("depthwise_conv_s8_opt_3x3", "scratch"), dict(input_dims=(1, 1, 1, 2**31 - 100)), "range", "refused"),
+    (("depthwise_conv_s8_opt_3x3", "scratch"), dict(input_dims=(1, 0, 4, 8)), "shape", "refused"),
+])
+def test_a_refused_buffer_is_a_typed_contract_error(fixture_planner, args, layer, status: str, match: str) -> None:
+    package, _ = fixture_planner
+    with pytest.raises(PlanRefusedError, match=match) as error:
+        planner.buffer_bytes(package.Target("mve"), *args, **layer)
+    assert error.value.status == status
+
+
+def test_the_opt_router_is_planned_against_ctx_size(fixture_planner) -> None:
+    package, _ = fixture_planner
+    layer = dict(input_dims=(1, 10, 10, 8), filter_dims=(1, 3, 3, 8), output_dims=(1, 8, 8, 8))
+    # The plane is 10 x 10 + 32 bytes.
+    mve = package.Target("mve")
+    assert planner.plan("depthwise_conv_s8_opt", mve, ctx_size=132, **layer).route == "dw_opt_s8:planar"
+    assert planner.plan("depthwise_conv_s8_opt", mve, ctx_size=0, **layer).route == "dw_opt_s8:channelwise"
+    with pytest.raises(PlanRefusedError) as error:
+        planner.plan("depthwise_conv_s8_opt", mve, ctx_size=131, **layer)
+    assert error.value.status == "range"
+    assert planner.plan("depthwise_conv_s8_opt", package.Target("dsp"), ctx_size=0, **layer).kernel == (
+        "arm_depthwise_conv_s8_opt_channelwise")
+
+
+def test_a_planner_without_the_call_is_unavailable(fixture_planner, monkeypatch: pytest.MonkeyPatch) -> None:
+    package, loaded = fixture_planner
+    monkeypatch.setattr(type(loaded), "buffer_bytes", property(lambda self: None), raising=False)
+    with pytest.raises(PlannerUnavailable, match="has no buffer_bytes"):
+        planner.buffer_bytes(package.Target("mve"), "depthwise_conv_s8_opt_3x3", "scratch", **DW_3X3)
+    monkeypatch.setattr(type(loaded), "depthwise_conv_s8_opt", property(lambda self: None), raising=False)
+    with pytest.raises(PlannerUnavailable, match="has no depthwise_conv_s8_opt"):
+        planner.plan("depthwise_conv_s8_opt", package.Target("mve"), ctx_size=0, input_dims=(1, 8, 8, 8),
+                     filter_dims=(1, 3, 3, 8), output_dims=(1, 6, 6, 8))

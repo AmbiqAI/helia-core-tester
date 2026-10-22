@@ -10,10 +10,11 @@ from pathlib import Path
 
 import pytest
 
-from helia_core_tester.contract.planner import PlanRefusedError
+from helia_core_tester.contract import planner
+from helia_core_tester.contract.planner import PlannerUnavailable, PlanRefusedError
 from helia_core_tester.hardware.wrapper_route import (
     CHANNELWISE, CONV_SOURCE, DW_OPT, PLANAR, conv_route, conv_s4_route, conv_s16_route, dw_opt_variant, dw_route,
-    dw_s4_route, dw_s16_route, inner_symbol, inner_variant, opt_scratch_size, planar_bytes, tree_gate,
+    dw_s4_route, dw_s16_route, inner_symbol, inner_variant, opt_scratch_size, tree_gate,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -57,10 +58,11 @@ def _partial_groups(i: tuple, f: tuple, o: tuple) -> bool:
     return i[3] % f[3] != 0 or o[3] % (i[3] // f[3]) != 0
 
 
+# Planar plane past ctx: 1x1 kernel, 32x32.
+_PLANE_PAST_CTX = ("d", (1, 32, 32, 8), (1, 1, 1, 8), (1, 32, 32, 8), (1, 1), (0, 0), (1, 1), 1)
 # Rare branches the random rows miss.
 _EDGE_ROWS = [
-    # Planar plane past ctx: 1x1 kernel, 32x32.
-    ("d", (1, 32, 32, 8), (1, 1, 1, 8), (1, 32, 32, 8), (1, 1), (0, 0), (1, 1), 1),
+    _PLANE_PAST_CTX,
     # Planar 1xk dot path, dilated.
     ("d", (1, 1, 64, 8), (1, 1, 7, 8), (1, 1, 52, 8), (1, 1), (0, 0), (1, 2), 1),
     ("d", (1, 1, 96, 24), (1, 1, 5, 24), (1, 1, 96, 24), (1, 1), (0, 2), (1, 1), 1),
@@ -91,7 +93,7 @@ def _expected(row: tuple, mve: bool, gate_1xn: bool = True) -> str:
         return None
     if route != DW_OPT:
         return route
-    ctx_size = opt_scratch_size(i, f, o, stride, pad, dil, mve)
+    ctx_size = opt_scratch_size(i, f, o, stride, pad, dil, ch_mult, mve)
     return f"{route}+{dw_opt_variant(i, f, o, stride, pad, dil, ch_mult, mve, ctx_size)}"
 
 
@@ -139,24 +141,10 @@ def test_mirror_matches_c_wrappers(tmp_path: Path, mve: bool) -> None:
         }
         assert any(route.startswith("to_conv:") for route in routes)
         # Planar declines a plane past ctx.
-        assert any(_ctx_fallback(row) for row in rows)
+        assert expected[rows.index(_PLANE_PAST_CTX)] == f"{DW_OPT}+{CHANNELWISE}"
     else:
         wanted.add("arm_depthwise_conv_3x3_s8")
     assert wanted <= seen
-
-
-def _ctx_fallback(row: tuple) -> bool:
-    """A planar layer whose plane exceeds ctx."""
-    kind, i, f, o, stride, pad, dil, ch_mult = row
-    if kind != "d":
-        return False
-    try:
-        if dw_route(i, f, o, stride, pad, dil, ch_mult, True) != DW_OPT:
-            return False
-    except PlanRefusedError:
-        return False
-    plane = planar_bytes(i, f, o, stride, pad, dil, ch_mult)
-    return plane > opt_scratch_size(i, f, o, stride, pad, dil, True) > 0
 
 
 def _manifest(cpu: str, weights: list[int], **params) -> dict:
@@ -261,13 +249,35 @@ def test_inner_variant_splits_the_opt_route() -> None:
 
 
 def test_planar_declines_past_ctx() -> None:
-    # 1x1 kernel, 32x32 plane: 1056 bytes > 496.
+    # 1x1 kernel, 32x32 plane: 1056 bytes > the 496-byte MVE scratch.
     args = ((1, 32, 32, 8), (1, 1, 1, 8), (1, 32, 32, 8), (1, 1), (0, 0), (1, 1))
-    ctx_size = opt_scratch_size(*args, True)
+    ctx_size = opt_scratch_size(*args, 1, True)
     assert ctx_size == 496
-    assert planar_bytes(*args, 1) == 32 * 32 + 32
     assert dw_opt_variant(*args, 1, True, ctx_size) == CHANNELWISE
     assert dw_opt_variant(*args, 1, True, 1 << 20) == CHANNELWISE
+    # 16x16: a 288-byte plane.
     small = ((1, 16, 16, 8), (1, 1, 1, 8), (1, 16, 16, 8), (1, 1), (0, 0), (1, 1))
-    assert dw_opt_variant(*small, 1, True, opt_scratch_size(*small, True)) == PLANAR
+    assert dw_opt_variant(*small, 1, True, opt_scratch_size(*small, 1, True)) == PLANAR
+    assert dw_opt_variant(*small, 1, True, 16 * 16 + 32) == PLANAR
+    # One byte short: planar declines and channelwise rejects a ctx below its scratch, so the call fails.
+    assert dw_opt_variant(*small, 1, True, 16 * 16 + 31) is None
     assert dw_opt_variant(*small, 1, True, 0) == CHANNELWISE
+    # Off MVE opt always runs channelwise.
+    assert dw_opt_variant(*small, 1, False, opt_scratch_size(*small, 1, False)) == CHANNELWISE
+
+
+def test_a_layer_the_opt_entry_rejects_is_not_routed() -> None:
+    with pytest.raises(PlanRefusedError) as error:
+        dw_opt_variant((1, 16, 16, 8), (1, 3, 3, 8), (1, 14, 14, 8), (1, 1), (0, 0), (2, 1), 1, True, 0)
+    assert error.value.status == "shape"
+
+
+def test_without_the_planner_calls_the_variant_is_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+    eight = _manifest("cortex-m55", [1, 3, 3, 8], pad_h=1, pad_w=1, output_c=8)
+    eight["blob_roles"][0]["dimensions"] = [1, 8, 8, 8]
+
+    def unavailable(method, target, **layer):
+        raise PlannerUnavailable(f"this checkout's planner has no {method}")
+
+    monkeypatch.setattr(planner, "plan", unavailable)
+    assert inner_variant(DW_OPT, eight) is None

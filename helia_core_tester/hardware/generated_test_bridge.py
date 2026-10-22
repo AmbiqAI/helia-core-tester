@@ -22,7 +22,7 @@ import re
 import struct
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable, Mapping, Optional
 
 import numpy as np
 import yaml
@@ -39,7 +39,6 @@ from .kernel_registry import (
 )
 from .pathutil import display_path
 from helia_core_tester.generation.io.descriptors import descriptor_matches_op
-from helia_core_tester.generation.kernel_dispatch import depthwise_3x3_scratch_bytes
 from helia_core_tester.generation.io.dtypes import (
     default_comparison_for_dtype,
     descriptor_matches_dtype_filter,
@@ -638,19 +637,42 @@ def _with_weight_sums(scratch: int, channels: int) -> int:
     return _align_up(int(scratch), 16) + channels * 4
 
 
+def _entry_ctx_buffer(descriptor: Optional[Mapping[str, Any]]) -> Optional[tuple[str, str]]:
+    """(record id, buffer) of the manifest record whose sized ctx buffer a descriptor's entry takes, else None."""
+    if not descriptor or not descriptor.get("entry"):
+        return None
+    from helia_core_tester.contract import render
+    from helia_core_tester.generation.entry import ENTRY_IMPLEMENTATION_KEY, apply_entry_manifest, ctx_buffer
+
+    contracts = render.load_current_contracts()
+    if not contracts.present:
+        return None
+    desc = apply_entry_manifest(descriptor, contracts)
+    record_id = desc.get(ENTRY_IMPLEMENTATION_KEY)
+    if record_id is None:
+        return None
+    record = next(r for r in contracts.implementations_of(str(desc["entry"]).strip()) if r.id == record_id)
+    buffer = ctx_buffer(record, f"{desc.get('name', '<unnamed>')}: entry {desc['entry']!r}")
+    return (record_id, buffer.name) if buffer is not None and buffer.size_query is not None else None
+
+
 def _depthwise_s8_scratch_bytes(
     input_dims: dict[str, int], filter_dims: dict[str, int], output_dims: dict[str, int], *, ch_mult: int,
-    stride: tuple[int, int], padding: tuple[int, int], dilation: tuple[int, int], sizers: object = None,
+    stride: tuple[int, int], padding: tuple[int, int], dilation: tuple[int, int],
+    descriptor: Optional[Mapping[str, Any]] = None,
 ) -> int:
     """The wrapper's scratch on every build (the checkout's planner, which counts the DW->conv route's
-    transposed filter too) or the entry's, plus weight sums."""
+    transposed filter too) or, for a manifest entry, the larger of that and its ctx buffer's, plus weight sums."""
     from helia_core_tester.contract import planner
+    from helia_core_tester.generation.ops.ConvolutionFunctions.depthwise_conv import dw_operands
 
     dims = {name: tuple(int(d[k]) for k in "nhwc") for name, d in
             (("input_dims", input_dims), ("filter_dims", filter_dims), ("output_dims", output_dims))}
-    scratch = planner.planned_ctx_bytes("depthwise_conv_wrapper_s8", None, **dims, ch_mult=int(ch_mult),
-                                        stride=tuple(stride), padding=tuple(padding), dilation=tuple(dilation))
-    scratch = max(scratch, depthwise_3x3_scratch_bytes(sizers, input_dims))
+    layer = dict(dims, ch_mult=int(ch_mult), stride=tuple(stride), padding=tuple(padding), dilation=tuple(dilation))
+    scratch = planner.planned_ctx_bytes("depthwise_conv_wrapper_s8", None, **layer)
+    entry = _entry_ctx_buffer(descriptor)
+    if entry is not None:
+        scratch = max(scratch, planner.planned_buffer_bytes(*entry, None, **dw_operands(layer)))
     return _with_weight_sums(scratch, output_dims["c"])
 
 
@@ -1642,7 +1664,7 @@ def _build_depthwise_conv_case(
         scratch_bytes = _depthwise_s8_scratch_bytes(
             input_dims, filter_dims, output_dims, ch_mult=ch_mult or 1, stride=(stride_h or 1, stride_w or 1),
             padding=(pad_h, pad_w), dilation=(dilation_h or 1, dilation_w or 1),
-            sizers=generated_test.descriptor.get("entry_sizer"),
+            descriptor=generated_test.descriptor,
         )
 
     arrays = [
