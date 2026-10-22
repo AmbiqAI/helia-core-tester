@@ -230,6 +230,8 @@ def test_c_sram_activations_need_mram_weights(tmp_path: Path) -> None:
     cc = shutil.which("cc")
     if cc is None:
         pytest.skip("host C compiler not available")
+    if not (CMSIS_NN_ROOT / "Include" / "arm_nnfunctions.h").is_file():
+        pytest.skip(f"no real ns-cmsis-nn checkout found at {CMSIS_NN_ROOT}")
     hardware = PROJECT_ROOT / "cmake" / "hardware"
     result = subprocess.run(
         [cc, "-std=c99", "-fsyntax-only", "-DHCT_HOST_ABS_ONLY", "-DHCT_ACTIVATIONS_SRAM", "-I", str(MRAM_STUB_DIR),
