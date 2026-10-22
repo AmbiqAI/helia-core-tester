@@ -12,6 +12,7 @@ from helia_core_tester.generation.ops._shared.conv_reference import (
     _uniform_input,
     exact_comparison,
     float_bounds,
+    output_quant,
     per_channel_multipliers,
     quantized_bounds,
     weight_rng,
@@ -110,16 +111,17 @@ def fc_reference_case(op, kernel_info: Dict[str, Any], float_kernel: bool, float
         bias_q = np.zeros(out_units, np.int64)
     x_q = policy.quantize(x_float, in_quant)
 
-    f_lo, f_hi = float_bounds(op)
     real_bias = (bias_q.astype(np.float64) * in_quant.scale * qfilter.scales.astype(np.float64)
                  if bias_q is not None else np.zeros(0))
     real_filter = (qfilter.values.astype(np.float64) + filter_offset) * qfilter.scales.astype(np.float64)[:, None]
     lib = get_bindings()
-    real = lib.run("fully_connected_f32", {"activation_min": f_lo, "activation_max": f_hi},
-                   {"input": policy.dequantize(x_q, in_quant).astype(np.float32),
-                    "filter": real_filter.astype(np.float32), "bias": real_bias.astype(np.float32)},
-                   {"output": output_shape})["output"]
-    out_quant = op.activation_quant("output", policy.data_range(real), kind)
+    out_quant = output_quant(
+        op, kind, lambda lo, hi: lib.run(
+            "fully_connected_f32", {"activation_min": lo, "activation_max": hi},
+            {"input": policy.dequantize(x_q, in_quant).astype(np.float32),
+             "filter": real_filter.astype(np.float32), "bias": real_bias.astype(np.float32)},
+            {"output": output_shape})["output"],
+        in_quant.scale, qfilter.scales)
     multiplier, shift = per_channel_multipliers(in_quant.scale, out_quant.scale, qfilter.scales)
     act_min, act_max = quantized_bounds(op, kind, out_quant.scale, out_quant.zero_point)
     params = {"input_offset": -in_quant.zero_point, "filter_offset": filter_offset,
