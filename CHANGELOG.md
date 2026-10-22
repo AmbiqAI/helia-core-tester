@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.11.0](https://github.com/AmbiqAI/helia-core-tester/compare/v0.10.0...v0.11.0) (2026-10-22)
+
+
+### Features
+
+* **agent-loop:** score and prompt ops without MACs ([dc1793e](https://github.com/AmbiqAI/helia-core-tester/commit/dc1793e07b8ecaa6bf8af7c88be6e70c84acb720))
+* **hardware:** add an sram placement with activations in cached SRAM ([d408bf5](https://github.com/AmbiqAI/helia-core-tester/commit/d408bf507d1f6dac76eb950e1b1e77bd69ff55c3))
+* **hardware:** add an sram placement with activations in cached SRAM ([#500](https://github.com/AmbiqAI/helia-core-tester/issues/500)) ([fc68c9e](https://github.com/AmbiqAI/helia-core-tester/commit/fc68c9e8c289ec0044e1f9281e40783f6940b5e0))
+* **nightly:** report skipped cases per family and flag growth ([8d70ef8](https://github.com/AmbiqAI/helia-core-tester/commit/8d70ef8b30de7f6231f405834005d55689b9146a))
+* **random-shapes:** add hidden float sigmoid shapes ([e1d1822](https://github.com/AmbiqAI/helia-core-tester/commit/e1d182295556f57c89c6f08a41dbc64e0ea91fb5))
+* **random-shapes:** add hidden float sigmoid shapes ([55cd214](https://github.com/AmbiqAI/helia-core-tester/commit/55cd214a415291e95096a54ccb92950c601c9868))
+* **random-shapes:** add hidden s8 Softmax shapes ([b492b54](https://github.com/AmbiqAI/helia-core-tester/commit/b492b543ea29f80b2d66e614fe3c211c8b834f18))
+* **random-shapes:** hidden s8 Softmax shapes ([3682539](https://github.com/AmbiqAI/helia-core-tester/commit/36825390563feb3d8b830425a29f4d09c1c5ec86))
+* **test:** generate INT32 comparison and select cases ([#479](https://github.com/AmbiqAI/helia-core-tester/issues/479)) ([07a70c6](https://github.com/AmbiqAI/helia-core-tester/commit/07a70c6214cfd72e60b81dfaf4f35cbe20d0a710)), closes [#478](https://github.com/AmbiqAI/helia-core-tester/issues/478)
+
+
+### Bug Fixes
+
+* **dequantize:** take the scalar NaN rule when the library keeps NaN payloads ([#495](https://github.com/AmbiqAI/helia-core-tester/issues/495)) ([6fbe79b](https://github.com/AmbiqAI/helia-core-tester/commit/6fbe79b964dd7149eddeb23d0b7e63f3e4010336))
+* **fully_connected:** reject a filter InFeatures that differs from the flattened input ([84f29b3](https://github.com/AmbiqAI/helia-core-tester/commit/84f29b3f229649aa715302973f15db771b85994e))
+* **generation:** assume f32 accumulation for FP16 TransposeConv ([c128dfb](https://github.com/AmbiqAI/helia-core-tester/commit/c128dfbf32179bbb1885fb6173d99dc29bbdb549))
+* **generation:** scale hidden float TransposeConv tolerance with the data ([31b2553](https://github.com/AmbiqAI/helia-core-tester/commit/31b2553a45be472a1d56854ed67da15439c650ed))
+* **generation:** scale hidden float TransposeConv tolerance with the data ([440090e](https://github.com/AmbiqAI/helia-core-tester/commit/440090e3d6dc7d8c465e22d9d0a6ecca787029a4))
+* **hardware:** enforce per-kernel blob dtype contracts in CASE_META ([de067ed](https://github.com/AmbiqAI/helia-core-tester/commit/de067edf21a19f2087e228dc2f65500eb3b1d948))
+* **hardware:** enforce per-kernel blob dtype contracts in CASE_META ([63a37d0](https://github.com/AmbiqAI/helia-core-tester/commit/63a37d09fab302d8039d9bd0a2cdb329118e8fd8))
+* **hardware:** skip the sram guard test without ns-cmsis-nn; note the RTT invalidate invariant ([f51986f](https://github.com/AmbiqAI/helia-core-tester/commit/f51986fe5e75a6b207db815a8cd6d9806c22d1d7))
+* **nightly:** address review: page the run history for baseline runs ([764c67a](https://github.com/AmbiqAI/helia-core-tester/commit/764c67a6d094aed422ec746369306ce120062df7))
+* **nightly:** address review: refuse malformed coverage shapes and warn on unchecked growth ([2e864b2](https://github.com/AmbiqAI/helia-core-tester/commit/2e864b2a845ee67055b0883e7a6825484d61c769))
+* **random-shapes:** address review findings ([78cc8cd](https://github.com/AmbiqAI/helia-core-tester/commit/78cc8cd0eefb29d0ab19532e202201ccd0399560))
+* **random-shapes:** stabilize SM8 hidden draws across numerical backends ([#490](https://github.com/AmbiqAI/helia-core-tester/issues/490)) ([be9cd23](https://github.com/AmbiqAI/helia-core-tester/commit/be9cd231d79b031908d3e7671beafc6229e6a6bc))
+
+
+### Docs
+
+* **descriptors:** attribute the depthwise f16 overrides to the MVE accumulation floor ([5e9c5be](https://github.com/AmbiqAI/helia-core-tester/commit/5e9c5be48ca8eb0462340328fa2d3bc7af6c047f))
+
 ## [0.10.0](https://github.com/AmbiqAI/helia-core-tester/compare/v0.9.0...v0.10.0) (2026-10-14)
 
 
