@@ -30,17 +30,6 @@ NO_IMPL = "ARM_CMSIS_NN_NO_IMPL_ERROR"
 SUCCESS = "ARM_CMSIS_NN_SUCCESS"
 DISPATCH_HEADER = '"Internal/arm_nn_dispatch.h"'
 
-# The route enum each planned route id names (Include/Internal/arm_nn_dispatch.h). Stands in until the planner
-# reports the enum value with the plan (requested on AmbiqAI/ns-cmsis-nn#889).
-ROUTE_ENUMS = {
-    "dw_wrapper_s8:to_conv": "ARM_NN_DW_CONV_S8_ROUTE_TO_CONV",
-    "dw_wrapper_s8:conv_3x3": "ARM_NN_DW_CONV_S8_ROUTE_3X3",
-    "dw_wrapper_s8:opt": "ARM_NN_DW_CONV_S8_ROUTE_OPT",
-    "dw_wrapper_s8:generic": "ARM_NN_DW_CONV_S8_ROUTE_GENERIC",
-    "fc_wrapper_s8:per_channel": "ARM_NN_FC_S8_ROUTE_PER_CHANNEL",
-    "fc_wrapper_s8:per_tensor": "ARM_NN_FC_S8_ROUTE_PER_TENSOR",
-}
-
 
 class ConformanceError(ValueError):
     """A conformance case whose descriptor and the checkout's planner disagree."""
@@ -151,9 +140,10 @@ def apply(pool, context: Mapping[str, Any], desc: Mapping[str, Any], cpu: str):
             lines.append(f'    HELIA_VALIDATE_SCALAR_EQ_INT("{label}", "ctx.size against the planned bytes", '
                          f"{int(plan.ctx_bytes)}, {n}_ctx.size);")
         if request.selector is not None:
-            if plan.route not in ROUTE_ENUMS:
+            route_name = planner.route_name(plan)
+            if route_name is None:
                 raise ConformanceError(f"{name}: planned route {plan.route!r} has no route enum to check")
-            lines.append(f'    HELIA_VALIDATE_SCALAR_EQ_INT("{label}", "{plan.route}", {ROUTE_ENUMS[plan.route]}, '
+            lines.append(f'    HELIA_VALIDATE_SCALAR_EQ_INT("{label}", "{plan.route}", {route_name}, '
                          f"{request.selector});")
         return lines
 

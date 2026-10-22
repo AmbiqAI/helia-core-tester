@@ -90,6 +90,14 @@ def _method(planner, method: str) -> Callable:
     return fn
 
 
+def route_name(plan) -> Optional[str]:
+    """The arm_nn_dispatch.h constant of a plan's route, as the package names it; None for a direct entry."""
+    if not hasattr(plan, "route_name"):
+        raise PlannerUnavailable("this checkout's planner names no route constant (Plan.route_name); it needs "
+                                 "AmbiqAI/ns-cmsis-nn's P1e planner (#891) or later")
+    return plan.route_name
+
+
 def plan(method: str, target, **layer):
     """One plan of `method` (a Planner method name) for `target`, with refusals typed for the tester."""
     package, planner = current_planner()
