@@ -639,15 +639,18 @@ def _with_weight_sums(scratch: int, channels: int) -> int:
 
 
 def _depthwise_s8_scratch_bytes(
-    input_dims: dict[str, int], filter_dims: dict[str, int], output_dims: dict[str, int], sizers: object = None
+    input_dims: dict[str, int], filter_dims: dict[str, int], output_dims: dict[str, int], *, ch_mult: int,
+    stride: tuple[int, int], padding: tuple[int, int], dilation: tuple[int, int], sizers: object = None,
 ) -> int:
-    """Bound wrapper or entry scratch plus weight sums."""
-    scratch = TemplateContextBuilder.calculate_depthwise_buffer_size_max(input_dims, filter_dims, output_dims, output_dtype="S8")
+    """The wrapper's scratch on every build (the checkout's planner, which counts the DW->conv route's
+    transposed filter too) or the entry's, plus weight sums."""
+    from helia_core_tester.contract import planner
+
+    dims = {name: tuple(int(d[k]) for k in "nhwc") for name, d in
+            (("input_dims", input_dims), ("filter_dims", filter_dims), ("output_dims", output_dims))}
+    scratch = planner.planned_ctx_bytes("depthwise_conv_wrapper_s8", None, **dims, ch_mult=int(ch_mult),
+                                        stride=tuple(stride), padding=tuple(padding), dilation=tuple(dilation))
     scratch = max(scratch, depthwise_3x3_scratch_bytes(sizers, input_dims))
-    # One input channel may run as conv.
-    if input_dims["c"] == 1:
-        conv = TemplateContextBuilder.calculate_buffer_size_max(input_dims, filter_dims, output_dims, output_dtype="S8")
-        scratch = max(scratch, conv + _shape_product(tuple(filter_dims.values())))
     return _with_weight_sums(scratch, output_dims["c"])
 
 
@@ -1637,7 +1640,9 @@ def _build_depthwise_conv_case(
         )
     else:
         scratch_bytes = _depthwise_s8_scratch_bytes(
-            input_dims, filter_dims, output_dims, sizers=generated_test.descriptor.get("entry_sizer")
+            input_dims, filter_dims, output_dims, ch_mult=ch_mult or 1, stride=(stride_h or 1, stride_w or 1),
+            padding=(pad_h, pad_w), dilation=(dilation_h or 1, dilation_w or 1),
+            sizers=generated_test.descriptor.get("entry_sizer"),
         )
 
     arrays = [
@@ -2006,11 +2011,18 @@ def _build_pooling_case(
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
-    scratch_bytes = (
-        int(TemplateContextBuilder.calculate_pooling_buffer_size_max(input_dims, output_dims, pooling_type="AVERAGE", output_dtype=activation_dtype))
-        if operator == "AvgPool"
-        else 0
-    )
+    if operator == "AvgPool" and activation_dtype == "S8":
+        from helia_core_tester.contract import planner
+
+        # arm_avgpool_s8's scratch on every build, from the checkout's planner.
+        scratch_bytes = planner.planned_ctx_bytes(
+            "pool_s8", None, max_pool=False, input_dims=input_shape, kernel_hw=(filter_dims["h"], filter_dims["w"]),
+            output_dims=output_shape, stride=(stride_h or 1, stride_w or 1), padding=(pad_h, pad_w))
+    elif operator == "AvgPool":
+        scratch_bytes = int(TemplateContextBuilder.calculate_pooling_buffer_size_max(
+            input_dims, output_dims, pooling_type="AVERAGE", output_dtype=activation_dtype))
+    else:
+        scratch_bytes = 0
 
     arrays = [
         (1, "input_0", activation_dtype, input_shape, input_data, False, False),

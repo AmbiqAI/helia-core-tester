@@ -51,7 +51,8 @@ def pool_argument_pool(context: Dict) -> ArgumentPool:
     return ArgumentPool(
         name=n, values=values, header=header, benchmark=False,
         output_count=f"({output['n']} * {output['h']} * {output['w']} * {output['c']})",
-        scratch_buffer=int(context["buffer_size_max"]) > 0,
+        # A case that queries the scratch size owns a buffer, even one the query says it can leave empty.
+        scratch_buffer=bool(context.get("kernel_get_buffer_size_fn")) or int(context["buffer_size_max"]) > 0,
         no_scratch=not context.get("kernel_get_buffer_size_fn"),
         prototype_from=UNDECLARED_ALIASES.get(context["kernel_fn"]),
     )
@@ -251,12 +252,22 @@ class PoolFamilyBase(OperationBase):
 
         # Calculate buffer size max
         activation_dtype = self.tensor_dtype("input")
-        buffer_size_max = builder.calculate_pooling_buffer_size_max(
-            input_dims,
-            output_dims,
-            pooling_type=pooling_type,
-            output_dtype=activation_dtype
-        )
+        if kernel_info["kernel_fn"] in ("arm_avgpool_s8", "arm_max_pool_s8"):
+            from helia_core_tester.contract import planner
+
+            # The kernel's scratch on every build of the target CPU, from the checkout's planner.
+            buffer_size_max = planner.planned_ctx_bytes(
+                "pool_s8", self.target_cpu, max_pool=kernel_info["kernel_fn"] == "arm_max_pool_s8",
+                input_dims=tuple(int(input_dims[k]) for k in "nhwc"), kernel_hw=(int(pool_h), int(pool_w)),
+                output_dims=tuple(int(output_dims[k]) for k in "nhwc"), stride=(int(stride_h), int(stride_w)),
+                padding=(int(geometry["pad_h"]), int(geometry["pad_w"])))
+        else:
+            buffer_size_max = builder.calculate_pooling_buffer_size_max(
+                input_dims,
+                output_dims,
+                pooling_type=pooling_type,
+                output_dtype=activation_dtype
+            )
         
         # Build template context
         context = {

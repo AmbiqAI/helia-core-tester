@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from helia_core_tester.contract.planner import PlanRefusedError
 from helia_core_tester.hardware.wrapper_route import (
     CHANNELWISE, CONV_SOURCE, DISPATCH_HEADER, DW_OPT, PLANAR, conv_route, conv_s4_route, conv_s16_route,
     dw_opt_variant, dw_route, dw_s4_route, dw_s16_route, inner_symbol, inner_variant, opt_scratch_size, planar_bytes,
@@ -82,7 +83,13 @@ def _expected(row: tuple, mve: bool, gate_1xn: bool = True) -> str:
         return dw_s4_route(i, dil, ch_mult)
     if kind == "s":
         return dw_s16_route(i, f, o, stride, pad, dil, ch_mult)
-    route = dw_route(i, f, o, stride, pad, dil, ch_mult, mve, gate_1xn)
+    try:
+        route = dw_route(i, f, o, stride, pad, dil, ch_mult, mve, gate_1xn)
+    except PlanRefusedError as error:
+        # The planner refuses dims that disagree; the C wrapper runs them unchecked.
+        if error.status != "shape":
+            raise
+        return None
     if route != DW_OPT:
         return route
     ctx_size = opt_scratch_size(i, f, o, stride, pad, dil, mve)
@@ -111,8 +118,11 @@ def test_mirror_matches_c_wrappers(tmp_path: Path, mve: bool) -> None:
     routes = out.stdout.split()
     assert len(routes) == len(lines)
     assert routes[-1] == "arm_fully_connected_per_channel_s8"
+    expected = [_expected(row, mve, gate_1xn) for row in rows]
+    assert sum(e is None for e in expected) < len(rows) // 2, "the planner refuses most depthwise rows"
     mismatches = [
-        (row, route) for row, route in zip(rows, routes) if route.removeprefix("to_conv:") != _expected(row, mve, gate_1xn)
+        (row, route) for row, route, want in zip(rows, routes, expected)
+        if want is not None and route.removeprefix("to_conv:") != want
     ]
     assert not mismatches, f"{len(mismatches)} rows differ, first: {mismatches[:3]}"
     seen = set(routes)
@@ -139,7 +149,12 @@ def test_mirror_matches_c_wrappers(tmp_path: Path, mve: bool) -> None:
 def _ctx_fallback(row: tuple) -> bool:
     """A planar layer whose plane exceeds ctx."""
     kind, i, f, o, stride, pad, dil, ch_mult = row
-    if kind != "d" or dw_route(i, f, o, stride, pad, dil, ch_mult, True) != DW_OPT:
+    if kind != "d":
+        return False
+    try:
+        if dw_route(i, f, o, stride, pad, dil, ch_mult, True) != DW_OPT:
+            return False
+    except PlanRefusedError:
         return False
     plane = planar_bytes(i, f, o, stride, pad, dil, ch_mult)
     return plane > opt_scratch_size(i, f, o, stride, pad, dil, True) > 0

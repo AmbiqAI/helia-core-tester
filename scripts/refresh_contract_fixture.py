@@ -3,8 +3,10 @@
 from an ns-cmsis-nn checkout that ships the export, the implementation manifest and ns_cmsis_nn_contracts.
 
 The fixture is a slice of that checkout: the export filtered to BOUND_PREFIXES, the public headers it is
-checked against, the reader package verbatim, and the manifest with its signature_sha256 rebound to the
-filtered export (the only field that differs from the checkout's).
+checked against, the reader package verbatim, the manifest with its signature_sha256 rebound to the
+filtered export (the only field that differs from the checkout's), and what the host planner builds from:
+Planner/, the library sources Planner/sources.txt lists and the headers they include (found with the host
+compiler's -MM).
 
     uv run python scripts/refresh_contract_fixture.py <ns-cmsis-nn checkout>
 """
@@ -14,7 +16,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -44,12 +48,36 @@ def manifest_symbols(record: dict) -> set[str]:
     return symbols
 
 
+def planner_inputs(root: Path) -> list[Path]:
+    """Planner/, its listed sources and every checkout header they include, relative to `root`."""
+    listing = root / "Planner" / "sources.txt"
+    sources = [line.strip() for line in listing.read_text(encoding="utf-8").splitlines()
+               if line.strip() and not line.startswith("#")]
+    compiler = os.environ.get("CC") or shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
+    if compiler is None:
+        raise RuntimeError("no host C compiler to find the planner's headers (set CC)")
+    found = {Path(p).relative_to(root) for p in (root / "Planner").rglob("*") if p.is_file()}
+    for source in sources:
+        result = subprocess.run([compiler, "-std=c11", "-MM", "-DARM_NN_TOOLCHAIN_ARMCLANG=0", "-IInclude",
+                                 "-IPlanner/include", "-IPlanner/src", source], cwd=root, capture_output=True,
+                                text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"{compiler} -MM {source} failed:\n{result.stderr.strip()}")
+        for token in result.stdout.replace("\\\n", " ").split():
+            if token.endswith(":"):
+                continue
+            path = (root / token).resolve()
+            if path.is_relative_to(root):
+                found.add(path.relative_to(root))
+    return sorted(found)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("checkout", type=Path)
     args = parser.parse_args(argv)
     root = args.checkout.resolve()
-    for relative in (CONTRACT_RELPATH, MANIFEST_RELPATH, PACKAGE_RELPATH / "__init__.py"):
+    for relative in (CONTRACT_RELPATH, MANIFEST_RELPATH, PACKAGE_RELPATH / "__init__.py", Path("Planner/sources.txt")):
         if not (root / relative).is_file():
             return fail(f"{root} has no {relative}")
     for header in HEADERS:
@@ -83,8 +111,17 @@ def main(argv: list[str] | None = None) -> int:
     package.mkdir(parents=True)
     for source in sorted((root / PACKAGE_RELPATH).glob("*.py")):
         shutil.copyfile(source, package / source.name)
+    try:
+        inputs = planner_inputs(root)
+    except (OSError, RuntimeError) as error:
+        return fail(str(error))
+    shutil.rmtree(FIXTURE_ROOT / "Planner", ignore_errors=True)
+    shutil.rmtree(FIXTURE_ROOT / "Source", ignore_errors=True)
+    for relative in inputs:
+        (FIXTURE_ROOT / relative).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(root / relative, FIXTURE_ROOT / relative)
     print(f"{FIXTURE_ROOT}: {len(functions)} functions, {len(manifest['implementations'])} implementations, "
-          f"reader from {root / PACKAGE_RELPATH}")
+          f"reader from {root / PACKAGE_RELPATH}, {len(inputs)} planner inputs")
     return 0
 
 

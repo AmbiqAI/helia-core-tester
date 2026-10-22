@@ -88,7 +88,7 @@ def _context(
         "dw_conv_params": _params(dilation=dilation, pad=pad),
         "input_dims": _dims(n=n, h=height, c=c),
         "filter_dims": _dims(h=filter_hw[0], w=filter_hw[1], c=c),
-        "output_dims": _dims(h=height, c=c),
+        "output_dims": _dims(n=n, h=height, c=c),
     }
 
 

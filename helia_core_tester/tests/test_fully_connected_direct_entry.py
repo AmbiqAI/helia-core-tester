@@ -46,13 +46,18 @@ def test_case_packs_once_before_the_call_and_checks_the_gate(tmp_path: Path) -> 
     code = re.sub(r"/\*.*?\*/|//[^\n]*", " ", source, flags=re.S)
     run = code[code.index("_run("):code.index("_test_case_run(void)")]
 
-    # The stream is sized by the entry's own query, then built in the run: sums first, then the packer.
+    # The stream is sized by the entry's own query, then built in the run by the manifest record's prepare
+    # steps, each bound to the case's arguments: sums first, then the packer.
     assert re.search(rf"int32_t packed_size = {_ENTRY}_get_packed_size\(\s*&\w+_filter_dims\s*\)", run)
     vector_sum = re.search(
-        r"arm_vector_sum_s8\(\s*\w+_kernel_sum,\s*13,\s*5,\s*\w+_weights,\s*\w+_fc_params\.input_offset,\s*0,\s*\w+_biases\s*\)",
+        r"arm_vector_sum_s8\(\s*\w+_kernel_sum,\s*\w+_filter_dims\.n,\s*\w+_output_dims\.c,\s*\w+_weights,"
+        r"\s*\w+_fc_params\.input_offset,\s*\w+_fc_params\.filter_offset,\s*\w+_biases\s*\)",
         run,
     )
-    pack = run.index(f"{_ENTRY}_pack(")
+    pack = re.search(rf"{_ENTRY}_pack\(\s*&\w+_filter_dims,\s*\w+_weights,\s*\w+_kernel_sum,\s*&\w+_quant_params,"
+                     r"\s*\(int8_t \*\)\w+_packed\s*\)", run)
+    assert pack
+    pack = pack.start()
     call = re.search(rf"return {_ENTRY}\(\s*&\w+_fc_params,\s*&\w+_input_dims,\s*input,\s*&\w+_filter_dims,"
                      r"\s*\(const int8_t \*\)\w+_packed,\s*&\w+_output_dims,\s*output\s*\)", run)
     assert vector_sum and call and vector_sum.start() < pack < call.start()
@@ -78,3 +83,30 @@ def test_declined_case_expects_the_gate_closed_and_an_untouched_output(tmp_path:
 def test_per_tensor_case_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="per-channel quantization only"):
         _source(_IN_GATE, tmp_path, hint={"call_style": "per_tensor", "force_per_tensor": True})
+
+
+def test_the_packed_size_is_the_packers(tmp_path: Path) -> None:
+    from helia_core_tester.generation.ops.FullyConnectedFunctions.fully_connected import fc_packed_stream_bytes
+
+    # ceil(C / 4) blocks, each four rows of K rounded up to 16 plus 48 bytes of parameters.
+    for k, c in ((13, 5), (1, 1), (16, 4), (17, 8), (64, 9)):
+        assert fc_packed_stream_bytes({"n": k, "c": c}) == -(-c // 4) * (4 * (-(-k // 16) * 16) + 48)
+
+
+@pytest.mark.parametrize("ref, expected", [
+    (None, "NULL"), ("filter_data", "x_weights"), ("fc_params.input_offset", "x_fc_params.input_offset"),
+    ("quant_ptr.multiplier", "(x_q)->multiplier"), ("buffer:kernel_sums", "x_kernel_sum"),
+])
+def test_manifest_bindings_resolve_over_the_case(ref, expected) -> None:
+    from helia_core_tester.generation.ops.FullyConnectedFunctions.fully_connected import manifest_binding
+
+    values = {"filter_data": "x_weights", "fc_params": "&x_fc_params", "quant_ptr": "x_q"}
+    assert manifest_binding(ref, values, {"kernel_sums": "x_kernel_sum"}, "x") == expected
+
+
+@pytest.mark.parametrize("ref, message", [("buffer:other", "names no buffer"), ("output_dims.c", "does not pass")])
+def test_a_binding_the_case_cannot_supply_fails_closed(ref, message) -> None:
+    from helia_core_tester.generation.ops.FullyConnectedFunctions.fully_connected import manifest_binding
+
+    with pytest.raises(ValueError, match=message):
+        manifest_binding(ref, {"filter_data": "x_weights"}, {"kernel_sums": "x_kernel_sum"}, "x")

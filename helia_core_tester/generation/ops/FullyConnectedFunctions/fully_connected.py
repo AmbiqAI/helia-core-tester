@@ -36,6 +36,10 @@ def fc_quant_argument(context: Dict[str, Any]) -> str:
     return f"&{n}_quant_params"
 
 
+def _dims_tuple(d: Dict[str, Any]) -> tuple[int, int, int, int]:
+    return (int(d["n"]), int(d["h"]), int(d["w"]), int(d["c"]))
+
+
 def fc_packed_entry(context: Dict[str, Any]) -> bool:
     """Whether the kernel reads a weight stream packed ahead of the call in place of the weights,
     kernel sums and quantization (arm_fully_connected_per_channel_packed_s8)."""
@@ -47,48 +51,87 @@ def fc_packed_entry(context: Dict[str, Any]) -> bool:
     return takes(require_bound_symbol(load_current_contracts(), context["kernel_fn"]), "packed_data")
 
 
-def fc_packed_stream_bound(filter_dims: Dict[str, Any]) -> int:
-    """A bound in whole words on the packed stream: ceil(C/4) blocks of four K-rows padded to 16
-    bytes plus 48 bytes of parameters. The run-time size query must fit it."""
-    return ((int(filter_dims['c']) + 3) * (int(filter_dims['n']) + 27) + 3) // 4 * 4
+def fc_packed_stream_bytes(filter_dims: Dict[str, Any]) -> int:
+    """The packed stream's size in whole words, from the library's own packer: the size depends only on the
+    filter shape, so the packer runs on zero weights and a right-shift-only quantization it accepts."""
+    from helia_core_tester.contract import planner
+
+    k, c = int(filter_dims['n']), int(filter_dims['c'])
+    size = planner.fc_packed_stream_bytes(bytes(k * c), filter_dims=(k, 1, 1, c), multipliers=[1 << 30] * c,
+                                          shifts=[-1] * c)
+    return (size + 3) // 4 * 4
 
 
-def fc_packed_provider(context: Dict[str, Any]) -> Provider:
-    """The stream the packed entry reads, built the way its caller must build it: kernel sums with
-    the input offset and bias folded in (filter offset 0), then the entry's own packer."""
+def manifest_binding(ref: Optional[str], values: Dict[str, str], buffers: Dict[str, str], where: str) -> str:
+    """The C expression of a manifest binding (an operand, `operand.field`, `buffer:<name>`, or None for NULL)
+    over the case's argument values and the provider's buffers."""
+    if ref is None:
+        return "NULL"
+    if ref.startswith("buffer:"):
+        name = ref[len("buffer:"):]
+        if name not in buffers:
+            raise ValueError(f"{where}: binding {ref!r} names no buffer this case provides ({sorted(buffers)})")
+        return buffers[name]
+    operand, _, field = ref.partition(".")
+    if operand not in values:
+        raise ValueError(f"{where}: binding {ref!r} names operand {operand!r}, which the case does not pass")
+    expr = values[operand]
+    if not field:
+        return expr
+    return f"{expr[1:]}.{field}" if expr.startswith("&") else f"({expr})->{field}"
+
+
+def manifest_prepare_setup(record, values: Dict[str, str], buffers: Dict[str, str], contracts, where: str) -> list:
+    """The prepare steps of `record` as C statements: each call bound from the contract, stopping at the first
+    failure (`pack_status`)."""
+    from helia_core_tester.contract.render import render_call
+
+    if not record.prepare:
+        raise ValueError(f"{where}: manifest record {record.id} has no prepare steps")
+    status_type = contracts.require(record.entry).returns.strip()
+    lines = []
+    for index, step in enumerate(record.prepare):
+        decl = contracts.require(step.symbol)
+        if decl.returns.strip() != status_type:
+            raise ValueError(f"{where}: prepare step {step.symbol} returns {decl.returns}, not the entry's "
+                             f"{status_type}")
+        args = {name: manifest_binding(ref, values, buffers, f"{where}: {step.symbol}.{name}")
+                for name, ref in step.args.items()}
+        if index == 0:
+            lines.append(f"    arm_cmsis_nn_status pack_status = {render_call(decl, args, indent='        ')};")
+        else:
+            lines += ["    if (pack_status == ARM_CMSIS_NN_SUCCESS) {",
+                      f"        pack_status = {render_call(decl, args, indent='            ')};",
+                      "    }"]
+    return lines
+
+
+def fc_packed_provider(context: Dict[str, Any], values: Dict[str, str]) -> Provider:
+    """The stream the packed entry reads, built on target by the prepare steps of the entry's implementation
+    manifest record (kernel sums, then the entry's own packer)."""
     from helia_core_tester.contract.render import load_current_contracts
+    from helia_core_tester.generation.entry import manifest_record
 
     n, kernel_fn = context["name"], context["kernel_fn"]
     upper = n.upper()
     filter_dims = context["filter_dims"]
+    contracts = load_current_contracts()
     sizer = f"{kernel_fn}_get_packed_size"
-    if load_current_contracts().find(sizer) is None:
+    if contracts.find(sizer) is None:
         raise ValueError(f"{n}: {kernel_fn} packs a weight stream but this checkout declares no {sizer}")
-    bound = fc_packed_stream_bound(filter_dims)
-    bias = f"{n}_biases" if context.get("has_bias_array", context["has_biases"]) else "NULL"
+    record = manifest_record(contracts, kernel_fn, f"{n}: entry {kernel_fn!r}")
+    if record is None:
+        raise ValueError(f"{n}: {kernel_fn} packs a weight stream, but the implementation manifest has no record "
+                         "saying how")
+    bound = fc_packed_stream_bytes(filter_dims)
+    buffers = {"kernel_sums": f"{n}_kernel_sum", "packed_weights": f"(int8_t *){n}_packed"}
+    # The prepare steps read the layer's bias, which the call itself no longer takes once it is folded.
+    values = {**values, "bias_data": f"{n}_biases" if context.get("has_bias_array", context["has_biases"]) else "NULL"}
     setup = "\n".join([
-        "    // The stream is built the way the entry's caller must build it: kernel sums with the",
-        "    // input offset and bias folded in (filter offset 0), then the entry's packer.",
+        f"    // The stream is built as manifest record {record.id} prepares it.",
         f"    {n}_packed_used = (size_t)packed_size;",
         f"    HELIA_GUARD_STAMP_SLACK({n}_packed, {n}_packed_used);",
-        f"    arm_cmsis_nn_status pack_status = arm_vector_sum_s8(",
-        f"        {n}_kernel_sum,",
-        f"        {int(filter_dims['n'])},",
-        f"        {int(filter_dims['c'])},",
-        f"        {n}_weights,",
-        f"        {n}_fc_params.input_offset,",
-        "        0,",
-        f"        {bias}",
-        "    );",
-        "    if (pack_status == ARM_CMSIS_NN_SUCCESS) {",
-        f"        pack_status = {kernel_fn}_pack(",
-        f"            &{n}_filter_dims,",
-        f"            {n}_weights,",
-        f"            {n}_kernel_sum,",
-        f"            &{n}_quant_params,",
-        f"            (int8_t *){n}_packed",
-        "        );",
-        "    }",
+        *manifest_prepare_setup(record, values, buffers, contracts, n),
         "    if (pack_status != ARM_CMSIS_NN_SUCCESS) {",
         "        return pack_status;",
         "    }",
@@ -97,8 +140,8 @@ def fc_packed_provider(context: Dict[str, Any]) -> Provider:
         param="packed_data",
         expr=f"(const int8_t *){n}_packed",
         # The bound keeps the harness's scratch macro name: the hardware bridge reads it as the stream size.
-        declarations=(Define(f"{upper}_BUFFER_SIZE_MAX", str(bound), comment="Packed weight stream (max upper bound; "
-                             "actual size queried at runtime)"),
+        declarations=(Define(f"{upper}_BUFFER_SIZE_MAX", str(bound), comment="Packed weight stream (the packer's "
+                             "size, in whole words; the size query must agree at run time)"),
                       Declaration(f"{n}_packed_used", "size_t", "0", storage="static",
                                   comment="Bytes of the stream the size query claimed")),
         # Word storage keeps the stream 4-byte aligned, as the entry requires.
@@ -229,7 +272,7 @@ def fc_argument_pool(context: Dict[str, Any]) -> ArgumentPool:
     if packed:
         # The entry takes no context: the stream is a provider's buffer, not the case's scratch.
         return ArgumentPool(
-            name=n, values=values, header=header, source=source, providers=(fc_packed_provider(context),),
+            name=n, values=values, header=header, source=source, providers=(fc_packed_provider(context, values),),
             output_count=f"({output['n']} * {output['h']} * {output['w']} * {output['c']})", benchmark=False,
             scratch_buffer=False, extra_checks=fc_packed_checks(context), includes=('"arm_nnsupportfunctions.h"',),
         )
@@ -501,17 +544,17 @@ class OpFullyConnected(OperationBase):
         has_weight_sum = False
         folded_bias = None
         if weight_dtype != "S4" and self._should_precompute_weight_sum(weights, output_dtype):
-            from helia_core_tester.generation.ops.ConvolutionFunctions.depthwise_conv import vector_sum_s8
+            from helia_core_tester.contract import planner
 
             bias_data = biases.astype(np.int32) if biases is not None and biases.size > 0 else None
-            weight_sum = vector_sum_s8(
-                vector_data=weights,
-                vector_cols=weights.shape[1],
-                vector_rows=weights.shape[0],
+            weight_sum = np.asarray(planner.vector_sum_s8(
+                np.ascontiguousarray(weights, dtype=np.int8).tobytes(),
+                cols=weights.shape[1],
+                rows=weights.shape[0],
                 lhs_offset=int(fc_params["input_offset"]),
                 rhs_offset=int(fc_params["filter_offset"]),
-                bias_data=bias_data,
-            ).astype(np.int32)
+                bias=bias_data.tolist() if bias_data is not None else None,
+            ), dtype=np.int32)
             has_weight_sum = True
             if bias_data is not None:
                 folded_bias = bias_data
@@ -535,6 +578,14 @@ class OpFullyConnected(OperationBase):
             buffer_size_max = output_dims['c'] * 4
         elif weight_dtype == "S4":
             buffer_size_max = 0
+        elif kernel_info["kernel_fn"] == "arm_fully_connected_wrapper_s8":
+            from helia_core_tester.contract import planner
+
+            # The wrapper's context on every build of the target CPU, from the checkout's planner.
+            buffer_size_max = planner.planned_ctx_bytes(
+                "fully_connected_wrapper_s8", self.target_cpu,
+                input_dims=_dims_tuple(input_dims), filter_dims=_dims_tuple(filter_dims),
+                output_dims=_dims_tuple(output_dims), per_channel=bool(quant_params_dict.get('per_channel')))
         else:
             buffer_size_max = builder.calculate_fc_buffer_size_max(filter_dims, output_dtype=activation_dtype)
         entry_scratch_bytes = kernel_info.get("entry_scratch_bytes")

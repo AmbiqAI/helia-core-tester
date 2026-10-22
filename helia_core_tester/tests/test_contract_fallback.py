@@ -132,3 +132,15 @@ def test_the_fixture_reader_is_the_one_tests_install(tmp_path: Path) -> None:
     assert sorted(p.name for p in (root / PACKAGE_RELPATH).glob("*.py")) == \
         sorted(p.name for p in (FIXTURE_ROOT / PACKAGE_RELPATH).glob("*.py"))
     assert (FIXTURE_ROOT.parent / "hardware_pilot" / "python").resolve() == (FIXTURE_ROOT / "python").resolve()
+
+
+def test_vendored_planner_inputs_match_the_real_tree() -> None:
+    root = _real_checkout_with(Path("Planner") / "sources.txt")
+    stale = [str(p.relative_to(FIXTURE_ROOT)) for p in sorted(FIXTURE_ROOT.rglob("*"))
+             if p.is_file() and p.relative_to(FIXTURE_ROOT).parts[0] in ("Planner", "Source")
+             and (not (root / p.relative_to(FIXTURE_ROOT)).is_file()
+                  or (root / p.relative_to(FIXTURE_ROOT)).read_bytes() != p.read_bytes())]
+    assert not stale, f"{stale} differ from {root}; run scripts/refresh_contract_fixture.py {root}"
+    listed = [line.strip() for line in (root / "Planner" / "sources.txt").read_text().splitlines()
+              if line.strip() and not line.startswith("#")]
+    assert all((FIXTURE_ROOT / source).is_file() for source in listed)
