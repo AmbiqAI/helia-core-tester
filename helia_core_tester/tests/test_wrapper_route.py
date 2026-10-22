@@ -12,8 +12,9 @@ import pytest
 
 from helia_core_tester.contract.planner import PlanRefusedError
 from helia_core_tester.hardware.wrapper_route import (
-    CHANNELWISE, CONV_SOURCE, DW_OPT, PLANAR, conv_route, conv_s4_route, conv_s16_route, dw_opt_variant, dw_route,
-    dw_s4_route, dw_s16_route, inner_symbol, inner_variant, opt_scratch_size, planar_bytes, tree_gate,
+    CHANNELWISE, CONV_SOURCE, DISPATCH_HEADER, DW_OPT, PLANAR, conv_route, conv_s4_route, conv_s16_route,
+    dw_opt_variant, dw_route, dw_s4_route, dw_s16_route, inner_symbol, inner_variant, opt_scratch_size, planar_bytes,
+    tree_gate,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -218,6 +219,38 @@ def test_tree_gate_reads_the_wrapper(tmp_path: Path) -> None:
     source.write_text(gate.format(""), encoding="utf-8")
     assert tree_gate(tmp_path) is None
     assert tree_gate(tmp_path / "missing") is None and tree_gate(None) is None
+
+
+def test_tree_gate_reads_the_route_selector(tmp_path: Path) -> None:
+    source = tmp_path / CONV_SOURCE
+    source.parent.mkdir(parents=True)
+    # The wrapper keeps no gate once its selector routes it (ns-cmsis-nn#886).
+    source.write_text("switch (arm_nn_convolve_wrapper_s8_select(conv_params, input_dims, filter_dims, output_dims))\n",
+                      encoding="utf-8")
+    header = tmp_path / DISPATCH_HEADER
+    header.parent.mkdir(parents=True)
+    selector = (
+        "/* arm_nn_is_convolve_1_x_n(conv_params, input_dims, filter_dims) */\n"
+        "__STATIC_FORCEINLINE arm_nn_conv_s8_route arm_nn_convolve_wrapper_s8_select(const cmsis_nn_conv_params *p)\n"
+        "{{\n    if (arm_nn_is_convolve_1_x_n(conv_params, input_dims, filter_dims){})\n    {{\n"
+        "        return ARM_NN_CONV_S8_ROUTE_1_X_N;\n    }}\n"
+        "        if (arm_nn_is_convolve_s8_small_cin(conv_params, input_dims, filter_dims, output_dims, NULL))\n}}\n"
+    )
+    padding = " &&\n        arm_nn_convolve_1_x_n_s8_padding_supported(conv_params, filter_dims, output_dims)"
+    for extra, expected in (("", False), (padding, True), (" && other(conv_params)", None)):
+        header.write_text(selector.format(extra), encoding="utf-8")
+        assert tree_gate(tmp_path) is expected
+    # A dispatch header without the conv selector leaves the wrapper as the source.
+    header.write_text("arm_nn_fully_connected_wrapper_s8_select(quant_params)\n", encoding="utf-8")
+    assert tree_gate(tmp_path) is None
+    gate = "else if (arm_nn_is_convolve_1_x_n(conv_params, input_dims, filter_dims))\n{\n"
+    source.write_text(gate + "arm_nn_is_convolve_s8_small_cin(conv_params, input_dims, filter_dims, output_dims, NULL)\n",
+                      encoding="utf-8")
+    assert tree_gate(tmp_path) is False
+    # An unreadable header is an unknown tree.
+    header.unlink()
+    header.mkdir()
+    assert tree_gate(tmp_path) is None
 
 
 def test_inner_symbol_names_s4_and_s16_routes() -> None:
