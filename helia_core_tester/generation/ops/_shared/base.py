@@ -927,6 +927,9 @@ class OperationBase(ABC):
         from helia_core_tester.generation.harness import plan_harness, render_declaration
         from helia_core_tester.generation.kernel_dispatch import autovectorize_declines_if
 
+        from helia_core_tester.generation import conformance
+
+        pool = conformance.apply(pool, context, self.desc, self.target_cpu)
         name = context["name"]
         env = template_environment(str(find_tester_templates_dir()))
         # Every refusal runs before anything is written, so a refused case leaves no partial output.

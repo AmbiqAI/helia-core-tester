@@ -489,6 +489,15 @@ class OpDepthwiseConv(OperationBase):
             'planar_supported': self.desc.get("planar_supported"),
             'planar_rule_fn': DEPTHWISE_CONV_S8_PLANAR_RULE,
         }
+        if self.desc.get("conformance") and kernel_info["kernel_fn"] == "arm_depthwise_conv_wrapper_s8" \
+                and weight_dtype == "S8":
+            from helia_core_tester.generation.conformance import PlanRequest
+
+            wrapper = kernel_info["kernel_fn"]
+            context["conformance"] = PlanRequest(
+                "depthwise_conv_wrapper_s8", dw_layer(dw_conv_params, input_dims, filter_dims, output_dims),
+                selector=f"arm_nn_{wrapper[len('arm_'):]}_select(&{name}_dw_conv_params, &{name}_input_dims, "
+                         f"&{name}_filter_dims, &{name}_output_dims)")
         self._render_depthwise(output_dir, context)
         self._write_cmake(output_dir)
 

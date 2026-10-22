@@ -266,6 +266,10 @@
       "description": "The entry declines (ARM_CMSIS_NN_NO_IMPL_ERROR, output untouched) on a build without the MVE paths it lives on: for an integer entry, a build whose ns-cmsis-nn integer sources have ARM_MATH_AUTOVECTORIZE (the default coverage build); for a float entry, a build without MVE float or whose float sources have ARM_MATH_AUTOVECTORIZE. The case expects that there and the full result elsewhere. Not allowed for an entry the implementation manifest has a record for: it follows from the record's requires and declines.",
       "type": "boolean"
     },
+    "conformance": {
+      "description": "A contract conformance case (Phase 2 T4a): generation checks the case's expectation against the ns-cmsis-nn checkout's host planner on every build the case is compiled under, and the case asserts on the target that its context is exactly the planned size, that the wrapper's own route selector picks the planned route, and, for the packed FC entry, that the stream and kernel sums equal the host packer's. Supported for the s8 depthwise and FC wrappers, the packed FC entry and s8 pooling.",
+      "type": "boolean"
+    },
     "planar_supported": {
       "description": "Also call arm_depthwise_conv_s8_opt_planar_supported() on the case's shape and require this answer.",
       "type": "boolean"
