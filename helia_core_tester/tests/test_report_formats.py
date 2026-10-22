@@ -23,9 +23,18 @@ def _repo(tmp_path: Path) -> Path:
     return root
 
 
+ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+
+
 def _flat(result) -> str:
+    # Typer styles and wraps output under CI or FORCE_COLOR, decided at import time.
     text = "".join(getattr(result, attr, "") or "" for attr in ("output", "stdout", "stderr"))
-    return " ".join(re.sub(r"[│╭╮╰╯─]", " ", text).split())
+    text = ANSI_ESCAPE.sub("", text)
+    return _collapse(re.sub(r"[│╭╮╰╯─]", " ", text))
+
+
+def _collapse(text: str) -> str:
+    return " ".join(text.split())
 
 
 @pytest.fixture(autouse=True)
@@ -120,15 +129,14 @@ def test_every_valid_format_is_accepted(tmp_path, captured, command) -> None:
 def test_bad_formats_are_rejected_before_the_pipeline(tmp_path, captured, command, value, message) -> None:
     result = _invoke(tmp_path, command, "--report-formats", value, plan=False)
     assert result.exit_code == 2
-    # Rich wraps the error box, so compare with whitespace collapsed on both sides.
-    assert " ".join(f"Invalid value for '--report-formats': {message}".split()) in _flat(result)
+    assert _collapse(f"Invalid value for '--report-formats': {message}") in _flat(result)
     assert captured == []
 
 
 def test_bad_token_in_a_later_repeat_is_rejected(tmp_path, captured) -> None:
     result = _invoke(tmp_path, "full", "--report-formats", "json", "--report-formats", "pdf", plan=False)
     assert result.exit_code == 2
-    assert f"unknown report format 'pdf' in 'pdf'; {EXPECTED}" in _flat(result)
+    assert _collapse(f"unknown report format 'pdf' in 'pdf'; {EXPECTED}") in _flat(result)
     assert captured == []
 
 
