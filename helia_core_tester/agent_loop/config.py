@@ -154,7 +154,7 @@ def parse_campaign(data: Any, base: Path) -> Campaign:
         raise ConfigError(f"legs: unique values from {', '.join(PLACEMENTS)}")
     if not legs or len(set(legs)) != len(legs) or any(leg not in PLACEMENTS for leg in legs):
         raise ConfigError(f"legs: unique values from {', '.join(PLACEMENTS)}")
-    if "mram" in legs and not board.has_mram:
+    if any(leg != "tcm" for leg in legs) and not board.has_mram:
         raise ConfigError(f"legs: {board.id} has no cached MRAM")
     toolchains = tuple(top.get("toolchains") or (DEFAULT_TOOLCHAIN,))
     if (not all(isinstance(t, str) for t in toolchains) or len(set(toolchains)) != len(toolchains)

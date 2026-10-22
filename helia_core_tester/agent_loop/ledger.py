@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Iterator, Optional
 
 from helia_core_tester.hardware.candidate_eval import EXIT_ERROR, VERDICT_EXITS
+from helia_core_tester.hardware.nsx_app import PLACEMENTS
 
 from .config import Leg
 
@@ -115,11 +116,17 @@ def skip_reason(leg: Leg, legs: dict[str, dict], runs: tuple[Leg, ...]) -> Optio
         # Fail or worse settles the eval.
         if not skipped(verdict) and (not scored(verdict) or verdict.get("verdict") not in OPEN_VERDICTS):
             return f"{name} was {verdict.get('verdict')}"
-    if leg.placement == "mram":
-        tcm = next((r.name for r in runs if r.placement == "tcm" and r.toolchain == leg.toolchain), None)
-        if tcm in legs and legs[tcm].get("verdict") != "pass":
-            return f"{tcm} did not pass"
+    gate = gate_leg(leg, runs)
+    if gate in legs and legs[gate].get("verdict") != "pass":
+        return f"{gate} did not pass"
     return None
+
+
+def gate_leg(leg: Leg, runs: tuple[Leg, ...]) -> Optional[str]:
+    """Same compiler's leg one placement earlier."""
+    rank = PLACEMENTS.index
+    earlier = [r for r in runs if r.toolchain == leg.toolchain and rank(r.placement) < rank(leg.placement)]
+    return max(earlier, key=lambda r: rank(r.placement)).name if earlier else None
 
 
 def merge_legs(legs: dict[str, Optional[dict]], wanted: tuple[str, ...]) -> str:

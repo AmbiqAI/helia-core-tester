@@ -47,7 +47,7 @@ def test_config_defaults_and_paths() -> None:
     ({"name": "Bad Name"}, "name"),
     ({"board": "nope"}, "board"),
     ({"legs": ["tcm", "tcm"]}, "legs"),
-    ({"legs": ["sram"]}, "legs"),
+    ({"legs": ["psram"]}, "legs"),
     ({"legs": [{}]}, "legs"),
     ({"submit_deadline_s": 600}, "at most 570"),
     ({"board": "apollo3p_evb", "legs": ["mram"]}, "no cached MRAM"),
@@ -538,6 +538,14 @@ def test_prompt_depthwise() -> None:
         assert keep in text
 
 
+
+def test_prompt_sram_leg() -> None:
+    text = render_prompt(_campaign(legs=["tcm", "mram", "sram"]), DW_ROWS, PATHS)
+    assert "leg `sram`: weights in MRAM and activations and scratch in SRAM" in text
+    assert "mram leg runs only after the tcm leg" in text and "sram leg runs only after the mram leg" in text
+    text = render_prompt(_campaign(legs=["tcm", "sram"]), DW_ROWS, PATHS)
+    assert "sram leg runs only after the tcm leg" in text and "mram leg" not in text
+
 def test_prompt_convolve_has_no_depthwise() -> None:
     camp = _campaign(op="Convolve", legs=["tcm"], evals=8)
     diff = b"--- base/Source/a.c\n+++ agent/Source/ConvolutionFunctions/arm_convolve_s8.c\n@@ -1 +1 @@\n-a\n+b\n"
@@ -792,6 +800,12 @@ def test_toolchains_expand_legs(atfe_root: Path) -> None:
     assert _campaign(toolchains=["atfe"], legs=["tcm"]).leg_names == ("tcm-atfe",)
 
 
+
+def test_sram_leg_needs_cached_mram() -> None:
+    assert _campaign(legs=["tcm", "mram", "sram"]).leg_names == ("tcm", "mram", "sram")
+    with pytest.raises(ConfigError, match="no cached MRAM"):
+        _campaign(board="apollo3p_evb", legs=["tcm", "sram"])
+
 @pytest.mark.parametrize("value, message", [
     (["gcc", "gcc"], "toolchains"), (["icc"], "toolchains"), ([{}], "toolchains"), (["atfe"], "ATFE_ROOT"),
 ])
@@ -908,6 +922,25 @@ def test_submit_gates_mram_per_toolchain(ws: Workspace, atfe_root: Path, capsys)
     row = ledger.Ledger(ws.ledger).rows()[0]
     assert list(row["legs"]) == list(LEGS4) and row["legs"]["mram"]["verdict"] == "skipped"
 
+
+
+def test_submit_gates_sram_on_mram(ws: Workspace, capsys) -> None:
+    _replace(ws, legs=("sram", "tcm", "mram"))
+    board = FakeBoard([_leg("pass"), _leg("no_gain")])
+    rc, view = _submit(ws, board, capsys)
+    # Placement order, not campaign order.
+    names = [Path(c[c.index("--baseline") + 1]).name for c in board.calls]
+    assert names == ["tcm", "mram"] and view["verdict"] == "no_gain"
+    assert view["legs"]["sram"] == {"verdict": "skipped", "reason": "mram did not pass"}
+    board = FakeBoard([_leg("pass"), _leg("pass"), _leg("fail")])
+    rc, view = _submit(ws, board, capsys)
+    names = [Path(c[c.index("--baseline") + 1]).name for c in board.calls]
+    assert names == ["tcm", "mram", "sram"] and view["verdict"] == "fail"
+
+
+def test_sram_leg_without_mram_gates_on_tcm() -> None:
+    runs = _campaign(legs=["tcm", "sram"]).runs
+    assert ledger.gate_leg(runs[1], runs) == "tcm" and ledger.gate_leg(runs[0], runs) is None
 
 def test_status_shows_skipped_legs(ws: Workspace, capsys) -> None:
     from typer.testing import CliRunner

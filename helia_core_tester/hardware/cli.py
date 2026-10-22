@@ -190,9 +190,10 @@ _CMSIS_NN_ROOT_HELP = (
     "Copies its Include/, Source/, cmake/ and nsx/ into the app."
 )
 _PLACEMENT_HELP = (
-    "Operand memory: tcm (one workspace: DTCM on Apollo5, SRAM on Apollo3P) "
-    "or mram (weights and bias in cached MRAM, evicted before each call; "
-    "activations and scratch in DTCM). Default: tcm."
+    "Operand memory: tcm (one workspace: DTCM on Apollo5, SRAM on Apollo3P), "
+    "mram (weights and bias in cached MRAM, evicted before each call; "
+    "activations and scratch in DTCM) or sram (as mram, but activations and scratch "
+    "in cached SRAM, cleaned and evicted before each call). Default: tcm."
 )
 _JOBS_HELP = "Parallel build jobs (default: CPU count + 2, like ninja)."
 _UPDATE_DEPS_HELP = "Re-resolve NSX modules and rewrite nsx.lock before building."
@@ -206,10 +207,11 @@ _TOOLCHAIN_DIR_HELP = "gcc or atfe: picks that toolchain's default build dir."
 
 def _check_placement(placement, spec: BoardSpec) -> None:
     from .nsx_app import PLACEMENTS
+    from .transfer import MRAM_PLACEMENTS
 
     if placement is not None and placement not in PLACEMENTS:
         _fail(f"--placement must be one of: {', '.join(PLACEMENTS)}.")
-    if placement == "mram" and not spec.has_mram:
+    if placement in MRAM_PLACEMENTS and not spec.has_mram:
         _fail(f"{spec.id} has no cached MRAM; use tcm.")
 
 
