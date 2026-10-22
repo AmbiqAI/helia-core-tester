@@ -277,20 +277,22 @@ def test_packed_fc_scratch_holds_sums_and_stream(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("name", "scratch"),
+    ("name", "scratch", "capacity"),
     [
-        # opt size 4464 + 64 sums.
-        ("depthwise_conv_entry_3x3_25x5_c64_s8", 4464 + 256),
+        # The wrapper's opt size 4464 + 64 sums; the case holds the 3x3 query, 3024 + 5 x 64.
+        ("depthwise_conv_entry_3x3_25x5_c64_s8", 4464 + 256, 3024 + 5 * 64),
         # 3x3 size 3024 + 28 x 64 + 64 sums.
-        ("depthwise_conv_entry_3x3_28x28_c64_stride2_s8", 4816 + 256),
-        ("depthwise_conv_entry_3x3_c64_s1_14x28_s8", 4816 + 256),
+        ("depthwise_conv_entry_3x3_28x28_c64_stride2_s8", 4816 + 256, 4816),
+        ("depthwise_conv_entry_3x3_c64_s1_14x28_s8", 4816 + 256, 4816),
     ],
 )
-def test_3x3_entry_scratch_takes_larger_size(tmp_path: Path, name: str, scratch: int) -> None:
+def test_3x3_entry_scratch_takes_larger_size(
+    tmp_path: Path, p1e_planner: None, name: str, scratch: int, capacity: int
+) -> None:
     case, manifest = _bridge_entry(tmp_path, "ConvolutionFunctions", name)
     assert manifest["scratch_buffer"]["bytes"] == scratch
     (source,) = case.directory.glob("*.c")
-    assert _extract_define_int(source.read_text(), f"{name.upper()}_BUFFER_SIZE_MAX") >= scratch - 256
+    assert _extract_define_int(source.read_text(), f"{name.upper()}_BUFFER_SIZE_MAX") == capacity
 
 
 @pytest.mark.parametrize(

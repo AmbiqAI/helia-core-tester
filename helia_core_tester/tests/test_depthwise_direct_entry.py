@@ -12,6 +12,7 @@ from helia_core_tester.generation.entry import MANIFEST_ENTRY_KEYS, EntryError, 
 from helia_core_tester.generation.kernel_dispatch import DEPTHWISE_CONV_S8_PLANAR_RULE
 
 from helia_core_tester.generation.test_ops import _required_kernel_symbols, generate_test
+from helia_core_tester.tests.contract_required import require_planner
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 OPT_SIZER = "arm_depthwise_conv_s8_opt_get_buffer_size"
@@ -39,6 +40,7 @@ def _resolve(entry: str, act: str = "S8", weight: str = "S8", **desc) -> dict:
 
 
 def test_entries_resolve_with_the_scratch_query_of_their_manifest_record() -> None:
+    require_planner()
     for entry, sizer in DEPTHWISE_CONV_S8_ENTRIES.items():
         assert _resolve(entry) == {
             "kernel_fn": entry,
@@ -46,7 +48,42 @@ def test_entries_resolve_with_the_scratch_query_of_their_manifest_record() -> No
             "entry_family": "contract",
             "kernel_needs_layout": False,
             "buffer_size_needs_layout": False,
+            "entry_implementation": entry.replace("arm_", "", 1),
+            "entry_ctx_buffer": "scratch",
         }
+
+
+@pytest.mark.parametrize(
+    ("name", "cpu", "capacity"),
+    [
+        # 16 x (3 x 52 + 32) + W x C + 16 on every build.
+        ("depthwise_conv_entry_3x3_25x5_c64_s8", "cortex-m55", 16 * (3 * 52 + 32) + 5 * 64 + 16),
+        ("depthwise_conv_entry_3x3_declines_c15_s8", "cortex-m4", 16 * (3 * 52 + 32) + 5 * 15 + 16),
+        # The opt scratch: 4 x 124 x 3 x 3 on MVE, C x 3 x 3 int16 on DSP, none on the plain build.
+        ("depthwise_conv_entry_channelwise_25x5_c64_s8", "cortex-m55", 4 * 124 * 9),
+        ("depthwise_conv_entry_channelwise_25x5_c64_s8", "cortex-m4", 64 * 9 * 2),
+        ("depthwise_conv_entry_channelwise_25x5_c64_s8", "cortex-m0", 0),
+        ("depthwise_conv_entry_planar_48x48_c8_s8", "cortex-m55", 4 * 124 * 9),
+    ],
+)
+def test_entry_scratch_capacity_is_its_records_planned_size(
+    tmp_path: Path, p1e_planner: None, name: str, cpu: str, capacity: int
+) -> None:
+    desc = _descriptor(name)
+    generate_test(desc, str(tmp_path), cpu=cpu)
+    source = "".join(p.read_text() for pattern in ("*.h", "*.c") for p in tmp_path.rglob(pattern))
+    assert re.findall(rf"#define {name.upper()}_BUFFER_SIZE_MAX (\d+)", source) == [str(capacity)]
+
+
+def test_an_entry_sizer_unlike_its_records_query_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    require_planner()
+    import helia_core_tester.generation.entry as entry_module
+
+    stamped = apply_entry_manifest(_descriptor("depthwise_conv_entry_3x3_25x5_c64_s8"))
+    monkeypatch.setattr(entry_module, "apply_entry_manifest", lambda desc, contracts=None: {**stamped,
+                                                                                           "entry_sizer": OPT_SIZER})
+    with pytest.raises(EntryError, match="is not the size query of record depthwise_conv_s8_opt_3x3's ctx buffer"):
+        _resolve("arm_depthwise_conv_s8_opt_3x3")
 
 
 @pytest.mark.parametrize(

@@ -82,10 +82,18 @@ def isa_target(package, mve: bool, dsp: bool = True):
     return package.Target("mve" if mve else "dsp" if dsp else "scalar")
 
 
+def _method(planner, method: str) -> Callable:
+    fn = getattr(planner, method, None)
+    if fn is None:
+        raise PlannerUnavailable(f"this checkout's planner has no {method}; it needs AmbiqAI/ns-cmsis-nn's P1e "
+                                 "planner calls or later")
+    return fn
+
+
 def plan(method: str, target, **layer):
     """One plan of `method` (a Planner method name) for `target`, with refusals typed for the tester."""
     package, planner = current_planner()
-    fn: Callable = getattr(planner, method)
+    fn = _method(planner, method)
     try:
         return fn(target, **layer)
     except package.PlanRefused as error:
@@ -111,6 +119,36 @@ def planned_ctx_bytes(method: str, cpu: Optional[str], **layer) -> int:
         raise PlanRefusedError("unsupported", f"{method}: every build of {cpu or 'any CPU'} declines the layer "
                                               f"({'; '.join(refusals)})")
     return max(sizes)
+
+
+def buffer_bytes(target, implementation_id: str, buffer_name: str, **layer) -> int:
+    """The bytes of one manifest buffer on `target`, from the library's own size query for the target ISA.
+
+    `layer` may hold every operand of the layer; only those the buffer's size query takes are passed on.
+    """
+    package, planner = current_planner()
+    fn = _method(planner, "buffer_bytes")
+    try:
+        buffer = planner.implementations.require(implementation_id).buffer(buffer_name)
+    except (package.ContractError, KeyError) as error:
+        raise PlanRefusedError("arguments", f"{implementation_id}.{buffer_name}: {error}") from None
+    roots = {ref.split(".", 1)[0] for ref in buffer.size_args.values()}
+    missing = sorted(roots - set(layer))
+    if missing:
+        raise PlanRefusedError("arguments", f"{implementation_id}.{buffer_name}: no {missing} given")
+    try:
+        return fn(target, implementation_id, buffer_name, **{root: layer[root] for root in roots})
+    except package.PlanRefused as error:
+        raise PlanRefusedError(error.status, str(error)) from None
+    except (ValueError, package.PlannerError) as error:
+        raise PlanRefusedError("arguments", f"{implementation_id}.{buffer_name}: {error}") from None
+
+
+def planned_buffer_bytes(implementation_id: str, buffer_name: str, cpu: Optional[str], **layer) -> int:
+    """The largest size of a manifest buffer over the builds of `cpu`."""
+    package, _ = current_planner()
+    return max(buffer_bytes(target, implementation_id, buffer_name, **layer)
+               for target in build_targets(package, cpu))
 
 
 def vector_sum_s8(data, *, cols: int, rows: int, lhs_offset: int, rhs_offset: int, bias=None) -> list[int]:

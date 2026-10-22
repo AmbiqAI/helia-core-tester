@@ -34,6 +34,8 @@ ENTRY_SCRATCH_NONE = "none"
 MANIFEST_ENTRY_KEYS = ("entry_sizer", "entry_scratch", "required_capabilities", "autovectorize_declines")
 # The record that decided them, stamped on the descriptor the generation step works from.
 ENTRY_IMPLEMENTATION_KEY = "entry_implementation"
+# The record's buffer bound to ctx, which sizes a manifest entry's scratch.
+ENTRY_CTX_BUFFER_KEY = "entry_ctx_buffer"
 # The capability a CPU needs for each positive manifest feature token (see core/cpu_targets.py).
 FEATURE_CAPABILITIES = {"mvei": ("mve",), "mvef": ("mve",), "mve_f16": ("mve", "fp16_execution"),
                         "dsp": ("dsp",), "f32_api": ("fp32_execution",), "f16_api": ("fp16_execution",)}
@@ -50,6 +52,15 @@ def manifest_record(contracts: ContractSet, entry: str, where: str) -> Optional[
         raise EntryError(f"{where}: the implementation manifest has {len(records)} records for it "
                          f"({', '.join(r.id for r in records)}); a direct call needs exactly one")
     return records[0] if records else None
+
+
+def ctx_buffer(record: ImplementationDecl, where: str):
+    """The record's buffer bound to `ctx` (a prepare-only buffer never reaches the call), or None."""
+    ctx = [b for b in record.buffers if b.param == "ctx" and b.lifetime != "prepare"]
+    if len(ctx) > 1:
+        raise EntryError(f"{where}: record {record.id} binds {len(ctx)} buffers to ctx "
+                         f"({', '.join(b.name for b in ctx)}); one sizes the scratch")
+    return ctx[0] if ctx else None
 
 
 def apply_entry_manifest(desc: Mapping[str, Any], contracts: Optional[ContractSet] = None) -> Dict[str, Any]:
@@ -81,12 +92,9 @@ def apply_entry_manifest(desc: Mapping[str, Any], contracts: Optional[ContractSe
         raise EntryError(f"{where}: the implementation manifest record {record.id} ({contracts.manifest_path}) "
                          f"decides {authored}; remove them from the descriptor")
     derived: Dict[str, Any] = {ENTRY_IMPLEMENTATION_KEY: record.id}
-    ctx = [b for b in record.buffers if b.param == "ctx" and b.lifetime != "prepare"]
-    if len(ctx) > 1:
-        raise EntryError(f"{where}: record {record.id} binds {len(ctx)} buffers to ctx "
-                         f"({', '.join(b.name for b in ctx)}); one sizes the scratch")
-    if ctx and ctx[0].size_query is not None:
-        derived["entry_sizer"] = ctx[0].size_query
+    ctx = ctx_buffer(record, where)
+    if ctx is not None and ctx.size_query is not None:
+        derived["entry_sizer"] = ctx.size_query
     else:
         derived["entry_scratch"] = ENTRY_SCRATCH_NONE
     expected = str(desc.get("expected_status", SUCCESS)).strip()
@@ -167,6 +175,15 @@ def resolve_entry(
         decl_sizer = _sizer_decl(contracts, sizer.strip(), where)
         resolved["kernel_get_buffer_size_fn"] = decl_sizer.name
         resolved["buffer_size_needs_layout"] = takes(decl_sizer, "layout")
+        record = manifest_record(contracts, entry, where)
+        if record is not None:
+            buffer = ctx_buffer(record, where)
+            if buffer is None or buffer.size_query != decl_sizer.name:
+                raise EntryError(f"{where}: entry_sizer {decl_sizer.name!r} is not the size query of record "
+                                 f"{record.id}'s ctx buffer")
+            # The planner sizes the case's scratch from this buffer's query.
+            resolved[ENTRY_IMPLEMENTATION_KEY] = record.id
+            resolved[ENTRY_CTX_BUFFER_KEY] = buffer.name
         return resolved
     found = contracts.sizer_for(entry, cpu)
     if found is None:
