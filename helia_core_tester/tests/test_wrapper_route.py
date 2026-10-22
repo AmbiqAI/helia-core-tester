@@ -298,6 +298,7 @@ def test_inner_variant_splits_the_opt_route() -> None:
     assert _variant(dw, {**five, "target_cpu": "cortex-m0"}) is None
 
 
+@pytest.mark.usefixtures("p1e_planner")
 def test_planar_declines_past_ctx() -> None:
     # 1x1 kernel, 32x32 plane: 1056 bytes > the 496-byte MVE scratch.
     args = ((1, 32, 32, 8), (1, 1, 1, 8), (1, 32, 32, 8), (1, 1), (0, 0), (1, 1))
@@ -316,6 +317,7 @@ def test_planar_declines_past_ctx() -> None:
     assert dw_opt_variant(*small, 1, False, opt_scratch_size(*small, 1, False)) == CHANNELWISE
 
 
+@pytest.mark.usefixtures("p1e_planner")
 def test_a_layer_the_opt_entry_rejects_is_not_routed() -> None:
     with pytest.raises(PlanRefusedError) as error:
         dw_opt_variant((1, 16, 16, 8), (1, 3, 3, 8), (1, 14, 14, 8), (1, 1), (0, 0), (2, 1), 1, True, 0)

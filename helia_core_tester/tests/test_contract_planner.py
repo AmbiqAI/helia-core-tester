@@ -10,6 +10,7 @@ import pytest
 from helia_core_tester.contract import planner
 from helia_core_tester.contract.planner import PlannerUnavailable, PlanRefusedError
 from helia_core_tester.tests.contract_fallback import FIXTURE_ROOT
+from helia_core_tester.tests.contract_required import P1E_CALLS, require_planner
 
 DW = dict(input_dims=(1, 8, 8, 16), filter_dims=(1, 3, 3, 16), output_dims=(1, 8, 8, 16), ch_mult=1, padding=(1, 1))
 
@@ -182,3 +183,40 @@ def test_a_planner_without_the_call_is_unavailable(fixture_planner, monkeypatch:
     with pytest.raises(PlannerUnavailable, match="has no depthwise_conv_s8_opt"):
         planner.plan("depthwise_conv_s8_opt", package.Target("mve"), ctx_size=0, input_dims=(1, 8, 8, 8),
                      filter_dims=(1, 3, 3, 8), output_dims=(1, 6, 6, 8))
+
+
+@pytest.fixture
+def no_contract_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    from helia_core_tester.contract import render
+
+    (tmp_path / "Include").mkdir()
+    (tmp_path / "Include" / "arm_nnfunctions.h").write_text("/* v7.35.1: no export, no package */\n")
+    monkeypatch.setattr(render, "resolve_cmsis_nn_root", lambda: tmp_path)
+    monkeypatch.delenv("HELIA_CORE_TESTER_REQUIRE_CONTRACT", raising=False)
+    return tmp_path
+
+
+@pytest.mark.parametrize("methods", [(), P1E_CALLS])
+def test_a_tree_without_the_package_skips_planner_tests_with_the_reason(no_contract_tree: Path, methods) -> None:
+    with pytest.raises(pytest.skip.Exception, match="needs the checkout's planner: .*has no kernel contract"):
+        require_planner(*methods)
+    with pytest.raises(PlannerUnavailable):
+        planner.current_planner()
+
+
+def test_a_tree_without_the_package_fails_planner_tests_where_the_leg_requires_one(
+    no_contract_tree: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HELIA_CORE_TESTER_REQUIRE_CONTRACT", "1")
+    with pytest.raises(pytest.fail.Exception, match="HELIA_CORE_TESTER_REQUIRE_CONTRACT is set but .*no kernel contract"):
+        require_planner(*P1E_CALLS)
+
+
+def test_a_planner_without_the_p1e_calls_skips_naming_them(fixture_planner, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("HELIA_CORE_TESTER_REQUIRE_CONTRACT", raising=False)
+    require_planner(*P1E_CALLS)
+    _, loaded = fixture_planner
+    monkeypatch.setattr(type(loaded), "buffer_bytes", property(lambda self: None), raising=False)
+    with pytest.raises(pytest.skip.Exception, match="planner has no buffer_bytes$"):
+        require_planner(*P1E_CALLS)
+    require_planner("depthwise_conv_s8_opt")

@@ -26,3 +26,11 @@ def _kernel_contract_fallback():
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(render, "resolve_cmsis_nn_root", fallback_resolver(render.resolve_cmsis_nn_root))
         yield
+
+
+@pytest.fixture
+def p1e_planner() -> None:
+    """Skips the test, with the reason, on a checkout whose planner lacks the P1e calls (see contract_required)."""
+    from helia_core_tester.tests.contract_required import P1E_CALLS, require_planner
+
+    require_planner(*P1E_CALLS)

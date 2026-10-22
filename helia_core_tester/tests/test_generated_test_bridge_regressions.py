@@ -286,7 +286,9 @@ def test_packed_fc_scratch_holds_sums_and_stream(tmp_path: Path) -> None:
         ("depthwise_conv_entry_3x3_c64_s1_14x28_s8", 4816 + 256, 4816),
     ],
 )
-def test_3x3_entry_scratch_takes_larger_size(tmp_path: Path, name: str, scratch: int, capacity: int) -> None:
+def test_3x3_entry_scratch_takes_larger_size(
+    tmp_path: Path, p1e_planner: None, name: str, scratch: int, capacity: int
+) -> None:
     case, manifest = _bridge_entry(tmp_path, "ConvolutionFunctions", name)
     assert manifest["scratch_buffer"]["bytes"] == scratch
     (source,) = case.directory.glob("*.c")
