@@ -104,6 +104,19 @@ def test_a_planner_that_cannot_build_fails_closed(tmp_path: Path) -> None:
         planner.load_planner(root)
 
 
+@pytest.mark.parametrize("layer", [
+    dict(DW, input_dims=(1, 65536, 65536, 1), filter_dims=(1, 1, 1, 1), output_dims=(1, 65536, 65536, 1),
+         padding=(0, 0)),
+    dict(DW, input_dims=(1, 1, 2**30, 4), filter_dims=(1, 1, 1, 4), output_dims=(1, 1, 2**30, 4), padding=(0, 0)),
+])
+def test_overflowing_dims_are_refused_not_truncated(fixture_planner, layer) -> None:
+    package, _ = fixture_planner
+    for target in planner.build_targets(package, None):
+        with pytest.raises(PlanRefusedError) as error:
+            planner.plan("depthwise_conv_wrapper_s8", target, **layer)
+        assert error.value.status == "range", target
+
+
 DW_3X3 = dict(input_dims=(1, 5, 7, 16), filter_dims=(1, 3, 3, 16), output_dims=(1, 5, 7, 16),
               dw_conv_params={"ch_mult": 1, "padding": (1, 1)})
 

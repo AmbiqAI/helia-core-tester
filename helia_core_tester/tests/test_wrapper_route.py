@@ -13,13 +13,15 @@ import pytest
 from helia_core_tester.contract import planner
 from helia_core_tester.contract.planner import PlannerUnavailable, PlanRefusedError
 from helia_core_tester.hardware.wrapper_route import (
-    CHANNELWISE, CONV_SOURCE, DW_OPT, PLANAR, conv_route, conv_s4_route, conv_s16_route, dw_opt_variant, dw_route,
-    dw_s4_route, dw_s16_route, inner_symbol, inner_variant, opt_scratch_size, tree_gate,
+    CHANNELWISE, CONV_SOURCE, DISPATCH_HEADER, DW_OPT, PLANAR, conv_route, conv_s4_route, conv_s16_route,
+    dw_opt_variant, dw_route, dw_s4_route, dw_s16_route, inner_symbol, inner_variant, opt_scratch_size, tree_gate,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CMSIS_NN_ROOT = Path(os.environ.get("CMSIS_NN_ROOT") or PROJECT_ROOT.parent.parent)
 HARNESS = Path(__file__).parent / "fixtures" / "wrapper_route" / "route_harness.c"
+PLANAR_SOURCE = Path("Source/NNSupportFunctions/arm_nn_depthwise_conv_s8_planar.c")
+OPT_SELECTOR = "arm_nn_depthwise_conv_s8_opt_select("
 
 
 def _rows(seed: int = 7, count: int = 20000) -> list[tuple]:
@@ -72,7 +74,7 @@ _EDGE_ROWS = [
 ]
 
 
-def _expected(row: tuple, mve: bool, gate_1xn: bool = True) -> str:
+def _expected(row: tuple, mve: bool, gate_1xn: bool = True, dw_known: bool = True) -> str:
     kind, i, f, o, stride, pad, dil, ch_mult = row
     if kind == "c":
         return conv_route(i, f, o, stride, pad, dil, mve, gate_1xn)
@@ -84,6 +86,8 @@ def _expected(row: tuple, mve: bool, gate_1xn: bool = True) -> str:
         return dw_s4_route(i, dil, ch_mult)
     if kind == "s":
         return dw_s16_route(i, f, o, stride, pad, dil, ch_mult)
+    if not dw_known:
+        return None
     try:
         route = dw_route(i, f, o, stride, pad, dil, ch_mult, mve, gate_1xn)
     except PlanRefusedError as error:
@@ -106,10 +110,19 @@ def test_mirror_matches_c_wrappers(tmp_path: Path, mve: bool) -> None:
         pytest.skip(f"no real ns-cmsis-nn checkout found at {CMSIS_NN_ROOT}")
     gate_1xn = tree_gate(CMSIS_NN_ROOT)
     assert gate_1xn is not None, "unknown 1xN gate; update GATES_1XN"
+    # Trees without a planner (before ns-cmsis-nn#889) leave the s8 depthwise route unknown.
+    try:
+        planner.current_planner()
+        dw_known = True
+    except PlannerUnavailable:
+        dw_known = False
+    dispatch = CMSIS_NN_ROOT / DISPATCH_HEADER
+    opt_select = dispatch.is_file() and OPT_SELECTOR in dispatch.read_text(encoding="utf-8")
     binary = tmp_path / "route_harness"
+    defines = [*(["-DHCT_ROUTE_MVE"] if mve else []), *(["-DHCT_ROUTE_OPT_SELECT"] if opt_select else [])]
     subprocess.run(
-        [cc, "-std=c99", *(["-DHCT_ROUTE_MVE"] if mve else []), "-I", str(CMSIS_NN_ROOT / "Include"),
-         "-I", str(CMSIS_NN_ROOT / "Source"), str(HARNESS), "-o", str(binary)],
+        [cc, "-std=c99", *defines, "-I", str(CMSIS_NN_ROOT / "Include"), "-I", str(CMSIS_NN_ROOT / "Source"),
+         str(HARNESS), str(CMSIS_NN_ROOT / PLANAR_SOURCE), "-o", str(binary)],
         check=True,
     )
     rows = _rows()
@@ -119,32 +132,37 @@ def test_mirror_matches_c_wrappers(tmp_path: Path, mve: bool) -> None:
     routes = out.stdout.split()
     assert len(routes) == len(lines)
     assert routes[-1] == "arm_fully_connected_per_channel_s8"
-    expected = [_expected(row, mve, gate_1xn) for row in rows]
-    assert sum(e is None for e in expected) < len(rows) // 2, "the planner refuses most depthwise rows"
+    expected = [_expected(row, mve, gate_1xn, dw_known) for row in rows]
+    if dw_known:
+        dw_expected = [e for row, e in zip(rows, expected) if row[0] == "d"]
+        assert sum(e is None for e in dw_expected) < len(dw_expected) // 2, "the planner refuses most depthwise rows"
     mismatches = [
         (row, route) for row, route, want in zip(rows, routes, expected)
         if want is not None and route.removeprefix("to_conv:") != want
     ]
     assert not mismatches, f"{len(mismatches)} rows differ, first: {mismatches[:3]}"
-    seen = set(routes)
+    seen = {route for route, want in zip(routes, expected) if want is not None}
     wanted = {
         "arm_convolve_1x1_s8_fast", "arm_convolve_1x1_s8", "arm_convolve_1_x_n_s8", "arm_convolve_s8",
-        f"{DW_OPT}+{CHANNELWISE}", "arm_depthwise_conv_s8",
         "arm_convolve_1x1_s4_fast", "arm_convolve_1x1_s4", "arm_convolve_1_x_n_s4", "arm_convolve_s4",
         "arm_depthwise_conv_s4_opt", "arm_depthwise_conv_s4", "arm_convolve_s16_group_ch_mult_1", "arm_convolve_s16",
         "arm_depthwise_conv_fast_s16", "arm_depthwise_conv_s16",
     }
     if mve:
         wanted |= {
-            "arm_convolve_1x1_out_s8", "arm_convolve_s8_small_cin", "arm_convolve_s8_3x3_c16_s1", f"{DW_OPT}+{PLANAR}",
+            "arm_convolve_1x1_out_s8", "arm_convolve_s8_small_cin", "arm_convolve_s8_3x3_c16_s1",
             "arm_convolve_even_s4", "arm_convolve_1x1_s16_ns_np_nd", "arm_convolve_s16_fast_small_kernel",
         }
-        assert any(route.startswith("to_conv:") for route in routes)
-        # Planar declines a plane past ctx.
-        assert expected[rows.index(_PLANE_PAST_CTX)] == f"{DW_OPT}+{CHANNELWISE}"
-    else:
-        wanted.add("arm_depthwise_conv_3x3_s8")
-    assert wanted <= seen
+    if dw_known:
+        wanted |= {f"{DW_OPT}+{CHANNELWISE}", "arm_depthwise_conv_s8"}
+        if mve:
+            wanted.add(f"{DW_OPT}+{PLANAR}")
+            assert any(route.startswith("to_conv:") for route in seen)
+            # Planar declines a plane past ctx.
+            assert expected[rows.index(_PLANE_PAST_CTX)] == f"{DW_OPT}+{CHANNELWISE}"
+        else:
+            wanted.add("arm_depthwise_conv_3x3_s8")
+    assert wanted <= seen, f"routes never checked: {sorted(wanted - seen)}"
 
 
 def _manifest(cpu: str, weights: list[int], **params) -> dict:
@@ -206,6 +224,38 @@ def test_tree_gate_reads_the_wrapper(tmp_path: Path) -> None:
     source.write_text(gate.format(""), encoding="utf-8")
     assert tree_gate(tmp_path) is None
     assert tree_gate(tmp_path / "missing") is None and tree_gate(None) is None
+
+
+def test_tree_gate_reads_the_route_selector(tmp_path: Path) -> None:
+    source = tmp_path / CONV_SOURCE
+    source.parent.mkdir(parents=True)
+    # The wrapper keeps no gate once its selector routes it (ns-cmsis-nn#886).
+    source.write_text("switch (arm_nn_convolve_wrapper_s8_select(conv_params, input_dims, filter_dims, output_dims))\n",
+                      encoding="utf-8")
+    header = tmp_path / DISPATCH_HEADER
+    header.parent.mkdir(parents=True)
+    selector = (
+        "/* arm_nn_is_convolve_1_x_n(conv_params, input_dims, filter_dims) */\n"
+        "__STATIC_FORCEINLINE arm_nn_conv_s8_route arm_nn_convolve_wrapper_s8_select(const cmsis_nn_conv_params *p)\n"
+        "{{\n    if (arm_nn_is_convolve_1_x_n(conv_params, input_dims, filter_dims){})\n    {{\n"
+        "        return ARM_NN_CONV_S8_ROUTE_1_X_N;\n    }}\n"
+        "        if (arm_nn_is_convolve_s8_small_cin(conv_params, input_dims, filter_dims, output_dims, NULL))\n}}\n"
+    )
+    padding = " &&\n        arm_nn_convolve_1_x_n_s8_padding_supported(conv_params, filter_dims, output_dims)"
+    for extra, expected in (("", False), (padding, True), (" && other(conv_params)", None)):
+        header.write_text(selector.format(extra), encoding="utf-8")
+        assert tree_gate(tmp_path) is expected
+    # A dispatch header without the conv selector leaves the wrapper as the source.
+    header.write_text("arm_nn_fully_connected_wrapper_s8_select(quant_params)\n", encoding="utf-8")
+    assert tree_gate(tmp_path) is None
+    gate = "else if (arm_nn_is_convolve_1_x_n(conv_params, input_dims, filter_dims))\n{\n"
+    source.write_text(gate + "arm_nn_is_convolve_s8_small_cin(conv_params, input_dims, filter_dims, output_dims, NULL)\n",
+                      encoding="utf-8")
+    assert tree_gate(tmp_path) is False
+    # An unreadable header is an unknown tree.
+    header.unlink()
+    header.mkdir()
+    assert tree_gate(tmp_path) is None
 
 
 def test_inner_symbol_names_s4_and_s16_routes() -> None:

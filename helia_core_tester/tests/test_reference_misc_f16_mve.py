@@ -257,7 +257,7 @@ def exp_lut(x) -> float:
     frac = f32(idx_f - f32(idx))
     y0, y1 = (float(np.array(LUT[i], np.uint16).view(np.float16)) for i in (idx, idx + 1))
     y = fma(frac, f32(f32(y1) - f32(y0)), y0, np.float32)
-    n = min(max(n, -14), 15)
+    n = min(max(n, -126), 15)
     return h(f32(f32(y) * f32(2.0 ** n)))
 
 

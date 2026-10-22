@@ -252,15 +252,20 @@ class PoolFamilyBase(OperationBase):
 
         # Calculate buffer size max
         activation_dtype = self.tensor_dtype("input")
+        plan_request = None
         if kernel_info["kernel_fn"] in ("arm_avgpool_s8", "arm_max_pool_s8"):
             from helia_core_tester.contract import planner
+            from helia_core_tester.generation.conformance import PlanRequest
 
+            layer = {"max_pool": kernel_info["kernel_fn"] == "arm_max_pool_s8",
+                     "input_dims": tuple(int(input_dims[k]) for k in "nhwc"), "kernel_hw": (int(pool_h), int(pool_w)),
+                     "output_dims": tuple(int(output_dims[k]) for k in "nhwc"),
+                     "stride": (int(stride_h), int(stride_w)),
+                     "padding": (int(geometry["pad_h"]), int(geometry["pad_w"]))}
             # The kernel's scratch on every build of the target CPU, from the checkout's planner.
-            buffer_size_max = planner.planned_ctx_bytes(
-                "pool_s8", self.target_cpu, max_pool=kernel_info["kernel_fn"] == "arm_max_pool_s8",
-                input_dims=tuple(int(input_dims[k]) for k in "nhwc"), kernel_hw=(int(pool_h), int(pool_w)),
-                output_dims=tuple(int(output_dims[k]) for k in "nhwc"), stride=(int(stride_h), int(stride_w)),
-                padding=(int(geometry["pad_h"]), int(geometry["pad_w"])))
+            buffer_size_max = planner.planned_ctx_bytes("pool_s8", self.target_cpu, **layer)
+            if self.desc.get("conformance"):
+                plan_request = PlanRequest("pool_s8", layer)
         else:
             buffer_size_max = builder.calculate_pooling_buffer_size_max(
                 input_dims,
@@ -298,6 +303,8 @@ class PoolFamilyBase(OperationBase):
             context["pool_activation_min_literal"] = builder.format_float_literal(pool_params["activation_min"])
             context["pool_activation_max_literal"] = builder.format_float_literal(pool_params["activation_max"])
         context.update(nonfinite_context)
+        if plan_request is not None:
+            context["conformance"] = plan_request
         pool = pool_argument_pool(context)
         fault = self.fault_kind()
         # The validation rules are keyed by the former template path; a fault case's sidecar keeps
