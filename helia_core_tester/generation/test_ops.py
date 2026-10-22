@@ -38,6 +38,7 @@ from helia_core_tester.generation.utils.temp_sizer_probe import kernel_source_ex
 
 
 RUN_SEED_ENV = "HCT_SEED"
+REQUIRE_CONTRACT_ENV = "HELIA_CORE_TESTER_REQUIRE_CONTRACT"
 
 
 def default_seed_for_case(name: str, run_seed: int = 0) -> int:
@@ -546,6 +547,21 @@ def test_generation(test_filters):
     contracts = contract_render.load_current_contracts()
     symbol_source_cache: Dict[str, bool] = {}
     for desc in filtered_descriptors:
+        if desc.get("conformance") and not contracts.present:
+            # Conformance checks the library against the checkout's planner; a checkout without the
+            # contract has neither. A leg that requires the contract fails instead of skipping.
+            reason = (f"the ns-cmsis-nn checkout ({contracts.root or 'unresolved'}) has no kernel contract, so it "
+                      "has no planner to conform to (needs ns_cmsis_nn_contracts, AmbiqAI/ns-cmsis-nn#889)")
+            if os.environ.get(REQUIRE_CONTRACT_ENV):
+                print(f"ERROR: {desc['name']}: {reason}")
+                generation_failures.append({**_entry_manifest_failure(desc, ValueError(reason)),
+                                            "stage": "conformance"})
+                continue
+            entry = _skip_manifest_entry(desc, cpu=target_cpu, missing_capabilities=[], status="skipped_conformance")
+            entry["reason"] = reason
+            skipped_entries.append(entry)
+            print(f"Skipping {desc['name']}: {reason}")
+            continue
         try:
             desc = apply_entry_manifest(desc, contracts)
         except EntryError as error:
@@ -843,6 +859,9 @@ def test_generation(test_filters):
             ),
             "skipped_kernel_symbol": sum(
                 1 for entry in skipped_entries if entry.get("status") == "skipped_kernel_symbol"
+            ),
+            "skipped_conformance": sum(
+                1 for entry in skipped_entries if entry.get("status") == "skipped_conformance"
             ),
             "skipped_degenerate": sum(
                 1 for entry in skipped_entries if entry.get("status") == "skipped_degenerate"
