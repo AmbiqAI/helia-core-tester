@@ -4,7 +4,7 @@ from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
-from helia_core_tester.generation.kernel_dispatch import check_entry_fault, resolve_direct_entry
+from helia_core_tester.generation.entry import check_entry_fault, resolve_entry
 from helia_core_tester.generation.ops._shared.base import OperationBase
 
 TensorQuant = Tuple[Sequence[float], Sequence[int]]
@@ -41,6 +41,19 @@ def resolve_quant_preset(
     if set(tensors) != set(_PRESET_TENSORS):
         raise ValueError(f"{operator} quant_preset {quant_preset!r} must define {list(_PRESET_TENSORS)}")
     return dict(tensors)
+
+
+def operand_quant(preset: Mapping[str, TensorQuant], default: Tuple[float, int]) -> Dict[str, Tuple[float, int]]:
+    """Per-tensor (scale, zero_point) of input1, input2 and output: the preset's, else `default` for all three."""
+    if not preset:
+        return {role: default for role in ("input1", "input2", "output")}
+    quant: Dict[str, Tuple[float, int]] = {}
+    for role, key in (("input1", "input_1_quant"), ("input2", "input_2_quant"), ("output", "output_quant")):
+        scales, zero_points = preset[key]
+        if len(scales) != 1 or len(zero_points) != 1:
+            raise ValueError(f"{key} must be per-tensor (one scale and one zero point), got {preset[key]!r}")
+        quant[role] = (float(scales[0]), int(zero_points[0]))
+    return quant
 
 
 class BinaryBasicMathBase(OperationBase):
@@ -85,38 +98,26 @@ class BinaryBasicMathBase(OperationBase):
         return tuple(shape_1) != tuple(shape_2)
 
     def _direct_entry_kernel(self) -> Optional[Dict[str, Any]]:
-        """Kernel info for an `entry:` case, which calls an s8 entry with its router's arguments."""
+        """Kernel info for an `entry:` case: a public kernel of this operator, bound from the kernel
+        contract with the router's values (the s8 row-broadcast entries take the router's arguments)."""
         entry = self.desc.get("entry")
         if not entry:
             return None
-        resolved = resolve_direct_entry(
+        dtype = self.tensor_dtype("input")
+        resolved = resolve_entry(
             str(self.desc.get("operator")),
             str(entry),
-            self.tensor_dtype("input"),
-            self.desc.get("weight_dtype", "S8"),
+            activation_dtype=dtype,
+            weight_dtype=dtype,
+            cpu=self.target_cpu,
+            desc=self.desc,
+            extra_roles={"input_1": dtype, "input_2": dtype},
         )
         check_entry_fault(self.desc, resolved)
+        c_type = self.tensor_c_type("input")
         return {
             "kernel_fn": resolved["kernel_fn"],
-            "input_c_type": "int8_t",
-            "output_c_type": "int8_t",
-            "float_kernel": False,
+            "input_c_type": c_type,
+            "output_c_type": c_type,
+            "float_kernel": dtype in ("FP32", "FP16"),
         }
-
-    @staticmethod
-    def _requantize_np(values: np.ndarray, multiplier: int, shift: int) -> np.ndarray:
-        left_shift = shift if shift > 0 else 0
-        right_shift = -shift if shift < 0 else 0
-        prod = values.astype(np.int64) * (1 << left_shift)
-        mult = (1 << 30) + (prod * int(multiplier))
-        res = (mult >> 31).astype(np.int64)
-        if right_shift == 0:
-            return res.astype(np.int32)
-        remainder_mask = (1 << right_shift) - 1
-        remainder = res & remainder_mask
-        result = res >> right_shift
-        threshold = remainder_mask >> 1
-        threshold = threshold + (result < 0)
-        result = result + (remainder > threshold)
-        return result.astype(np.int32)
-

@@ -15,7 +15,6 @@ from helia_core_tester.generation.io.descriptors import load_all_descriptors
 
 def _generate(tmp_path: Path, name: str) -> dict[str, np.ndarray]:
     """Generate one case; map array name to values."""
-    pytest.importorskip("tensorflow")
     from helia_core_tester.generation.test_ops import generate_test
 
     descs = {d["name"]: d for d in load_all_descriptors(str(find_descriptors_dir()))}

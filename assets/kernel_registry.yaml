@@ -2,16 +2,19 @@
 #
 # This is the single source of truth mapping a bridged (family, operator, dtype[, weight_dtype])
 # tuple to the numeric `kernel_id` sent over HCTP in CASE_META and dispatched by firmware in
-# `cmake/hardware/benchmark_server_session.c`'s `run_kernel_once()`. Host
-# (`helia_core_tester/hardware/kernel_registry.py`) and firmware
-# (`cmake/hardware/benchmark_server_session.h`'s `HCT_KERNEL_ID_*` defines) must agree on
-# these numbers -- `test_kernel_registry.py` cross-checks the Python side against this file,
-# and a comment in benchmark_server_session.h points back here.
+# `cmake/hardware/benchmark_server_adapters.gen.c`'s `hct_run_kernel_once()`. Each row also
+# names the firmware's `c_define` for that id; `scripts/generate_kernel_catalog.py` renders the
+# `HCT_KERNEL_ID_*` block of `cmake/hardware/benchmark_server_adapters.h` (and the kernel
+# catalog) from this file, and `helia_core_tester/tests/test_kernel_registry.py` checks that
+# the committed header, the catalog, and this file agree. When an ns-cmsis-nn checkout ships a
+# kernel contract export, every `cmsis_function` must be declared in it.
 #
 # When adding a new bridged kernel:
-#   1. Reserve the next kernel_id here.
-#   2. Add a matching `HCT_KERNEL_ID_*` #define in benchmark_server_session.h.
-#   3. Add a `run_<kernel>_once()` firmware handler + a case in `run_kernel_once()`'s switch.
+#   1. Reserve the next kernel_id here, with its `c_define` and `cmsis_function`.
+#   2. Run `python3 scripts/generate_kernel_catalog.py` to regenerate the header block and
+#      the catalog.
+#   3. Add a FirmwareAdapterSpec in helia_core_tester/hardware/adapter_specs.py and run
+#      `python3 scripts/generate_hardware_adapters.py`.
 #   4. Add a builder function in generated_test_bridge.py's `_BUILDERS` dispatch table.
 #   5. Declare `blobs: {role: dtype, ...}`: every CASE_META role the bridge streams for this
 #      kernel and the dtype it must carry (S8/S16/S32/S64/S4/BOOL/FP32/FP16). Adapters cast
@@ -20,6 +23,7 @@
 
 kernels:
   - kernel_id: 1
+    c_define: HCT_KERNEL_ID_ABS_S8
     family: BasicMathFunctions
     operator: Abs
     dtype: S8
@@ -28,6 +32,7 @@ kernels:
     note: "Shared by the synthetic demo bundle and the generated-test bridge."
 
   - kernel_id: 2
+    c_define: HCT_KERNEL_ID_CONVOLVE_S8
     family: ConvolutionFunctions
     operator: Convolve
     dtype: S8
@@ -35,6 +40,7 @@ kernels:
     blobs: {input_0: S8, weights: S8, bias: S32, multiplier: S32, shift: S32}
 
   - kernel_id: 3
+    c_define: HCT_KERNEL_ID_ADD_S8
     family: BasicMathFunctions
     operator: Add
     dtype: S8
@@ -42,6 +48,7 @@ kernels:
     blobs: {input_0: S8, input_1: S8}
 
   - kernel_id: 4
+    c_define: HCT_KERNEL_ID_SUB_S8
     family: BasicMathFunctions
     operator: Sub
     dtype: S8
@@ -49,6 +56,7 @@ kernels:
     blobs: {input_0: S8, input_1: S8}
 
   - kernel_id: 5
+    c_define: HCT_KERNEL_ID_MUL_S8
     family: BasicMathFunctions
     operator: Mul
     dtype: S8
@@ -56,6 +64,7 @@ kernels:
     blobs: {input_0: S8, input_1: S8}
 
   - kernel_id: 6
+    c_define: HCT_KERNEL_ID_MAXIMUM_S8
     family: BasicMathFunctions
     operator: Maximum
     dtype: S8
@@ -63,6 +72,7 @@ kernels:
     blobs: {input_0: S8, input_1: S8}
 
   - kernel_id: 7
+    c_define: HCT_KERNEL_ID_MINIMUM_S8
     family: BasicMathFunctions
     operator: Minimum
     dtype: S8
@@ -70,6 +80,7 @@ kernels:
     blobs: {input_0: S8, input_1: S8}
 
   - kernel_id: 8
+    c_define: HCT_KERNEL_ID_DEPTHWISE_CONV_S8
     family: ConvolutionFunctions
     operator: DepthwiseConv
     dtype: S8
@@ -77,6 +88,7 @@ kernels:
     blobs: {input_0: S8, weights: S8, bias: S32, multiplier: S32, shift: S32}
 
   - kernel_id: 9
+    c_define: HCT_KERNEL_ID_ADD_S16
     family: BasicMathFunctions
     operator: Add
     dtype: S16
@@ -84,6 +96,7 @@ kernels:
     blobs: {input_0: S16, input_1: S16}
 
   - kernel_id: 10
+    c_define: HCT_KERNEL_ID_SUB_S16
     family: BasicMathFunctions
     operator: Sub
     dtype: S16
@@ -91,6 +104,7 @@ kernels:
     blobs: {input_0: S16, input_1: S16}
 
   - kernel_id: 11
+    c_define: HCT_KERNEL_ID_MUL_S16
     family: BasicMathFunctions
     operator: Mul
     dtype: S16
@@ -98,6 +112,7 @@ kernels:
     blobs: {input_0: S16, input_1: S16}
 
   - kernel_id: 12
+    c_define: HCT_KERNEL_ID_MAXIMUM_S16
     family: BasicMathFunctions
     operator: Maximum
     dtype: S16
@@ -105,6 +120,7 @@ kernels:
     blobs: {input_0: S16, input_1: S16}
 
   - kernel_id: 13
+    c_define: HCT_KERNEL_ID_MINIMUM_S16
     family: BasicMathFunctions
     operator: Minimum
     dtype: S16
@@ -112,6 +128,7 @@ kernels:
     blobs: {input_0: S16, input_1: S16}
 
   - kernel_id: 14
+    c_define: HCT_KERNEL_ID_CONVOLVE_S16
     family: ConvolutionFunctions
     operator: Convolve
     dtype: S16
@@ -120,6 +137,7 @@ kernels:
     blobs: {input_0: S16, weights: S8, bias: [S32, S64], multiplier: S32, shift: S32}
 
   - kernel_id: 15
+    c_define: HCT_KERNEL_ID_DEPTHWISE_CONV_S16
     family: ConvolutionFunctions
     operator: DepthwiseConv
     dtype: S16
@@ -127,6 +145,7 @@ kernels:
     blobs: {input_0: S16, weights: S8, bias: S64, multiplier: S32, shift: S32}
 
   - kernel_id: 16
+    c_define: HCT_KERNEL_ID_AVGPOOL_S8
     family: PoolingFunctions
     operator: AvgPool
     dtype: S8
@@ -134,6 +153,7 @@ kernels:
     blobs: {input_0: S8}
 
   - kernel_id: 17
+    c_define: HCT_KERNEL_ID_MAXPOOL_S8
     family: PoolingFunctions
     operator: MaxPool
     dtype: S8
@@ -141,6 +161,7 @@ kernels:
     blobs: {input_0: S8}
 
   - kernel_id: 18
+    c_define: HCT_KERNEL_ID_AVGPOOL_S16
     family: PoolingFunctions
     operator: AvgPool
     dtype: S16
@@ -148,6 +169,7 @@ kernels:
     blobs: {input_0: S16}
 
   - kernel_id: 19
+    c_define: HCT_KERNEL_ID_MAXPOOL_S16
     family: PoolingFunctions
     operator: MaxPool
     dtype: S16
@@ -155,6 +177,7 @@ kernels:
     blobs: {input_0: S16}
 
   - kernel_id: 20
+    c_define: HCT_KERNEL_ID_RELU_S8
     family: ActivationFunctions
     operator: Relu
     dtype: S8
@@ -162,6 +185,7 @@ kernels:
     blobs: {input_0: S8}
 
   - kernel_id: 21
+    c_define: HCT_KERNEL_ID_RELU_S16
     family: ActivationFunctions
     operator: Relu
     dtype: S16
@@ -169,6 +193,7 @@ kernels:
     blobs: {input_0: S16}
 
   - kernel_id: 22
+    c_define: HCT_KERNEL_ID_RELU6_S8
     family: ActivationFunctions
     operator: Relu6
     dtype: S8
@@ -176,6 +201,7 @@ kernels:
     blobs: {input_0: S8}
 
   - kernel_id: 23
+    c_define: HCT_KERNEL_ID_RELU6_S16
     family: ActivationFunctions
     operator: Relu6
     dtype: S16
@@ -183,6 +209,7 @@ kernels:
     blobs: {input_0: S16}
 
   - kernel_id: 24
+    c_define: HCT_KERNEL_ID_CLAMP_S8
     family: ActivationFunctions
     operator: Clamp
     dtype: S8
@@ -190,6 +217,7 @@ kernels:
     blobs: {input_0: S8}
 
   - kernel_id: 25
+    c_define: HCT_KERNEL_ID_CLAMP_S16
     family: ActivationFunctions
     operator: Clamp
     dtype: S16
@@ -197,6 +225,7 @@ kernels:
     blobs: {input_0: S16}
 
   - kernel_id: 26
+    c_define: HCT_KERNEL_ID_LEAKY_RELU_S8
     family: ActivationFunctions
     operator: LeakyRelu
     dtype: S8
@@ -204,6 +233,7 @@ kernels:
     blobs: {input_0: S8}
 
   - kernel_id: 27
+    c_define: HCT_KERNEL_ID_LEAKY_RELU_S16
     family: ActivationFunctions
     operator: LeakyRelu
     dtype: S16
@@ -211,6 +241,7 @@ kernels:
     blobs: {input_0: S16}
 
   - kernel_id: 28
+    c_define: HCT_KERNEL_ID_LOGISTIC_S16
     family: ActivationFunctions
     operator: Logistic
     dtype: S16
@@ -218,6 +249,7 @@ kernels:
     blobs: {input_0: S16}
 
   - kernel_id: 29
+    c_define: HCT_KERNEL_ID_TANH_S16
     family: ActivationFunctions
     operator: Tanh
     dtype: S16
@@ -225,6 +257,7 @@ kernels:
     blobs: {input_0: S16}
 
   - kernel_id: 30
+    c_define: HCT_KERNEL_ID_HARD_SWISH_COMPAT_S8
     family: ActivationFunctions
     operator: HardSwishCompat
     dtype: S8
@@ -232,6 +265,7 @@ kernels:
     blobs: {input_0: S8}
 
   - kernel_id: 31
+    c_define: HCT_KERNEL_ID_HARD_SWISH_PRECISE_S8
     family: ActivationFunctions
     operator: HardSwishPrecise
     dtype: S8
@@ -239,6 +273,7 @@ kernels:
     blobs: {input_0: S8}
 
   - kernel_id: 32
+    c_define: HCT_KERNEL_ID_HARD_SWISH_PRECISE_S16
     family: ActivationFunctions
     operator: HardSwishPrecise
     dtype: S16
@@ -246,6 +281,7 @@ kernels:
     blobs: {input_0: S16}
 
   - kernel_id: 33
+    c_define: HCT_KERNEL_ID_PRELU_S8
     family: ActivationFunctions
     operator: PReLU
     dtype: S8
@@ -253,6 +289,7 @@ kernels:
     blobs: {input_0: S8, input_1: S8}
 
   - kernel_id: 34
+    c_define: HCT_KERNEL_ID_PRELU_S16
     family: ActivationFunctions
     operator: PReLU
     dtype: S16
@@ -260,6 +297,7 @@ kernels:
     blobs: {input_0: S16, input_1: S16}
 
   - kernel_id: 35
+    c_define: HCT_KERNEL_ID_PRELU_SCALAR_S8
     family: ActivationFunctions
     operator: PReLUScalar
     dtype: S8
@@ -267,6 +305,7 @@ kernels:
     blobs: {input_0: S8, input_1: S8}
 
   - kernel_id: 36
+    c_define: HCT_KERNEL_ID_PRELU_SCALAR_S16
     family: ActivationFunctions
     operator: PReLUScalar
     dtype: S16
@@ -274,6 +313,7 @@ kernels:
     blobs: {input_0: S16, input_1: S16}
 
   - kernel_id: 37
+    c_define: HCT_KERNEL_ID_QUANTIZE_S8
     family: QuantizationFunctions
     operator: Quantize
     dtype: S8
@@ -281,6 +321,7 @@ kernels:
     blobs: {input_0: FP32}
 
   - kernel_id: 38
+    c_define: HCT_KERNEL_ID_QUANTIZE_S16
     family: QuantizationFunctions
     operator: Quantize
     dtype: S16
@@ -288,6 +329,7 @@ kernels:
     blobs: {input_0: FP32}
 
   - kernel_id: 39
+    c_define: HCT_KERNEL_ID_DEQUANTIZE_S8
     family: QuantizationFunctions
     operator: Dequantize
     dtype: S8
@@ -295,6 +337,7 @@ kernels:
     blobs: {input_0: S8}
 
   - kernel_id: 40
+    c_define: HCT_KERNEL_ID_DEQUANTIZE_S16
     family: QuantizationFunctions
     operator: Dequantize
     dtype: S16
@@ -302,6 +345,7 @@ kernels:
     blobs: {input_0: S16}
 
   - kernel_id: 41
+    c_define: HCT_KERNEL_ID_SOFTMAX_S8
     family: SoftmaxFunctions
     operator: Softmax
     dtype: S8
@@ -309,6 +353,7 @@ kernels:
     blobs: {input_0: S8}
 
   - kernel_id: 42
+    c_define: HCT_KERNEL_ID_SOFTMAX_S16
     family: SoftmaxFunctions
     operator: Softmax
     dtype: S16
@@ -316,6 +361,7 @@ kernels:
     blobs: {input_0: S16}
 
   - kernel_id: 43
+    c_define: HCT_KERNEL_ID_SOFTMAX_S8_S16
     family: SoftmaxFunctions
     operator: SoftmaxS8S16
     dtype: S8
@@ -323,6 +369,7 @@ kernels:
     blobs: {input_0: S8}
 
   - kernel_id: 44
+    c_define: HCT_KERNEL_ID_FULLY_CONNECTED_S8
     family: FullyConnectedFunctions
     operator: FullyConnected
     dtype: S8
@@ -330,6 +377,7 @@ kernels:
     blobs: {input_0: S8, weights: S8, bias: S32, multiplier: S32, shift: S32}
 
   - kernel_id: 45
+    c_define: HCT_KERNEL_ID_FULLY_CONNECTED_S16
     family: FullyConnectedFunctions
     operator: FullyConnected
     dtype: S16
@@ -337,6 +385,7 @@ kernels:
     blobs: {input_0: S16, weights: S8, bias: S64, multiplier: S32, shift: S32}
 
   - kernel_id: 46
+    c_define: HCT_KERNEL_ID_BATCH_MATMUL_S8
     family: FullyConnectedFunctions
     operator: BatchMatMul
     dtype: S8
@@ -344,6 +393,7 @@ kernels:
     blobs: {input_0: S8, input_1: S8}
 
   - kernel_id: 47
+    c_define: HCT_KERNEL_ID_BATCH_MATMUL_S16
     family: FullyConnectedFunctions
     operator: BatchMatMul
     dtype: S16
@@ -351,6 +401,7 @@ kernels:
     blobs: {input_0: S16, input_1: S16}
 
   - kernel_id: 48
+    c_define: HCT_KERNEL_ID_ABS_S16
     family: BasicMathFunctions
     operator: Abs
     dtype: S16
@@ -358,6 +409,7 @@ kernels:
     blobs: {input_0: S16}
 
   - kernel_id: 49
+    c_define: HCT_KERNEL_ID_ARGMAX_S8
     family: BasicMathFunctions
     operator: ArgMax
     dtype: S8
@@ -365,6 +417,7 @@ kernels:
     blobs: {input_0: S8}
 
   - kernel_id: 50
+    c_define: HCT_KERNEL_ID_ARGMAX_S16
     family: BasicMathFunctions
     operator: ArgMax
     dtype: S16
@@ -372,6 +425,7 @@ kernels:
     blobs: {input_0: S16}
 
   - kernel_id: 51
+    c_define: HCT_KERNEL_ID_ARGMIN_S8
     family: BasicMathFunctions
     operator: ArgMin
     dtype: S8
@@ -379,6 +433,7 @@ kernels:
     blobs: {input_0: S8}
 
   - kernel_id: 52
+    c_define: HCT_KERNEL_ID_ARGMIN_S16
     family: BasicMathFunctions
     operator: ArgMin
     dtype: S16
@@ -386,6 +441,7 @@ kernels:
     blobs: {input_0: S16}
 
   - kernel_id: 53
+    c_define: HCT_KERNEL_ID_MEAN_S8
     family: BasicMathFunctions
     operator: Mean
     dtype: S8
@@ -393,6 +449,7 @@ kernels:
     blobs: {input_0: S8}
 
   - kernel_id: 54
+    c_define: HCT_KERNEL_ID_MEAN_S16
     family: BasicMathFunctions
     operator: Mean
     dtype: S16
@@ -400,6 +457,7 @@ kernels:
     blobs: {input_0: S16}
 
   - kernel_id: 55
+    c_define: HCT_KERNEL_ID_REDUCE_MAX_S8
     family: BasicMathFunctions
     operator: ReduceMax
     dtype: S8
@@ -407,6 +465,7 @@ kernels:
     blobs: {input_0: S8}
 
   - kernel_id: 56
+    c_define: HCT_KERNEL_ID_REDUCE_MAX_S16
     family: BasicMathFunctions
     operator: ReduceMax
     dtype: S16
@@ -414,6 +473,7 @@ kernels:
     blobs: {input_0: S16}
 
   - kernel_id: 57
+    c_define: HCT_KERNEL_ID_REDUCE_MIN_S8
     family: BasicMathFunctions
     operator: ReduceMin
     dtype: S8
@@ -421,6 +481,7 @@ kernels:
     blobs: {input_0: S8}
 
   - kernel_id: 58
+    c_define: HCT_KERNEL_ID_REDUCE_MIN_S16
     family: BasicMathFunctions
     operator: ReduceMin
     dtype: S16
@@ -428,6 +489,7 @@ kernels:
     blobs: {input_0: S16}
 
   - kernel_id: 59
+    c_define: HCT_KERNEL_ID_RSQRT_S16_PER_OP
     family: BasicMathFunctions
     operator: Rsqrt
     dtype: S16
@@ -436,6 +498,7 @@ kernels:
     note: "Covers per_op and universal generated variants; builder selects the right streamed LUT/scalars."
 
   - kernel_id: 60
+    c_define: HCT_KERNEL_ID_RSQRT_S16_UNIVERSAL
     family: BasicMathFunctions
     operator: RsqrtUniversal
     dtype: S16
@@ -443,6 +506,7 @@ kernels:
     blobs: {input_0: S16, weights: S32}
 
   - kernel_id: 61
+    c_define: HCT_KERNEL_ID_SQRT_S8
     family: BasicMathFunctions
     operator: Sqrt
     dtype: S8
@@ -450,6 +514,7 @@ kernels:
     blobs: {input_0: S8, weights: S8}
 
   - kernel_id: 62
+    c_define: HCT_KERNEL_ID_SQRT_S16
     family: BasicMathFunctions
     operator: Sqrt
     dtype: S16
@@ -457,6 +522,7 @@ kernels:
     blobs: {input_0: S16, weights: S16}
 
   - kernel_id: 63
+    c_define: HCT_KERNEL_ID_SQUARED_DIFFERENCE_S8
     family: BasicMathFunctions
     operator: SquaredDifference
     dtype: S8
@@ -464,6 +530,7 @@ kernels:
     blobs: {input_0: S8, input_1: S8}
 
   - kernel_id: 64
+    c_define: HCT_KERNEL_ID_SQUARED_DIFFERENCE_S16
     family: BasicMathFunctions
     operator: SquaredDifference
     dtype: S16
@@ -471,6 +538,7 @@ kernels:
     blobs: {input_0: S16, input_1: S16}
 
   - kernel_id: 65
+    c_define: HCT_KERNEL_ID_REQUANTIZE_S8
     family: NNSupportFunctions
     operator: Requantize
     dtype: S8
@@ -478,6 +546,7 @@ kernels:
     blobs: {input_0: S8}
 
   - kernel_id: 66
+    c_define: HCT_KERNEL_ID_REQUANTIZE_S16
     family: NNSupportFunctions
     operator: Requantize
     dtype: S16
@@ -485,6 +554,7 @@ kernels:
     blobs: {input_0: S16}
 
   - kernel_id: 67
+    c_define: HCT_KERNEL_ID_EQUAL_S8
     family: ComparisonFunctions
     operator: Equal
     dtype: S8
@@ -492,6 +562,7 @@ kernels:
     blobs: {input_0: S8, input_1: S8}
 
   - kernel_id: 68
+    c_define: HCT_KERNEL_ID_EQUAL_S16
     family: ComparisonFunctions
     operator: Equal
     dtype: S16
@@ -499,6 +570,7 @@ kernels:
     blobs: {input_0: S16, input_1: S16}
 
   - kernel_id: 69
+    c_define: HCT_KERNEL_ID_NOT_EQUAL_S8
     family: ComparisonFunctions
     operator: NotEqual
     dtype: S8
@@ -506,6 +578,7 @@ kernels:
     blobs: {input_0: S8, input_1: S8}
 
   - kernel_id: 70
+    c_define: HCT_KERNEL_ID_NOT_EQUAL_S16
     family: ComparisonFunctions
     operator: NotEqual
     dtype: S16
@@ -513,6 +586,7 @@ kernels:
     blobs: {input_0: S16, input_1: S16}
 
   - kernel_id: 71
+    c_define: HCT_KERNEL_ID_GREATER_S8
     family: ComparisonFunctions
     operator: Greater
     dtype: S8
@@ -520,6 +594,7 @@ kernels:
     blobs: {input_0: S8, input_1: S8}
 
   - kernel_id: 72
+    c_define: HCT_KERNEL_ID_GREATER_S16
     family: ComparisonFunctions
     operator: Greater
     dtype: S16
@@ -527,6 +602,7 @@ kernels:
     blobs: {input_0: S16, input_1: S16}
 
   - kernel_id: 73
+    c_define: HCT_KERNEL_ID_GREATER_EQUAL_S8
     family: ComparisonFunctions
     operator: GreaterEqual
     dtype: S8
@@ -534,6 +610,7 @@ kernels:
     blobs: {input_0: S8, input_1: S8}
 
   - kernel_id: 74
+    c_define: HCT_KERNEL_ID_GREATER_EQUAL_S16
     family: ComparisonFunctions
     operator: GreaterEqual
     dtype: S16
@@ -541,6 +618,7 @@ kernels:
     blobs: {input_0: S16, input_1: S16}
 
   - kernel_id: 75
+    c_define: HCT_KERNEL_ID_LESS_S8
     family: ComparisonFunctions
     operator: Less
     dtype: S8
@@ -548,6 +626,7 @@ kernels:
     blobs: {input_0: S8, input_1: S8}
 
   - kernel_id: 76
+    c_define: HCT_KERNEL_ID_LESS_S16
     family: ComparisonFunctions
     operator: Less
     dtype: S16
@@ -555,6 +634,7 @@ kernels:
     blobs: {input_0: S16, input_1: S16}
 
   - kernel_id: 77
+    c_define: HCT_KERNEL_ID_LESS_EQUAL_S8
     family: ComparisonFunctions
     operator: LessEqual
     dtype: S8
@@ -562,6 +642,7 @@ kernels:
     blobs: {input_0: S8, input_1: S8}
 
   - kernel_id: 78
+    c_define: HCT_KERNEL_ID_LESS_EQUAL_S16
     family: ComparisonFunctions
     operator: LessEqual
     dtype: S16
@@ -569,6 +650,7 @@ kernels:
     blobs: {input_0: S16, input_1: S16}
 
   - kernel_id: 79
+    c_define: HCT_KERNEL_ID_TRANSPOSE_CONV_S8
     family: ConvolutionFunctions
     operator: TransposeConv
     dtype: S8
@@ -576,6 +658,7 @@ kernels:
     blobs: {input_0: S8, weights: S8, bias: S32, multiplier: S32, shift: S32}
 
   - kernel_id: 80
+    c_define: HCT_KERNEL_ID_RESHAPE_S8
     family: ReshapeFunctions
     operator: Reshape
     dtype: S8
@@ -583,6 +666,7 @@ kernels:
     blobs: {input_0: S8}
 
   - kernel_id: 81
+    c_define: HCT_KERNEL_ID_SQUEEZE_S8
     family: TesterExtensions
     operator: Squeeze
     dtype: S8
@@ -590,6 +674,7 @@ kernels:
     blobs: {input_0: S8}
 
   - kernel_id: 82
+    c_define: HCT_KERNEL_ID_TRANSPOSE_S8
     family: TransposeFunctions
     operator: Transpose
     dtype: S8
@@ -597,6 +682,7 @@ kernels:
     blobs: {input_0: S8, meta_0: S32}
 
   - kernel_id: 83
+    c_define: HCT_KERNEL_ID_TRANSPOSE_S16
     family: TransposeFunctions
     operator: Transpose
     dtype: S16
@@ -604,6 +690,7 @@ kernels:
     blobs: {input_0: S16, meta_0: S32}
 
   - kernel_id: 84
+    c_define: HCT_KERNEL_ID_PAD_S8
     family: PadFunctions
     operator: Pad
     dtype: S8
@@ -611,6 +698,7 @@ kernels:
     blobs: {input_0: S8, meta_0: S32}
 
   - kernel_id: 85
+    c_define: HCT_KERNEL_ID_PAD_S16
     family: PadFunctions
     operator: Pad
     dtype: S16
@@ -618,6 +706,7 @@ kernels:
     blobs: {input_0: S16, meta_0: S32}
 
   - kernel_id: 86
+    c_define: HCT_KERNEL_ID_MIRROR_PAD_S8
     family: PadFunctions
     operator: MirrorPad
     dtype: S8
@@ -625,6 +714,7 @@ kernels:
     blobs: {input_0: S8, meta_0: S32}
 
   - kernel_id: 87
+    c_define: HCT_KERNEL_ID_MIRROR_PAD_S16
     family: PadFunctions
     operator: MirrorPad
     dtype: S16
@@ -632,6 +722,7 @@ kernels:
     blobs: {input_0: S16, meta_0: S32}
 
   - kernel_id: 88
+    c_define: HCT_KERNEL_ID_CONCATENATION_S8
     family: ConcatenationFunctions
     operator: Concatenation
     dtype: S8
@@ -639,6 +730,7 @@ kernels:
     blobs: {input_0: S8, input_1: S8, input_2: S8, meta_0: S32}
 
   - kernel_id: 89
+    c_define: HCT_KERNEL_ID_CONCATENATION_S16
     family: ConcatenationFunctions
     operator: Concatenation
     dtype: S16
@@ -646,6 +738,7 @@ kernels:
     blobs: {input_0: S16, input_1: S16, input_2: S16, meta_0: S32}
 
   - kernel_id: 90
+    c_define: HCT_KERNEL_ID_CONCATENATION_S32
     family: ConcatenationFunctions
     operator: Concatenation
     dtype: S32
@@ -653,6 +746,7 @@ kernels:
     blobs: {input_0: S32, input_1: S32, input_2: S32, meta_0: S32}
 
   - kernel_id: 91
+    c_define: HCT_KERNEL_ID_SPLIT_S8
     family: ConcatenationFunctions
     operator: Split
     dtype: S8
@@ -660,6 +754,7 @@ kernels:
     blobs: {input_0: S8, meta_0: S32}
 
   - kernel_id: 92
+    c_define: HCT_KERNEL_ID_SPLIT_S16
     family: ConcatenationFunctions
     operator: Split
     dtype: S16
@@ -667,6 +762,7 @@ kernels:
     blobs: {input_0: S16, meta_0: S32}
 
   - kernel_id: 93
+    c_define: HCT_KERNEL_ID_BATCH_TO_SPACE_ND_S8
     family: ReshapeFunctions
     operator: BatchToSpaceND
     dtype: S8
@@ -674,6 +770,7 @@ kernels:
     blobs: {input_0: S8, meta_0: S32}
 
   - kernel_id: 94
+    c_define: HCT_KERNEL_ID_BATCH_TO_SPACE_ND_S16
     family: ReshapeFunctions
     operator: BatchToSpaceND
     dtype: S16
@@ -681,6 +778,7 @@ kernels:
     blobs: {input_0: S16, meta_0: S32}
 
   - kernel_id: 95
+    c_define: HCT_KERNEL_ID_SPACE_TO_BATCH_ND_S8
     family: ReshapeFunctions
     operator: SpaceToBatchND
     dtype: S8
@@ -688,6 +786,7 @@ kernels:
     blobs: {input_0: S8, meta_0: S32}
 
   - kernel_id: 96
+    c_define: HCT_KERNEL_ID_SPACE_TO_BATCH_ND_S16
     family: ReshapeFunctions
     operator: SpaceToBatchND
     dtype: S16
@@ -695,6 +794,7 @@ kernels:
     blobs: {input_0: S16, meta_0: S32}
 
   - kernel_id: 97
+    c_define: HCT_KERNEL_ID_SPACE_TO_DEPTH_S8
     family: ReshapeFunctions
     operator: SpaceToDepth
     dtype: S8
@@ -702,6 +802,7 @@ kernels:
     blobs: {input_0: S8, meta_0: S32}
 
   - kernel_id: 98
+    c_define: HCT_KERNEL_ID_SPACE_TO_DEPTH_S16
     family: ReshapeFunctions
     operator: SpaceToDepth
     dtype: S16
@@ -709,6 +810,7 @@ kernels:
     blobs: {input_0: S16, meta_0: S32}
 
   - kernel_id: 99
+    c_define: HCT_KERNEL_ID_DEPTH_TO_SPACE_S8
     family: ReshapeFunctions
     operator: DepthToSpace
     dtype: S8
@@ -716,6 +818,7 @@ kernels:
     blobs: {input_0: S8, meta_0: S32}
 
   - kernel_id: 100
+    c_define: HCT_KERNEL_ID_DEPTH_TO_SPACE_S16
     family: ReshapeFunctions
     operator: DepthToSpace
     dtype: S16
@@ -723,6 +826,7 @@ kernels:
     blobs: {input_0: S16, meta_0: S32}
 
   - kernel_id: 101
+    c_define: HCT_KERNEL_ID_RESIZE_NEAREST_NEIGHBOR_S8
     family: ReshapeFunctions
     operator: ResizeNearestNeighbor
     dtype: S8
@@ -730,6 +834,7 @@ kernels:
     blobs: {input_0: S8, meta_0: S32}
 
   - kernel_id: 102
+    c_define: HCT_KERNEL_ID_RESIZE_NEAREST_NEIGHBOR_S16
     family: ReshapeFunctions
     operator: ResizeNearestNeighbor
     dtype: S16
@@ -737,6 +842,7 @@ kernels:
     blobs: {input_0: S16, meta_0: S32}
 
   - kernel_id: 103
+    c_define: HCT_KERNEL_ID_TILE_S8
     family: TileFunctions
     operator: Tile
     dtype: S8
@@ -744,6 +850,7 @@ kernels:
     blobs: {input_0: S8, meta_0: S32}
 
   - kernel_id: 104
+    c_define: HCT_KERNEL_ID_TILE_S16
     family: TileFunctions
     operator: Tile
     dtype: S16
@@ -751,6 +858,7 @@ kernels:
     blobs: {input_0: S16, meta_0: S32}
 
   - kernel_id: 105
+    c_define: HCT_KERNEL_ID_GATHER_S8
     family: GatherFunctions
     operator: Gather
     dtype: S8
@@ -758,6 +866,7 @@ kernels:
     blobs: {input_0: S8, input_1: S32, meta_0: S32}
 
   - kernel_id: 106
+    c_define: HCT_KERNEL_ID_GATHER_S16
     family: GatherFunctions
     operator: Gather
     dtype: S16
@@ -765,6 +874,7 @@ kernels:
     blobs: {input_0: S16, input_1: S32, meta_0: S32}
 
   - kernel_id: 107
+    c_define: HCT_KERNEL_ID_GATHER_ND_S8
     family: GatherFunctions
     operator: GatherND
     dtype: S8
@@ -772,6 +882,7 @@ kernels:
     blobs: {input_0: S8, input_1: S32, meta_0: S32}
 
   - kernel_id: 108
+    c_define: HCT_KERNEL_ID_GATHER_ND_S16
     family: GatherFunctions
     operator: GatherND
     dtype: S16
@@ -779,6 +890,7 @@ kernels:
     blobs: {input_0: S16, input_1: S32, meta_0: S32}
 
   - kernel_id: 109
+    c_define: HCT_KERNEL_ID_WHERE_S8
     family: SelectFunctions
     operator: Where
     dtype: S8
@@ -786,6 +898,7 @@ kernels:
     blobs: {input_0: S8, meta_0: S32}
 
   - kernel_id: 110
+    c_define: HCT_KERNEL_ID_WHERE_S16
     family: SelectFunctions
     operator: Where
     dtype: S16
@@ -793,6 +906,7 @@ kernels:
     blobs: {input_0: S16, meta_0: S32}
 
   - kernel_id: 111
+    c_define: HCT_KERNEL_ID_SELECT_V2_S8
     family: SelectFunctions
     operator: SelectV2
     dtype: S8
@@ -800,6 +914,7 @@ kernels:
     blobs: {input_0: BOOL, input_1: S8, input_2: S8, meta_0: S32}
 
   - kernel_id: 112
+    c_define: HCT_KERNEL_ID_SELECT_V2_S16
     family: SelectFunctions
     operator: SelectV2
     dtype: S16
@@ -807,6 +922,7 @@ kernels:
     blobs: {input_0: BOOL, input_1: S16, input_2: S16, meta_0: S32}
 
   - kernel_id: 113
+    c_define: HCT_KERNEL_ID_REVERSE_SEQUENCE_S8
     family: ReverseSequenceFunctions
     operator: ReverseSequence
     dtype: S8
@@ -814,6 +930,7 @@ kernels:
     blobs: {input_0: S8, input_1: S32, meta_0: S32}
 
   - kernel_id: 114
+    c_define: HCT_KERNEL_ID_REVERSE_SEQUENCE_S16
     family: ReverseSequenceFunctions
     operator: ReverseSequence
     dtype: S16
@@ -821,6 +938,7 @@ kernels:
     blobs: {input_0: S16, input_1: S32, meta_0: S32}
 
   - kernel_id: 115
+    c_define: HCT_KERNEL_ID_SCATTER_ND_S8
     family: ScatterFunctions
     operator: ScatterNd
     dtype: S8
@@ -828,6 +946,7 @@ kernels:
     blobs: {input_0: S32, input_1: S8, meta_0: S32}
 
   - kernel_id: 116
+    c_define: HCT_KERNEL_ID_SCATTER_ND_S16
     family: ScatterFunctions
     operator: ScatterNd
     dtype: S16
@@ -835,6 +954,7 @@ kernels:
     blobs: {input_0: S32, input_1: S16, meta_0: S32}
 
   - kernel_id: 117
+    c_define: HCT_KERNEL_ID_BROADCAST_TO_S8
     family: BroadcastFunctions
     operator: BroadcastTo
     dtype: S8
@@ -842,6 +962,7 @@ kernels:
     blobs: {input_0: S8, meta_0: S32}
 
   - kernel_id: 118
+    c_define: HCT_KERNEL_ID_BROADCAST_TO_S16
     family: BroadcastFunctions
     operator: BroadcastTo
     dtype: S16
@@ -849,6 +970,7 @@ kernels:
     blobs: {input_0: S16, meta_0: S32}
 
   - kernel_id: 119
+    c_define: HCT_KERNEL_ID_DYNAMIC_UPDATE_SLICE_S8
     family: DynamicUpdateSliceFunctions
     operator: DynamicUpdateSlice
     dtype: S8
@@ -856,6 +978,7 @@ kernels:
     blobs: {input_0: S8, input_1: S8, input_2: S32, meta_0: S32}
 
   - kernel_id: 120
+    c_define: HCT_KERNEL_ID_DYNAMIC_UPDATE_SLICE_S16
     family: DynamicUpdateSliceFunctions
     operator: DynamicUpdateSlice
     dtype: S16
@@ -863,6 +986,7 @@ kernels:
     blobs: {input_0: S16, input_1: S16, input_2: S32, meta_0: S32}
 
   - kernel_id: 121
+    c_define: HCT_KERNEL_ID_STRIDED_SLICE_S8
     family: StridedSliceFunctions
     operator: StridedSlice
     dtype: S8
@@ -870,6 +994,7 @@ kernels:
     blobs: {input_0: S8, meta_0: S32}
 
   - kernel_id: 122
+    c_define: HCT_KERNEL_ID_STRIDED_SLICE_S16
     family: StridedSliceFunctions
     operator: StridedSlice
     dtype: S16
@@ -877,6 +1002,7 @@ kernels:
     blobs: {input_0: S16, meta_0: S32}
 
   - kernel_id: 123
+    c_define: HCT_KERNEL_ID_STRIDED_SLICE_S32
     family: StridedSliceFunctions
     operator: StridedSlice
     dtype: S32
@@ -884,6 +1010,7 @@ kernels:
     blobs: {input_0: S32, meta_0: S32}
 
   - kernel_id: 124
+    c_define: HCT_KERNEL_ID_CONVOLVE_S4
     family: ConvolutionFunctions
     operator: Convolve
     dtype: S8
@@ -892,6 +1019,7 @@ kernels:
     blobs: {input_0: S8, weights: S4, bias: S32, multiplier: S32, shift: S32}
 
   - kernel_id: 125
+    c_define: HCT_KERNEL_ID_FULLY_CONNECTED_S4
     family: FullyConnectedFunctions
     operator: FullyConnected
     dtype: S8
@@ -900,6 +1028,7 @@ kernels:
     blobs: {input_0: S8, weights: S4, bias: S32, multiplier: S32, shift: S32}
 
   - kernel_id: 126
+    c_define: HCT_KERNEL_ID_DEPTHWISE_CONV_S4
     family: ConvolutionFunctions
     operator: DepthwiseConv
     dtype: S8
@@ -908,6 +1037,7 @@ kernels:
     blobs: {input_0: S8, weights: S4, bias: S32, multiplier: S32, shift: S32}
 
   - kernel_id: 127
+    c_define: HCT_KERNEL_ID_AVGPOOL_F32
     family: PoolingFunctions
     operator: AvgPool
     dtype: FP32
@@ -915,6 +1045,7 @@ kernels:
     blobs: {input_0: FP32}
 
   - kernel_id: 128
+    c_define: HCT_KERNEL_ID_MAXPOOL_F32
     family: PoolingFunctions
     operator: MaxPool
     dtype: FP32
@@ -922,6 +1053,7 @@ kernels:
     blobs: {input_0: FP32}
 
   - kernel_id: 129
+    c_define: HCT_KERNEL_ID_RESHAPE_F32
     family: ReshapeFunctions
     operator: Reshape
     dtype: FP32
@@ -929,6 +1061,7 @@ kernels:
     blobs: {input_0: FP32}
 
   - kernel_id: 130
+    c_define: HCT_KERNEL_ID_RESHAPE_F16
     family: ReshapeFunctions
     operator: Reshape
     dtype: FP16
@@ -936,6 +1069,7 @@ kernels:
     blobs: {input_0: FP16}
 
   - kernel_id: 131
+    c_define: HCT_KERNEL_ID_TRANSPOSE_F32
     family: TransposeFunctions
     operator: Transpose
     dtype: FP32
@@ -943,6 +1077,7 @@ kernels:
     blobs: {input_0: FP32, meta_0: S32}
 
   - kernel_id: 132
+    c_define: HCT_KERNEL_ID_TRANSPOSE_F16
     family: TransposeFunctions
     operator: Transpose
     dtype: FP16
@@ -950,6 +1085,7 @@ kernels:
     blobs: {input_0: FP16, meta_0: S32}
 
   - kernel_id: 133
+    c_define: HCT_KERNEL_ID_PAD_F32
     family: PadFunctions
     operator: Pad
     dtype: FP32
@@ -957,6 +1093,7 @@ kernels:
     blobs: {input_0: FP32, meta_0: S32}
 
   - kernel_id: 134
+    c_define: HCT_KERNEL_ID_PAD_F16
     family: PadFunctions
     operator: Pad
     dtype: FP16
@@ -964,6 +1101,7 @@ kernels:
     blobs: {input_0: FP16, meta_0: S32}
 
   - kernel_id: 135
+    c_define: HCT_KERNEL_ID_STRIDED_SLICE_F32
     family: StridedSliceFunctions
     operator: StridedSlice
     dtype: FP32
@@ -971,6 +1109,7 @@ kernels:
     blobs: {input_0: FP32, meta_0: S32}
 
   - kernel_id: 136
+    c_define: HCT_KERNEL_ID_STRIDED_SLICE_F16
     family: StridedSliceFunctions
     operator: StridedSlice
     dtype: FP16
@@ -978,6 +1117,7 @@ kernels:
     blobs: {input_0: FP16, meta_0: S32}
 
   - kernel_id: 137
+    c_define: HCT_KERNEL_ID_CONCATENATION_F32
     family: ConcatenationFunctions
     operator: Concatenation
     dtype: FP32
@@ -988,6 +1128,7 @@ kernels:
     blobs: {input_0: FP32, input_1: FP32, input_2: FP32, meta_0: S32}
 
   - kernel_id: 138
+    c_define: HCT_KERNEL_ID_CONCATENATION_F16
     family: ConcatenationFunctions
     operator: Concatenation
     dtype: FP16
@@ -995,6 +1136,7 @@ kernels:
     blobs: {input_0: FP16, input_1: FP16, input_2: FP16, meta_0: S32}
 
   - kernel_id: 139
+    c_define: HCT_KERNEL_ID_SPLIT_F16
     family: ConcatenationFunctions
     operator: Split
     dtype: FP16
@@ -1002,6 +1144,7 @@ kernels:
     blobs: {input_0: FP16, meta_0: S32}
 
   - kernel_id: 140
+    c_define: HCT_KERNEL_ID_ABS_F32
     family: BasicMathFunctions
     operator: Abs
     dtype: FP32
@@ -1009,6 +1152,7 @@ kernels:
     blobs: {input_0: FP32}
 
   - kernel_id: 141
+    c_define: HCT_KERNEL_ID_ABS_F16
     family: BasicMathFunctions
     operator: Abs
     dtype: FP16
@@ -1016,6 +1160,7 @@ kernels:
     blobs: {input_0: FP16}
 
   - kernel_id: 142
+    c_define: HCT_KERNEL_ID_ADD_F32
     family: BasicMathFunctions
     operator: Add
     dtype: FP32
@@ -1023,6 +1168,7 @@ kernels:
     blobs: {input_0: FP32, input_1: FP32}
 
   - kernel_id: 143
+    c_define: HCT_KERNEL_ID_ADD_F16
     family: BasicMathFunctions
     operator: Add
     dtype: FP16
@@ -1030,6 +1176,7 @@ kernels:
     blobs: {input_0: FP16, input_1: FP16}
 
   - kernel_id: 144
+    c_define: HCT_KERNEL_ID_SUB_F32
     family: BasicMathFunctions
     operator: Sub
     dtype: FP32
@@ -1037,6 +1184,7 @@ kernels:
     blobs: {input_0: FP32, input_1: FP32}
 
   - kernel_id: 145
+    c_define: HCT_KERNEL_ID_SUB_F16
     family: BasicMathFunctions
     operator: Sub
     dtype: FP16
@@ -1044,6 +1192,7 @@ kernels:
     blobs: {input_0: FP16, input_1: FP16}
 
   - kernel_id: 146
+    c_define: HCT_KERNEL_ID_MUL_F32
     family: BasicMathFunctions
     operator: Mul
     dtype: FP32
@@ -1051,6 +1200,7 @@ kernels:
     blobs: {input_0: FP32, input_1: FP32}
 
   - kernel_id: 147
+    c_define: HCT_KERNEL_ID_MUL_F16
     family: BasicMathFunctions
     operator: Mul
     dtype: FP16
@@ -1058,6 +1208,7 @@ kernels:
     blobs: {input_0: FP16, input_1: FP16}
 
   - kernel_id: 148
+    c_define: HCT_KERNEL_ID_MAXIMUM_F32
     family: BasicMathFunctions
     operator: Maximum
     dtype: FP32
@@ -1065,6 +1216,7 @@ kernels:
     blobs: {input_0: FP32, input_1: FP32}
 
   - kernel_id: 149
+    c_define: HCT_KERNEL_ID_MAXIMUM_F16
     family: BasicMathFunctions
     operator: Maximum
     dtype: FP16
@@ -1072,6 +1224,7 @@ kernels:
     blobs: {input_0: FP16, input_1: FP16}
 
   - kernel_id: 150
+    c_define: HCT_KERNEL_ID_MINIMUM_F32
     family: BasicMathFunctions
     operator: Minimum
     dtype: FP32
@@ -1079,6 +1232,7 @@ kernels:
     blobs: {input_0: FP32, input_1: FP32}
 
   - kernel_id: 151
+    c_define: HCT_KERNEL_ID_MINIMUM_F16
     family: BasicMathFunctions
     operator: Minimum
     dtype: FP16
@@ -1086,6 +1240,7 @@ kernels:
     blobs: {input_0: FP16, input_1: FP16}
 
   - kernel_id: 152
+    c_define: HCT_KERNEL_ID_PRELU_F32
     family: ActivationFunctions
     operator: PReLU
     dtype: FP32
@@ -1093,6 +1248,7 @@ kernels:
     blobs: {input_0: FP32, input_1: FP32}
 
   - kernel_id: 153
+    c_define: HCT_KERNEL_ID_PRELU_F16
     family: ActivationFunctions
     operator: PReLU
     dtype: FP16
@@ -1100,6 +1256,7 @@ kernels:
     blobs: {input_0: FP16, input_1: FP16}
 
   - kernel_id: 154
+    c_define: HCT_KERNEL_ID_SOFTMAX_F32
     family: SoftmaxFunctions
     operator: Softmax
     dtype: FP32
@@ -1107,6 +1264,7 @@ kernels:
     blobs: {input_0: FP32}
 
   - kernel_id: 155
+    c_define: HCT_KERNEL_ID_SOFTMAX_F16
     family: SoftmaxFunctions
     operator: Softmax
     dtype: FP16
@@ -1114,6 +1272,7 @@ kernels:
     blobs: {input_0: FP16}
 
   - kernel_id: 156
+    c_define: HCT_KERNEL_ID_AVGPOOL_F16
     family: PoolingFunctions
     operator: AvgPool
     dtype: FP16
@@ -1121,6 +1280,7 @@ kernels:
     blobs: {input_0: FP16}
 
   - kernel_id: 157
+    c_define: HCT_KERNEL_ID_MAXPOOL_F16
     family: PoolingFunctions
     operator: MaxPool
     dtype: FP16
@@ -1128,6 +1288,7 @@ kernels:
     blobs: {input_0: FP16}
 
   - kernel_id: 158
+    c_define: HCT_KERNEL_ID_NN_ACTIVATION_FLOAT_F32
     family: ActivationFunctions
     operator: NNActivationFloat
     dtype: FP32
@@ -1135,6 +1296,7 @@ kernels:
     blobs: {input_0: FP32}
 
   - kernel_id: 159
+    c_define: HCT_KERNEL_ID_NN_ACTIVATION_FLOAT_F16
     family: ActivationFunctions
     operator: NNActivationFloat
     dtype: FP16
@@ -1142,6 +1304,7 @@ kernels:
     blobs: {input_0: FP16}
 
   - kernel_id: 160
+    c_define: HCT_KERNEL_ID_REDUCE_SUM_F32
     family: BasicMathFunctions
     operator: ReduceSum
     dtype: FP32
@@ -1149,6 +1312,7 @@ kernels:
     blobs: {input_0: FP32}
 
   - kernel_id: 161
+    c_define: HCT_KERNEL_ID_REDUCE_SUM_F16
     family: BasicMathFunctions
     operator: ReduceSum
     dtype: FP16
@@ -1156,6 +1320,7 @@ kernels:
     blobs: {input_0: FP16}
 
   - kernel_id: 162
+    c_define: HCT_KERNEL_ID_BATCH_NORM_F32
     family: NNSupportFunctions
     operator: BatchNorm
     dtype: FP32
@@ -1163,6 +1328,7 @@ kernels:
     blobs: {input_0: FP32, bias: FP32, multiplier: FP32}
 
   - kernel_id: 163
+    c_define: HCT_KERNEL_ID_BATCH_NORM_F16
     family: NNSupportFunctions
     operator: BatchNorm
     dtype: FP16
@@ -1170,6 +1336,7 @@ kernels:
     blobs: {input_0: FP16, bias: FP16, multiplier: FP16}
 
   - kernel_id: 164
+    c_define: HCT_KERNEL_ID_FULLY_CONNECTED_F32
     family: FullyConnectedFunctions
     operator: FullyConnected
     dtype: FP32
@@ -1178,6 +1345,7 @@ kernels:
     blobs: {input_0: FP32, weights: FP32, bias: FP32}
 
   - kernel_id: 165
+    c_define: HCT_KERNEL_ID_FULLY_CONNECTED_F16
     family: FullyConnectedFunctions
     operator: FullyConnected
     dtype: FP16
@@ -1186,6 +1354,7 @@ kernels:
     blobs: {input_0: FP16, weights: FP16, bias: FP16}
 
   - kernel_id: 166
+    c_define: HCT_KERNEL_ID_TRANSPOSE_CONV_F32
     family: ConvolutionFunctions
     operator: TransposeConv
     dtype: FP32
@@ -1194,6 +1363,7 @@ kernels:
     blobs: {input_0: FP32, weights: FP32, bias: FP32}
 
   - kernel_id: 167
+    c_define: HCT_KERNEL_ID_TRANSPOSE_CONV_F16
     family: ConvolutionFunctions
     operator: TransposeConv
     dtype: FP16
@@ -1203,6 +1373,7 @@ kernels:
 
 
   - kernel_id: 168
+    c_define: HCT_KERNEL_ID_DEPTHWISE_CONV_F32
     family: ConvolutionFunctions
     operator: DepthwiseConv
     dtype: FP32
@@ -1211,6 +1382,7 @@ kernels:
     blobs: {input_0: FP32, weights: FP32, bias: FP32}
 
   - kernel_id: 169
+    c_define: HCT_KERNEL_ID_DEPTHWISE_CONV_F16
     family: ConvolutionFunctions
     operator: DepthwiseConv
     dtype: FP16
@@ -1219,6 +1391,7 @@ kernels:
     blobs: {input_0: FP16, weights: FP16, bias: FP16}
 
   - kernel_id: 170
+    c_define: HCT_KERNEL_ID_BATCH_MATMUL_F32
     family: FullyConnectedFunctions
     operator: BatchMatMul
     dtype: FP32
@@ -1227,6 +1400,7 @@ kernels:
     blobs: {input_0: FP32, input_1: FP32}
 
   - kernel_id: 171
+    c_define: HCT_KERNEL_ID_BATCH_MATMUL_F16
     family: FullyConnectedFunctions
     operator: BatchMatMul
     dtype: FP16
@@ -1235,6 +1409,7 @@ kernels:
     blobs: {input_0: FP16, input_1: FP16}
 
   - kernel_id: 172
+    c_define: HCT_KERNEL_ID_CONVOLVE_F32
     family: ConvolutionFunctions
     operator: Convolve
     dtype: FP32
@@ -1243,6 +1418,7 @@ kernels:
     blobs: {input_0: FP32, weights: FP32, bias: FP32}
 
   - kernel_id: 173
+    c_define: HCT_KERNEL_ID_CONVOLVE_F16
     family: ConvolutionFunctions
     operator: Convolve
     dtype: FP16
@@ -1252,6 +1428,7 @@ kernels:
 
   # Times an empty call: the board's floor.
   - kernel_id: 174
+    c_define: HCT_KERNEL_ID_EMPTY_CALL
     family: Timing
     operator: EmptyCall
     dtype: S8
@@ -1260,6 +1437,7 @@ kernels:
 
   # Direct entries: descriptors name them with `entry:`.
   - kernel_id: 175
+    c_define: HCT_KERNEL_ID_CONVOLVE_S8_SMALL_CIN
     family: ConvolutionFunctions
     operator: Convolve
     dtype: S8
@@ -1268,6 +1446,7 @@ kernels:
     direct_entry: true
 
   - kernel_id: 176
+    c_define: HCT_KERNEL_ID_CONVOLVE_S8_3X3_C16_S1
     family: ConvolutionFunctions
     operator: Convolve
     dtype: S8
@@ -1276,6 +1455,7 @@ kernels:
     direct_entry: true
 
   - kernel_id: 177
+    c_define: HCT_KERNEL_ID_CONVOLVE_1X1_S8_SHORT_K
     family: ConvolutionFunctions
     operator: Convolve
     dtype: S8
@@ -1284,6 +1464,7 @@ kernels:
     direct_entry: true
 
   - kernel_id: 178
+    c_define: HCT_KERNEL_ID_DEPTHWISE_CONV_S8_OPT_3X3
     family: ConvolutionFunctions
     operator: DepthwiseConv
     dtype: S8
@@ -1292,6 +1473,7 @@ kernels:
     direct_entry: true
 
   - kernel_id: 179
+    c_define: HCT_KERNEL_ID_DEPTHWISE_CONV_S8_OPT_3X3_C64_S1
     family: ConvolutionFunctions
     operator: DepthwiseConv
     dtype: S8
@@ -1300,6 +1482,7 @@ kernels:
     direct_entry: true
 
   - kernel_id: 180
+    c_define: HCT_KERNEL_ID_DEPTHWISE_CONV_S8_OPT_PLANAR
     family: ConvolutionFunctions
     operator: DepthwiseConv
     dtype: S8
@@ -1308,6 +1491,7 @@ kernels:
     direct_entry: true
 
   - kernel_id: 181
+    c_define: HCT_KERNEL_ID_DEPTHWISE_CONV_S8_OPT_CHANNELWISE
     family: ConvolutionFunctions
     operator: DepthwiseConv
     dtype: S8
@@ -1316,6 +1500,7 @@ kernels:
     direct_entry: true
 
   - kernel_id: 182
+    c_define: HCT_KERNEL_ID_FULLY_CONNECTED_PER_CHANNEL_PACKED_S8
     family: FullyConnectedFunctions
     operator: FullyConnected
     dtype: S8
@@ -1324,6 +1509,7 @@ kernels:
     direct_entry: true
 
   - kernel_id: 183
+    c_define: HCT_KERNEL_ID_SVDF_S8
     family: SVDFunctions
     operator: SVDF
     dtype: S8
@@ -1331,6 +1517,7 @@ kernels:
     blobs: {input_0: S8, weights: S8, bias: S32, input_1: S8, input_2: S8, meta_0: S32}
 
   - kernel_id: 184
+    c_define: HCT_KERNEL_ID_SVDF_STATE_S16_S8
     family: SVDFunctions
     operator: SVDF
     dtype: S8
@@ -1339,6 +1526,7 @@ kernels:
     blobs: {input_0: S8, weights: S8, bias: S32, input_1: S16, input_2: S16, meta_0: S32}
 
   - kernel_id: 185
+    c_define: HCT_KERNEL_ID_LSTM_UNIDIRECTIONAL_S8
     family: LSTMFunctions
     operator: LSTMUnidirectional
     dtype: S8
@@ -1352,4 +1540,5 @@ kernels:
     dtype: S16
     weight_dtype: S8
     cmsis_function: arm_transpose_conv_s16
+    c_define: HCT_KERNEL_ID_TRANSPOSE_CONV_S16
     blobs: {input_0: S16, weights: S8, bias: S64, multiplier: S32, shift: S32}

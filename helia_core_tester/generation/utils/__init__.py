@@ -1,3 +1,3 @@
 """
-Utilities for TFLite model processing and template generation.
+Template-context and kernel-probe utilities for test-case generation.
 """

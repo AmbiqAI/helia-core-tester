@@ -1,11 +1,22 @@
 """
-Requantize operation implementation.
+Requantize operation implementation: CMSIS-NN's arm_requantize_* (arm_nn_requantize between the
+zero points) on the C reference, a named variant with no TFLite counterpart.
 """
 
 from typing import Dict
 import numpy as np
 from pathlib import Path
+from helia_core_tester.generation.harness import ArgumentPool, ArrayLiteral, Declaration
+from helia_core_tester.generation.harness.simple import tensor_case_pool
 from helia_core_tester.generation.ops._shared.quantization_base import QuantizationFamilyBase
+
+
+def requantize_argument_pool(context: Dict) -> ArgumentPool:
+    shape = Declaration(f"{context['name']}_input_shape", "int32_t", ArrayLiteral(context["input_shape_array"]), array=True)
+    values = {key: context[key] for key in ("effective_scale_multiplier", "effective_scale_shift", "input_zeropoint",
+                                            "output_zeropoint")}
+    return tensor_case_pool(context, {"size": context["input_size"], **values}, dims=(), extra_header=(shape,),
+                            output_count=str(context["input_size"]))
 
 
 class OpRequantize(QuantizationFamilyBase):
@@ -13,17 +24,8 @@ class OpRequantize(QuantizationFamilyBase):
     Requantize operation (int8->int8, int16->int16).
     """
 
-    def allow_no_tflite(self) -> bool:
+    def uses_reference(self) -> bool:
         return True
-
-    def needs_keras_model(self) -> bool:
-        return False
-
-    def build_keras_model(self):
-        raise NotImplementedError("Requantize uses CMSIS-NN kernel directly; no model required.")
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        raise NotImplementedError("Requantize does not produce a TFLite model.")
 
     def _select_cmsis_requantize_kernel(self) -> Dict[str, str]:
         activation_dtype = self.desc.get("activation_dtype", "S8")
@@ -62,19 +64,20 @@ class OpRequantize(QuantizationFamilyBase):
             np_in_dtype = np.int8
             qmin, qmax = -128, 127
             input_q = rng.integers(qmin, qmax + 1, size=input_shape, dtype=np_in_dtype)
-            out_dtype = np.int8
         elif kernel_info["input_c_type"] == "int16_t":
             np_in_dtype = np.int16
             qmin, qmax = -32768, 32767
             input_q = rng.integers(qmin, qmax + 1, size=input_shape, dtype=np_in_dtype)
-            out_dtype = np.int16
         else:
             raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
 
-        centered = input_q.astype(np.int32) - int(input_zp)
-        requant = self._requantize_np(centered, multiplier, shift)
-        requant = requant + int(output_zp)
-        requant = np.clip(requant, qmin, qmax).astype(out_dtype)
+        from helia_core_tester.generation.reference.call import ReferenceCall
+
+        requant = self.reference_golden(ReferenceCall(
+            "requantize_s8" if kernel_info["input_c_type"] == "int8_t" else "requantize_s16",
+            {"multiplier": multiplier, "shift": shift, "input_zero_point": input_zp, "output_zero_point": output_zp},
+            {"input": np.ascontiguousarray(input_q)}, {"output": input_shape},
+        ))
 
         context = {
             "name": name,
@@ -91,9 +94,8 @@ class OpRequantize(QuantizationFamilyBase):
             "output_zeropoint": output_zp,
         }
 
-        cmake_context = {
-            "name": name,
-            "operator": self.desc.get("operator", "Requantize"),
-            "operator_name": "requantize",
-        }
-        self._write_op_outputs(output_dir, "requantize", "NNSupportFunctions/requantize/requantize.h.j2", "NNSupportFunctions/requantize/requantize.c.j2", context, cmake_context)
+        self.render_harness_case(
+            output_dir, stem="requantize", context=context, pool=requantize_argument_pool(context),
+            validation_key="NNSupportFunctions/requantize/requantize.c.j2", label="Requantize", operator="Requantize",
+            sidecar=True,
+        )

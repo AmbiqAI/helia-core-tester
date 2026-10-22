@@ -292,3 +292,17 @@ strides: [2, 2]
 padding: VALID
 fault: negative_dim
 expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+# Contract conformance (Phase 2 T4a, AmbiqAI/ns-cmsis-nn#829): arm_max_pool_s8 (no scratch), checked on the target against the
+# checkout's planner on every build (see generation/conformance.py).
+operator: MaxPool
+name: max_pool_conformance_pool3x3_stride2_c8_s8
+conformance: true
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint: {call_style: per_tensor}
+input_shape: [1, 9, 9, 8]
+pool_size: [3, 3]
+strides: [2, 2]
+padding: VALID

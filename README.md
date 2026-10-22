@@ -18,7 +18,9 @@ uv run helia_core_tester --help
 - `uv run helia_core_tester clean`
 - `uv run helia_core_tester clean-all`
 - `uv run helia_core_tester doctor`
+- `uv run helia_core_tester host-check` (see [Host check](#host-check))
 - `uv run helia_core_tester coverage-merge`
+- `uv run helia_core_tester contract inventory` (see [Kernel contracts](#kernel-contracts-iteration-1))
 - `uv run helia_core_tester boards` / `probes list` / `probes match`
 - `uv run helia_core_tester hardware run|build|flash|stream|memory-report`
 - `uv run helia_core_tester explain <bundle> [--case ID] [--op OP] [--json]`
@@ -740,7 +742,6 @@ Reports:
 Generation report files (always emitted):
 - `generation_summary.json`
 - `generation_failures.json`
-- `conversion_failures.json`
 - `manifest_pointer.json`
 - `capability_skips.json`
 
@@ -783,7 +784,6 @@ Reference ops for float infrastructure:
 Future ops should consume resolved tensor roles rather than raw legacy dtype fields:
 - `self.tensor_dtype("input")`
 - `self.tensor_c_type("output")`
-- `self.tensor_litert_dtype("input")`
 - `self.comparison_config()`
 
 ### Non-finite inputs
@@ -907,9 +907,10 @@ bit equality.
 enforces the `if`/`then` gate in `schema.json`, and `OperationBase.nonfinite_policy()` checks it
 again at generation time.
 
-To scaffold a new tester op, start from `helia_core_tester/scripts/scaffold_operator.py`.
-
-Generated LiteRT-only ops should route through `build_<op>_op()` and resolve tensor roles from
+To scaffold a new tester op, start from `helia_core_tester/scripts/scaffold_operator.py`. It
+emits a reference-backed skeleton (`uses_reference()`, the `REFERENCE_ENTRY` it calls on the C
+reference) whose `generate_c_files()` records its golden through `reference_golden()`; see
+[Reference goldens](#reference-goldens-c-reference-library). Resolve tensor roles from
 `tensor_dtypes` or the normalized descriptor metadata instead of hand-parsing legacy dtype fields.
 
 ### Non-finite float comparison
@@ -982,7 +983,7 @@ Minimum, Maximum, PReLU) must feed each operand data that spans negative, near-z
 positive values **after** the input offset is applied, i.e. `value - zero_point`. A one-signed
 operand cannot discriminate the sign-dependent kernel paths: the packed DSP loop of
 ns-cmsis-nn#343 dropped the sign of `value + input_offset`, and abs, PReLU and min/max branch
-on it directly. Uniform `[-1, 1]` float data plus a TFLite zero point does not guarantee the
+on it directly. Uniform `[-1, 1]` float data plus a policy zero point does not guarantee the
 span, so generation enforces it (`OperationBase._enforce_int_operand_sign_span`, issue #81
 property 2).
 
@@ -1009,9 +1010,8 @@ cases are all one- or two-pixel and sit below this floor, which is why that oper
 wired to the rule.
 
 Two kinds of operand are check-only: the generator never steers them, so a failing one must be
-waived. An operand baked into the TFLite model (a PReLU alpha) cannot move, because the
-reference interpreter would keep using the model's copy and the golden would stop matching the
-emitted array. An operand the descriptor pins explicitly (`hint.extras.input_values`, or
+waived. A constant whose one-signedness is the point of the case (a PReLU alpha slope) is left as
+drawn. An operand the descriptor pins explicitly (`hint.extras.input_values`, or
 `input_1_values` / `input_2_values` for the float squared difference) must not
 move, because the pinned values are the case.
 
@@ -1021,9 +1021,8 @@ An operand that is intentionally one-signed opts out in its descriptor under
 ```yaml
 operand_sign_span_exempt:
   input: pinned uniformly negative input to hold the alpha branch on every lane (hct#81)
-  alpha: PReLU's alpha is the positive slope constant baked into the TFLite model; steering it
-    would leave the reference interpreter using the model's copy, and the kernel branches on
-    the sign of the input, not of alpha (hct#81)
+  alpha: PReLU's alpha is a positive slope constant, and the kernel branches on the sign of
+    the input, not of alpha (hct#81)
 ```
 
 The reason is required, and the key must name an operand the operator actually submits to the
@@ -1031,6 +1030,127 @@ rule: each wired operator declares those labels as `SIGN_SPAN_OPERANDS`, and a w
 anything else fails generation instead of silently waiving nothing. `operand_sign_span_exempt`
 is also declared in `helia_core_tester/generation/descriptors/schema.json`, which the loader
 enforces, but the operand check needs the operator's labels, so it lives in code.
+
+## Reference goldens (C reference library)
+
+Every golden comes from one flow: descriptor -> seeded draw -> quantization -> `ReferenceCall` ->
+a C reference kernel maintained in this repo -> golden plus `<case>.reference.json`. There is no
+TensorFlow, Keras, LiteRT or flatbuffers dependency and no model file; `tests/test_no_frameworks.py`
+fails on any import of them. Operators say so with `uses_reference()`, and the driver fails any
+case whose `generate_c_files()` recorded no call through `OperationBase.reference_golden()`,
+unless the case is `status_only()` (it asserts a returned status, an `ARG_ERROR` case) or
+`self_checking()` (ChunkedEquivalence: the full-length call is the reference for the chunked
+calls). This covers the elementwise and activation families
+(Add, Sub, Mul, Minimum/Maximum, SquaredDifference, comparisons, Abs, Clamp, Relu/Relu6, LeakyRelu,
+PReLU/PReLUScalar, HardSwish, Tanh, Logistic, NNActivationS16, NNActivationFloat), Softmax, Sqrt,
+Rsqrt, Quantize, Dequantize and Requantize; the weighted operators (Conv, DepthwiseConv,
+TransposeConv, FullyConnected, BatchMatMul), pooling, Mean, ReduceSum/Max/Min, ArgMax/ArgMin and
+BatchNorm; and the data-movement operators (Concatenation, Pack/Unpack, Split, Gather/GatherND,
+Pad/MirrorPad, Reshape/Squeeze, BatchToSpaceND/SpaceToBatchND, DepthToSpace/SpaceToDepth,
+ResizeNearestNeighbor, Transpose, StridedSlice, Tile, BroadcastTo, ScatterNd, SelectV2, Where,
+ReverseSequence, DynamicUpdateSlice, Fill); and the recurrent operators (LSTM s8/s16/f32/f16, GRU
+f32/f16, SVDF with int8 or int16 state and float). Nothing is read from the ns-cmsis-nn checkout's
+UnitTest data.
+
+- `helia_core_tester/reference/` holds the library: plain scalar C11 written from each operator's
+  definition (TFLite reference semantics for integer rounding), never from ns-cmsis-nn sources.
+  `src/common/` has the shared fixed point (gemmlowp SRDHM, rounding divide, double-rounding
+  `MultiplyByQuantizedMultiplier`, `QuantizeMultiplier`, activation range), binary16 conversion
+  on bit patterns, tensor checks and numpy-style broadcasting; `src/<family>/` the operators.
+- `reference/spec/entries.yaml` is the single source of truth for the ABI. Every kernel entry is
+  `hct_ref_<entry>(params, inputs, n, outputs, n)`, every prepare entry (parameters computed the
+  way TFLite's prepare computes them) `hct_ref_<entry>(in, out)`. `include/hct_ref_abi.h` is
+  generated from it (`python -m helia_core_tester.generation.reference.abi --write`; a stale
+  header fails the build and a test), and the ctypes structs are built from it at import.
+- Data-movement entries are dtype-generic: a tensor declared `any` in the spec takes the caller's
+  dtype (any of int8..int64, float16/32, bool) and an `any` output takes the `any` inputs' common
+  dtype, so one entry serves every element type. Operators with a variable number of operands pass
+  them back to back with their extents (Concatenation in, Split out); Pack and Unpack are those
+  plus a reshape, MirrorPad is Pad with a mode.
+- The library is built once per environment with the host C compiler (`HCT_HOST_CC`, else
+  `cc`/`gcc`/`clang`) into `artifacts/host_ref/<key>/`, keyed by the spec, header, sources, flags
+  and compiler identity. Flags are strict: `-O1 -fno-fast-math -ffp-contract=off -Werror`, and
+  binary16 is converted on bit patterns, so a golden does not depend on the host FPU or optimizer.
+  Only the `hct_ref_*` symbols are exported.
+- Where ns-cmsis-nn deliberately differs from TFLite, the difference is a named reference entry,
+  never a tolerance: `hard_swish_precise_*` and `requantize_*` (arm_nn_requantize's tie-up high
+  multiply), the float16 tanh table (`tanh_lut_f16`, `tanh_lut_mve_f16`). Lookup tables the op
+  defines are part of the reference: int16 Softmax uses the tables TFLM's `LUTPopulate<int16_t>`
+  generates (the ones `arm_softmax_s16` is handed; TFLite core builds a 1/(1+x) table in double that
+  differs in two entries), int16 Rsqrt regenerates its table in float as TFLite does, and the
+  sigmoid table of Tanh/Logistic s16 is stored. A table needing a transcendental is stored rather
+  than regenerated, so it cannot drift with the host libm.
+- Quantization is a pure function of the case: `generation/reference/policy.py` (s8 asymmetric with
+  TFLite's zero-point nudge, s16 symmetric) over the range the operator draws from, a fixed preset
+  where the operator defines one, or an explicit descriptor block that overrides either:
+
+  ```yaml
+  quantization:
+    input: {scale: 0.0078125, zero_point: 0}   # or {range: [lo, hi]} for the policy
+    output: {range: [-0.375, 8.0]}
+  ```
+
+- Weighted operators draw their own weights (Glorot-uniform, `weight_gain` scaling it, from a
+  stream separate from the input draw) in `generation/reference/weighted.py`. Filters are
+  quantized symmetric per output channel (qmax 127 for int8, 7 for int4, as TFLite's converter does),
+  biases at `input_scale * filter_scale[c]`, rounded half away from zero, int32 for s8 and int64
+  for s16; integer biases are drawn with a magnitude that moves every channel's output by at least
+  one step, so a dropped bias-add cannot pass. The output quantization is the policy over the
+  float reference (`*_f32` entry) applied to the dequantized operands, and the multipliers come
+  from the `per_channel_quant` entry (TFLite's `PopulateConvolutionQuantizationParams`).
+  FullyConnected follows TFLM's double rounding (TFLite core since 2.20 rounds once; ns-cmsis-nn
+  rounds twice), s16 FullyConnected TFLite's reduced-multiplier int64 path, and Mean TFLM's folding
+  of 1/count into the multiplier.
+- Integer LSTM is TFLM's lstm_eval (int8x8_16 and int16x8_64): gate matmuls to int16 at 2^-12,
+  int16 sigmoid/tanh LUTs, int16 Mul/Add cell update with optional clip, hidden = output gate times
+  tanh(cell) in the cell's power-of-two scale. It reproduces the TFLM-generated goldens in
+  ns-cmsis-nn's UnitTest TestData bit for bit (tests/test_reference_lstm.py). The generator draws
+  its own weights and derives the multipliers as TFLM's prepare does; descriptor zero points apply.
+  SVDF runs a step sequence in one call (TFLM EvalIntegerSvdfReference / EvalFloatSvdfReference);
+  float LSTM/GRU round every matmul-plus-bias once, every activation once, and every other
+  elementwise step per IEEE operation in the element type.
+- float goldens are the exact result rounded once to the output type. float16 computes in binary32
+  on the half operands (or binary64 where a step is not exact in binary32) and rounds once; an
+  operator made of several binary16 steps (SquaredDifference) rounds each step, as IEEE binary16
+  arithmetic does. Minimum/Maximum follow IEEE 754-2019 (NaN propagates, -0 < +0). Sums (convolutions,
+  matrix products, pooling, reductions) are exact in binary64 and rounded once, so summation order
+  is not part of the reference; BatchNorm is a fused multiply-add. Tolerances for
+  kernels that accumulate in fp16 are derived per operator.
+- Tests: `reference/tests/test_common.c` (run by `tests/test_reference_c.py` under UBSan, and
+  ASan where the host supports it) checks the fixed point against wide-integer models and binary16
+  exhaustively; `tests/test_reference_*.py` cover the ABI, the build cache, the bindings' argument
+  checks and every status code, and each operator against independent models
+  (`tests/reference_models.py`: Python-int fixed point, the LUT generators, numpy float models).
+
+## Host check
+
+`full` and `hardware run` compile and run every generated int case on the host, against the
+ns-cmsis-nn kernels, after generation and before any FVP or board build; a failure blocks the
+build (`--no-fail-fast` does not override that). ns-cmsis-nn's cortex-m0 configuration (no
+`ARM_MATH_*` define) is pure C, so the generated harness runs natively and validates its golden
+exactly as it does on the FVP.
+
+```bash
+uv run helia_core_tester host-check --cpu cortex-m55                    # m0 kernels (default)
+uv run helia_core_tester host-check --cpu cortex-m55 --host-kernels m0,dsp
+uv run helia_core_tester full --cpu cortex-m55 --skip-host-check         # bypass
+```
+
+- `--host-kernels`: `m0` (pure C) and/or `dsp` (the Armv7E-M routes, through the mutation
+  harness's `dsp_shim.h`). Also `host_kernels` in `helia_core_tester.toml` /
+  `HELIA_CORE_TESTER_HOST_KERNELS`, and `skip_host_check` / `HELIA_CORE_TESTER_SKIP_HOST_CHECK`.
+- The cases checked are the ones `manifest.json` lists (what the FVP build compiles), and the run
+  seed comes from it: every failure prints `--seed <run_seed> --name <case>`. Every non-pass is a
+  failure, including a case that does not compile or link on the host.
+- A tree generated for a CPU with capabilities the host build lacks (cortex-m55's MVE) is judged
+  per case: a case whose `required_capabilities` the host build lacks is *not applicable* and
+  not run; a case the generator specialised for the target CPU (an `entry:` or `fault:` case, or
+  FullyConnected s8 folding its bias into the MVE-only kernel sums) still runs, but its failure is
+  *advisory* (reported, not blocking); everything else blocks. The report lists all three.
+- The kernel library (every int and f32 source of the checkout; f16 stays FVP-only) and the test
+  runtime are cached in `artifacts/host_kernels/<key>/`, keyed by the checkout's `Include/` and
+  `Source/` (commit when clean, content when dirty), the mode, flags and compiler identity.
+- The report is `artifacts/reports/generation/int/<cpu>/host_check.json`.
 
 ## Mutation scoring
 
@@ -1064,13 +1184,26 @@ contradicts the tree is an error, and a tree that records no CPU requires `--cpu
 
 Defaults chosen so a repeat run is cheap and a hung kernel cannot wedge a leg.
 
+Seeds:
+
+- every run draws its cases (weights, inputs, derived quantization) from one run seed. `--seed N`
+  (also `HCT_SEED`) chooses it; otherwise the run draws a fresh seed, prints it, and records it in
+  every case's `descriptor.yaml` (`run_seed`, `case_seed`), its sidecar, `manifest.json`,
+  `generation_summary.json`, `run_seed.json` and the hardware bundle's `selection.seed`. A failure
+  reproduces with `--seed <run_seed> --name <case>`; a case's own seed is `sha256(run_seed, name)`.
+- `hardware run --seed`, `candidate baseline --seed` (drawn once and stored in `baseline.json`
+  otherwise) and the nightly legs (`HCT_NIGHTLY_SEED`, default the UTC date) pin it the same way,
+  and `score` refuses to compare bundles drawn from different seeds.
+
 Generation reuse:
-- each generated case carries a `.stamp` over its descriptor document, the case name, target CPU, suite, seed, the identity of the ns-cmsis-nn checkout (commit when the checkout is a clean git tree, a content digest of its `Include/` and UnitTest TestData otherwise), and a generator-version hash (the generation sources, `core/cpu_targets.py`, `core/path_layout.py`, the templates under `assets/templates`, a SHA-256 of `uv.lock` for the resolved dependency set, and the Python version and machine architecture). Float precision is not a stamp input: it selects which descriptors a run generates, not what any one of them emits.
-- a case whose stamp still matches is reused: no TFLite conversion, no inference, no file emission. Its manifest entry is rebuilt from the on-disk sidecar, so build and run see the same tree either way.
+- each generated case carries a `.stamp` over its descriptor document, the case name, target CPU, suite, seed, the identity of the ns-cmsis-nn checkout (commit when the checkout is a clean git tree, a content digest of its `Include/`, UnitTest TestData and `Tests/KernelContracts` export otherwise), and a generator-version hash (the generation sources, `core/cpu_targets.py`, `core/path_layout.py`, the templates under `assets/templates`, the C reference library under `helia_core_tester/reference`, a SHA-256 of `uv.lock` for the resolved dependency set, the Python version and machine architecture, and the host C compiler identity). Float precision is not a stamp input: it selects which descriptors a run generates, not what any one of them emits.
+- a case whose stamp still matches is reused: no reference call, no file emission. Its manifest entry is rebuilt from the on-disk sidecar, so build and run see the same tree either way.
 - a case whose stamp does not match has its directory removed before regeneration, so output a previous descriptor emitted under a different file name cannot survive into the new build.
 - capability and kernel-symbol skips are re-evaluated every run, because a different ns-cmsis-nn checkout can add or remove a symbol.
 - `generation_summary.json` and `manifest.json` record generated, reused and pruned counts.
 - `--force-generate` (also `force_generate` in `helia_core_tester.toml`, `HELIA_CORE_TESTER_FORCE_GENERATE`) regenerates everything.
+- the seed is part of the stamp, so a run without `--seed` never reuses: pass the seed a run printed
+  to reuse its cases.
 - cases outside the active filter are pruned from the tree at the end of a run.
 
 Parallel FVP runs:
@@ -1105,6 +1238,49 @@ Behavior:
 - for `--suite both`, merge requires both int and float inputs for every requested CPU; missing pairs are named in the failure output and reports.
 - `--include-mve-float` adds optional cortex-m55 float-MVE coverage; it cannot replace a missing required int/float input. Reports are still written when required inputs are missing.
 - `--include-mve-int` adds optional cortex-m55 integer-MVE coverage from a `--coverage --coverage-mve-int` run (`artifacts/reports/coverage/int-mve`), under the same rules. The default coverage build defines `ARM_MATH_AUTOVECTORIZE`, which compiles out integer MVE paths guarded by `!ARM_MATH_AUTOVECTORIZE`; `--coverage-mve-int` builds integer sources without it, except `arm_nn_mat_mul_core_4x_s8.c`. Float sources get the same define unless the run adds `--coverage-mve-float`; such a build sets `HELIA_CMSIS_NN_FLOAT_AUTOVECTORIZE` for the harness, and a float case marked `autovectorize_declines` then expects `ARM_CMSIS_NN_NO_IMPL_ERROR`, as it does on a core without MVE float.
+
+## Kernel contracts (iteration 1)
+
+ns-cmsis-nn exports every public function signature (name, header, `#if` guards, return type, parameters with type, direction and array extent) to `Tests/KernelContracts/kernel_contracts.json`, schema `ns-cmsis-nn/kernel-contracts/1`, rendered by `scripts/check_kernel_contract.py export` from the Doxygen `@param` blocks and freshness-gated in that repo's CI. Next to it, `Tests/KernelContracts/kernel_implementations.json` (schema `ns-cmsis-nn/kernel-implementations/1`) lists, per kernel implementation, its entry, wrapper route, required build features (`requires`) and first release (`since`). Both are read by ns-cmsis-nn's own `ns_cmsis_nn_contracts` package (`python/`, AmbiqAI/ns-cmsis-nn#829). The tester never runs Doxygen or parses the headers.
+
+The tester imports `ns_cmsis_nn_contracts` from the checkout it reads (the one `CMSIS_NN_ROOT` names), not from a pinned dependency: the reader then always matches the files it validates, ns-cmsis-nn can change both in one PR and test it with this tester as its submodule, and the package's host planner is built from that checkout's own C sources.
+
+What consumes it:
+
+- `helia_core_tester/contract/ir.py` adapts what the package's `load_signatures()` and `load_implementations()` return to a `ContractSet` (`present` or `absent`). Validation is the package's; every error it raises (an unsupported schema, an unreadable or truncated file, a duplicate symbol, a symbol the checkout's `Include/` does not declare, a manifest bound to another export) is a `ContractError`, never a skip. An export without the package to read it, a package that cannot be imported, and a package of a schema the tester does not read (`SUPPORTED_CONTRACT_SCHEMAS`, `SUPPORTED_MANIFEST_SCHEMAS`) fail the same way.
+- Generation (`generation/kernel_gate.py`) skips a descriptor whose `required_kernel_symbols`, `entry:`, `entry_sizer` or planar rule is not in the signature export (`skipped_kernel_symbol`). Where the manifest has a record for one of those symbols, the record's `since` must not be after the checkout's version (otherwise a generation failure). When its `requires` do not hold on the target CPU, a record that declines on a `build` cause keeps the case (the entry is callable and returns `ARM_CMSIS_NN_NO_IMPL_ERROR` there, which the `*_declines_*` descriptors test); any other record skips it (`skipped_capability` with `unmet_kernel_requirements`). The CPU decides `mvei`, `dsp`, `mvef`, `mve_f16`, `f32_api` and `f16_api`; `!autovectorize` and `!single_rounding` are compile options of the generated tree and are left to the case (`autovectorize_declines`). A symbol the export lacks while `Source/**/<symbol>.c` defines it is a generation failure.
+- `uv run helia_core_tester contract inventory [--cmsis-nn-root R] [--generated-tests-dir D] [--fail-on-uncovered] [--allow-unknown]` reports which public kernels, sizers and support functions the generated cases call, writes `artifacts/reports/contracts/inventory.json` (schema `hct.contract_inventory/1`), and exits 2 when there is no contract or no cases: an empty inventory is never reported as coverage. `--fail-on-unknown` is on by default; the nhwc pooling aliases (helia-core-tester#205) are the known unknowns today.
+- `doctor` prints the contract status, function count and manifest record count.
+- An `entry:` the manifest has a record for (the FC, depthwise and pooling pilot) takes its terms from the record (`generation/entry.py::apply_entry_manifest`), and its descriptor must not set `entry_sizer`, `entry_scratch`, `required_capabilities` or `autovectorize_declines`. The scratch query is the one of the record's buffer bound to `ctx` (`entry_scratch: none` without one). A case expecting the full result needs the CPU capabilities of the record's positive `requires`, and declines under `ARM_MATH_AUTOVECTORIZE` when the record needs `!autovectorize` and declines on a build cause; a case expecting `ARM_CMSIS_NN_NO_IMPL_ERROR` runs everywhere. The generated `descriptor.yaml` carries the derived terms and the record id (`entry_implementation`). `entry_sizer` names one query; the list form is gone.
+- The checkout's host planner (`ns_cmsis_nn_contracts.open_planner`, the library's own dispatch and sizing code built from `Planner/` with the host C compiler) replaces the tester's Python copies for the s8 pilot (`contract/planner.py`). It provides:
+  - the depthwise wrapper's route (`wrapper_route.dw_route`, the s8 depthwise fault reachability);
+  - the scratch capacity of s8 depthwise-wrapper, FC-wrapper and pooling cases, the largest plan over the builds a case compiles under (MVE with and without `ARM_MATH_AUTOVECTORIZE` on cortex-m55);
+  - the bridge's and the random-shape footprint's wrapper scratch;
+  - the scratch capacity of a depthwise `entry:` with a manifest record (the 3x3, planar and channelwise entries): the size query of the record's `ctx` buffer, evaluated by the planner for each build a case compiles under (`planner.buffer_bytes`), and the same size in the bridge;
+  - the planar or channelwise algorithm `arm_depthwise_conv_s8_opt` runs for a given `ctx->size` (`wrapper_route.dw_opt_variant`, the result bundle's `inner_variant`);
+  - the depthwise and FC kernel sums (`arm_vector_sum_s8`);
+  - the packed FC stream size (`arm_fully_connected_per_channel_packed_s8_pack`).
+
+  The packed case's on-target setup is rendered from its manifest record's `prepare` steps, each call bound from the contract. A checkout whose planner lacks these calls (before ns-cmsis-nn's P1e) fails them as `PlannerUnavailable`.
+- `test_contract_symbol_audit.py` checks every `arm_*` string literal in the generation sources and descriptors against the export; `KNOWN_UNDECLARED` in that test (the nhwc aliases, helia-core-tester#205) may only shrink, and a stale entry fails the test.
+- Templates render kernel calls with the Jinja globals `contract_call(symbol, {param: expression})` and `contract_parity_assert(symbol)`: the argument order comes from the export, a missing or extra name is a render error, and the emitted `_Static_assert` makes a header that drifts from the export a compile error on the FVP and on hardware. The Convolve family is migrated; other families still hand-write their calls.
+- Hardware: `assets/kernel_registry.yaml` carries the `c_define` of every `HCT_KERNEL_ID_*`, `scripts/generate_kernel_catalog.py` renders the define block of `cmake/hardware/benchmark_server_adapters.h` from it and, when a contract is reachable, requires every `cmsis_function` to be declared in the export. A templated `FirmwareAdapterSpec` renders its calls through `contract_call` (`scripts/generate_hardware_adapters.py --cmsis-nn-root R`); the elementwise add/sub/mul adapter is the pilot, and `unmarshalled` waivers must explain any declared session scalar a body never reads or any argument bound to a constant.
+- Reuse stamps hash `Tests/KernelContracts`, so an export change regenerates the affected cases.
+
+Contract conformance (T4a, `generation/conformance.py`): a descriptor with `conformance: true` checks the built library against the checkout's planner on every build of its CPU (m0 scalar, m4 DSP, m55 MVE, and m55 MVE with `ARM_MATH_AUTOVECTORIZE` under `--coverage`).
+- At generation, a build the planner refuses as unsupported must be one where the case expects `ARM_CMSIS_NN_NO_IMPL_ERROR`, and the reverse. A `null_ctx_buf` fault case must have a planned context on every build.
+- On the target, under each build's own `ARM_MATH_*` condition, the case asserts:
+  - `ctx.size` equals the planned bytes; the harness already sizes ctx with the target's query and checks the red zones on both sides;
+  - the wrapper's own selector (`arm_nn_*_wrapper_s8_select`, `Include/Internal/arm_nn_dispatch.h`) returns the planned route;
+  - for the packed FC entry, the stream and kernel sums the manifest's prepare steps build equal the host packer's.
+- The grid at the end of `depthwise_conv.yaml`, `fully_connected.yaml`, `avg_pool.yaml` and `max_pool.yaml` crosses every route boundary of the s8 depthwise and FC wrappers, plus the packed entry (with a rejection) and both s8 pools. `test_conformance.py` checks that it reaches every T4a implementation of the manifest. The direct depthwise entries and `arm_depthwise_conv_s8_opt`'s planar/channelwise routes (T4b) wait for planner calls the package does not have yet.
+- CI: the `contract-conformance` job of `self-validate.yml` runs the grid on the FVP against ns-cmsis-nn `dev/kernel-contracts`, one leg per profile (m0, m4, m55, and m55 under `--coverage` for the autovectorize build), with `HELIA_CORE_TESTER_REQUIRE_CONTRACT=1` so a missing planner fails. Its `absent` leg runs against `v7.35.1`, where every conformance case is skipped (`skipped_conformance`, with a reason) instead of failing. `scripts/conformance_leg.py check` turns each leg's generation manifest into the verdict, so neither leg can pass by omission.
+
+Absent semantics: a checkout without the file (ns-cmsis-nn before the export landed) loads as `absent`, whether or not it has a `python/` directory; generation then does not gate, and every template refuses at render time. Everything that does not need the contract keeps working; `contract inventory` exits 2, the real-tree contract tests skip with a reason (`HELIA_CORE_TESTER_REQUIRE_CONTRACT=1` turns that skip into a failure, which is what CI's present leg sets), `doctor` says `kernel contract: absent`, and a migrated template refuses to render, naming the minimum ns-cmsis-nn (AmbiqAI/ns-cmsis-nn#549 or later) instead of falling back to a hand-written call. `self-validate.yml` runs a `present` leg against the ns-cmsis-nn ref under test and an `absent` leg against `v7.35.1`; `scripts/assert_contract_summary.py` asserts each leg observed exactly that.
+
+Bumping the minimum ns-cmsis-nn: when the export or manifest schema changes, add the new string to `SUPPORTED_CONTRACT_SCHEMAS` / `SUPPORTED_MANIFEST_SCHEMAS` in `contract/ir.py`, refresh `tests/fixtures/contract/` (the loader fixture and the twelve-function hardware pilot, which a real-tree test keeps equal to the export), and update the `#549` reference in `contract/render.py` if a newer export is required. The unit-test fallback contract `tests/fixtures/contract/bound_operators` (export slice, headers, the vendored `ns_cmsis_nn_contracts` and the manifest rebound to the slice) is refreshed with `uv run python scripts/refresh_contract_fixture.py <ns-cmsis-nn>`; `test_contract_fallback.py` keeps it equal to a real checkout. Tests that build a temporary checkout install that vendored reader (`tests/contract_checkout.py`). Bumping the absent-leg pin means changing `v7.35.1` in `self-validate.yml` to the newest tag that still has no export.
+
+Deferred to later iterations: C references and `@hct` size, sizer and tolerance tags that would remove descriptors and op classes for new kernels; the host oracle and generic harness; on-target sizer validation for streamed cases; and the argument-pack streaming path (per-prototype trampolines replacing hand-written adapter bodies), which follows the NSX build conversion.
 
 ## Clean Contract
 

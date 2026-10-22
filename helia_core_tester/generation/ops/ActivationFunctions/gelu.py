@@ -4,7 +4,8 @@ GELU operation implementation.
 ns-cmsis-nn provides arm_nn_gelu_f32 (ns-cmsis-nn #743) and arm_nn_gelu_f16
 (ns-cmsis-nn #761), the exact GELU 0.5 * x * erfc(-x / sqrt(2)), not the tanh
 approximation; the f16 kernel evaluates it in float32 and rounds once. The
-reference is that expression in float64 at the exactly widened input.
+golden is the C reference's gelu_f32/gelu_f16: that expression in float64 at the
+exactly widened input, rounded once.
 
 A descriptor either compares against the reference rounded once to the output
 type under its `comparison` tolerance, or names a `contract_interval`, in which
@@ -17,7 +18,6 @@ from pathlib import Path
 from typing import Dict
 
 import numpy as np
-import tensorflow as tf
 
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.ops._shared.contract_interval import contract_interval
@@ -65,21 +65,8 @@ class OpGelu(OperationBase):
     GELU operation (FP32, FP16).
     """
 
-    def build_keras_model(self) -> tf.keras.Model:
-        """Build Keras model for exact GELU."""
-        input_shape = self.desc['input_shape']
-        inputs = tf.keras.Input(shape=input_shape[1:], dtype=tf.float32, name='input')
-        x = tf.keras.layers.Lambda(
-            lambda t: tf.nn.gelu(t, approximate=False),
-            name='gelu'
-        )(inputs)
-        return tf.keras.Model(inputs=inputs, outputs=x)
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        """Convert to a plain float32 TFLite model (no quantization)."""
-        self._kernel()
-        converter = tf.lite.TFLiteConverter.from_keras_model(model)
-        self._write_tflite_bytes(out_path, converter.convert())
+    def uses_reference(self) -> bool:
+        return True
 
     def comparison_config(self):
         """The contract bound for contract_interval cases, recorded as such in the sidecar."""
@@ -121,6 +108,7 @@ class OpGelu(OperationBase):
 
     def generate_c_files(self, output_dir: Path) -> None:
         """Generate C and H files from templates for GELU operation."""
+        from helia_core_tester.generation.reference.call import ReferenceCall
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
         name = self.desc['name']
@@ -128,13 +116,11 @@ class OpGelu(OperationBase):
         builder = TemplateContextBuilder()
         input_data = self._inputs(dtype, bits_dtype)
 
-        def reference(operands):
-            with np.errstate(over="ignore", invalid="ignore"):
-                return gelu_exact_reference(operands[0]).astype(dtype)
-
-        output_data = reference([input_data])
+        output_data = self.reference_golden(ReferenceCall(
+            "gelu_f16" if dtype == np.float16 else "gelu_f32", {"unused": 0},
+            {"input": np.ascontiguousarray(input_data)}, {"output": tuple(input_data.shape)}))
         output_data, nonfinite_context = self.apply_nonfinite_policy(
-            output_data, reference=reference, inputs=[input_data]
+            output_data, reference=self.reference_probe, inputs=[input_data]
         )
 
         context = {
@@ -183,3 +169,47 @@ class OpGelu(OperationBase):
             context,
             cmake_context,
         )
+
+
+from helia_core_tester.generation.harness.registry import harness_pool  # noqa: E402
+from helia_core_tester.generation.harness.model import Declaration, ArrayLiteral  # noqa: E402
+from helia_core_tester.generation.harness.simple import tensor_case_pool  # noqa: E402
+
+# FPSCR.FZ16 (bit 19) set for the call, then restored.
+_FZ16_ON = """#if defined(__arm__) && defined(__ARM_FEATURE_FP16_SCALAR_ARITHMETIC)
+    uint32_t fpscr;
+    __asm__ volatile("vmrs %0, fpscr" : "=r"(fpscr));
+    __asm__ volatile("vmsr fpscr, %0" : : "r"(fpscr | (1u << 19)));
+#endif"""
+_FZ16_OFF = """#if defined(__arm__) && defined(__ARM_FEATURE_FP16_SCALAR_ARITHMETIC)
+    __asm__ volatile("vmsr fpscr, %0" : : "r"(fpscr));
+#endif"""
+
+
+@harness_pool("ActivationFunctions/gelu/gelu.c.j2", label="Gelu")
+def gelu_argument_pool(context):
+    """arm_nn_gelu_f32/f16(input, output, size). A contract_interval case checks every output bit pattern
+    against the per-element interval the contract allows instead of the golden."""
+    n = context["name"]
+    extra = []
+    fields = {}
+    if context.get("interval_lo_array"):
+        bits = context["interval_bits_type"]
+        extra += [
+            Declaration(f"{n}_interval_lo", bits, ArrayLiteral(context["interval_lo_array"]), array=True,
+                        comment="Lowest output bit pattern the contract allows, per element"),
+            Declaration(f"{n}_interval_hi", bits, ArrayLiteral(context["interval_hi_array"]), array=True,
+                        comment="Highest output bit pattern the contract allows, per element"),
+        ]
+        zero_ok = "NULL"
+        if context.get("interval_zero_ok_array"):
+            extra.append(Declaration(f"{n}_interval_zero_ok", "uint8_t", ArrayLiteral(context["interval_zero_ok_array"]),
+                                     array=True, comment="1 or 2: a +0 or -0 result is also allowed (FZ16)"))
+            zero_ok = f"{n}_interval_zero_ok"
+        fields["validation"] = (
+            f"    failures += helia_test_float_interval({n}_output, {n}_interval_lo, {n}_interval_hi, {zero_ok},\n"
+            f"                                          {context['output_size']}, {context['interval_width']}, "
+            f"{context.get('validation_report_limit', 20)});")
+    if context.get("fpscr_fz16"):
+        fields["pre_call"], fields["cleanup"] = _FZ16_ON, _FZ16_OFF
+    return tensor_case_pool(context, {"size": context["output_size"]}, dims=(), extra_header=extra, **fields)

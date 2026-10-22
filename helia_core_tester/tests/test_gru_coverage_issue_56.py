@@ -71,7 +71,7 @@ def test_gru_null_buffers_is_legal_only_because_reset_after_true() -> None:
     desc = _load_gru("gru_unidirectional_float_null_buffers_reset_after_f32")
     assert desc["fault"] == "null_buffers"
     assert desc["reset_after"] is True
-    # expected_status defaults to SUCCESS (see gru_unidirectional_fault.c.j2) --
+    # expected_status defaults to SUCCESS (see gru_unidirectional_fault.fragment.j2) --
     # this is a legal-path guard, not an error-injection case.
     assert desc.get("expected_status") is None
 
@@ -163,7 +163,7 @@ def test_lstm_no_bias_combines_with_time_major() -> None:
 
 
 def test_gru_no_bias_stream_composes_end_to_end(tmp_path: Path) -> None:
-    # The stream template (gru_unidirectional_stream.c.j2) had the same
+    # The stream template (gru_unidirectional_stream.fragment.j2) had the same
     # unconditional bias-symbol reference Copilot flagged in the fault
     # template -- it wasn't exercised by the original PR because no
     # descriptor combined use_bias: false with streaming. Fixed alongside

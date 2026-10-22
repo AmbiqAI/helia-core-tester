@@ -1,0 +1,294 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Ambiq
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Helpers shared by the hct_ref entries. Not part of the ABI: the library is
+ * built -fvisibility=hidden and only hct_ref_abi.h declarations are exported.
+ */
+#ifndef HCT_REF_INTERNAL_H
+#define HCT_REF_INTERNAL_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+#include "hct_ref_abi.h"
+
+/* Upper bound on any tensor's element count; generation never comes close. */
+#define HCT_MAX_ELEMENTS (1LL << 26)
+
+#define HCT_TRY(expr)                                                                                                  \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        const int32_t hct_status_ = (expr);                                                                            \
+        if (hct_status_ != HCT_OK)                                                                                     \
+        {                                                                                                              \
+            return hct_status_;                                                                                        \
+        }                                                                                                              \
+    } while (0)
+
+/* ---- tensors ---- */
+
+/* Checks pointer, dtype, rank and dims; *count receives the element count. A
+ * zero-element tensor may have a NULL data pointer. */
+int32_t hct_check_tensor(const HctTensor *t, int32_t dtype, int64_t *count);
+
+/* Bytes per element of an HctDtype; 0 for an unknown dtype. */
+int32_t hct_dtype_size(int32_t dtype);
+
+/* hct_check_tensor for an entry declared `any`: the tensor's own dtype must be a known one. */
+int32_t hct_check_tensor_any(const HctTensor *t, int64_t *count);
+
+/* Equal rank and dims. */
+int32_t hct_check_same_shape(const HctTensor *a, const HctTensor *b);
+
+/* Element i of a tensor as raw bytes (dtype already checked). */
+static inline void *hct_elem(const HctTensor *t, int64_t i)
+{
+    return (char *)t->data + i * hct_dtype_size(t->dtype);
+}
+
+/* Checks the tensor-array pointers and counts of a kernel entry. */
+int32_t hct_check_io(
+    const HctTensor *inputs, int32_t num_inputs, int32_t want_inputs, const HctTensor *outputs, int32_t num_outputs,
+    int32_t want_outputs);
+
+/* Two operands broadcast numpy-style (trailing dims aligned, 1 stretches) onto
+ * an output whose shape must equal the broadcast shape. */
+typedef struct
+{
+    int32_t rank;
+    int32_t dims[HCT_MAX_RANK];
+    int64_t a_strides[HCT_MAX_RANK]; /* 0 along a broadcast dim */
+    int64_t b_strides[HCT_MAX_RANK];
+    int64_t count;
+} HctBroadcast2;
+
+int32_t hct_broadcast2_init(HctBroadcast2 *bc, const HctTensor *a, const HctTensor *b, const HctTensor *out);
+
+/* Element offsets into a and b of output element `index` (row-major). */
+void hct_broadcast2_offsets(const HctBroadcast2 *bc, int64_t index, int64_t *a_offset, int64_t *b_offset);
+
+/* ---- fixed point (TFLite reference semantics) ---- */
+
+int32_t hct_saturating_rounding_doubling_high_mul(int32_t a, int32_t b);
+
+/* Round-half-away-from-zero division by 2^exponent, exponent in [0, 31]. */
+int32_t hct_rounding_divide_by_pot(int32_t x, int32_t exponent);
+
+/* MultiplyByQuantizedMultiplier, double rounding: SRDHM then RDBPOT. shift in
+ * [-31, 30]; a positive shift scales x up first, wrapping as int32 arithmetic does. */
+int32_t hct_multiply_by_quantized_multiplier(int32_t x, int32_t multiplier, int32_t shift);
+
+/* CMSIS-NN arm_nn_requantize without CMSIS_NN_USE_SINGLE_ROUNDING (a named variant, not
+ * TFLite): the high multiply rounds ties up with no sign-dependent nudge and no saturation,
+ * then a rounding right shift. shift in [-31, 30]; a positive shift wraps as int32 math does. */
+int32_t hct_cmsis_requantize(int32_t x, int32_t multiplier, int32_t shift);
+
+/* MultiplyByQuantizedMultiplier(int64_t, ...): the multiplier reduced to 16 bits, one
+ * rounding shift. shift in [-31, 7], |x| < 2^47; TFLite requires the result to fit int32, which
+ * the caller checks. */
+int64_t hct_multiply_by_quantized_multiplier_64(int64_t x, int32_t multiplier, int32_t shift);
+
+/* QuantizeMultiplier: real in [0, inf) -> (multiplier in [2^30, 2^31) or 0, shift). */
+int32_t hct_quantize_multiplier_impl(double real, int32_t *multiplier, int32_t *shift);
+
+/* As above, for 0 < real < 1 (shift <= 0). */
+int32_t hct_quantize_multiplier_smaller_than_one(double real, int32_t *multiplier, int32_t *shift);
+
+/* CalculateActivationRangeQuantized for an int8/int16 tensor. */
+int32_t hct_activation_range_quantized(
+    int32_t activation, int32_t dtype, float scale, int32_t zero_point, int32_t *act_min, int32_t *act_max);
+
+/* Inclusive integer range of an int8/int16 dtype; HCT_E_DTYPE otherwise. */
+int32_t hct_dtype_range(int32_t dtype, int32_t *qmin, int32_t *qmax);
+
+/* ---- float ---- */
+
+/* binary16 <-> binary32. Widening is exact; narrowing rounds to nearest even,
+ * overflows to infinity, and keeps NaNs NaN (quieted, sign kept). */
+float hct_f16_to_f32(uint16_t h);
+uint16_t hct_f32_to_f16(float f);
+
+/* binary64 -> binary16, rounded once to nearest even. */
+uint16_t hct_f64_to_f16(double d);
+
+/* Clamp that propagates NaN (std::min(std::max(x, lo), hi) as TFLite applies it). */
+static inline float hct_clamp_f32(float x, float lo, float hi)
+{
+    if (x < lo)
+    {
+        return lo;
+    }
+    if (x > hi)
+    {
+        return hi;
+    }
+    return x;
+}
+
+/* Activation bounds must be ordered and not NaN; infinities leave a side open. */
+int32_t hct_check_float_activation(float lo, float hi);
+
+/* ---- element access (dtype already checked by the caller) ---- */
+
+static inline int32_t hct_load_i32(const HctTensor *t, int64_t i)
+{
+    switch (t->dtype)
+    {
+    case HCT_INT8:
+        return ((const int8_t *)t->data)[i];
+    case HCT_INT16:
+        return ((const int16_t *)t->data)[i];
+    case HCT_BOOL:
+        return ((const uint8_t *)t->data)[i];
+    default:
+        return ((const int32_t *)t->data)[i];
+    }
+}
+
+/* Stores v, which the caller has already clamped to the dtype's range. */
+static inline void hct_store_i32(HctTensor *t, int64_t i, int32_t v)
+{
+    switch (t->dtype)
+    {
+    case HCT_INT8:
+        ((int8_t *)t->data)[i] = (int8_t)v;
+        break;
+    case HCT_INT16:
+        ((int16_t *)t->data)[i] = (int16_t)v;
+        break;
+    case HCT_BOOL:
+        ((uint8_t *)t->data)[i] = (uint8_t)(v != 0);
+        break;
+    default:
+        ((int32_t *)t->data)[i] = v;
+        break;
+    }
+}
+
+static inline int64_t hct_load_i64(const HctTensor *t, int64_t i)
+{
+    return t->dtype == HCT_INT64 ? ((const int64_t *)t->data)[i] : hct_load_i32(t, i);
+}
+
+/* float32 element, or a binary16 element widened exactly. */
+static inline float hct_load_f32(const HctTensor *t, int64_t i)
+{
+    return t->dtype == HCT_FLOAT16 ? hct_f16_to_f32(((const uint16_t *)t->data)[i]) : ((const float *)t->data)[i];
+}
+
+/* Stores f, rounding once to binary16 for a float16 tensor. */
+static inline void hct_store_f32(HctTensor *t, int64_t i, float f)
+{
+    if (t->dtype == HCT_FLOAT16)
+    {
+        ((uint16_t *)t->data)[i] = hct_f32_to_f16(f);
+    }
+    else
+    {
+        ((float *)t->data)[i] = f;
+    }
+}
+
+/* One binary16 arithmetic result: the binary32 value rounded to binary16 and back.
+ * binary32 has >= 2p + 2 bits for p = 11, so one +, -, * or / computed in binary32
+ * and rounded here is exactly the IEEE binary16 operation. */
+static inline float hct_round_f16(float f)
+{
+    return hct_f16_to_f32(hct_f32_to_f16(f));
+}
+
+/* ---- int16 lookup tables (TFLite LUTPopulate<int16_t> / LUTLookup) ---- */
+
+#define HCT_LUT_S16_SIZE 513
+
+/* detail::LUTPopulateInt16<float>: 512 segments over the int16 input range, each anchor
+ * biased by half the midpoint interpolation error, plus a closing anchor for the last slope. */
+void hct_lut_populate_s16(float input_scale, int32_t input_zero_point, float output_scale, int32_t output_zero_point,
+                          float (*transform)(float value, const void *params), const void *params,
+                          int16_t lut[HCT_LUT_S16_SIZE]);
+
+/* LUTLookup(int16_t): linear interpolation between lut[256 + (v >> 7)] and the next anchor. */
+static inline int32_t hct_lut_lookup_s16(int32_t value, const int16_t *lut)
+{
+    const int32_t index = 256 + (value >> 7);
+    const int32_t offset = value & 0x7f;
+    const int32_t base = lut[index];
+    const int32_t slope = lut[index + 1] - lut[index];
+    return (int16_t)(base + ((slope * offset + 64) >> 7));
+}
+
+/* Rounds a binary64 value once to the tensor's float type (binary16 directly, not through
+ * binary32), then applies [lo, hi] as TFLite's ActivationFunctionWithMinMax does (NaN passes).
+ * Clamping after rounding equals rounding after clamping: the bounds are representable. */
+static inline void hct_store_rounded(HctTensor *t, int64_t i, double v, float lo, float hi)
+{
+    if (t->dtype == HCT_FLOAT16)
+    {
+        const float r = hct_f16_to_f32(hct_f64_to_f16(v));
+        ((uint16_t *)t->data)[i] = hct_f32_to_f16(hct_clamp_f32(r, hct_round_f16(lo), hct_round_f16(hi)));
+    }
+    else
+    {
+        ((float *)t->data)[i] = hct_clamp_f32((float)v, lo, hi);
+    }
+}
+
+/* ---- exact sums ---- */
+
+/* 22 limbs from 2^-352: every binary32 x binary32 product (lowest bit >= 2^-350, below 2^256)
+ * and sums of up to HCT_MAX_ELEMENTS of them, with room for the sign. */
+#define HCT_XSUM_LIMBS 22
+#define HCT_XSUM_BASE (-352)
+
+typedef struct
+{
+    int64_t limb[HCT_XSUM_LIMBS];
+    int32_t pending;
+    int32_t nan, pos_inf, neg_inf, out_of_range;
+} HctXsum;
+
+void hct_xsum_init(HctXsum *x);
+
+/* Adds v exactly. Non-finite values are tracked as IEEE addition would combine them; a finite v
+ * outside the accumulator's range marks it, and hct_xsum_round then fails with HCT_E_PARAM. */
+void hct_xsum_add(HctXsum *x, double v);
+void hct_xsum_add_product(HctXsum *x, float a, float b);
+
+/* The exact sum divided by `divisor` (1..HCT_MAX_ELEMENTS), rounded once to nearest even in
+ * `dtype` (HCT_FLOAT32 or HCT_FLOAT16; overflow to infinity), returned as a binary64 that holds
+ * that value exactly. An exact zero is +0. */
+int32_t hct_xsum_round(const HctXsum *x, int64_t divisor, int32_t dtype, double *out);
+
+/* Stores the rounded sum (divided by `divisor`) into a float tensor element, then clamps. */
+static inline int32_t hct_store_xsum(HctTensor *t, int64_t i, const HctXsum *x, int64_t divisor, float lo, float hi)
+{
+    double v = 0.0;
+    HCT_TRY(hct_xsum_round(x, divisor, t->dtype, &v));
+    hct_store_rounded(t, i, v, lo, hi);
+    return HCT_OK;
+}
+
+/* reference_integer_ops::Logistic / Tanh on one int16 value with the effective input multiplier
+ * and right shift (multiplier 3 << k, shift 0 in the power-of-two case). */
+int32_t hct_tanh_logistic_s16_value(int32_t value, int32_t multiplier, int32_t shift, int is_tanh);
+
+/* ns-cmsis-nn's float32 activation tables (binary32 bits): 2^(i/256), i = 0..256, and
+ * tanh(6 i / 384), i = 0..384. */
+extern const uint32_t hct_cmsis_exp2_lut_f32_bits[257];
+extern const uint32_t hct_cmsis_tanh_lut_f32_bits[385];
+
+/* ns-cmsis-nn's float16 activation tables (binary16 bits): arm_nn_exp2_lut_f16 = 2^(i/256) and
+ * arm_nn_tanh_lut_f16 = tanh(4 i / 256), i = 0..256. */
+extern const uint16_t hct_cmsis_exp2_lut_f16[257];
+extern const uint16_t hct_cmsis_tanh_lut_f16[257];
+
+/* Checks a two-input, one-output broadcasting entry and sets up its iteration. */
+int32_t hct_binary_setup(const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs,
+                         int32_t in_dtype, int32_t out_dtype, HctBroadcast2 *bc);
+
+/* Checks a one-input, one-output entry whose output has the input's shape; *count gets the size. */
+int32_t hct_unary_setup(const HctTensor *inputs, int32_t num_inputs, HctTensor *outputs, int32_t num_outputs,
+                        int32_t in_dtype, int32_t out_dtype, int64_t *count);
+
+#endif /* HCT_REF_INTERNAL_H */

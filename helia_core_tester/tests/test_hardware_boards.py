@@ -146,4 +146,3 @@ def test_blob_store_minimum_loads(tmp_path: Path, size: int) -> None:
         encoding="utf-8",
     )
     assert load_board_table(good)[0].blob_store_bytes == size
-

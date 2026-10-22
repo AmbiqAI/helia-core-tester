@@ -101,7 +101,6 @@ OPERATOR_DESCRIPTOR_PROFILES = {'Abs': 'single_input_unary',
  'Transpose': 'shape_transform',
  'Unpack': 'shape_transform',
  'TransposeConv': 'shape_transform',
- 'VariableUpdate': 'shape_transform',
  'Where': 'custom'}
 
 PROFILE_REQUIRED_FIELDS = {

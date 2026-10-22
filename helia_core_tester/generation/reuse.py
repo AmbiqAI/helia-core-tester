@@ -1,13 +1,16 @@
 """Per-case reuse stamps for the generation step.
 
-TFLite conversion plus interpreter inference dominates generation wall time, and
-every input that can change a case's emitted bytes is knowable before that work
-starts: the descriptor document, the per-case generation inputs (cpu, suite,
-seed), the generator itself, the resolved dependency set and interpreter it runs
-under, and the ns-cmsis-nn checkout the generator reads. A stamp folds all of
+Every input that can change a case's emitted bytes is knowable before generating
+it: the descriptor document, the per-case generation inputs (cpu, suite, seed),
+the generator itself (the C reference sources included), the resolved dependency
+set and Python interpreter it runs under, and the ns-cmsis-nn checkout the
+generator reads. A stamp folds all of
 those into one digest; a case whose on-disk stamp still matches, and whose
 artifacts still hash to what that stamp recorded, is reused verbatim.
 See issue #107.
+
+The seed is part of the stamp, and a run without `--seed` (or HCT_SEED) draws a
+fresh one, so reuse is an opt-in: pass the seed a run printed to reuse its cases.
 """
 
 from __future__ import annotations
@@ -29,11 +32,10 @@ STAMP_FILENAME = ".stamp"
 
 # Version prefix of the stamp payload itself. Bump when the payload layout
 # changes so old stamps cannot accidentally validate against new semantics.
-_STAMP_SCHEMA = "helia-core-tester/generation-stamp/4"
+_STAMP_SCHEMA = "helia-core-tester/generation-stamp/8"
 
 # The lock file is the whole resolved dependency set, so it covers every package
-# that can move emitted bytes -- the converter and runtime, but equally numpy's
-# RNG streams, keras, jinja2, flatbuffers and pyyaml -- without anyone having to
+# that can move emitted bytes -- numpy's RNG streams, jinja2 and pyyaml -- without anyone having to
 # keep a hand-maintained list of them in step.
 _LOCK_FILENAME = "uv.lock"
 
@@ -47,18 +49,21 @@ _EXTERNAL_GENERATOR_SOURCES = (
 
 # Subtrees (or single files) of the ns-cmsis-nn checkout that are generation
 # inputs: the public headers drive the temp-sizer probe's choice of template
-# variant, the UnitTest data is read directly as LSTM/GRU goldens, the s16
-# activation generator reads sigmoid_table_uint16 from arm_nntables.c, and the
-# LSTM s16 reference path feeds schema.fbs to flatc.
+# variant, and the exported kernel contract (contract/ir.py) is what call-site
+# rendering and symbol checks read instead of the headers. No golden is read
+# from the checkout (they come from the tester's C reference). Changing this
+# list is a stamp-schema bump: an uncovered input would let a stale case be
+# reused after that input changed.
 _CMSIS_NN_INPUT_SUBTREES = (
     "Include",
-    "Tests/UnitTest/TestCases/TestData",
-    "Source/NNSupportFunctions/arm_nntables.c",
-    "Tests/UnitTest/RefactoredTestGen",
+    "Tests/KernelContracts",
 )
 
 _version_hash_cache: Optional[str] = None
 _checkout_identity_cache: Optional[Dict[str, str]] = None
+
+
+_REFERENCE_ROOT = Path(__file__).resolve().parents[1] / "reference"
 
 
 def _iter_generator_sources() -> Iterator[Path]:
@@ -82,6 +87,11 @@ def _iter_generator_sources() -> Iterator[Path]:
     for relative in _EXTERNAL_GENERATOR_SOURCES:
         yield repo_root / relative
 
+    # The C reference library computes goldens and is not Python.
+    for path in sorted(_REFERENCE_ROOT.rglob("*")):
+        if path.is_file() and path.suffix in {".c", ".h", ".yaml"}:
+            yield path
+
     templates_root = find_tester_templates_dir(repo_root)
     if not templates_root.is_dir():
         raise FileNotFoundError(
@@ -99,7 +109,7 @@ def _environment_identity() -> Dict[str, str]:
 
     Naming individual packages under-counts the inputs: numpy decides the RNG
     streams behind every generated tensor, jinja2 and pyyaml decide the emitted
-    text, flatbuffers and the converter decide the model bytes. Hashing the lock
+    text. Hashing the lock
     file covers the resolved set as a whole. The interpreter version and the
     machine are separate axes the lock file does not pin, and both reach the
     emitted bytes through platform-specific wheels and floating-point behaviour.
@@ -121,7 +131,18 @@ def _environment_identity() -> Dict[str, str]:
         "lock_sha256": hashlib.sha256(lock_bytes).hexdigest(),
         "python": ".".join(str(part) for part in sys.version_info[:3]),
         "machine": platform.machine(),
+        # The host C compiler builds the reference library that computes the goldens.
+        "host_cc": _host_cc_identity(),
     }
+
+
+def _host_cc_identity() -> str:
+    from helia_core_tester.utils.host_compiler import HostCompilerMissing, compiler_identity, find_host_cc
+
+    try:
+        return compiler_identity(find_host_cc())
+    except HostCompilerMissing:
+        return "missing"
 
 
 def generator_version_hash() -> str:
@@ -209,9 +230,9 @@ def cmsis_nn_checkout_identity() -> Dict[str, str]:
     """Identity of the ns-cmsis-nn checkout the generator will read.
 
     The checkout is an input to the emitted bytes, not only to the build: the
-    LSTM/GRU goldens are read straight out of its UnitTest TestData, and the
     temp-sizer probe (generation/utils/temp_sizer_probe.py) reads its public
-    Include/ headers to pick which template variant a case emits. Two runs
+    Include/ headers to pick which template variant a case emits, and call sites
+    render from its exported kernel contract. Two runs
     against different checkouts must therefore never share a stamp.
 
     A clean git checkout is identified by its commit, which is cheap and exact.
@@ -259,6 +280,7 @@ def case_stamp(
     suite: str,
     seed: int,
     version_hash: str,
+    kernel_numerics: str = "shipped",
 ) -> str:
     """Digest of everything that determines a case's generated bytes.
 
@@ -272,6 +294,7 @@ def case_stamp(
         "descriptor": descriptor,
         "case_name": case_name,
         "cpu": cpu,
+        "kernel_numerics": kernel_numerics,
         "suite": suite,
         "seed": seed,
         "generator_version": version_hash,
@@ -356,7 +379,7 @@ def _remove_entry(path: Path) -> None:
 def case_reusable(test_dir: Path, stamp: str) -> bool:
     """True iff this case was generated from ``stamp`` and is still intact.
 
-    Presence is not integrity: a truncated .c, a deleted .tflite, a missing
+    Presence is not integrity: a truncated .c, a deleted reference record, a missing
     header or a lost CMakeLists.txt each leave a case that still looks generated
     but no longer builds, or no longer tests what the stamp claims. Comparing
     the recorded artifact digest (generation/artifact_identity.py, the same

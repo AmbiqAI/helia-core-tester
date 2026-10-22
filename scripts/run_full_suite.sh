@@ -43,7 +43,7 @@ usage() {
     echo "  --cpu CPUS             Comma-separated target CPUs (default: ${CPUS})"
     echo "  --jobs N               Parallel build jobs (default: nproc = ${JOBS})"
     echo "  --run-jobs N           Parallel FVP run jobs, 0 = auto (default: ${RUN_JOBS})"
-    echo "  --skip-generation      Reuse already-generated TFLite/C test artifacts"
+    echo "  --skip-generation      Reuse already-generated C test artifacts"
     echo "  --help                 Show this help message"
     exit "${1:-0}"
 }

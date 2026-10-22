@@ -18,6 +18,7 @@ _ABS = (
 _REGISTRY = (
     "kernels:\n"
     "  - kernel_id: {kid}\n"
+    "    c_define: HCT_KERNEL_ID_ABS_S8\n"
     "    family: BasicMathFunctions\n"
     "    operator: Abs\n"
     "    dtype: S8\n"

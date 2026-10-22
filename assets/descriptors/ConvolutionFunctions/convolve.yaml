@@ -1305,8 +1305,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1335,8 +1333,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1365,8 +1361,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1395,8 +1389,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1425,8 +1417,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1455,8 +1445,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1485,8 +1473,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1515,8 +1501,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1545,8 +1529,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1575,8 +1557,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1605,8 +1585,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1635,8 +1613,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1665,8 +1641,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1695,8 +1669,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1725,8 +1697,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1755,8 +1725,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1785,8 +1753,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1815,8 +1781,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1845,8 +1809,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1875,8 +1837,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1905,8 +1865,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1935,8 +1893,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1965,8 +1921,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1995,8 +1949,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -2025,8 +1977,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -2103,8 +2053,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape: [1, 4, 4, 1]
 filter_shape: [3, 3, 1, 2]
@@ -2972,6 +2920,7 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_convolve_s8_small_cin
+entry_sizer: arm_convolve_s8_get_buffer_size
 hint: {call_style: per_tensor}
 input_shape: [1, 49, 10, 1]
 filter_shape: [10, 4, 1, 64]
@@ -2987,6 +2936,7 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_convolve_s8_small_cin
+entry_sizer: arm_convolve_s8_get_buffer_size
 hint: {call_style: per_tensor}
 input_shape: [1, 12, 12, 3]
 filter_shape: [3, 3, 3, 8]
@@ -3002,6 +2952,7 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_convolve_s8_small_cin
+entry_sizer: arm_convolve_s8_get_buffer_size
 hint: {call_style: per_tensor}
 input_shape: [1, 8, 8, 3]
 filter_shape: [3, 3, 3, 16]
@@ -3017,6 +2968,7 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_convolve_s8_small_cin
+entry_sizer: arm_convolve_s8_get_buffer_size
 hint: {call_style: per_tensor}
 input_shape: [1, 1, 64, 1]
 filter_shape: [1, 9, 1, 4]
@@ -3032,6 +2984,7 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_convolve_s8_small_cin
+entry_sizer: arm_convolve_s8_get_buffer_size
 hint: {call_style: per_tensor}
 input_shape: [1, 6, 6, 1]
 filter_shape: [4, 4, 1, 4]
@@ -3047,6 +3000,7 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_convolve_s8_small_cin
+entry_sizer: arm_convolve_s8_get_buffer_size
 hint: {call_style: per_tensor}
 input_shape: [1, 6, 6, 3]
 filter_shape: [4, 4, 3, 4]
@@ -3062,6 +3016,7 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_convolve_s8_small_cin
+entry_sizer: arm_convolve_s8_get_buffer_size
 hint: {call_style: per_tensor}
 input_shape: [1, 5, 5, 2]
 filter_shape: [3, 3, 2, 12]
@@ -3077,6 +3032,7 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_convolve_s8_small_cin
+entry_sizer: arm_convolve_s8_get_buffer_size
 hint: {call_style: per_tensor}
 input_shape: [2, 6, 6, 3]
 filter_shape: [3, 3, 3, 8]
@@ -3092,6 +3048,7 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_convolve_s8_small_cin
+entry_sizer: arm_convolve_s8_get_buffer_size
 hint: {call_style: per_tensor}
 input_shape: [1, 2, 2, 1]
 filter_shape: [3, 3, 1, 4]
@@ -3107,6 +3064,7 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_convolve_s8_small_cin
+entry_sizer: arm_convolve_s8_get_buffer_size
 hint: {call_style: per_tensor}
 input_shape: [1, 6, 6, 2]
 filter_shape: [3, 3, 2, 8]
@@ -3122,6 +3080,7 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_convolve_s8_small_cin
+entry_sizer: arm_convolve_s8_get_buffer_size
 hint: {call_style: per_tensor}
 input_shape: [1, 8, 8, 4]
 filter_shape: [3, 3, 4, 16]
@@ -3136,6 +3095,7 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_convolve_s8_3x3_c16_s1
+entry_sizer: arm_convolve_s8_get_buffer_size
 hint: {call_style: per_tensor}
 input_shape: [1, 16, 16, 16]
 filter_shape: [3, 3, 16, 16]
@@ -3151,6 +3111,7 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_convolve_s8_3x3_c16_s1
+entry_sizer: arm_convolve_s8_get_buffer_size
 hint: {call_style: per_tensor}
 input_shape: [1, 7, 9, 16]
 filter_shape: [3, 3, 16, 32]
@@ -3166,6 +3127,7 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_convolve_s8_3x3_c16_s1
+entry_sizer: arm_convolve_s8_get_buffer_size
 hint: {call_style: per_tensor}
 input_shape: [1, 6, 6, 16]
 filter_shape: [3, 3, 16, 16]
@@ -3181,6 +3143,7 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_convolve_s8_3x3_c16_s1
+entry_sizer: arm_convolve_s8_get_buffer_size
 hint: {call_style: per_tensor}
 input_shape: [2, 5, 5, 16]
 filter_shape: [3, 3, 16, 16]
@@ -3196,6 +3159,7 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_convolve_s8_3x3_c16_s1
+entry_sizer: arm_convolve_s8_get_buffer_size
 hint: {call_style: per_tensor}
 input_shape: [1, 8, 8, 16]
 filter_shape: [3, 3, 16, 16]
@@ -3215,6 +3179,7 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_convolve_1x1_s8_short_k
+entry_sizer: arm_convolve_1x1_s8_fast_get_buffer_size
 hint: {call_style: per_tensor}
 input_shape: [1, 2, 4, 8]
 filter_shape: [1, 1, 8, 16]
@@ -3230,6 +3195,7 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_convolve_1x1_s8_short_k
+entry_sizer: arm_convolve_1x1_s8_fast_get_buffer_size
 hint: {call_style: per_tensor}
 input_shape: [2, 1, 11, 8]
 filter_shape: [1, 1, 8, 5]
@@ -3245,6 +3211,7 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_convolve_1x1_s8_short_k
+entry_sizer: arm_convolve_1x1_s8_fast_get_buffer_size
 hint: {call_style: per_tensor}
 input_shape: [1, 3, 3, 1]
 filter_shape: [1, 1, 1, 8]
@@ -3260,6 +3227,7 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_convolve_1x1_s8_short_k
+entry_sizer: arm_convolve_1x1_s8_fast_get_buffer_size
 hint: {call_style: per_tensor}
 input_shape: [2, 4, 4, 3]
 filter_shape: [1, 1, 3, 4]
@@ -3275,6 +3243,7 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_convolve_1x1_s8_short_k
+entry_sizer: arm_convolve_1x1_s8_fast_get_buffer_size
 hint: {call_style: per_tensor}
 input_shape: [1, 2, 5, 16]
 filter_shape: [1, 1, 16, 12]
@@ -3290,6 +3259,7 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_convolve_1x1_s8_short_k
+entry_sizer: arm_convolve_1x1_s8_fast_get_buffer_size
 hint: {call_style: per_tensor}
 input_shape: [1, 1, 3, 5]
 filter_shape: [1, 1, 5, 7]
@@ -3305,6 +3275,7 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_convolve_1x1_s8_short_k
+entry_sizer: arm_convolve_1x1_s8_fast_get_buffer_size
 hint: {call_style: per_tensor}
 input_shape: [1, 3, 4, 13]
 filter_shape: [1, 1, 13, 9]
@@ -3320,7 +3291,11 @@ activation_dtype: S8
 weight_dtype: S8
 activation: RELU6
 entry: arm_convolve_1x1_s8_short_k
+entry_sizer: arm_convolve_1x1_s8_fast_get_buffer_size
 hint: {call_style: per_tensor}
+# Inputs in [-2, 2] keep most pre-activations inside (0, 6), so the clamp is exercised on both
+# sides without pinning the output at the top code.
+input_range: [-2, 2]
 input_shape: [1, 1, 11, 8]
 filter_shape: [1, 1, 8, 8]
 strides: [1, 1]
@@ -3335,6 +3310,7 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_convolve_1x1_s8_short_k
+entry_sizer: arm_convolve_1x1_s8_fast_get_buffer_size
 hint: {call_style: per_tensor}
 input_shape: [1, 3, 3, 8]
 filter_shape: [1, 1, 8, 4]
@@ -3350,6 +3326,7 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_convolve_1x1_s8_short_k
+entry_sizer: arm_convolve_1x1_s8_fast_get_buffer_size
 hint: {call_style: per_tensor}
 input_shape: [1, 2, 4, 17]
 filter_shape: [1, 1, 17, 8]
@@ -3364,6 +3341,7 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_convolve_1x1_s8_short_k
+entry_sizer: arm_convolve_1x1_s8_fast_get_buffer_size
 hint: {call_style: per_tensor}
 input_shape: [1, 4, 4, 8]
 filter_shape: [1, 1, 8, 8]
@@ -3372,7 +3350,7 @@ padding: VALID
 use_bias: true
 expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 ---
-# BEGIN mlperf model shapes (scripts/extract_model_shapes.py)
+# BEGIN mlperf model shapes (layer shapes of the MLPerf Tiny int8 models)
 operator: Convolve
 name: convolve_mlperf_ic_l0_s8
 activation_dtype: S8
@@ -3627,6 +3605,35 @@ strides: [1, 1]
 padding: SAME
 use_bias: true
 # END mlperf model shapes
+---
+# Entries resolved from the kernel contract (iteration 1b): public kernels the wrappers
+# route to, called directly. arm_convolve_s16 takes the struct-typed
+# bias; arm_convolve_1x1_s8_fast takes weight sums and a one-argument sizer of its own.
+operator: Convolve
+name: convolve_entry_contract_s16_5x7_k3x3_co6_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+entry: arm_convolve_s16
+hint: {call_style: per_tensor}
+input_shape: [1, 5, 7, 3]
+filter_shape: [3, 3, 3, 6]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+---
+operator: Convolve
+name: convolve_entry_contract_1x1_fast_6x6_c8_co12_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_convolve_1x1_s8_fast
+hint: {call_style: per_tensor}
+input_shape: [1, 6, 6, 8]
+filter_shape: [1, 1, 8, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
 ---
 operator: Convolve
 name: convolve_int16xint8_1x1_relu_s16

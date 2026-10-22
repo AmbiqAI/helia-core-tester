@@ -12,7 +12,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-import jinja2
 import numpy as np
 import pytest
 
@@ -21,7 +20,6 @@ from helia_core_tester.generation.io.descriptors import load_all_descriptors
 from helia_core_tester.generation.ops.BasicMathFunctions.add import OpAdd
 from helia_core_tester.generation.ops.BasicMathFunctions.mul import OpMul
 from helia_core_tester.generation.ops.BasicMathFunctions.sub import OpSub
-from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 import helia_core_tester.generation.test_ops as generation_module
 
 _OPS = {"sub": (OpSub, "Sub"), "add": (OpAdd, "Add"), "mul": (OpMul, "Mul")}
@@ -35,13 +33,16 @@ def _repo_root() -> Path:
 
 
 def _render(template_name: str, context: dict[str, object]) -> str:
-    env = jinja2.Environment(
-        loader=jinja2.FileSystemLoader(str(_repo_root() / "assets" / "templates")),
-        trim_blocks=True,
-        lstrip_blocks=True,
-    )
-    render_context = TemplateContextBuilder.build_validation_context(template_name, context)
-    return env.get_template(template_name).render(**render_context)
+    """Render through the harness pool registered for the operator's former template."""
+    from helia_core_tester.generation.harness import registry
+    from helia_core_tester.tests.harness_render import render_pool
+
+    dims = context["output_dims"]
+    context = {"input1_dims": dims, "input2_dims": dims, "input1_data_array": "    0.0f", "input2_data_array": "    0.0f",
+               "expected_output_array": "    0.0f", "use_batch_harness": False, **context}
+    builder, label = registry.lookup(template_name)
+    stem = template_name.rsplit("/", 1)[1].removesuffix(".c.j2")
+    return render_pool(context, builder(context), stem=stem, validation_key=template_name, label=label)[1]
 
 
 def _desc(op: str, name: str, shape_1, shape_2, dtype: str = "FP32", hint: dict | None = None) -> dict:
@@ -117,12 +118,14 @@ def test_templates_emit_the_dims_taking_call_only_when_asked(op: str) -> None:
     )
 
     assert f"arm_elementwise_{op}_f32(" in flat
-    assert "_input1_dims" not in flat and "24\n" in flat
+    flat_call = flat[flat.index(f"arm_elementwise_{op}_f32("):]
+    assert "_input1_dims" not in flat_call[:flat_call.index(");")] and "24 /* block_size */" in flat_call
 
     assert f"arm_elementwise_{op}_broadcast_f32(" in broadcast
     for role in ("input1", "input2", "output"):
         assert f"&{op}_float_bcast_channel_f32_{role}_dims" in broadcast
-    call = broadcast[broadcast.index("kernel_status ="):broadcast.index(");")]
+    start = broadcast.index(f"return arm_elementwise_{op}_broadcast_f32(")
+    call = broadcast[start:broadcast.index(");", start)]
     assert "24" not in call, "the broadcast entry point takes no block_size"
     assert "-1.0e+30f" in call and "1.0e+30f" in call
 

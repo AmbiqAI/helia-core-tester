@@ -29,13 +29,13 @@ def test_sigmoid_keys_and_streams() -> None:
 
 
 @pytest.mark.parametrize(("cpu", "n", "digest"), [
-    ("cortex-m55", 4, "8ef5566124719b8b66221c49f9217a7b661578ae9f692d5f29fe3ce37a8dc6be"),
-    ("cortex-m55", 12, "a7dbe60de604e71c3c3a59849dfee0c3e5512a97b0fedcad03a5f36f622e7073"),
-    ("cortex-m4", 4, "e5cfad80f35b8cb71464932f08c3d4e09f8abd67e5a9f0ccbc9e1a0bb13b3aee"),
-    ("cortex-m4", 12, "75cdebefb65732259f51fef7f2e8adedaf544c314bbdb20e0f43f4b9b8ce9d60"),
+    ("cortex-m55", 4, "b914a5b53c44f387fb0ea36952fe72d22d07498bac87398952d01d53cee24247"),
+    ("cortex-m55", 12, "d5ab9cdab6ac4e150c180620fd75ddcbe46968d86cbc72beaed05e951430d0e6"),
+    ("cortex-m4", 4, "deceddeee7dc7441c6e4e33af0979cccfcff4ec0eed12faaf69e081f98108afc"),
+    ("cortex-m4", 12, "8c4dcbf3377a83a24b1eaa2cc4feaca445036a472a815bb1ed0792bb07f43cb7"),
 ])
 def test_prior_hidden_sets_unchanged(cpu: str, n: int, digest: str) -> None:
-    # Pinned before sigmoid joined.
+    # Pinned before sigmoid joined; re-pinned when float TransposeConv draws dropped `sum_bound` (same shapes).
     assert _digest(rs.hidden_cases(n, SECRET, cpu, PRIOR)) == digest
 
 

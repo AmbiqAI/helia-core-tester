@@ -35,6 +35,32 @@ TRUE_VALUES = {"1", "true", "yes", "on"}
 FALSE_VALUES = {"0", "false", "no", "off"}
 VALID_SUITE_MODES = {"int", "float", "both"}
 VALID_FLOAT_PRECISION = {"f16", "f32", "both"}
+VALID_HOST_KERNELS = ("m0", "dsp")
+VALID_REPORT_FORMATS = ("json", "html", "md", "junit")
+
+
+def parse_report_formats(values: Any) -> list[str]:
+    """Split comma-separated report formats into a de-duplicated list, keeping first-seen order."""
+    expected = ", ".join(VALID_REPORT_FORMATS)
+    if isinstance(values, str):
+        values = [values]
+    if not isinstance(values, (list, tuple)):
+        raise ValueError(f"report formats must be a string or a list of strings, got {values!r}")
+    formats: list[str] = []
+    for value in values:
+        if not isinstance(value, str):
+            raise ValueError(f"report format must be a string, got {value!r}")
+        for token in value.split(","):
+            token = token.strip()
+            if not token:
+                raise ValueError(f"empty report format in {value!r}; expected a comma-separated list of: {expected}")
+            if token not in VALID_REPORT_FORMATS:
+                raise ValueError(f"unknown report format {token!r} in {value!r}; expected a comma-separated list of: {expected}")
+            formats.append(token)
+    if not formats:
+        raise ValueError(f"at least one report format is required; expected a comma-separated list of: {expected}")
+    return list(dict.fromkeys(formats))
+
 
 # FVP boot dominates per-case wall time, so parallel run jobs are the lever that
 # matters -- but an unbounded default on a shared or metered runner is a cost
@@ -105,7 +131,8 @@ class Config:
     dtype_filter: Optional[str] = None
     name_filter: Optional[str] = None
     limit: Optional[int] = None
-    seed: Optional[int] = 500
+    # The run seed every case's draw derives from; None draws a fresh one per run.
+    seed: Optional[int] = None
 
     force_generate: bool = False
     # Shared trees: keep other runs' cases.
@@ -119,6 +146,10 @@ class Config:
     # Else the secret comes from HCT_HIDDEN_SEED.
     hidden_seed_file: Optional[Path] = None
     skip_generation: bool = False
+    # Generated int cases run on the host against the ns-cmsis-nn kernels
+    # before any FVP/board build; these pick the kernel builds it uses.
+    skip_host_check: bool = False
+    host_kernels: list[str] = field(default_factory=lambda: ["m0"])
     skip_build: bool = False
     skip_run: bool = False
 
@@ -254,12 +285,15 @@ class Config:
             "force_generate",
             "keep_unselected",
             "skip_generation",
+            "skip_host_check",
             "skip_build",
             "skip_run",
             "enable_reporting",
         }:
             return self._parse_bool(key, value)
         if key == "report_formats":
+            return parse_report_formats(value)
+        if key == "host_kernels":
             return [item.strip() for item in value.split(",") if item.strip()]
         return value
 
@@ -305,6 +339,11 @@ class Config:
         if not 0 <= self.verbosity <= 3:
             raise ValueError(f"verbosity must be between 0 and 3, got {self.verbosity}")
         self._validate_random_shapes()
+        self._validate_host_kernels()
+        try:
+            self.report_formats = parse_report_formats(self.report_formats)
+        except ValueError as e:
+            raise ConfigurationError(f"report_formats: {e}") from e
 
         if self.jobs is None:
             self.jobs = os.cpu_count() or 4
@@ -319,6 +358,18 @@ class Config:
         self.downloads_dir.parent.mkdir(parents=True, exist_ok=True)
         self.generated_tests_root.mkdir(parents=True, exist_ok=True)
         self.reports_root.mkdir(parents=True, exist_ok=True)
+
+    def _validate_host_kernels(self) -> None:
+        if isinstance(self.host_kernels, str):
+            self.host_kernels = [item.strip() for item in self.host_kernels.split(",") if item.strip()]
+        modes = [str(m).strip().lower() for m in self.host_kernels]
+        unknown = [m for m in modes if m not in VALID_HOST_KERNELS]
+        if unknown or not modes:
+            raise ConfigurationError(
+                f"host_kernels must be a non-empty subset of {', '.join(VALID_HOST_KERNELS)}, got {self.host_kernels!r}"
+            )
+        # Deduplicate, keeping the order given.
+        self.host_kernels = list(dict.fromkeys(modes))
 
     def _validate_random_shapes(self) -> None:
         # Any seed would be silently ignored.
@@ -610,6 +661,8 @@ class Config:
             "shape_seed": self.shape_seed,
             "hidden_dir": str(self.hidden_dir) if self.hidden_dir else None,
             "skip_generation": self.skip_generation,
+            "skip_host_check": self.skip_host_check,
+            "host_kernels": list(self.host_kernels),
             "skip_build": self.skip_build,
             "skip_run": self.skip_run,
             "enable_reporting": self.enable_reporting,

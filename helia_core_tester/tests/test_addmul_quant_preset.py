@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 import numpy as np
@@ -12,16 +11,9 @@ from helia_core_tester.generation.io.descriptors import load_all_descriptors
 from helia_core_tester.generation.ops._shared.binary_basic_math_base import resolve_quant_preset
 from helia_core_tester.generation.ops.BasicMathFunctions.add import ADD_QUANT_PRESETS, OpAdd
 from helia_core_tester.generation.ops.BasicMathFunctions.mul import MUL_QUANT_PRESETS, OpMul
-from helia_core_tester.generation.test_ops import generate_test
+from helia_core_tester.generation.reference.bindings import get_bindings
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_FIELDS = (
-    "input_1_offset", "input_1_mult", "input_1_shift",
-    "input_2_offset", "input_2_mult", "input_2_shift",
-    "left_shift", "out_offset", "out_mult", "out_shift",
-)
-
-
 def _descriptors() -> list[dict]:
     return load_all_descriptors(str(_PROJECT_ROOT / "assets" / "descriptors"))
 
@@ -30,51 +22,33 @@ def _descriptor(name: str) -> dict:
     return next(d for d in _descriptors() if d["name"] == name)
 
 
-def _generate(desc: dict, tmp_path: Path) -> tuple[dict, np.ndarray, np.ndarray, np.ndarray]:
-    """Kernel parameters, inputs (shaped) and golden of one generated case."""
-    name = desc["name"]
-    generate_test(desc, str(tmp_path))
-    case_dir = next(p.parent for p in tmp_path.rglob(f"{name}.tflite"))
-    source = "".join(p.read_text() for p in case_dir.glob("*.c"))
-    header = next(case_dir.glob("includes/*.h")).read_text()
-
-    params = {f: int(m.group(1)) for f in _FIELDS if (m := re.search(rf"(-?\d+),\s*// {f}\b", source))}
-
-    def ints(pattern: str) -> list[int]:
-        return [int(x) for x in re.findall(r"-?\d+", re.search(pattern, header, re.S).group(1))]
-
-    def tensor(key: str) -> np.ndarray:
-        return np.array(ints(rf"{name}_{key}\[\] = \{{(.*?)\}};")).reshape(ints(rf"{name}_{key}_dims = \{{(.*?)\}};"))
-
-    golden = np.array(ints(rf"{name}_expected_output\[\] = \{{(.*?)\}};"))
-    return params, tensor("input1"), tensor("input2"), golden
+_OPS = {"add": OpAdd, "mul": OpMul}
 
 
-def _simulate(op: str, p: dict, a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    common = dict(
-        input1_offset=p["input_1_offset"], input2_offset=p["input_2_offset"],
-        out_offset=p["out_offset"], out_mult=p["out_mult"], out_shift=p["out_shift"],
-        out_activation_min=-128, out_activation_max=127, out_dtype=np.int8,
-    )
-    if op == "add":
-        out = OpAdd._simulate_add_quantized(
-            a, b, input1_mult=p["input_1_mult"], input1_shift=p["input_1_shift"],
-            input2_mult=p["input_2_mult"], input2_shift=p["input_2_shift"], left_shift=p["left_shift"], **common,
-        )
-    else:
-        out = OpMul._simulate_mul_quantized(a, b, **common)
+def _generate(desc: dict, tmp_path: Path) -> tuple[dict, np.ndarray, np.ndarray, np.ndarray, str]:
+    """The recorded reference call of one generated case: its prepared parameters, inputs, golden and entry."""
+    op = _OPS[desc["operator"].lower()](dict(desc), seed=500, target_cpu="cortex-m55")
+    op.generate_c_files(tmp_path)
+    call = op.reference
+    assert call is not None and not list(tmp_path.rglob("*.tflite"))
+    return dict(call.params), call.inputs["input1"], call.inputs["input2"], call.output().reshape(-1), call.entry
+
+
+def _simulate(entry: str, p: dict, a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    out = get_bindings().run(entry, p, {"input1": a, "input2": b},
+                             {"output": np.broadcast_shapes(a.shape, b.shape)})["output"]
     return out.reshape(-1)
 
 
 def _swapped(p: dict, *keys: str) -> dict:
     q = dict(p)
     for k in keys:
-        q[f"input_1_{k}"], q[f"input_2_{k}"] = p[f"input_2_{k}"], p[f"input_1_{k}"]
+        q[f"input1_{k}"], q[f"input2_{k}"] = p[f"input2_{k}"], p[f"input1_{k}"]
     return q
 
 
 def _swaps(op: str) -> list[tuple[str, ...]]:
-    return [("offset",), ("mult", "shift"), ("offset", "mult", "shift")] if op == "add" else [("offset",)]
+    return [("offset",), ("multiplier", "shift"), ("offset", "multiplier", "shift")] if op == "add" else [("offset",)]
 
 
 @pytest.mark.parametrize(
@@ -90,27 +64,28 @@ def _swaps(op: str) -> list[tuple[str, ...]]:
 )
 def test_distinct_case_golden_changes_when_operand_quant_is_swapped(name: str, tmp_path: Path) -> None:
     op = name[:3]
-    params, a, b, golden = _generate(_descriptor(name), tmp_path)
+    params, a, b, golden, entry = _generate(_descriptor(name), tmp_path)
 
-    assert params["input_1_offset"] != params["input_2_offset"]
+    assert params["input1_offset"] != params["input2_offset"]
     if op == "add":
-        assert (params["input_1_mult"], params["input_1_shift"]) != (params["input_2_mult"], params["input_2_shift"])
-    assert np.array_equal(_simulate(op, params, a, b), golden)
+        assert (params["input1_multiplier"], params["input1_shift"]) != (params["input2_multiplier"],
+                                                                          params["input2_shift"])
+    assert np.array_equal(_simulate(entry, params, a, b), golden)
     # Count only moves the FVP's 1-LSB tolerance cannot absorb. mul_scalar_right has
     # 4 elements, two of which saturate either way.
     for keys in _swaps(op):
-        moved = np.abs(_simulate(op, _swapped(params, *keys), a, b).astype(np.int32) - golden) > 1
+        moved = np.abs(_simulate(entry, _swapped(params, *keys), a, b).astype(np.int32) - golden) > 1
         assert np.mean(moved) >= 0.5, keys
 
 
 @pytest.mark.parametrize("name", ["add_default_s8", "mul_default_s8"])
 def test_shared_default_is_unchanged_and_blind_to_a_swap(name: str, tmp_path: Path) -> None:
     op = name[:3]
-    params, a, b, golden = _generate(_descriptor(name), tmp_path)
+    params, a, b, golden, entry = _generate(_descriptor(name), tmp_path)
 
-    assert params["input_1_offset"] == params["input_2_offset"]
+    assert params["input1_offset"] == params["input2_offset"]
     for keys in _swaps(op):
-        assert np.array_equal(_simulate(op, _swapped(params, *keys), a, b), golden)
+        assert np.array_equal(_simulate(entry, _swapped(params, *keys), a, b), golden)
 
 
 @pytest.mark.parametrize("op", ["add", "mul"])

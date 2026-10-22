@@ -1,9 +1,4 @@
-# FP16 comparisons follow the rule stated at the top of ConvolutionFunctions/convolve_float.yaml.
-# Re-derived by that rule against ns-cmsis-nn v7.47.0 for #124. From v7.47.0 (ns-cmsis-nn#881) every
-# default FP16 depthwise route accumulates in float32 on every leg, so the default-entry cases carry
-# no override: over seeds 500 and 1-8 their worst error is 0 on the finite cases and 0.45 of the
-# budget on the non-finite sweeps, on the shipped, MVE float coverage and fallback coverage legs.
-# The _acc16 entries keep float16 lane accumulation, so their cases keep the rule's override.
+# Float comparisons follow the rule stated at the top of ConvolutionFunctions/convolve_float.yaml.
 operator: DepthwiseConv
 name: depthwise_conv_float_default_f32
 suite: float
@@ -625,6 +620,9 @@ strides: [1, 1]
 padding: SAME
 use_bias: true
 depth_multiplier: 1
+# The unmasked lanes are a 9-tap float16 multiply-accumulate chain: the shipped Helium
+# build compares them with the route's own golden, any other build with the exact golden
+# widened by the chain's rounding bound; the tokens play no part in either.
 input_mode: nonfinite_sweep
 nonfinite_tokens: [nan]
 nonfinite_policy: mask
@@ -645,6 +643,9 @@ strides: [1, 1]
 padding: SAME
 use_bias: true
 depth_multiplier: 1
+# The unmasked lanes are a 9-tap float16 multiply-accumulate chain: the shipped Helium
+# build compares them with the route's own golden, any other build with the exact golden
+# widened by the chain's rounding bound; the tokens play no part in either.
 input_mode: nonfinite_sweep
 nonfinite_tokens: [inf]
 nonfinite_policy: mask
@@ -665,6 +666,9 @@ strides: [1, 1]
 padding: SAME
 use_bias: true
 depth_multiplier: 1
+# The unmasked lanes are a 9-tap float16 multiply-accumulate chain: the shipped Helium
+# build compares them with the route's own golden, any other build with the exact golden
+# widened by the chain's rounding bound; the tokens play no part in either.
 input_mode: nonfinite_sweep
 nonfinite_tokens: [-inf]
 nonfinite_policy: mask
@@ -789,6 +793,7 @@ expected_status: ARM_CMSIS_NN_ARG_ERROR
 operator: DepthwiseConv
 name: depthwise_conv_float_entry_acc16_5x5_c4_f16
 entry: arm_depthwise_conv_f16_acc16
+entry_sizer: arm_depthwise_conv_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -799,11 +804,11 @@ strides: [1, 1]
 padding: VALID
 use_bias: true
 depth_multiplier: 1
-comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_float_entry_acc16_chmult2_f16
 entry: arm_depthwise_conv_f16_acc16
+entry_sizer: arm_depthwise_conv_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -814,7 +819,6 @@ strides: [1, 1]
 padding: SAME
 use_bias: true
 depth_multiplier: 2
-comparison: {atol: 0.002, rtol: 0.002}
 ---
 # The 1d_k3 and 2x5 kernels through the _acc16 router, with the shapes of
 # depthwise_conv_float_1d_k3_no_bias_f16 and depthwise_conv_float_2x5_f16: from ns-cmsis-nn#881
@@ -822,6 +826,7 @@ comparison: {atol: 0.002, rtol: 0.002}
 operator: DepthwiseConv
 name: depthwise_conv_float_entry_acc16_1d_k3_no_bias_f16
 entry: arm_depthwise_conv_f16_acc16
+entry_sizer: arm_depthwise_conv_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -836,6 +841,7 @@ depth_multiplier: 1
 operator: DepthwiseConv
 name: depthwise_conv_float_entry_acc16_2x5_chmult2_f16
 entry: arm_depthwise_conv_f16_acc16
+entry_sizer: arm_depthwise_conv_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -846,11 +852,11 @@ strides: [1, 1]
 padding: VALID
 use_bias: true
 depth_multiplier: 2
-comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_float_entry_nhwc_5x5_c4_f16
 entry: arm_depthwise_nhwc_conv_f16
+entry_sizer: arm_depthwise_conv_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -865,6 +871,7 @@ depth_multiplier: 1
 operator: DepthwiseConv
 name: depthwise_conv_float_entry_nhwc_acc16_5x5_c4_f16
 entry: arm_depthwise_nhwc_conv_f16_acc16
+entry_sizer: arm_depthwise_conv_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -875,11 +882,11 @@ strides: [1, 1]
 padding: VALID
 use_bias: true
 depth_multiplier: 1
-comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_float_entry_nhwc_acc16_chmult2_f16
 entry: arm_depthwise_nhwc_conv_f16_acc16
+entry_sizer: arm_depthwise_conv_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -890,11 +897,11 @@ strides: [1, 1]
 padding: SAME
 use_bias: true
 depth_multiplier: 2
-comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_float_entry_wrapper_acc16_6x6_c3_f16
 entry: arm_depthwise_conv_wrapper_f16_acc16
+entry_sizer: arm_depthwise_conv_wrapper_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -905,7 +912,6 @@ strides: [1, 1]
 padding: SAME
 use_bias: true
 depth_multiplier: 1
-comparison: {atol: 0.002, rtol: 0.002}
 ---
 # Long reductions through the direct and generic depthwise kernels: more than 32 taps, the length at
 # which they folded float16 lanes into float32 before ns-cmsis-nn v7.47.0.
@@ -951,6 +957,7 @@ depth_multiplier: 2
 operator: DepthwiseConv
 name: depthwise_conv_fault_entry_acc16_invalid_layout_f16
 entry: arm_depthwise_conv_f16_acc16
+entry_sizer: arm_depthwise_conv_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -971,6 +978,7 @@ expected_status: ARM_CMSIS_NN_ARG_ERROR
 operator: DepthwiseConv
 name: depthwise_conv_float_route_1d_k3_f16
 entry: arm_depthwise_conv_1d_k3_nhwc_f16
+entry_sizer: arm_depthwise_conv_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -985,6 +993,7 @@ depth_multiplier: 1
 operator: DepthwiseConv
 name: depthwise_conv_float_route_2x5_f16
 entry: arm_depthwise_conv_2x5_nhwc_f16
+entry_sizer: arm_depthwise_conv_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -1001,6 +1010,7 @@ depth_multiplier: 1
 operator: DepthwiseConv
 name: depthwise_conv_float_route_1d_k3_acc16_f16
 entry: arm_depthwise_conv_1d_k3_nhwc_f16_acc16
+entry_sizer: arm_depthwise_conv_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -1015,6 +1025,7 @@ depth_multiplier: 1
 operator: DepthwiseConv
 name: depthwise_conv_float_route_2x5_acc16_f16
 entry: arm_depthwise_conv_2x5_nhwc_f16_acc16
+entry_sizer: arm_depthwise_conv_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -1029,6 +1040,7 @@ depth_multiplier: 1
 operator: DepthwiseConv
 name: depthwise_conv_float_route_direct_f16
 entry: arm_depthwise_conv_direct_nhwc_f16
+entry_sizer: arm_depthwise_conv_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -1043,6 +1055,7 @@ depth_multiplier: 1
 operator: DepthwiseConv
 name: depthwise_conv_float_route_direct_acc16_f16
 entry: arm_depthwise_conv_direct_nhwc_f16_acc16
+entry_sizer: arm_depthwise_conv_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -1053,11 +1066,11 @@ strides: [1, 1]
 padding: SAME
 use_bias: true
 depth_multiplier: 1
-comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_float_route_cin1_f16
 entry: arm_depthwise_conv_cin1_nhwc_f16
+entry_sizer: arm_depthwise_conv_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -1073,6 +1086,7 @@ autovectorize_declines: true
 operator: DepthwiseConv
 name: depthwise_conv_float_route_cin1_acc16_f16
 entry: arm_depthwise_conv_cin1_nhwc_f16_acc16
+entry_sizer: arm_depthwise_conv_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -1084,11 +1098,11 @@ padding: SAME
 use_bias: true
 depth_multiplier: 8
 autovectorize_declines: true
-comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_float_route_generic_f16
 entry: arm_depthwise_conv_generic_nhwc_f16
+entry_sizer: arm_depthwise_conv_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -1103,6 +1117,7 @@ depth_multiplier: 2
 operator: DepthwiseConv
 name: depthwise_conv_float_route_generic_acc16_f16
 entry: arm_depthwise_conv_generic_nhwc_f16_acc16
+entry_sizer: arm_depthwise_conv_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -1113,11 +1128,11 @@ strides: [1, 1]
 padding: SAME
 use_bias: true
 depth_multiplier: 2
-comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_float_route_1d_k3_declines_3x3_f16
 entry: arm_depthwise_conv_1d_k3_nhwc_f16
+entry_sizer: arm_depthwise_conv_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -1133,6 +1148,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: DepthwiseConv
 name: depthwise_conv_float_route_2x5_declines_3x3_f16
 entry: arm_depthwise_conv_2x5_nhwc_f16
+entry_sizer: arm_depthwise_conv_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -1148,6 +1164,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: DepthwiseConv
 name: depthwise_conv_float_route_direct_declines_mult2_f16
 entry: arm_depthwise_conv_direct_nhwc_f16
+entry_sizer: arm_depthwise_conv_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -1163,6 +1180,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: DepthwiseConv
 name: depthwise_conv_float_route_cin1_declines_cin2_f16
 entry: arm_depthwise_conv_cin1_nhwc_f16
+entry_sizer: arm_depthwise_conv_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -1178,6 +1196,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: DepthwiseConv
 name: depthwise_conv_float_route_cin1_acc16_declines_cin2_f16
 entry: arm_depthwise_conv_cin1_nhwc_f16_acc16
+entry_sizer: arm_depthwise_conv_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -1193,6 +1212,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: DepthwiseConv
 name: depthwise_conv_float_route_direct_acc16_declines_mult2_f16
 entry: arm_depthwise_conv_direct_nhwc_f16_acc16
+entry_sizer: arm_depthwise_conv_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16

@@ -7,24 +7,27 @@ from typing import Any, Dict
 import numpy as np
 
 from helia_core_tester.generation.ops._shared.base import OperationBase
-from helia_core_tester.generation.utils.litert_builder import build_unary_same_shape_op
-from helia_core_tester.generation.utils.litert_utils import (
-    get_operator_tensors_from_litert,
-    load_litert_model,
-)
+from helia_core_tester.generation.harness import ArrayLiteral, Declaration
+from helia_core_tester.generation.harness.simple import tensor_case_pool
+
+
+def sqrt_argument_pool(context):
+    """Sqrt reads a lookup table the case carries as the file-scope `sqrt_lut`."""
+    lut = context["sqrt_lut"]
+    rows = "\n".join(", ".join(str(v) for v in lut[i:i + 8]) + "," for i in range(0, len(lut), 8))
+    table = Declaration("sqrt_lut", context["lut_c_type"], ArrayLiteral(rows), storage="static", array=True,
+                        extent=str(context["lut_size"]))
+    return tensor_case_pool(context, {"sqrt_lut": "sqrt_lut"}, dims=("input_dims",), extra_header=(table,))
 
 
 SQRT_S16_LUT_SIZE = 513
 SQRT_S16_SLOT_SHIFT = 7
 SQRT_S16_SLOT_HALF_STEP = 1 << (SQRT_S16_SLOT_SHIFT - 1)
+SQRT_S16_ACCURATE_FROM = 2048
 
-
-def clamp_f32(x, min_val, max_val):
-    '''Clamp a float32 value to the specified range.'''
-    return max(min(x, max_val), min_val)
 
 def _quant_param_to_scalar(value, name: str, cast):
-    """Normalize LiteRT quantization values to a scalar."""
+    """Normalize a quantization value to a scalar."""
     arr = np.asarray(value)
     if arr.size != 1:
         raise ValueError(f"Sqrt expects scalar quantization for {name}, got shape {arr.shape}")
@@ -39,7 +42,7 @@ def _sqrt_quantized_real(real_value: float) -> float:
 
 
 def _quantize_s16_sqrt_output(real_value: float, output_scale: float, output_zp: int) -> int:
-    """Match LiteRT's int16 sqrt output more closely with truncation-based requantization."""
+    """Truncate on requantizing, as TFLite's int16 sqrt does."""
     quantized_output = int(np.trunc(np.float32(real_value / np.float32(output_scale)))) + int(output_zp)
     return int(np.clip(quantized_output, -32768, 32767))
 
@@ -109,55 +112,14 @@ def make_sqrt_lut(input_scale, input_zp, output_scale, output_zp, activation_dty
     raise NotImplementedError(f"Unsupported Sqrt dtype: {activation_dtype}")
 
 
-def build_sqrt_op(
-    *,
-    input_shape,
-    dtype: str = "int8",
-) -> bytes:
-    return build_unary_same_shape_op(
-        op_name="SQRT",
-        input_shape=input_shape,
-        dtype=dtype,
-    )
-
 class OpSqrt(OperationBase):
     """
-    Sqrt operation.
+    Sqrt operation: goldens from the C reference (TFLite's SqrtEvalQuantized; float in binary64).
     """
 
-    def needs_keras_model(self) -> bool:
-        return False
-    
-    def build_keras_model(self):
-        raise NotImplementedError("Sqrt uses LiteRT-only model generation.")
+    def uses_reference(self) -> bool:
+        return True
 
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        """Convert Keras model to TFLite with quantization."""
-        if self.tensor_dtype("input") in ("FP16", "FP32"):
-            self._write_tflite_bytes(
-                out_path,
-                build_sqrt_op(
-                    input_shape=tuple(self.desc["input_shape"]),
-                    dtype=self.tensor_litert_dtype("input"),
-                ),
-            )
-            return
-        activation_dtype = self.desc.get("activation_dtype", "S8")
-        if activation_dtype == "S8":
-            dtype = "int8"
-        elif activation_dtype == "S16":
-            dtype = "int16"
-        else:
-            raise NotImplementedError(f"Unsupported Sqrt dtype: {activation_dtype}")
-
-        input_shape = tuple(self.desc["input_shape"])
-        model_bytes = build_sqrt_op(
-            input_shape=input_shape,
-            dtype=dtype,
-        )
-        with open(out_path, "wb") as f:
-            f.write(model_bytes)
-    
     def _select_cmsis_sqrt_kernel(self) -> Dict[str, str]:
         """
         Select appropriate CMSIS-NN kernel function for Sqrt operation.
@@ -196,63 +158,52 @@ class OpSqrt(OperationBase):
             generate_sqrt_float(self, output_dir, reciprocal=False)
             return
 
+        from helia_core_tester.generation.reference import policy
+        from helia_core_tester.generation.reference import quant as ref_quant
+        from helia_core_tester.generation.reference.call import ReferenceCall
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
-        
+
         name = self.desc['name']
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
-        
-        # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_sqrt_kernel()
-        
-        input_shape = tuple(self.desc["input_shape"])
-        
+        activation_dtype = self.desc.get("activation_dtype", "S8")
+        kind = ref_quant.kind(activation_dtype)
+        input_shape = tuple(int(d) for d in self.desc["input_shape"])
+
         builder = TemplateContextBuilder()
         comparison = self.comparison_config()
-        
-        # Convert shapes to CMSIS dims
         input_dims = builder.nhwc_to_cmsis_dims(input_shape)
-        
-        # Generate deterministic integer input data
+
+        # The non-negative codes: TFLite refuses a negative dequantized input. arm_sqrt_s16
+        # interpolates a 513-entry table, which is within one code of sqrt only from code
+        # SQRT_S16_ACCURATE_FROM up (up to 7 codes off from 512, hundreds near 0); the default
+        # draw stays there, and hint.input_q_range covers the steep low end with its own tolerance.
         rng_state = self.rng.__getstate__()
         self.rng = np.random.default_rng(self.seed)
-
-        if kernel_info["input_c_type"] == "int8_t":
-            np_in_dtype = np.int8
-            qmin, qmax = -128, 127
-        elif kernel_info["input_c_type"] == "int16_t":
-            np_in_dtype = np.int16
-            qmin, qmax = -32768, 32767
-        else:
-            raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
-        input_q = self.rng.integers(0, qmax + 1, size=input_shape, dtype=np_in_dtype)
+        np_in_dtype = np.int8 if kind == "s8" else np.int16
+        qmax = int(np.iinfo(np_in_dtype).max)
+        low, high = self.desc.get("hint", {}).get("input_q_range", (SQRT_S16_ACCURATE_FROM if kind == "s16" else 0, qmax))
+        if not 0 <= int(low) <= int(high) <= qmax:
+            raise ValueError(f"{name}: input_q_range must lie in [0, {qmax}], got [{low}, {high}]")
+        input_q = self.rng.integers(int(low), int(high) + 1, size=input_shape).astype(np_in_dtype)
         self.rng.__setstate__(rng_state)
 
-        model, subgraph = load_litert_model(str(tflite_path))
-        
-        # Get operator tensors (first operator)
-        if len(subgraph.operators) == 0:
-            raise ValueError("No operators found in model")
-        
-        op_tensors = get_operator_tensors_from_litert(model, subgraph, 0)
-
-        input_quant = op_tensors['inputs'][0]['quantization']
-        output_quant = op_tensors['outputs'][0]['quantization']
-
-        # Compute expected output directly
-        output_data = self.run_inference(str(tflite_path), input_q)
-        output_shape = tuple(output_data.shape)
-        input_scale = input_quant['scale']
-        input_zp = input_quant['zero_point']
-        output_scale = output_quant['scale']
-        output_zp = output_quant['zero_point'] 
-        # Format arrays
+        preset = policy.TensorQuant(*ref_quant.preset_quant(activation_dtype), kind)
+        quant = self.desc.get("quantization") or {}
+        in_quant = policy.descriptor_quant(quant.get("input"), kind) or preset
+        out_quant = policy.descriptor_quant(quant.get("output"), kind) or preset
+        input_scale, input_zp = in_quant.scale, in_quant.zero_point
+        output_scale, output_zp = out_quant.scale, out_quant.zero_point
+        output_data = self.reference_golden(ReferenceCall(
+            f"sqrt_{kind}",
+            {"input_scale": input_scale, "input_zero_point": input_zp,
+             "output_scale": output_scale, "output_zero_point": output_zp},
+            {"input": np.ascontiguousarray(input_q)}, {"output": input_shape},
+            quant={"input": in_quant.to_json(), "output": out_quant.to_json()},
+        ))
+        output_shape = input_shape
         input_array_str = builder.format_array_as_c_literal(input_q)
         expected_output_array_str = builder.format_array_as_c_literal(output_data)
 
-
-        activation_dtype = self.desc.get("activation_dtype", "S8")
         sqrt_lut = make_sqrt_lut(
             input_scale=input_scale,
             input_zp=input_zp,
@@ -279,27 +230,8 @@ class OpSqrt(OperationBase):
             context["validation_mode"] = "tolerant_int"
             context["comparison_tolerance"] = int(comparison.get("tolerance", 1))
         
-        # Render templates
-        includes_api_dir = output_dir / "includes"
-        includes_api_dir.mkdir(parents=True, exist_ok=True)
-        
-        h_content = self.render_template("BasicMathFunctions/sqrt/sqrt.h.j2", context)
-        h_path = includes_api_dir / f"{name}_sqrt.h"
-        with open(h_path, 'w') as f:
-            f.write(h_content)
-        
-        c_content = self.render_template("BasicMathFunctions/sqrt/sqrt.c.j2", context)
-        c_path = output_dir / f"{name}_sqrt.c"
-        with open(c_path, 'w') as f:
-            f.write(c_content)
-        
-        cmake_context = {
-            'name': name,
-            'operator': self.desc.get('operator', 'Sqrt'),
-            'operator_name': 'sqrt'
-        }
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
-        cmake_path = output_dir / "CMakeLists.txt"
-        with open(cmake_path, 'w') as f:
-            f.write(cmake_content)
+        self.render_harness_case(
+            output_dir, stem="sqrt", context=context, pool=sqrt_argument_pool(context),
+            validation_key="BasicMathFunctions/sqrt/sqrt.c.j2", label="Sqrt", operator="Sqrt",
+        )
         

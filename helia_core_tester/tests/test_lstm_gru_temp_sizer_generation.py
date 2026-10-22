@@ -215,21 +215,21 @@ _TEMPLATES = "LSTMFunctions/lstm_unidirectional/lstm_unidirectional{suffix}.c.j2
 
 
 def _render(template_relpath: str, context: dict) -> str:
-    from helia_core_tester.generation.ops._shared.base import OperationBase
+    """The case source as the generic harness renders it: `template_relpath` is the validation key
+    (the former template path), whose body now lives in the matching fragment."""
+    from helia_core_tester.generation.ops._shared.recurrent_pool import recurrent_argument_pool
+    from helia_core_tester.tests.harness_render import render_pool
 
-    class _Renderer(OperationBase):
-        def build_keras_model(self):  # pragma: no cover - never called
-            raise NotImplementedError
+    from dataclasses import replace
 
-    renderer = _Renderer.__new__(_Renderer)
-    is_float = "gru" in template_relpath or "_f32" in template_relpath
-    renderer.desc = {
-        "operator": "GRUUnidirectional" if "gru" in template_relpath else "LSTMUnidirectional",
-        "tensor_dtypes": (
-            {"input": "FP32", "output": "FP32"} if is_float else {"input": "S8", "output": "S8"}
-        ),
-    }
-    return renderer.render_template(template_relpath, context)
+    body = template_relpath.replace(".c.j2", ".fragment.j2")
+    context = {"use_batch_harness": False, **context}
+    context.setdefault("kernel_fn", f"arm_lstm_unidirectional_{context.get('dtype', 's8')}")
+    # Only the source is inspected here, and these contexts carry no header data.
+    pool = replace(recurrent_argument_pool(context, body=body, header=body,
+                                           ctype=context.get("data_dtype") or context["output_dtype"]), header_text="")
+    stem = "gru_unidirectional" if "gru" in template_relpath else "lstm_unidirectional"
+    return render_pool(context, pool, stem=stem, validation_key=template_relpath, label=stem)[1]
 
 
 def _int_lstm_context(**overrides) -> dict:
@@ -491,49 +491,3 @@ def test_detected_gru_pre_reset_sizes_temp1_from_sizer_contract() -> None:
     ) in rendered
     assert ".temp1 = case_x_temp1," in rendered
     assert "temp1_capacity_bytes" in rendered
-
-
-def _fake_checkout(root: Path, table_entries: int = 256) -> Path:
-    (root / "Include").mkdir(parents=True)
-    (root / "Source" / "NNSupportFunctions").mkdir(parents=True)
-    body = ", ".join(str(i) for i in range(table_entries))
-    (root / "Source" / "NNSupportFunctions" / "arm_nntables.c").write_text(
-        "const uint16_t sigmoid_table_uint16[256] = {\n" + body + "\n};\n"
-    )
-    return root
-
-
-def test_sigmoid_table_is_read_from_the_resolved_checkout(tmp_path: Path, monkeypatch) -> None:
-    from helia_core_tester.generation.ops.ActivationFunctions.nn_activation_s16 import OpNNActivationS16
-
-    monkeypatch.setenv("CMSIS_NN_ROOT", str(_fake_checkout(tmp_path / "ns-cmsis-nn")))
-    table = OpNNActivationS16.__new__(OpNNActivationS16)._load_sigmoid_table()
-    assert table == list(range(256))
-
-
-def test_sigmoid_table_names_the_fix_without_a_checkout(tmp_path: Path, monkeypatch) -> None:
-    from helia_core_tester.generation.ops.ActivationFunctions.nn_activation_s16 import OpNNActivationS16
-
-    monkeypatch.setenv("CMSIS_NN_ROOT", str(tmp_path / "not-a-checkout"))
-    with pytest.raises(RuntimeError, match="set CMSIS_NN_ROOT to an ns-cmsis-nn checkout"):
-        OpNNActivationS16.__new__(OpNNActivationS16)._load_sigmoid_table()
-
-
-def test_lstm_schema_path_follows_the_resolved_checkout(tmp_path: Path, monkeypatch) -> None:
-    from helia_core_tester.generation.ops.LSTMFunctions.lstm_unidirectional import lstm_schema_path
-
-    root = _fake_checkout(tmp_path / "ns-cmsis-nn")
-    monkeypatch.setenv("CMSIS_NN_ROOT", str(root))
-    assert lstm_schema_path() == root / "Tests" / "UnitTest" / "RefactoredTestGen" / "schema.fbs"
-
-
-def test_lstm_schema_path_nested_fallback_is_the_tester_repo_grandparent(monkeypatch) -> None:
-    """Without a resolvable checkout the schema comes from the nested layout,
-    <ns-cmsis-nn>/Tests/helia-core-tester: two levels above the tester repo root."""
-    import helia_core_tester
-    from helia_core_tester.generation.ops.LSTMFunctions import lstm_unidirectional
-
-    monkeypatch.setattr(lstm_unidirectional, "resolve_cmsis_nn_root", lambda: None)
-    tester_root = Path(helia_core_tester.__file__).resolve().parents[1]
-    expected = tester_root.parents[1] / "Tests" / "UnitTest" / "RefactoredTestGen" / "schema.fbs"
-    assert lstm_unidirectional.lstm_schema_path() == expected

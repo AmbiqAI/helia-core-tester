@@ -149,7 +149,7 @@ def _padding(rng: np.random.Generator) -> str:
 
 
 def _maybe_dilate(rng: np.random.Generator, layer: Layer, p: float = 0.5) -> Layer:
-    """Keras needs stride 1 to dilate."""
+    """Dilate at stride 1 (the dilated draws never combine the two)."""
     if rng.random() < p:
         layer.sh = layer.sw = 1
         layer.dh = int(rng.integers(1, 4))
@@ -817,7 +817,8 @@ def footprint(op: str, layer: Layer, dtype: str = "S8") -> int:
         weights = layer.kh * layer.kw * layer.cout
     else:
         fdims = {"n": 1, "h": layer.kh, "w": layer.kw, "c": layer.cout}
-        scratch = _depthwise_s8_scratch_bytes(idims, fdims, odims)
+        scratch = _depthwise_s8_scratch_bytes(idims, fdims, odims, ch_mult=layer.mult, stride=(layer.sh, layer.sw),
+                                              padding=layer.pads(), dilation=(layer.dh, layer.dw))
         weights = layer.kh * layer.kw * layer.cout
     used = 0
     # input, weights, bias, multiplier, shift
@@ -927,8 +928,6 @@ def _descriptor(
         desc["filter_shape"] = [layer.kh, layer.kw, layer.cout, layer.cin]
         desc["suite"] = "float"
         desc["tensor_dtypes"] = dict.fromkeys(("input", "output", "weights", "bias"), dtype)
-        # Tolerance scales with the summed terms.
-        desc["sum_bound"] = True
     elif op == "TransposeConv":
         desc["filter_shape"] = [layer.kh, layer.kw, layer.cout, layer.cin]
         # Skip on kernels without the entry.

@@ -39,3 +39,15 @@ weight_dtype: S8
 input_shape: [2, 3, 5, 3]
 comparison:
   tolerance: 1
+---
+# arm_sqrt_s16's table is coarse where sqrt is steep: up to 7 codes off over [512, 2048)
+# (the default draws start at 2048, where it is within one code).
+name: sqrt_small_input_s16
+operator: Sqrt
+activation_dtype: S16
+weight_dtype: S8
+input_shape: [1, 1, 64, 1]
+hint:
+  input_q_range: [512, 2047]
+comparison:
+  tolerance: 7

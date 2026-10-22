@@ -1,10 +1,14 @@
 """The inner kernel a conv, depthwise or FC wrapper calls.
 
-Mirrors the dispatch of the s8 conv, depthwise and FC wrappers and
-the s4 and s16 conv and depthwise wrappers in ns-cmsis-nn v7.38.0
-and later (GCC builds; MVE vs not). The 1xN padding gate (v7.38.1,
-s8 and s4) is read from the built tree; an unknown tree gives no
-route. Names the wrapper's direct callee. Off MVE,
+The s8 depthwise wrapper's route, and the planar or channelwise
+algorithm arm_depthwise_conv_s8_opt runs, come from the checkout's
+host planner (contract/planner.py). The rest mirrors the dispatch of the
+s8 conv and FC wrappers and the s4 and s16 conv and depthwise wrappers
+in ns-cmsis-nn v7.38.0 and later (GCC builds; MVE vs not). The 1xN
+padding gate (v7.38.1, s8 and s4) is read from the built tree: from
+the s8 conv wrapper, or from its route selector once the tree has one
+(ns-cmsis-nn#886). An unknown tree gives no route. Names the wrapper's
+direct callee. Off MVE,
 arm_convolve_1_x_n_s8 just forwards to arm_convolve_s8.
 
 inner_variant goes one level down: arm_depthwise_conv_s8_opt runs a
@@ -41,27 +45,36 @@ DW_WRAPPERS = (DW_WRAPPER, DW_S4_WRAPPER, DW_S16_WRAPPER)
 DW_OPT = "arm_depthwise_conv_s8_opt"
 PLANAR = "arm_depthwise_conv_s8_opt_planar"
 CHANNELWISE = "arm_depthwise_conv_s8_opt_channelwise"
-# Planar plane slack; opt scratch channel block.
-PLANAR_SLACK = 32
-CH_IN_BLOCK_MVE = 124
-# GCC value; armclang uses 8.
-DW_TO_CONV_THRESHOLD = 1
 # Fast s16 needs fewer taps.
 FAST_S16_TAPS = 512
 CONV_SOURCE = Path("Source/ConvolutionFunctions/arm_convolve_wrapper_s8.c")
+DISPATCH_HEADER = Path("Include/Internal/arm_nn_dispatch.h")
+CONV_SELECTOR = "arm_nn_convolve_wrapper_s8_select("
 # Known 1xN conditions: padding gate or not.
 GATES_1XN = {
     "arm_nn_is_convolve_1_x_n(conv_params, input_dims, filter_dims)": False,
     "arm_nn_is_convolve_1_x_n(conv_params, input_dims, filter_dims) && "
     "arm_nn_convolve_1_x_n_s8_padding_supported(conv_params, filter_dims, output_dims)": True,
 }
-_GATE_1XN = re.compile(r"else if \((arm_nn_is_convolve_1_x_n\(.*?)\)\s*\{", re.S)
+_GATE_1XN = re.compile(r"\bif \((arm_nn_is_convolve_1_x_n\(.*?)\)\s*\{", re.S)
+
+
+def _conv_dispatch(kernel_root: Path) -> str:
+    """The text that holds the s8 conv wrapper's routing: its selector if the tree has one, else the wrapper."""
+    try:
+        header = (kernel_root / DISPATCH_HEADER).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        header = ""
+    start = header.find(CONV_SELECTOR)
+    if start >= 0:
+        return header[start:]
+    return (kernel_root / CONV_SOURCE).read_text(encoding="utf-8")
 
 
 def tree_gate(kernel_root: Optional[Path]) -> Optional[bool]:
     """A tree's 1xN padding gate; None if unknown."""
     try:
-        text = (kernel_root / CONV_SOURCE).read_text(encoding="utf-8")
+        text = _conv_dispatch(kernel_root)
     except (OSError, TypeError):
         return None
     match = _GATE_1XN.search(text)
@@ -156,19 +169,24 @@ def _small_cin(i: Dims, f: Dims, o: Dims, dil: Pair) -> bool:
     )
 
 
+DW_TO_CONV_ROUTE = "dw_wrapper_s8:to_conv"
+
+
 def dw_route(
     i: Dims, f: Dims, o: Dims, stride: Pair, pad: Pair, dil: Pair, ch_mult: int, mve: bool,
     gate_1xn: bool = True,
 ) -> str:
-    """arm_depthwise_conv_wrapper_s8's callee; DW->conv names the conv callee."""
-    if mve and i[3] == 1 and o[3] > DW_TO_CONV_THRESHOLD:
+    """arm_depthwise_conv_wrapper_s8's callee, from the checkout's planner; DW->conv names the conv callee."""
+    from helia_core_tester.contract import planner
+
+    package, _ = planner.current_planner()
+    plan = planner.plan("depthwise_conv_wrapper_s8", planner.isa_target(package, mve), input_dims=tuple(i),
+                        filter_dims=tuple(f), output_dims=tuple(o), ch_mult=int(ch_mult), stride=tuple(stride),
+                        padding=tuple(pad), dilation=tuple(dil))
+    if plan.route == DW_TO_CONV_ROUTE:
         # Transposed filter: {c, h, w, n}.
         return conv_route(i, (f[3], f[1], f[2], f[0]), o, stride, pad, dil, mve, gate_1xn)
-    if ch_mult == 1 and i[0] == 1 and _dil_ok(i, f, o, stride, pad, dil):
-        if not mve and f[1:3] == (3, 3) and pad[0] <= 1 and pad[1] <= 1 and dil == (1, 1):
-            return "arm_depthwise_conv_3x3_s8"
-        return "arm_depthwise_conv_s8_opt"
-    return "arm_depthwise_conv_s8"
+    return plan.kernel
 
 
 def _dil_ok(i: Dims, f: Dims, o: Dims, stride: Pair, pad: Pair, dil: Pair) -> bool:
@@ -193,60 +211,36 @@ def dw_s16_route(i: Dims, f: Dims, o: Dims, stride: Pair, pad: Pair, dil: Pair, 
     return "arm_depthwise_conv_s16"
 
 
-def opt_scratch_size(i: Dims, f: Dims, o: Dims, stride: Pair, pad: Pair, dil: Pair, mve: bool) -> int:
-    """The ctx size the adapter gives opt.
+def opt_scratch_size(
+    i: Dims, f: Dims, o: Dims, stride: Pair, pad: Pair, dil: Pair, ch_mult: int, mve: bool, dsp: bool = True,
+) -> int:
+    """The ctx size the adapter gives opt: the s8 wrapper's planned ctx (the firmware sizes it with
+    arm_depthwise_conv_wrapper_s8_get_buffer_size), from the checkout's planner."""
+    from helia_core_tester.contract import planner
 
-    The firmware sizes the s8 wrapper's ctx with
-    arm_depthwise_conv_wrapper_s8_get_buffer_size; on the opt
-    route that is the MVE opt scratch.
-    """
-    if not mve or i[3] != o[3] or i[0] != 1 or not _dil_ok(i, f, o, stride, pad, dil):
-        return 0
-    return _opt_bytes(f)
-
-
-def _opt_bytes(f: Dims) -> int:
-    """arm_depthwise_conv_s8_opt_get_buffer_size_mve."""
-    return 4 * CH_IN_BLOCK_MVE * f[1] * f[2]
-
-
-def planar_bytes(i: Dims, f: Dims, o: Dims, stride: Pair, pad: Pair, dil: Pair, ch_mult: int) -> int:
-    """arm_nn_depthwise_conv_s8_planar_bytes; -1 if declined."""
-    ch, dx = i[3], dil[1]
-    if (
-        ch != o[3] or i[0] != 1 or ch_mult != 1 or stride != (1, 1) or dil[0] != 1 or dx < 1
-        or ch < 1 or o[2] < 1 or o[1] < 1 or f[2] < 1 or f[1] < 1
-    ):
-        return -1
-    if ch > 32 or dx > 128 // ch:
-        return -1
-    plane_w = o[2] + (f[2] - 1) * dx
-    if o[1] == 1 and i[1] == 1 and f[1] == 1 and pad[0] == 0 and 5 <= f[2] <= 16:
-        # The 1xk dot product path.
-        if o[2] < 8 or (ch > 16 and o[2] < 24 * dx):
-            return -1
-        return -(-plane_w // dx) * dx + PLANAR_SLACK
-    if o[1] == 1:
-        profitable = ch <= 16 or (ch <= 32 and o[2] >= 32)
-    else:
-        profitable = ch <= 8 or (ch <= 16 and o[2] >= 16)
-    if o[2] < 8 or not profitable:
-        return -1
-    return plane_w * (o[1] + f[1] - 1) + PLANAR_SLACK
+    package, _ = planner.current_planner()
+    return planner.plan("depthwise_conv_wrapper_s8", planner.isa_target(package, mve, dsp), input_dims=tuple(i),
+                        filter_dims=tuple(f), output_dims=tuple(o), ch_mult=int(ch_mult), stride=tuple(stride),
+                        padding=tuple(pad), dilation=tuple(dil)).ctx_bytes
 
 
 def dw_opt_variant(
-    i: Dims, f: Dims, o: Dims, stride: Pair, pad: Pair, dil: Pair, ch_mult: int, mve: bool, ctx_size: int
-) -> str:
-    """The algorithm arm_depthwise_conv_s8_opt runs.
+    i: Dims, f: Dims, o: Dims, stride: Pair, pad: Pair, dil: Pair, ch_mult: int, mve: bool, ctx_size: int,
+    dsp: bool = True,
+) -> Optional[str]:
+    """The algorithm arm_depthwise_conv_s8_opt runs with ctx->size ctx_size, from the checkout's planner;
+    None when the call fails (a ctx_size the channelwise path rejects)."""
+    from helia_core_tester.contract import planner
 
-    Planar declines when its plane exceeds ctx_size
-    or the MVE opt scratch; channelwise then runs.
-    """
-    plane = planar_bytes(i, f, o, stride, pad, dil, ch_mult)
-    if not mve or plane < 0 or ctx_size <= 0 or plane > ctx_size or plane > _opt_bytes(f):
-        return CHANNELWISE
-    return PLANAR
+    package, _ = planner.current_planner()
+    try:
+        return planner.plan("depthwise_conv_s8_opt", planner.isa_target(package, mve, dsp), input_dims=tuple(i),
+                            filter_dims=tuple(f), output_dims=tuple(o), ctx_size=int(ctx_size), ch_mult=int(ch_mult),
+                            stride=tuple(stride), padding=tuple(pad), dilation=tuple(dil)).kernel
+    except planner.PlanRefusedError as error:
+        if error.status != "range":
+            raise
+        return None
 
 
 def _layer(manifest: Mapping) -> tuple:
@@ -271,7 +265,13 @@ def inner_symbol(timed_symbol: str, manifest: Mapping, gate_1xn: Optional[bool])
         return "arm_fully_connected_per_channel_s8"
     i, w, o, stride, pad, dil, ch_mult, mve = _layer(manifest)
     if timed_symbol == DW_WRAPPER:
-        return dw_route(i, w, o, stride, pad, dil, ch_mult, mve, gate_1xn)
+        from helia_core_tester.contract.planner import PlannerUnavailable, PlanRefusedError
+
+        # Without the checkout's planner, or for a layer it refuses, the route is unknown.
+        try:
+            return dw_route(i, w, o, stride, pad, dil, ch_mult, mve, gate_1xn)
+        except (PlannerUnavailable, PlanRefusedError):
+            return None
     if timed_symbol == DW_S4_WRAPPER:
         return dw_s4_route(i, dil, ch_mult)
     if timed_symbol == DW_S16_WRAPPER:
@@ -291,6 +291,12 @@ def inner_variant(inner: Optional[str], manifest: Mapping) -> Optional[str]:
     # Without DSP, opt runs the reference kernel.
     if inner != DW_OPT or not get_cpu_profile(manifest["target_cpu"]).has_dsp:
         return None
+    from helia_core_tester.contract.planner import PlannerUnavailable, PlanRefusedError
+
     i, f, o, stride, pad, dil, ch_mult, mve = _layer(manifest)
-    ctx_size = opt_scratch_size(i, f, o, stride, pad, dil, mve)
-    return dw_opt_variant(i, f, o, stride, pad, dil, ch_mult, mve, ctx_size)
+    # Without the checkout's planner calls, or for a layer it refuses, the variant is unknown.
+    try:
+        ctx_size = opt_scratch_size(i, f, o, stride, pad, dil, ch_mult, mve)
+        return dw_opt_variant(i, f, o, stride, pad, dil, ch_mult, mve, ctx_size)
+    except (PlannerUnavailable, PlanRefusedError):
+        return None

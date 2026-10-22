@@ -6,6 +6,7 @@ from typing import Dict
 import numpy as np
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.ops._shared.copy_pool import copy_argument_pool
 
 
 class OpReshape(OperationBase):
@@ -13,38 +14,9 @@ class OpReshape(OperationBase):
     Reshape operation.
     """
 
-    def needs_keras_model(self) -> bool:
-        return False
+    def uses_reference(self) -> bool:
+        return True
 
-    def build_keras_model(self):
-        raise NotImplementedError("Reshape uses LiteRT-only model generation.")
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        from helia_core_tester.generation.utils.litert_builder import build_reshape_op
-
-        activation_dtype = self.tensor_dtype("input")
-        if activation_dtype == 'S8':
-            dtype = "int8"
-        elif activation_dtype == 'FP32':
-            dtype = "float32"
-        elif activation_dtype == 'FP16':
-            dtype = "float16"
-        else:
-            raise NotImplementedError(f"Unsupported Reshape dtype: {activation_dtype}")
-
-        input_shape = tuple(self.desc['input_shape'])
-        target_shape = tuple(self.desc.get('target_shape'))
-        if target_shape is None:
-            raise ValueError("Reshape operation requires 'target_shape' in descriptor")
-
-        model_bytes = build_reshape_op(
-            input_shape=input_shape,
-            target_shape=target_shape,
-            dtype=dtype,
-        )
-        with open(out_path, "wb") as f:
-            f.write(model_bytes)
-    
     def _select_cmsis_reshape_kernel(self) -> Dict[str, str]:
         """
         Select appropriate CMSIS-NN kernel function for Reshape operation.
@@ -79,20 +51,20 @@ class OpReshape(OperationBase):
         """
         Generate C and H files from templates for Reshape operation.
         """
+        from helia_core_tester.generation.reference.call import ReferenceCall
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
-        
+
         name = self.desc['name']
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
         
         # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_reshape_kernel()
         
         input_shape = tuple(self.desc['input_shape'])
-        output_shape = tuple(self.desc.get('target_shape'))
-        if output_shape is None:
+        if self.desc.get('target_shape') is None:
             raise ValueError("Reshape operation requires 'target_shape' in descriptor")
+        output_shape = tuple(int(d) for d in self.desc['target_shape'])
+        if int(np.prod(output_shape)) != int(np.prod(input_shape)):
+            raise ValueError(f"Reshape {name}: target_shape {output_shape} does not hold the {int(np.prod(input_shape))} input elements")
         
         builder = TemplateContextBuilder()
         
@@ -113,7 +85,12 @@ class OpReshape(OperationBase):
             input_q = self.rng.integers(-128, 128, size=input_shape, dtype=np.int8)
         self.rng.__setstate__(rng_state)
 
-        output_data = input_q.reshape(output_shape)
+        output_data = self.reference_golden(ReferenceCall(
+            "reshape", {"unused": 0}, {"input": np.ascontiguousarray(input_q)}, {"output": output_shape}))
+        nonfinite_context = {}
+        if kernel_info["input_c_type"] in {"float", "float16_t"}:
+            output_data, nonfinite_context = self.apply_nonfinite_policy(
+                output_data, reference=self.reference_probe, inputs=[input_q])
         
         # Format arrays
         input_array_str = builder.format_array_as_c_literal(input_q)
@@ -131,28 +108,11 @@ class OpReshape(OperationBase):
             'output_dtype': kernel_info["output_c_type"],
             'kernel_fn': kernel_info["kernel_fn"],
         }
+        context.update(nonfinite_context)
         
         # Render templates
-        includes_api_dir = output_dir / "includes"
-        includes_api_dir.mkdir(parents=True, exist_ok=True)
-        
-        h_content = self.render_template("ReshapeFunctions/reshape/reshape.h.j2", context)
-        h_path = includes_api_dir / f"{name}_reshape.h"
-        with open(h_path, 'w') as f:
-            f.write(h_content)
-        
-        c_content = self.render_template("ReshapeFunctions/reshape/reshape.c.j2", context)
-        c_path = output_dir / f"{name}_reshape.c"
-        with open(c_path, 'w') as f:
-            f.write(c_content)
-        
-        cmake_context = {
-            'name': name,
-            'operator': self.desc.get('operator', 'Reshape'),
-            'operator_name': 'reshape'
-        }
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
-        cmake_path = output_dir / "CMakeLists.txt"
-        with open(cmake_path, 'w') as f:
-            f.write(cmake_content)
+        self.render_harness_case(
+            output_dir, stem="reshape", context=context, pool=copy_argument_pool(context),
+            validation_key="ReshapeFunctions/reshape/reshape.c.j2", label="Reshape", operator="Reshape",
+        )
         

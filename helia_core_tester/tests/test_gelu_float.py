@@ -36,27 +36,21 @@ def test_reference_nonfinite_lanes():
     assert np.isnan(out[0]) and out[1] == np.inf and np.isnan(out[2])
 
 
-def test_reference_matches_tflite_exact_gelu(tmp_path):
-    from ai_edge_litert.interpreter import Interpreter, OpResolverType
+@pytest.mark.parametrize("entry,dtype", [("gelu_f32", np.float32), ("gelu_f16", np.float16)])
+def test_c_reference_is_the_exact_gelu_rounded_once(entry, dtype):
+    from helia_core_tester.generation.reference.bindings import get_bindings
 
-    values = np.concatenate([FINITE, np.array([np.nan, np.inf, -np.inf], dtype=np.float32)])
-    desc = {**CASES[0], "name": "gelu_reference_check", "input_shape": [1, 1, 1, values.size]}
-    op = OpGelu(desc, seed=500, target_cpu="cortex-m55")
-    path = tmp_path / "gelu.tflite"
-    op.convert_to_tflite(op.build_keras_model(), str(path), 500)
-    # The reference kernels, not XNNPACK, which flushes the far negative tail to -0.
-    interpreter = Interpreter(model_path=str(path), experimental_op_resolver_type=OpResolverType.BUILTIN_REF)
-    assert [o["op_name"] for o in interpreter._get_ops_details()] == ["GELU"]
-    interpreter.allocate_tensors()
-    interpreter.set_tensor(interpreter.get_input_details()[0]["index"], values.reshape(1, 1, 1, -1))
-    interpreter.invoke()
-    actual = interpreter.get_tensor(interpreter.get_output_details()[0]["index"]).ravel()
-    expected = gelu_exact_reference(values)
-
-    finite = np.isfinite(expected)
-    assert _within(actual[finite], expected[finite], CASES[0]).all()
-    assert np.array_equal(np.isnan(actual), np.isnan(expected))
-    assert np.array_equal(actual[np.isinf(expected)], expected[np.isinf(expected)])
+    values = np.concatenate([FINITE, np.array([0.0, -0.0, np.nan, np.inf, -np.inf], dtype=np.float32)]).astype(dtype)
+    got = get_bindings().run(entry, {"unused": 0}, {"input": values}, {"output": values.shape})["output"]
+    with np.errstate(over="ignore", invalid="ignore"):
+        want = gelu_exact_reference(values).astype(dtype)
+    assert got.dtype == dtype
+    np.testing.assert_array_equal(np.isnan(got), np.isnan(want))
+    finite = ~np.isnan(want)
+    np.testing.assert_array_equal(got[finite], want[finite])
+    # An input zero keeps its sign.
+    zeros = values == 0
+    np.testing.assert_array_equal(np.signbit(got[zeros]), np.signbit(values[zeros]))
 
 
 def test_bound_rejects_the_tanh_approximation():
@@ -71,8 +65,9 @@ def test_bound_rejects_the_tanh_approximation():
 @pytest.mark.parametrize("desc", CASES, ids=lambda desc: desc["name"])
 def test_generated_case_calls_the_kernel(tmp_path, desc):
     op = OpGelu(desc, seed=500, target_cpu="cortex-m55")
-    op.convert_to_tflite(op.build_keras_model(), str(tmp_path / f"{desc['name']}.tflite"), 500)
     op.generate_c_files(tmp_path)
+    assert op.reference is not None and op.reference.entry == "gelu_f32"
+    assert not list(tmp_path.rglob("*.tflite"))
     source = (tmp_path / f"{desc['name']}_gelu.c").read_text()
     assert "arm_nn_gelu_f32(" in source
     assert "HELIA_VALIDATE_RETURN_FAILURES" in source

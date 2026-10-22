@@ -737,8 +737,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -768,8 +766,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -799,8 +795,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -833,8 +827,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -867,8 +859,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -901,8 +891,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -935,8 +923,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1314,8 +1300,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1348,8 +1332,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1382,8 +1364,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1419,8 +1399,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 2
@@ -1453,8 +1431,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 2
@@ -1487,8 +1463,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 2
@@ -1521,8 +1495,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 2
@@ -1555,8 +1527,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1589,8 +1559,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 2
@@ -1626,8 +1594,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1660,8 +1626,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1694,8 +1658,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1728,8 +1690,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1762,8 +1722,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1796,8 +1754,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1830,8 +1786,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -1864,8 +1818,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape:
 - 1
@@ -2136,8 +2088,6 @@ depth_multiplier: 1
 dilation:
 - 1
 - 1
-required_capabilities:
-- mve
 ---
 operator: DepthwiseConv
 name: depthwise_conv_entry_3x3_48x48_c16_stride2_s8
@@ -2166,8 +2116,6 @@ depth_multiplier: 1
 dilation:
 - 1
 - 1
-required_capabilities:
-- mve
 ---
 operator: DepthwiseConv
 name: depthwise_conv_entry_3x3_14x10_c36_stride2_s8
@@ -2196,8 +2144,6 @@ depth_multiplier: 1
 dilation:
 - 1
 - 1
-required_capabilities:
-- mve
 ---
 operator: DepthwiseConv
 name: depthwise_conv_entry_3x3_6x6_c68_s8
@@ -2226,8 +2172,6 @@ depth_multiplier: 1
 dilation:
 - 1
 - 1
-required_capabilities:
-- mve
 ---
 operator: DepthwiseConv
 name: depthwise_conv_entry_3x3_5x8_c64_s8
@@ -2256,8 +2200,6 @@ depth_multiplier: 1
 dilation:
 - 1
 - 1
-required_capabilities:
-- mve
 ---
 operator: DepthwiseConv
 name: depthwise_conv_entry_3x3_28x28_c64_stride2_s8
@@ -2287,8 +2229,6 @@ depth_multiplier: 1
 dilation:
 - 1
 - 1
-required_capabilities:
-- mve
 ---
 operator: DepthwiseConv
 name: depthwise_conv_entry_3x3_declines_c15_s8
@@ -2347,8 +2287,6 @@ depth_multiplier: 1
 dilation:
 - 1
 - 1
-required_capabilities:
-- mve
 ---
 operator: DepthwiseConv
 name: depthwise_conv_entry_3x3_c64_s1_12x12_s8
@@ -2377,8 +2315,6 @@ depth_multiplier: 1
 dilation:
 - 1
 - 1
-required_capabilities:
-- mve
 ---
 operator: DepthwiseConv
 name: depthwise_conv_entry_3x3_c64_s1_14x28_s8
@@ -2408,8 +2344,6 @@ depth_multiplier: 1
 dilation:
 - 1
 - 1
-required_capabilities:
-- mve
 ---
 operator: DepthwiseConv
 name: depthwise_conv_entry_3x3_c64_s1_declines_stride2_s8
@@ -2467,8 +2401,6 @@ depth_multiplier: 1
 dilation:
 - 1
 - 1
-required_capabilities:
-- mve
 planar_supported: true
 ---
 operator: DepthwiseConv
@@ -2498,8 +2430,6 @@ depth_multiplier: 1
 dilation:
 - 1
 - 1
-required_capabilities:
-- mve
 planar_supported: true
 ---
 operator: DepthwiseConv
@@ -2636,8 +2566,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape: [1, 4, 4, 4]
 filter_shape: [2, 2, 4, 1]
@@ -2711,8 +2639,6 @@ hint:
     input_scale: 4.0
     input_zero_point: 3
     weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
     per_channel: true
 input_shape: [1, 4, 4, 4]
 filter_shape: [2, 2, 4, 1]
@@ -2723,7 +2649,7 @@ depth_multiplier: 1
 fault: channel_mismatch
 expected_status: ARM_CMSIS_NN_ARG_ERROR
 ---
-# BEGIN mlperf model shapes (scripts/extract_model_shapes.py)
+# BEGIN mlperf model shapes (layer shapes of the MLPerf Tiny int8 models)
 # Same layer: kws_l3, kws_l5, kws_l7
 operator: DepthwiseConv
 name: depthwise_conv_mlperf_kws_l1_s8
@@ -2857,6 +2783,63 @@ padding: SAME
 use_bias: true
 # END mlperf model shapes
 ---
+# Entries resolved from the kernel contract (iteration 1b): public depthwise kernels called
+# directly instead of through their wrapper.
+# arm_depthwise_conv_s16 and arm_depthwise_conv_s4 use no scratch and deliberately have no
+# sizer (entry_scratch: none); arm_depthwise_conv_fast_s16 sizes its own; arm_depthwise_conv_s4
+# spells its tensors input/kernel/bias/output.
+operator: DepthwiseConv
+name: depthwise_conv_entry_contract_s16_chmult2_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+entry: arm_depthwise_conv_s16
+entry_scratch: none
+hint:
+  call_style: per_tensor
+input_shape: [1, 5, 9, 4]
+filter_shape: [3, 3, 4, 2]
+strides: [1, 2]
+padding: SAME
+use_bias: true
+depth_multiplier: 2
+---
+operator: DepthwiseConv
+name: depthwise_conv_entry_contract_fast_s16_6x7_c8_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+entry: arm_depthwise_conv_fast_s16
+hint:
+  call_style: per_tensor
+input_shape: [1, 6, 7, 8]
+filter_shape: [3, 3, 8, 1]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+depth_multiplier: 1
+---
+operator: DepthwiseConv
+name: depthwise_conv_entry_contract_generic_s4
+activation_dtype: S8
+weight_dtype: S4
+activation: NONE
+entry: arm_depthwise_conv_s4
+entry_scratch: none
+hint:
+  call_style: per_tensor
+  extras:
+    input_scale: 4.0
+    input_zero_point: 3
+    weight_scale: 1.0
+    per_channel: true
+input_shape: [1, 5, 5, 6]
+filter_shape: [3, 3, 6, 1]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+---
 operator: DepthwiseConv
 name: depthwise_conv_relu_s16
 activation_dtype: S16
@@ -2884,3 +2867,146 @@ strides: [2, 1]
 padding: VALID
 use_bias: true
 depth_multiplier: 2
+---
+# Contract conformance (Phase 2 T4a, AmbiqAI/ns-cmsis-nn#829): arm_depthwise_conv_wrapper_s8 on a grid that
+# crosses every route boundary of its selector. Each case checks on the target that the wrapper's own selector
+# picks the route the checkout's planner plans and that ctx is exactly the planned size, on every build.
+# MVE: one input channel with more than one output channel goes to conv.
+operator: DepthwiseConv
+name: depthwise_conv_conformance_to_conv_cin1_mult8_s8
+conformance: true
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint: {call_style: per_tensor}
+input_shape: [1, 10, 10, 1]
+filter_shape: [3, 3, 1, 8]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+depth_multiplier: 8
+---
+# The to_conv boundary: one input and one output channel stays on the depthwise routes.
+operator: DepthwiseConv
+name: depthwise_conv_conformance_cin1_mult1_5x5_s8
+conformance: true
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint: {call_style: per_tensor}
+input_shape: [1, 8, 8, 1]
+filter_shape: [5, 5, 1, 1]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+---
+# Not MVE: a 3x3 filter with padding at most 1 runs arm_depthwise_conv_3x3_s8; MVE runs opt.
+operator: DepthwiseConv
+name: depthwise_conv_conformance_3x3_pad1_c16_s8
+conformance: true
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint: {call_style: per_tensor}
+input_shape: [1, 9, 11, 16]
+filter_shape: [3, 3, 16, 1]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+---
+# Every build: opt.
+operator: DepthwiseConv
+name: depthwise_conv_conformance_opt_5x5_c8_s8
+conformance: true
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint: {call_style: per_tensor}
+input_shape: [1, 12, 12, 8]
+filter_shape: [5, 5, 8, 1]
+strides: [2, 1]
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+---
+# A dilated 1D layer the opt dilation rule accepts.
+operator: DepthwiseConv
+name: depthwise_conv_conformance_dilated_1d_k5_d2_c8_s8
+conformance: true
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint: {call_style: per_tensor}
+input_shape: [1, 1, 64, 8]
+filter_shape: [1, 5, 8, 1]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+depth_multiplier: 1
+dilation: [1, 2]
+---
+# A 2D dilation the opt rule rejects: generic.
+operator: DepthwiseConv
+name: depthwise_conv_conformance_dilated_2d_c8_s8
+conformance: true
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint: {call_style: per_tensor}
+input_shape: [1, 10, 10, 8]
+filter_shape: [3, 3, 8, 1]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+depth_multiplier: 1
+dilation: [2, 2]
+---
+# A channel multiplier: generic.
+operator: DepthwiseConv
+name: depthwise_conv_conformance_mult2_c4_s8
+conformance: true
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint: {call_style: per_tensor}
+input_shape: [1, 8, 8, 4]
+filter_shape: [3, 3, 4, 2]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+depth_multiplier: 2
+---
+# Batch 2: generic.
+operator: DepthwiseConv
+name: depthwise_conv_conformance_batch2_c8_s8
+conformance: true
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint: {call_style: per_tensor}
+input_shape: [2, 6, 6, 8]
+filter_shape: [5, 5, 8, 1]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+---
+# Fault: a NULL ctx->buf where every DSP and MVE build plans a context gives the argument error.
+operator: DepthwiseConv
+name: depthwise_conv_conformance_fault_null_ctx_buf_s8
+conformance: true
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+required_capabilities: [dsp]
+hint: {call_style: per_tensor}
+input_shape: [1, 12, 12, 8]
+filter_shape: [5, 5, 8, 1]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+fault: null_ctx_buf
+expected_status: ARM_CMSIS_NN_ARG_ERROR

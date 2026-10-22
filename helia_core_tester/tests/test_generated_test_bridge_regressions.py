@@ -95,8 +95,26 @@ def test_depthwise_batch_case_rejected_without_truncation(tmp_path: Path) -> Non
         _bridge(tmp_path, "ConvolutionFunctions", "depthwise_conv_mult_batches_s8")
 
 
-def test_pool_batch_padded_case_truncates_to_header_dims(tmp_path: Path) -> None:
-    manifest = _bridge(tmp_path, "PoolingFunctions", "avg_pool_valid_pool1x1_stride1x2_s16")
+def _generated(tmp_path: Path, family: str, desc: dict) -> GeneratedTestCase:
+    generate_test(desc, str(tmp_path / "artifacts" / "generated_tests" / "int" / "cortex-m55"), seed=Config.seed)
+    (case,) = discover_generated_tests(tmp_path, family=family, name_filter=desc["name"])
+    return case
+
+
+def test_pool_case_keeps_its_declared_batch_and_bridges_at_batch_one(tmp_path: Path) -> None:
+    from copy import deepcopy
+
+    desc = next(d for d in load_all_descriptors(str(PROJECT_ROOT / "assets" / "descriptors"))
+                if d["name"] == "avg_pool_valid_pool1x1_stride1x2_s16")
+    assert desc["input_shape"][0] == 3
+    with pytest.raises(UnsupportedGeneratedTestError, match="batch size 3 > 1"):
+        build_case_bundle_from_generated_test(PROJECT_ROOT, _generated(tmp_path / "b3", "PoolingFunctions", desc),
+                                              output_root=tmp_path / "b3" / "bundle", require_fvp_pass=False)
+    single = deepcopy(desc)
+    single["input_shape"][0] = 1
+    bundle = build_case_bundle_from_generated_test(PROJECT_ROOT, _generated(tmp_path / "b1", "PoolingFunctions", single),
+                                                   output_root=tmp_path / "b1" / "bundle", require_fvp_pass=False)
+    manifest = load_case_bundle(bundle.manifest_path).manifest
     blobs = {blob["role"]: blob for blob in manifest["blob_roles"]}
     assert blobs["input_0"]["dimensions"] == [1, 1, 9, 2]
     assert blobs["input_0"]["byte_length"] == 36
@@ -259,20 +277,22 @@ def test_packed_fc_scratch_holds_sums_and_stream(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("name", "scratch"),
+    ("name", "scratch", "capacity"),
     [
-        # opt size 4464 + 64 sums.
-        ("depthwise_conv_entry_3x3_25x5_c64_s8", 4464 + 256),
+        # The wrapper's opt size 4464 + 64 sums; the case holds the 3x3 query, 3024 + 5 x 64.
+        ("depthwise_conv_entry_3x3_25x5_c64_s8", 4464 + 256, 3024 + 5 * 64),
         # 3x3 size 3024 + 28 x 64 + 64 sums.
-        ("depthwise_conv_entry_3x3_28x28_c64_stride2_s8", 4816 + 256),
-        ("depthwise_conv_entry_3x3_c64_s1_14x28_s8", 4816 + 256),
+        ("depthwise_conv_entry_3x3_28x28_c64_stride2_s8", 4816 + 256, 4816),
+        ("depthwise_conv_entry_3x3_c64_s1_14x28_s8", 4816 + 256, 4816),
     ],
 )
-def test_3x3_entry_scratch_takes_larger_size(tmp_path: Path, name: str, scratch: int) -> None:
+def test_3x3_entry_scratch_takes_larger_size(
+    tmp_path: Path, p1e_planner: None, name: str, scratch: int, capacity: int
+) -> None:
     case, manifest = _bridge_entry(tmp_path, "ConvolutionFunctions", name)
     assert manifest["scratch_buffer"]["bytes"] == scratch
     (source,) = case.directory.glob("*.c")
-    assert _extract_define_int(source.read_text(), f"{name.upper()}_BUFFER_SIZE_MAX") >= scratch - 256
+    assert _extract_define_int(source.read_text(), f"{name.upper()}_BUFFER_SIZE_MAX") == capacity
 
 
 @pytest.mark.parametrize(

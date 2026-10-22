@@ -1,18 +1,19 @@
-#ifndef LSTM_UNIDIRECTIONAL_FLOAT_STREAM_F32_LSTM_UNIDIRECTIONAL_H
-#define LSTM_UNIDIRECTIONAL_FLOAT_STREAM_F32_LSTM_UNIDIRECTIONAL_H
+#ifndef LSTM_UNIDIRECTIONAL_FLOAT_STREAM_F32_HARNESS_H
+#define LSTM_UNIDIRECTIONAL_FLOAT_STREAM_F32_HARNESS_H
 
 #include <stdint.h>
-// Golden arrays may carry NAN/INFINITY, and this header is included ahead of any
-// other translation-unit include that would define them.
+// Input arrays may carry NAN/INFINITY tokens, and this header is included ahead of
+// any other translation-unit include that would define them.
 #include <math.h>
 #include "arm_nnfunctions.h"
+#include "arm_nn_types.h"
 
 static const float lstm_unidirectional_float_stream_f32_input_tensor[] = {
     -0.780473351f, -0.076173268f, -0.979150891f, 0.598568618f, 0.588701367f, 0.203874439f, -0.757103324f, 0.502486229f, -0.160482883f, 0.683489919f, -0.549579918f, 0.790302634f
 };
 
 static const float lstm_unidirectional_float_stream_f32_expected_output[] = {
-    0.133278728f, 0.058342401f, 0.10917066f, 0.059413195f, -0.039022762f, -0.097628467f, -0.07599289f, -0.073883697f, 0.047617719f, -0.028640648f, -0.097779304f, 0.011414835f, -0.017671818f, -0.08620517f, -0.079264849f, -0.093903191f,
+    0.13327235f, 0.058337741f, 0.109169409f, 0.059412811f, -0.039019365f, -0.097624257f, -0.075984821f, -0.073875874f, 0.047613814f, -0.028637698f, -0.097768463f, 0.011415219f, -0.017670687f, -0.086199015f, -0.079258069f, -0.093895957f,
 };
 
 static const float lstm_unidirectional_float_stream_f32_forget_gate_input_weights[] = {
@@ -62,5 +63,6 @@ static const float lstm_unidirectional_float_stream_f32_cell_gate_bias[] = {
 static const float lstm_unidirectional_float_stream_f32_output_gate_bias[] = {
     -0.076597005f, -0.127822027f, 0.223839059f, -0.159131557f
 };
+
 
 #endif

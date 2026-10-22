@@ -1,13 +1,12 @@
-/* Real wrappers, recording callees. */
+/* Real wrappers, recording callees. The planar plane rule
+   (arm_nn_depthwise_conv_s8_planar.c) links in from a plain unit. */
 #include <stdio.h>
 
 #include "arm_nnfunctions.h"
 #include "arm_nnsupportfunctions.h"
 
-/* Plain C: the planar plane rule. */
-#include "NNSupportFunctions/arm_nn_depthwise_conv_s8_planar.c"
-
-/* Headers stay plain; wrapper bodies see MVE. */
+/* Headers stay plain; wrapper bodies and the route selectors
+   (Internal/arm_nn_dispatch.h, first included below) see MVE. */
 #ifdef HCT_ROUTE_MVE
 #define ARM_MATH_MVEI 1
 #endif
@@ -22,6 +21,7 @@ static int g_to_conv;
 
 /* arm_depthwise_conv_s8_opt's planar or channelwise pick. */
 static arm_cmsis_nn_status hct_dw_opt(const cmsis_nn_context *ctx,
+                                      const cmsis_nn_context *ws,
                                       const cmsis_nn_dw_conv_params *p,
                                       const cmsis_nn_dims *i,
                                       const cmsis_nn_dims *f,
@@ -32,16 +32,21 @@ static arm_cmsis_nn_status hct_dw_opt(const cmsis_nn_context *ctx,
 #if defined(ARM_MATH_MVEI)
     if (arm_nn_depthwise_conv_s8_planar_candidate(p, i))
     {
-        /* The decline guard of arm_nn_depthwise_conv_s8_planar. */
         const int32_t bytes = arm_nn_depthwise_conv_s8_planar_bytes(p, i, f, o);
-        if (!(bytes < 0 || ctx->buf == NULL || bytes > ctx->size ||
+    #ifdef HCT_ROUTE_OPT_SELECT
+        if (arm_nn_depthwise_conv_s8_opt_select(bytes, ctx, ws, i, f) == ARM_NN_DW_OPT_S8_ROUTE_PLANAR)
+    #else
+        /* Trees before the opt selector: arm_nn_depthwise_conv_s8_planar's decline guard. */
+        if (!(bytes < 0 || ctx->buf == NULL || bytes > ctx->size || ws->buf == NULL ||
               bytes > arm_depthwise_conv_s8_opt_get_buffer_size(i, f)))
+    #endif
         {
             g_variant = "arm_depthwise_conv_s8_opt_planar";
         }
     }
 #else
     (void)ctx;
+    (void)ws;
     (void)p;
     (void)i;
     (void)f;
@@ -59,7 +64,7 @@ static arm_cmsis_nn_status hct_dw_opt(const cmsis_nn_context *ctx,
 #define arm_convolve_s8_3x3_c16_s1(...) HCT_CALL(arm_convolve_s8_3x3_c16_s1)
 #define arm_convolve_s8(...) HCT_CALL(arm_convolve_s8)
 #define arm_depthwise_conv_3x3_s8(...) HCT_CALL(arm_depthwise_conv_3x3_s8)
-#define arm_depthwise_conv_s8_opt(c, ws, p, q, i, in, f, k, bd, b, o, out) hct_dw_opt(c, p, i, f, o)
+#define arm_depthwise_conv_s8_opt(c, ws, p, q, i, in, f, k, bd, b, o, out) hct_dw_opt(c, ws, p, i, f, o)
 #define arm_depthwise_conv_s8(...) HCT_CALL(arm_depthwise_conv_s8)
 #define arm_fully_connected_per_channel_s8(...) HCT_CALL(arm_fully_connected_per_channel_s8)
 #define arm_fully_connected_s8(...) HCT_CALL(arm_fully_connected_s8)

@@ -41,7 +41,6 @@ def _descriptor(name: str) -> Dict:
 def _generate(op: OpConvolve, out_dir: Path) -> str:
     out_dir.mkdir(parents=True, exist_ok=True)
     name = op.desc["name"]
-    op.convert_to_tflite(op.build_keras_model(), str(out_dir / f"{name}.tflite"), 1)
     op.generate_c_files(out_dir)
     return "\n".join(path.read_text() for path in sorted(out_dir.rglob(f"{name}*")) if path.suffix in {".c", ".h"})
 
@@ -80,7 +79,7 @@ def test_bias_dtype_rejected_outside_s16(activation_dtype: str, weight_dtype: st
     with pytest.raises(ValueError, match="only supported for S16 x S8"):
         op._select_cmsis_convolve_kernel()
     with pytest.raises(ValueError, match="only supported for S16 x S8"):
-        op.convert_to_tflite(None, "/nonexistent/never-written.tflite", 1)
+        op.generate_c_files(Path("/nonexistent/never-written"))
 
 
 @pytest.mark.parametrize(
@@ -92,23 +91,29 @@ def test_bias_dtype_rejected_outside_s16(activation_dtype: str, weight_dtype: st
     ],
 )
 def test_int32_bias_case_emits_int32_bias_end_to_end(name: str, tmp_path: Path) -> None:
-    text = _generate(OpConvolve(_descriptor(name), seed=1, target_cpu=_CPU), tmp_path)
+    op = OpConvolve(_descriptor(name), seed=1, target_cpu=_CPU)
+    text = _generate(op, tmp_path)
+    # The golden accumulates in int32 and requantizes as TFLite does for an int32 bias.
+    assert op.reference.entry == "conv_s16_b32"
+    assert op.reference.inputs["bias"].dtype.name == "int32"
     assert f"static const int32_t {name}_biases[]" in text
     assert f"static const int64_t {name}_biases[]" not in text
     assert ".is_int32_bias = true" in text
     assert ".is_int32_bias = false" not in text
 
 
-def test_bias_width_mismatch_between_golden_and_kernel_fails(tmp_path: Path) -> None:
-    """Fault injection: a model converted with the default int64 bias must not be
-    silently narrowed into an int32 kernel call."""
-    desc = _descriptor("convolve_int32_bias_1x1_in8_out7_s16")
-    name = desc["name"]
-    unpinned = OpConvolve({k: v for k, v in desc.items() if k != "bias_dtype"}, seed=1, target_cpu=_CPU)
-    unpinned.convert_to_tflite(unpinned.build_keras_model(), str(tmp_path / f"{name}.tflite"), 1)
+def test_bias_width_mismatch_between_golden_and_kernel_fails(tmp_path: Path, monkeypatch) -> None:
+    """Fault injection: an int64 bias drawn for a case whose kernel takes int32 must not be
+    silently narrowed into the kernel call."""
+    pinned = OpConvolve(_descriptor("convolve_int32_bias_1x1_in8_out7_s16"), seed=1, target_cpu=_CPU)
+    draw = pinned._reference_case
 
-    pinned = OpConvolve(desc, seed=1, target_cpu=_CPU)
-    with pytest.raises(ValueError, match="bias_dtype pins int32_t but the converted model carries a int64 bias"):
+    def widened(*args, **kwargs):
+        case = draw(*args, **kwargs)
+        return {**case, "biases": case["biases"].astype("int64")}
+
+    monkeypatch.setattr(pinned, "_reference_case", widened)
+    with pytest.raises(ValueError, match="the kernel takes a int32_t bias but the case drew a int64 one"):
         pinned.generate_c_files(tmp_path)
 
 

@@ -11,7 +11,27 @@ from typing import Any, Dict, Tuple
 import numpy as np
 
 from helia_core_tester.generation.ops._shared.base import OperationBase
-from helia_core_tester.generation.utils.litert_builder import build_unary_same_shape_op
+from helia_core_tester.generation.harness import ArgumentPool, ArrayLiteral, Declaration
+from helia_core_tester.generation.harness.simple import dims_count, tensor_case_pool
+
+RSQRT_CALL_STYLES = ("per_op", "universal")
+
+
+def rsqrt_argument_pool(context: Dict[str, Any]) -> ArgumentPool:
+    """The universal kernel takes the requantisation and a 32-bit LUT; per-op takes a 16-bit LUT."""
+    n = context["name"]
+    style = str(context.get("call_style", "per_op"))
+    if style not in RSQRT_CALL_STYLES:
+        raise ValueError(f"{n}: Rsqrt call_style {style!r} is not one of {RSQRT_CALL_STYLES}")
+    values = {"input_offset": context["input_offset"], "out_offset": context["output_offset"],
+              "out_activation_min": context["out_activation_min"], "out_activation_max": context["out_activation_max"],
+              "block_size": context["block_size"], "lut": f"{n}_rsqrt_lut"}
+    if style == "universal":
+        values.update(out_mult=context["out_mult"], out_shift=context["out_shift"],
+                      needs_rescale=context["needs_rescale"])
+    lut = Declaration(f"{n}_rsqrt_lut", context["lut_dtype"], ArrayLiteral(context["rsqrt_lut_array"]), array=True,
+                      comment="Reciprocal square-root lookup table")
+    return tensor_case_pool(context, values, extra_header=(lut,), output_count=dims_count(context["output_dims"]))
 
 
 RSQRT_CANONICAL_OUTPUT_SCALE = 1.0 / 32768.0
@@ -29,13 +49,6 @@ def _quant_param_to_scalar(value, name: str, cast):
     if arr.size != 1:
         raise ValueError(f"Rsqrt expects scalar quantization for {name}, got shape {arr.shape}")
     return cast(arr.reshape(-1)[0])
-
-
-def _requantize_like_cmsis(value: int, multiplier: int, shift: int) -> int:
-    if multiplier == 0 or value == 0:
-        return 0
-    result = int(round((value * multiplier) / float(1 << (31 - shift))))
-    return result
 
 
 def make_rsqrt_per_op_lut(input_scale, output_scale, output_zp) -> np.ndarray:
@@ -74,11 +87,11 @@ def make_rsqrt_universal_lut(input_scale) -> np.ndarray:
 
 
 def derive_rsqrt_universal_quant_params(output_scale: float) -> Dict[str, int]:
-    from helia_core_tester.generation.utils.tflite_utils import calculate_multiplier_shift
+    from helia_core_tester.generation.reference.quant import quantize_multiplier
 
     output_scale = float(output_scale)
     effective_scale = RSQRT_CANONICAL_OUTPUT_SCALE / output_scale
-    out_mult, out_shift = calculate_multiplier_shift(effective_scale)
+    out_mult, out_shift = quantize_multiplier(effective_scale)
     needs_rescale = 0 if abs(effective_scale - 1.0) < 1e-9 else 1
     return {
         "out_mult": int(out_mult),
@@ -87,45 +100,18 @@ def derive_rsqrt_universal_quant_params(output_scale: float) -> Dict[str, int]:
     }
 
 
-def build_rsqrt_op(
-    *,
-    input_shape,
-    dtype: str = "int16",
-) -> bytes:
-    return build_unary_same_shape_op(
-        op_name="RSQRT",
-        input_shape=input_shape,
-        dtype=dtype,
-        input_scale=RSQRT_INPUT_SCALE if dtype == "int16" else None,
-    )
-
-
 class OpRsqrt(OperationBase):
-    """Rsqrt operation."""
+    """Rsqrt operation: goldens from the C reference (TFLite's int16 LUT Rsqrt; float in binary64)."""
 
-    def needs_keras_model(self) -> bool:
-        return False
+    def _expect_arg_error(self) -> bool:
+        return bool(self.desc.get("hint", {}).get("force_negative_input_case", False))
 
-    def build_keras_model(self):
-        raise NotImplementedError("Rsqrt uses LiteRT-only model generation.")
+    def uses_reference(self) -> bool:
+        return not self.status_only()
 
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        if self.tensor_dtype("input") in ("FP16", "FP32"):
-            self._write_tflite_bytes(
-                out_path,
-                build_rsqrt_op(
-                    input_shape=tuple(self.desc["input_shape"]),
-                    dtype=self.tensor_litert_dtype("input"),
-                ),
-            )
-            return
-        activation_dtype = self.desc.get("activation_dtype", "S16")
-        if activation_dtype != "S16":
-            raise NotImplementedError(f"Unsupported Rsqrt dtype: {activation_dtype}")
-
-        input_shape = tuple(self.desc["input_shape"])
-        model_bytes = build_rsqrt_op(input_shape=input_shape, dtype="int16")
-        self._write_tflite_bytes(out_path, model_bytes)
+    def status_only(self) -> bool:
+        # A negative-domain case checks the kernel's ARG_ERROR, not an output.
+        return self.tensor_dtype("input") not in ("FP16", "FP32") and self._expect_arg_error()
 
     def _variant(self) -> str:
         call_style = str(self.desc.get("hint", {}).get("call_style", "per_op"))
@@ -164,11 +150,6 @@ class OpRsqrt(OperationBase):
         clipped = np.clip(fill, -32768, 32767)
         return np.full(shape, clipped, dtype=np.int16)
 
-    def _quantize_input(self, input_data: np.ndarray, input_scale: float, input_zp: int) -> np.ndarray:
-        quantized = np.round(input_data / float(input_scale) + float(input_zp)).astype(np.int32)
-        quantized = np.clip(quantized, -32768, 32767)
-        return quantized.astype(np.int16)
-
     def _ensure_positive_domain_input(self, input_q: np.ndarray, input_zp: int) -> None:
         if np.any(input_q.astype(np.int32) - int(input_zp) < 0):
             raise ValueError("Rsqrt test inputs must stay in the non-negative post-offset domain")
@@ -180,48 +161,40 @@ class OpRsqrt(OperationBase):
             generate_sqrt_float(self, output_dir, reciprocal=True)
             return
 
-        from helia_core_tester.generation.utils.litert_utils import get_operator_tensors_from_litert
+        from helia_core_tester.generation.reference import policy
+        from helia_core_tester.generation.reference.call import ReferenceCall
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
-        from helia_core_tester.generation.utils.tflite_utils import activation_bounds, scalar_scale_zp
 
         name = self.desc["name"]
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
-
         kernel_info = self._select_cmsis_rsqrt_kernel()
-
-        model, subgraph = self.load_litert_model(str(tflite_path))
-        op_tensors = get_operator_tensors_from_litert(model, subgraph, 0)
-
-        input_shape = self._ensure_shape_tuple(op_tensors["inputs"][0]["shape"])
-        output_shape = self._ensure_shape_tuple(op_tensors["outputs"][0]["shape"])
-        input_quant = op_tensors["inputs"][0]["quantization"]
-        output_quant = op_tensors["outputs"][0]["quantization"]
-        input_scale, input_zp = scalar_scale_zp(input_quant)
-        output_scale, output_zp = scalar_scale_zp(output_quant)
+        input_shape = output_shape = tuple(int(d) for d in self.desc["input_shape"])
+        quant = self.desc.get("quantization") or {}
+        in_quant = policy.descriptor_quant(quant.get("input"), "s16") or policy.TensorQuant(RSQRT_INPUT_SCALE, 0, "s16")
+        out_quant = (policy.descriptor_quant(quant.get("output"), "s16")
+                     or policy.TensorQuant(RSQRT_CANONICAL_OUTPUT_SCALE, 0, "s16"))
+        input_scale, input_zp = in_quant.scale, in_quant.zero_point
+        output_scale, output_zp = out_quant.scale, out_quant.zero_point
 
         builder = TemplateContextBuilder()
         input_dims = builder.nhwc_to_cmsis_dims(input_shape)
         output_dims = builder.nhwc_to_cmsis_dims(output_shape)
-        out_activation_min, out_activation_max = activation_bounds("S16")
+        out_activation_min, out_activation_max = -32768, 32767
 
-        expect_arg_error = bool(self.desc.get("hint", {}).get("force_negative_input_case", False))
-        if expect_arg_error:
+        if self.status_only():
             input_q = self._generate_negative_domain_input(input_shape, input_zp)
             expected_status = "ARM_CMSIS_NN_ARG_ERROR"
             output_data = np.zeros(output_shape, dtype=np.int16)
         else:
             input_data = self._generate_positive_float_input(input_shape, input_scale)
-            input_q = self._quantize_input(input_data, input_scale, input_zp)
+            input_q = policy.quantize(input_data, in_quant)
             self._ensure_positive_domain_input(input_q, input_zp)
-
-            interpreter = self.load_litert_interpreter(str(tflite_path))
-            input_details = interpreter.get_input_details()
-            output_details = interpreter.get_output_details()
-            interpreter.set_tensor(input_details[0]["index"], input_q)
-            interpreter.invoke()
-            output_data = np.array(interpreter.get_tensor(output_details[0]["index"]))
+            output_data = self.reference_golden(ReferenceCall(
+                "rsqrt_s16",
+                {"input_scale": input_scale, "input_zero_point": input_zp,
+                 "output_scale": output_scale, "output_zero_point": output_zp},
+                {"input": np.ascontiguousarray(input_q)}, {"output": output_shape},
+                quant={"input": in_quant.to_json(), "output": out_quant.to_json()},
+            ))
             expected_status = "ARM_CMSIS_NN_SUCCESS"
 
         input_array_str = builder.format_array_as_c_literal(input_q)
@@ -258,16 +231,7 @@ class OpRsqrt(OperationBase):
             "expected_status": expected_status,
         }
 
-        cmake_context = {
-            "name": name,
-            "operator": self.desc.get("operator", "Rsqrt"),
-            "operator_name": "rsqrt",
-        }
-        self._write_op_outputs(
-            output_dir,
-            "rsqrt",
-            "BasicMathFunctions/rsqrt/rsqrt.h.j2",
-            "BasicMathFunctions/rsqrt/rsqrt.c.j2",
-            context,
-            cmake_context,
+        self.render_harness_case(
+            output_dir, stem="rsqrt", context=context, pool=rsqrt_argument_pool(context),
+            validation_key="BasicMathFunctions/rsqrt/rsqrt.c.j2", label="Rsqrt", operator="Rsqrt", sidecar=True,
         )

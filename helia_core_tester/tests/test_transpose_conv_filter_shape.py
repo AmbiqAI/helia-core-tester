@@ -11,15 +11,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-pytest.importorskip("tensorflow")
-
-from helia_core_tester.core.config import Config  # noqa: E402
-from helia_core_tester.core.discovery import find_descriptors_dir  # noqa: E402
-from helia_core_tester.generation.io import descriptors as desc_io  # noqa: E402
-from helia_core_tester.generation.ops.ConvolutionFunctions.transpose_conv import (  # noqa: E402
+from helia_core_tester.core.config import Config
+from helia_core_tester.core.discovery import find_descriptors_dir
+from helia_core_tester.generation.io import descriptors as desc_io
+from helia_core_tester.generation.ops.ConvolutionFunctions.transpose_conv import (
     OpTransposeConv,
 )
-from helia_core_tester.generation.test_ops import generate_test  # noqa: E402
+from helia_core_tester.generation.test_ops import generate_test
 
 BASE = "transpose_conv_reverse_valid_kernel1x1_stride2x2_no_bias_s8"
 
@@ -75,7 +73,7 @@ def test_formerly_mismatched_cases_change_the_channel_count(shipped):
 def test_mismatched_inch_is_rejected(base_desc, in_ch):
     base_desc["filter_shape"][3] = in_ch
     with pytest.raises(ValueError, match=r"InCh \(%d\) must equal the input channel count \(17\)" % in_ch):
-        OpTransposeConv(base_desc, 1).build_keras_model()
+        OpTransposeConv(base_desc, 1).validate_descriptor()
 
 
 def test_generate_test_rejects_a_mismatch_before_writing(base_desc, tmp_path):
@@ -154,13 +152,6 @@ def test_schema_rejects_the_same_shapes_at_load_time(field, value, schema_reject
         desc_io.validate_descriptor_schema(doc, "transpose_conv")
 
 
-def _filter_shape_from_tflite(tflite_path: Path) -> list:
-    """Filter tensor shape [OutCh, KH, KW, InCh] of the model's TRANSPOSE_CONV op."""
-    op = OpTransposeConv({"name": "probe"}, 1)
-    tensors = op.load_primary_operator_tensors(str(tflite_path))
-    return [int(v) for v in tensors["weights"].shape]
-
-
 def _header_dims(header: str, name: str, which: str) -> dict:
     match = re.search(rf"{name}_{which}_dims = \{{([^}}]*)\}}", header)
     assert match, f"{which}_dims not found"
@@ -176,49 +167,23 @@ def _header_dims(header: str, name: str, which: str) -> dict:
         "transpose_conv_same_kernel1x5_stride5x2_bias_s8",
     ],
 )
-def test_converted_filter_matches_all_four_declared_dims(shipped, tmp_path, name):
+def test_reference_filter_matches_all_four_declared_dims(shipped, tmp_path, name):
     desc = shipped[name]
     kh, kw, out_ch, in_ch = desc["filter_shape"]
     assert out_ch != in_ch
-    generate_test(desc, str(tmp_path), seed=Config.seed)
-    (tflite,) = tmp_path.rglob(f"{name}.tflite")
-    assert _filter_shape_from_tflite(tflite) == [out_ch, kh, kw, in_ch]
-    header = next(tflite.parent.rglob(f"{name}_transpose_conv.h")).read_text()
+    op = OpTransposeConv(copy.deepcopy(desc), 500, target_cpu="cortex-m55")
+    op.generate_c_files(tmp_path)
+    assert list(op.reference.inputs["filter"].shape) == [out_ch, kh, kw, in_ch]
+    assert not list(tmp_path.rglob("*.tflite"))
+    header = next(tmp_path.rglob(f"{name}_transpose_conv.h")).read_text()
     assert _header_dims(header, name, "filter") == {"n": out_ch, "h": kh, "w": kw, "c": in_ch}
     assert _header_dims(header, name, "input")["c"] == in_ch
     assert _header_dims(header, name, "output")["c"] == out_ch
 
 
-def _convert(desc: dict, out: Path) -> OpTransposeConv:
-    op = OpTransposeConv(desc, Config.seed)
-    out.mkdir()
-    op.convert_to_tflite(op.build_keras_model(), str(out / f"{desc['name']}.tflite"), Config.seed)
-    return op
-
-
-def test_converted_filter_disagreeing_with_descriptor_is_rejected(base_desc, tmp_path):
-    """Fault injection: the model on disk no longer matches the descriptor's filter."""
-    out = tmp_path / "case"
-    _convert(base_desc, out)
-    tampered = copy.deepcopy(base_desc)
-    tampered["filter_shape"][2] = 8  # OutCh in the model stays 5
-    with pytest.raises(ValueError, match="does not match the descriptor's filter_shape"):
-        OpTransposeConv(tampered, Config.seed).generate_c_files(out)
-
-
-def test_no_weights_fallback_rejects_a_mismatched_inch(base_desc, tmp_path, monkeypatch):
-    """The descriptor-only fallback (no weight tensor in the model) validates too."""
-    out = tmp_path / "case"
-    _convert(base_desc, out)
-    real = OpTransposeConv.load_primary_operator_tensors
-
-    def without_weights(self, path):
-        tensors = dict(real(self, path))
-        tensors["weights"] = None
-        return tensors
-
-    monkeypatch.setattr(OpTransposeConv, "load_primary_operator_tensors", without_weights)
+def test_generation_rejects_a_mismatched_inch(base_desc, tmp_path):
     tampered = copy.deepcopy(base_desc)
     tampered["filter_shape"][3] = 16
     with pytest.raises(ValueError, match=r"InCh \(16\) must equal the input channel count \(17\)"):
-        OpTransposeConv(tampered, Config.seed).generate_c_files(out)
+        OpTransposeConv(tampered, 500, target_cpu="cortex-m55").generate_c_files(tmp_path)
+    assert not list(tmp_path.rglob("*.c"))

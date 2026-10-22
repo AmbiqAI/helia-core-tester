@@ -1,19 +1,23 @@
 """GRUUnidirectional operation implementation.
 
 CMSIS-only (force_cmsis) float test generation for arm_gru_unidirectional_f16
-and arm_gru_unidirectional_f32. Mirrors the OpLSTMUnidirectional force_cmsis
-code path: no Keras/TFLite model is built; a pure-numpy reference (matching the
-arm_nn_gru_step_*.c math for both the reset-after and pre-reset formulations)
-produces the golden output directly.
+and arm_gru_unidirectional_f32. On the shipped build the golden is the kernel's arithmetic on the target
+(gru_f32_cmsis for float32 on every target, gru_f16_mve for float16 on Helium),
+checked against the exact gru_f32/gru_f16 entry (gates update z, reset r,
+candidate n; reset-after and pre-reset forms); every other case keeps the exact one,
+widened by the guard budget and the gate dot-product bound.
 """
 
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
-import tensorflow as tf
 
+from helia_core_tester.generation.ops._shared import kernel_faithful as kf
 from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.ops._shared.recurrent_pool import recurrent_argument_pool
+
+GRU_FRAGMENTS = "LSTMFunctions/gru_unidirectional"
 
 
 class OpGRUUnidirectional(OperationBase):
@@ -32,90 +36,51 @@ class OpGRUUnidirectional(OperationBase):
         "negative_time_steps",
     )
 
-    def build_keras_model(self) -> tf.keras.Model:
-        raise RuntimeError("GRUUnidirectional is CMSIS-only; no Keras model is built.")
+    def status_only(self) -> bool:
+        # An ARG_ERROR case asserts the returned status alone; null_buffers expects SUCCESS and keeps its golden.
+        return self.expected_status() != "ARM_CMSIS_NN_SUCCESS"
 
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        raise RuntimeError("GRUUnidirectional CMSIS-only test; skip TFLite generation.")
-
-    def needs_keras_model(self) -> bool:
-        return False
-
-    def allow_no_tflite(self) -> bool:
-        return True
+    def uses_reference(self) -> bool:
+        return not self.status_only()
 
     @staticmethod
-    def _sigmoid(x: np.ndarray) -> np.ndarray:
-        return 1.0 / (1.0 + np.exp(-x))
-
-    def _generate_gru_expected(
-        self,
+    def gru_call(
         input_tensor: np.ndarray,
-        update_w_in: np.ndarray,
-        update_w_hidden: np.ndarray,
-        update_b_in: np.ndarray,
-        update_b_hidden: np.ndarray,
-        reset_w_in: np.ndarray,
-        reset_w_hidden: np.ndarray,
-        reset_b_in: np.ndarray,
-        reset_b_hidden: np.ndarray,
-        cand_w_in: np.ndarray,
-        cand_w_hidden: np.ndarray,
-        cand_b_in: np.ndarray,
-        cand_b_hidden: np.ndarray,
+        gates: Dict[str, Tuple[np.ndarray, np.ndarray, Optional[np.ndarray], Optional[np.ndarray]]],
         *,
-        batch_size: int,
-        time_steps: int,
-        input_size: int,
-        hidden_size: int,
         time_major: bool,
         reset_after: bool,
-    ) -> np.ndarray:
-        """
-        Reference GRU forward pass matching arm_nn_gru_step_f16.c /
-        arm_nn_gru_step_f32.c exactly
-        (same gate order, same reset-after / pre-reset branch, same
-        batch-major/time-major addressing), computed in float32 for
-        simplicity and cast to float16 only for the returned output.
-        """
-        hidden = np.zeros((batch_size, hidden_size), dtype=np.float32)
-        output = np.zeros((time_steps, batch_size, hidden_size), dtype=np.float32)
+    ):
+        """The gru_f32/gru_f16 ReferenceCall: per-gate (w_in, w_hidden, b_in, b_hidden) stacked in z, r, n order.
 
-        if time_major:
-            sequence = np.asarray(input_tensor, dtype=np.float32).reshape(time_steps, batch_size, input_size)
-        else:
-            sequence = np.transpose(
-                np.asarray(input_tensor, dtype=np.float32).reshape(batch_size, time_steps, input_size),
-                (1, 0, 2),
-            )
+        Absent biases (None) are passed as shape (0,) tensors."""
+        from helia_core_tester.generation.reference.call import ReferenceCall
 
-        for t in range(time_steps):
-            x = sequence[t]  # [batch, input_size]
+        dtype = np.asarray(input_tensor).dtype
+        if dtype not in (np.float32, np.float16):
+            raise ValueError(f"GRU reference takes float32 or float16, got {dtype}")
+        order = [gates[g] for g in ("update", "reset", "candidate")]
 
-            z_pre = x @ update_w_in.T + hidden @ update_w_hidden.T + update_b_in + update_b_hidden
-            z = self._sigmoid(z_pre)
+        def stack(index: int) -> np.ndarray:
+            parts = [g[index] for g in order]
+            if any(p is None for p in parts):
+                if not all(p is None for p in parts):
+                    raise ValueError("GRU biases must be present on every gate or on none")
+                return np.zeros((0,), dtype=dtype)
+            return np.ascontiguousarray(np.stack([np.asarray(p, dtype=dtype) for p in parts]))
 
-            r_pre = x @ reset_w_in.T + hidden @ reset_w_hidden.T + reset_b_in + reset_b_hidden
-            r = self._sigmoid(r_pre)
-
-            if reset_after:
-                # n = tanh( Wn.x + b_in + r * (Un.h_prev + b_hn) )
-                xh = x @ cand_w_in.T + cand_b_in
-                hh = hidden @ cand_w_hidden.T + cand_b_hidden
-                cand_pre = xh + r * hh
-            else:
-                # n = tanh( Wn.x + b_in + Un.(r . h_prev) + b_hn )
-                xh = x @ cand_w_in.T + cand_b_in
-                hh = (r * hidden) @ cand_w_hidden.T + cand_b_hidden
-                cand_pre = xh + hh
-
-            cand = np.tanh(cand_pre)
-            hidden = z * hidden + (1.0 - z) * cand
-            output[t] = hidden
-
-        if time_major:
-            return output.astype(np.float32).flatten()
-        return np.transpose(output, (1, 0, 2)).astype(np.float32).flatten()
+        x = np.ascontiguousarray(input_tensor, dtype=dtype)
+        if x.ndim != 3:
+            raise ValueError(f"GRU input must be rank 3, got shape {x.shape}")
+        w = stack(0)
+        hidden_size = int(w.shape[1])
+        return ReferenceCall(
+            f"gru_{'f16' if dtype == np.float16 else 'f32'}",
+            {"time_major": int(bool(time_major)), "reset_after": int(bool(reset_after))},
+            {"input": x, "input_weights": w, "recurrent_weights": stack(1), "input_bias": stack(2),
+             "recurrent_bias": stack(3)},
+            {"output": (x.shape[0], x.shape[1], hidden_size)},
+        )
 
     def generate_c_files(self, output_dir) -> None:
         if not self.desc.get("hint", {}).get("force_cmsis", False):
@@ -132,12 +97,11 @@ class OpGRUUnidirectional(OperationBase):
         reset_after = bool(self.desc.get("reset_after", True))
         # Issue #56: use_bias: false exercises the NULL-safe bias branches in
         # arm_nn_gru_step_*.c (`gate->input_bias ? gate->input_bias[h] : 0.0f`,
-        # same for hidden_bias, all three gates) -- a real Keras GRU config
+        # same for hidden_bias, all three gates) -- a real GRU layer config
         # (use_bias=False), previously untested. Zero-valued bias is
-        # mathematically identical to omitting it, so the golden computation
-        # below needs no other change; only the C side needs to actually pass
-        # NULL to exercise the guarded branch (done via the `use_bias`
-        # template flag, not by zeroing the pointer).
+        # mathematically identical to omitting it; the reference call passes
+        # the biases as absent and the C side passes NULL through the
+        # `use_bias` template flag.
         use_bias = bool(self.desc.get("use_bias", True))
 
         activation_dtype = self.tensor_dtype("input", default="FP32")
@@ -190,33 +154,48 @@ class OpGRUUnidirectional(OperationBase):
 
         self.rng.__setstate__(rng_state)
 
-        def float_reference(operands):
-            return self._generate_gru_expected(
-                operands[0],
-                update_w_in.astype(np.float32),
-                update_w_hidden.astype(np.float32),
-                update_b_in.astype(np.float32),
-                update_b_hidden.astype(np.float32),
-                reset_w_in.astype(np.float32),
-                reset_w_hidden.astype(np.float32),
-                reset_b_in.astype(np.float32),
-                reset_b_hidden.astype(np.float32),
-                cand_w_in.astype(np.float32),
-                cand_w_hidden.astype(np.float32),
-                cand_b_in.astype(np.float32),
-                cand_b_hidden.astype(np.float32),
-                batch_size=batch_size,
-                time_steps=time_steps,
-                input_size=input_size,
-                hidden_size=hidden_size,
-                time_major=time_major,
-                reset_after=reset_after,
+        gates = {
+            "update": (update_w_in, update_w_hidden, update_b_in if use_bias else None,
+                       update_b_hidden if use_bias else None),
+            "reset": (reset_w_in, reset_w_hidden, reset_b_in if use_bias else None,
+                      reset_b_hidden if use_bias else None),
+            "candidate": (cand_w_in, cand_w_hidden, cand_b_in if use_bias else None,
+                          cand_b_hidden if use_bias else None),
+        }
+        call = self.gru_call(input_tensor, gates, time_major=time_major, reset_after=reset_after)
+        comparison = {}
+        if self.status_only():
+            # The kernel rejects the call before writing; the header still declares an expected
+            # array, filled from the same reference but not recorded as a golden.
+            output_ref = call.output()
+            nonfinite_context = {}
+        else:
+            budget = kf.GRU_F32_ATOL if float_dtype == np.float32 else kf.RNN_F16_ATOL
+            if float_dtype == np.float16 and kf.mve_float16_route(self):
+                # arm_nn_gru_step_f16 on Helium: float16 lane dots, the kernel's float16 tables and the
+                # pre-reset sum as GCC vectorised it.
+                exact, call = call, kf.rnn_f16_mve_call(call)
+                kf.check_close_to_exact(name, call, exact, atol=budget)
+                comparison = kf.comparison_context(self, float_dtype)
+            elif float_dtype == np.float32 and kf.float_route(self) is not None:
+                # arm_nn_gru_step_f32 on this target: the kernel's float32 tables and operation order.
+                exact, call = call, kf.gru_f32_cmsis_call(call, self.target_cpu)
+                kf.check_close_to_exact(name, call, exact, atol=budget)
+                comparison = kf.comparison_context(self, float_dtype)
+            else:
+                # The exact GRU: the kernel's activation tables stay within the guard budget of it, and its gate
+                # dot products within recurrent_dot_bound.
+                ins = call.inputs
+                dots = kf.recurrent_dot_bound(ins["input"], ins["input_weights"], ins["recurrent_weights"],
+                                              (ins["input_bias"], ins["recurrent_bias"]), float_dtype)
+                comparison = kf.comparison_context(self, float_dtype, budget + dots)
+            output_ref = self.reference_golden(call)
+            output_ref, nonfinite_context = self.apply_nonfinite_policy(
+                output_ref,
+                reference=lambda operands: self.reference_probe([operands[0], *list(call.inputs.values())[1:]]),
+                inputs=[input_tensor],
             )
-
-        output_ref = float_reference([input_tensor])
-        output_ref, nonfinite_context = self.apply_nonfinite_policy(
-            output_ref, reference=float_reference, inputs=[input_tensor]
-        )
+        output_ref = np.asarray(output_ref).reshape(-1)
 
         fault = self.fault_kind()
         stream = bool(self.desc.get("hint", {}).get("stream", False))
@@ -254,6 +233,7 @@ class OpGRUUnidirectional(OperationBase):
             "expected_status": self.expected_status(),
             "use_bias": use_bias,
         }
+        context.update(comparison)
         context.update(nonfinite_context)
 
         # ns-cmsis-nn#377 / tester#71: generation-time feature probe for the
@@ -280,8 +260,7 @@ class OpGRUUnidirectional(OperationBase):
 
         if fault:
             context.update(self.fault_context())
-            h_tpl = "LSTMFunctions/gru_unidirectional/gru_unidirectional.h.j2"
-            c_tpl = "LSTMFunctions/gru_unidirectional/gru_unidirectional_fault.c.j2"
+            variant = "gru_unidirectional_fault"
         elif stream:
             if batch_size != 1:
                 raise ValueError("GRUUnidirectional streaming descriptors require batch_size == 1.")
@@ -299,21 +278,14 @@ class OpGRUUnidirectional(OperationBase):
             context["chunk_lengths"] = chunk_lengths
             context["chunk_input_offsets"] = [c * input_size for c in chunk_offsets]
             context["chunk_output_offsets"] = [c * hidden_size for c in chunk_offsets]
-            h_tpl = "LSTMFunctions/gru_unidirectional/gru_unidirectional.h.j2"
-            c_tpl = "LSTMFunctions/gru_unidirectional/gru_unidirectional_stream.c.j2"
+            variant = "gru_unidirectional_stream"
         else:
-            h_tpl = "LSTMFunctions/gru_unidirectional/gru_unidirectional.h.j2"
-            c_tpl = "LSTMFunctions/gru_unidirectional/gru_unidirectional.c.j2"
+            variant = "gru_unidirectional"
 
-        self._write_op_outputs(
-            Path(output_dir),
-            "gru_unidirectional",
-            h_tpl,
-            c_tpl,
-            context,
-            {
-                "name": name,
-                "operator": self.desc.get("operator", "GRUUnidirectional"),
-                "operator_name": "gru_unidirectional",
-            },
+        self.render_harness_case(
+            Path(output_dir), stem="gru_unidirectional", context=context,
+            pool=recurrent_argument_pool(
+                context, body=f"{GRU_FRAGMENTS}/{variant}.fragment.j2",
+                header=f"{GRU_FRAGMENTS}/gru_unidirectional.fragment.j2", ctype=context["data_dtype"]),
+            validation_key=f"{GRU_FRAGMENTS}/{variant}.c.j2", label="GRU", operator="GRUUnidirectional", sidecar=True,
         )

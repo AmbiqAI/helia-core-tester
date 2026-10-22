@@ -1,35 +1,39 @@
-#ifndef STRIDED_SLICE_FLOAT_WHOLE_SLAB_F32_STRIDEDSLICE_H
-#define STRIDED_SLICE_FLOAT_WHOLE_SLAB_F32_STRIDEDSLICE_H
+#ifndef STRIDED_SLICE_FLOAT_WHOLE_SLAB_F32_HARNESS_H
+#define STRIDED_SLICE_FLOAT_WHOLE_SLAB_F32_HARNESS_H
 
 #include <stdint.h>
-// Golden arrays may carry NAN/INFINITY, and this header is included ahead of any
-// other translation-unit include that would define them.
+// Input arrays may carry NAN/INFINITY tokens, and this header is included ahead of
+// any other translation-unit include that would define them.
 #include <math.h>
 #include "arm_nnfunctions.h"
 #include "arm_nn_types.h"
 
-// Input dimensions
 static const cmsis_nn_dims strided_slice_float_whole_slab_f32_input_dims = {
-    .n = 2, .h = 3,
-    .w = 4, .c = 2
+    .n = 2,
+    .h = 3,
+    .w = 4,
+    .c = 2
 };
 
-// Output dimensions
 static const cmsis_nn_dims strided_slice_float_whole_slab_f32_output_dims = {
-    .n = 1, .h = 3,
-    .w = 4, .c = 2
+    .n = 1,
+    .h = 3,
+    .w = 4,
+    .c = 2
 };
 
-// Begin dimensions
 static const cmsis_nn_dims strided_slice_float_whole_slab_f32_begin_dims = {
-    .n = 1, .h = 0,
-    .w = 0, .c = 0
+    .n = 1,
+    .h = 0,
+    .w = 0,
+    .c = 0
 };
 
-// Stride dimensions
 static const cmsis_nn_dims strided_slice_float_whole_slab_f32_stride_dims = {
-    .n = 1, .h = 1,
-    .w = 1, .c = 1
+    .n = 1,
+    .h = 1,
+    .w = 1,
+    .c = 1
 };
 
 // Input data (for testing)

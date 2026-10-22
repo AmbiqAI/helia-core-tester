@@ -1,32 +1,34 @@
-#ifndef SUB_FLOAT_DEFAULT_F32_SUB_H
-#define SUB_FLOAT_DEFAULT_F32_SUB_H
+#ifndef SUB_FLOAT_DEFAULT_F32_HARNESS_H
+#define SUB_FLOAT_DEFAULT_F32_HARNESS_H
 
 #include <stdint.h>
-// Golden arrays may carry NAN/INFINITY, and this header is included ahead of any
-// other translation-unit include that would define them.
+// Input arrays may carry NAN/INFINITY tokens, and this header is included ahead of
+// any other translation-unit include that would define them.
 #include <math.h>
 #include "arm_nnfunctions.h"
 #include "arm_nn_types.h"
 
-// Input 1 dimensions
 static const cmsis_nn_dims sub_float_default_f32_input1_dims = {
-    .n = 1, .h = 4,
-    .w = 4, .c = 8
+    .n = 1,
+    .h = 4,
+    .w = 4,
+    .c = 8
 };
 
-// Input 2 dimensions
 static const cmsis_nn_dims sub_float_default_f32_input2_dims = {
-    .n = 1, .h = 4,
-    .w = 4, .c = 8
+    .n = 1,
+    .h = 4,
+    .w = 4,
+    .c = 8
 };
 
-// Output dimensions
 static const cmsis_nn_dims sub_float_default_f32_output_dims = {
-    .n = 1, .h = 4,
-    .w = 4, .c = 8
+    .n = 1,
+    .h = 4,
+    .w = 4,
+    .c = 8
 };
 
-// Input 1 data (for testing)
 static const float sub_float_default_f32_input1[] = {
     -0.184611723f, 0.567204416f, -0.362504721f, -0.281310976f, 0.260168135f, -0.067387193f, -0.392200172f, 0.431194007f, 0.396392971f, 0.151942551f, -0.998773754f, 0.273458391f, -0.637282491f, -0.072227471f, 0.867436647f, 0.742382228f,
     0.994810879f, -0.459058523f, 0.209741935f, -0.609152973f, -0.987786233f, -0.820062995f, -0.667029142f, -0.886695385f, 0.158887506f, 0.580691814f, -0.174482301f, -0.983911753f, 0.557604909f, 0.370913744f, -0.999569297f, 0.942091763f,
@@ -38,7 +40,6 @@ static const float sub_float_default_f32_input1[] = {
     0.229336575f, -0.336014152f, 1.531064627e-04f, -0.037235025f, -0.337031126f, 0.646980464f, 0.12551862f, 0.79756403f, -0.184065431f, -0.056774352f, 0.949887931f, 0.934147775f, 0.468524605f, 0.72053504f, -0.227458358f, -0.577099383f,
 };
 
-// Input 2 data (for testing)
 static const float sub_float_default_f32_input2[] = {
     -0.269526035f, -0.764942884f, -0.679506183f, -0.982728302f, -0.184056193f, 0.520979702f, 0.427447051f, -0.412258059f, 0.9684425f, 0.283183903f, -0.098390527f, -0.601612449f, 0.100532025f, 0.629450023f, -0.082154445f, -0.235486448f,
     0.906016409f, 0.719091892f, -0.164448127f, 0.242736876f, -0.034265731f, 0.194072038f, 0.759414971f, 0.018449122f, 0.950567245f, 0.692854345f, -0.162489146f, 0.669061542f, 0.268858552f, 0.932341933f, 0.712457955f, 0.883790314f,

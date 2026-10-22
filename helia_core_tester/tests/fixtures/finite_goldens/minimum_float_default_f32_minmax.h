@@ -1,32 +1,34 @@
-#ifndef MINIMUM_FLOAT_DEFAULT_F32_MINMAX_H
-#define MINIMUM_FLOAT_DEFAULT_F32_MINMAX_H
+#ifndef MINIMUM_FLOAT_DEFAULT_F32_HARNESS_H
+#define MINIMUM_FLOAT_DEFAULT_F32_HARNESS_H
 
 #include <stdint.h>
-// Golden arrays may carry NAN/INFINITY, and this header is included ahead of any
-// other translation-unit include that would define them.
+// Input arrays may carry NAN/INFINITY tokens, and this header is included ahead of
+// any other translation-unit include that would define them.
 #include <math.h>
 #include "arm_nnfunctions.h"
 #include "arm_nn_types.h"
 
-// Input 1 dimensions
 static const cmsis_nn_dims minimum_float_default_f32_input1_dims = {
-    .n = 1, .h = 4,
-    .w = 4, .c = 8
+    .n = 1,
+    .h = 4,
+    .w = 4,
+    .c = 8
 };
 
-// Input 2 dimensions
 static const cmsis_nn_dims minimum_float_default_f32_input2_dims = {
-    .n = 1, .h = 4,
-    .w = 4, .c = 8
+    .n = 1,
+    .h = 4,
+    .w = 4,
+    .c = 8
 };
 
-// Output dimensions
 static const cmsis_nn_dims minimum_float_default_f32_output_dims = {
-    .n = 1, .h = 4,
-    .w = 4, .c = 8
+    .n = 1,
+    .h = 4,
+    .w = 4,
+    .c = 8
 };
 
-// Input 1 data (for testing)
 static const float minimum_float_default_f32_input1[] = {
     0.514949679f, 0.115951836f, 0.281030834f, -0.82988435f, -0.254707754f, -0.361866742f, -0.165661916f, -0.466612995f, 0.610121846f, 0.265164346f, 0.169733718f, 0.379959404f, 0.931377113f, -0.047355205f, -0.747314811f, 0.44551596f,
     0.39261198f, -0.598023832f, -0.103597999f, 0.07585413f, -0.945386469f, 0.028864436f, -0.218813658f, -0.186126888f, -0.843125701f, -0.997984529f, 0.282834858f, -0.143040851f, 0.94944948f, 0.732227862f, 0.885139942f, 0.248230904f,
@@ -38,7 +40,6 @@ static const float minimum_float_default_f32_input1[] = {
     -0.274000704f, 0.650281608f, 0.068033382f, 0.015888913f, -0.522580624f, -0.904778421f, 0.520444989f, 0.874806702f, -0.941263199f, 0.802458823f, 0.620696485f, -0.299334973f, -0.035639394f, 0.876060367f, -0.498380005f, 0.963202775f,
 };
 
-// Input 2 data (for testing)
 static const float minimum_float_default_f32_input2[] = {
     -0.152800962f, 0.287274897f, 0.678585172f, -0.705652654f, -0.102937967f, -0.841748118f, 0.165375724f, -0.162895873f, -0.138732582f, -0.204420447f, -0.267388672f, 0.541725755f, -0.614966512f, -0.026769243f, -0.394237638f, -0.531074762f,
     -0.854343414f, -0.70906502f, -0.811155736f, 0.792230427f, -0.55406189f, -0.96506691f, -0.477246881f, 0.407948881f, 0.445983201f, 7.710805628e-03f, 0.088037565f, -0.286258042f, -0.56540823f, -0.066025086f, -0.731893301f, -0.544116139f,

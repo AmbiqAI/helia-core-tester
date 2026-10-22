@@ -245,7 +245,7 @@ def test_softmax_patterns(pattern: str) -> None:
         assert (np.sort(rows, axis=1)[:, -2] < 0).all()
 
 
-def test_softmax_golden_is_tflite(tmp_path: Path) -> None:
+def test_softmax_calibration_range_moves_diff_min(tmp_path: Path) -> None:
     import re
 
     from helia_core_tester.generation.ops.SoftmaxFunctions.softmax import OpSoftmax
@@ -255,17 +255,19 @@ def test_softmax_golden_is_tflite(tmp_path: Path) -> None:
             "activation": "NONE", "hint": {"call_style": "per_tensor"}, "input_shape": [1, 3, 37],
             "calibration_range": [-200.0, 300.0]}
     op = OpSoftmax(desc, seed=500)
-    op.convert_to_tflite(op.build_keras_model(), str(tmp_path / "sm.tflite"), 500)
     op.generate_c_files(tmp_path)
-    source, header = (tmp_path / "sm_softmax.c").read_text(), (tmp_path / "includes" / "sm_softmax.h").read_text()
-    args = {k: int(re.search(rf"(-?\d+),\s*// {k}\b", source).group(1)) for k in ("mult", "shift", "diff_min")}
+    call = op.reference
+    assert call is not None and call.entry == "softmax_s8"
+    header = (tmp_path / "includes" / "sm_softmax.h").read_text()
     arrays = {k: np.array([int(v) for v in re.findall(r"-?\d+", re.search(rf"sm_{k}\[[^\]]*\]\s*=\s*\{{([^}}]*)", header).group(1))])
               for k in ("input", "expected_output")}
     x = arrays["input"].reshape(3, 37)
-    assert args["diff_min"] > -64 and np.mean(x - x.max(axis=1, keepdims=True) < args["diff_min"]) > 0.5
-    ref = OpSoftmax._softmax_common_s8(arrays["input"].astype(np.int8), 3, 37, args["mult"], args["shift"],
-                                      args["diff_min"], False)
-    assert (ref.reshape(-1) == arrays["expected_output"]).all()
+    diff_min = call.params["diff_min"]
+    assert diff_min > -64 and np.mean(x - x.max(axis=1, keepdims=True) < diff_min) > 0.5
+    # The header carries the recorded reference call's input and golden.
+    assert (call.inputs["input"].reshape(-1) == arrays["input"]).all()
+    assert (call.output().reshape(-1) == arrays["expected_output"]).all()
+    assert not list(tmp_path.rglob("*.tflite"))
 
 
 @pytest.mark.parametrize("cpu", ["cortex-m55", "cortex-m4"])
@@ -421,7 +423,7 @@ def test_flat_random_draw_is_dropped(tmp_path: Path, monkeypatch: pytest.MonkeyP
     def _fake_generate_test(desc, out_dir, generation_failures=None, **_kwargs):
         test_dir = Path(out_dir) / desc["_family"] / desc["name"]
         test_dir.mkdir(parents=True, exist_ok=True)
-        (test_dir / f"{desc['name']}.tflite").write_bytes(b"\x01")
+        (test_dir / "CMakeLists.txt").write_text("# fake\n")
         if desc["name"].endswith("001"):
             generation_failures.append({"name": desc["name"]})
             raise DegenerateGoldenError("flat")
@@ -517,7 +519,7 @@ def test_hidden_generation_stays_outside(tmp_path: Path, monkeypatch: pytest.Mon
     def _fake_generate_test(desc, out_dir, **_kwargs):
         test_dir = Path(out_dir) / desc["_family"] / desc["name"]
         test_dir.mkdir(parents=True, exist_ok=True)
-        (test_dir / f"{desc['name']}.tflite").write_bytes(b"\x01")
+        (test_dir / "CMakeLists.txt").write_text("# fake\n")
 
     monkeypatch.setattr(generation_module, "generate_test", _fake_generate_test)
     filters = {"op": None, "dtype": None, "wtype": None, "name": None, "limit": None, "seed": 1,
