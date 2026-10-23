@@ -637,3 +637,36 @@ hint:
   call_style: per_tensor
 input_1_shape: [2, 1, 5, 24]
 input_2_shape: [2, 3, 1, 24]
+---
+# Mixed-rank operands (#482): a rank-2 operand broadcasts right-aligned (NumPy/TFLite),
+# so [3, 4] is NHWC (1, 1, 3, 4) and [3, 1] is (1, 1, 3, 1), not the HW reading (1, H, W, 1).
+operator: Mul
+name: mul_mixed_rank2_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 3, 4]
+input_2_shape: [3, 4]
+---
+operator: Mul
+name: mul_mixed_rank2_qdistinct_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+quant_preset: distinct
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 3, 4]
+input_2_shape: [3, 4]
+---
+operator: Mul
+name: mul_mixed_rank2_left_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_1_shape: [3, 1]
+input_2_shape: [1, 2, 3, 4]
