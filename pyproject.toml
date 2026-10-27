@@ -63,3 +63,6 @@ filterwarnings = [
 
 [tool.uv]
 package = true
+# eMudhra/emSign CA incident: uv >= 0.13.4 ships a fixed trust store.
+# setup-uv reads this floor in CI; older local uv binaries refuse to run.
+required-version = ">=0.13.4"
