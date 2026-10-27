@@ -39,7 +39,7 @@ dependencies = [
     # Same pin helia-profiler carries.
     "neuralspotx==0.8.1",
     # CA bundle for downloads (NixOS).
-    "certifi>=2023.7.22",
+    "certifi>=2026.10.19",
 ]
 
 [project.scripts]

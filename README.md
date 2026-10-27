@@ -195,7 +195,14 @@ hpx places a TCM-sized arena. The packed fully-connected kernel reads a stream
 packed from its weights, so that stream is packed on the device once per case,
 before any timing, and placed in the pool after the bias; the per-call pack
 still runs, so `prepare_cycles` matches `tcm`. Neither programming nor eviction counts toward
-the timed cycles or `prepare_cycles`. Give each placement its own `--build-dir`. The
+the timed cycles or `prepare_cycles`. `sram` (Apollo510, Apollo330P) places weights
+and bias as `mram` does, but moves the workspace (activations, scratch,
+multipliers and shifts) into cached SRAM (NSX's `.sram_bss`), as most deployments
+and helia-aot do once TCM fills. Before every timed call it also cleans and evicts the
+case's used workspace from the D-cache, so a loop order that re-reads an activation
+after the cache has evicted it pays the refill. The extra cost shows only once the
+working set (weights plus activations plus scratch) outgrows the D-cache; below that,
+each line misses once whatever the loop order. Give each placement its own `--build-dir`. The
 bundle records it in `session_manifest.json` `target.placement`.
 
 On boards with `blob_store_bytes` in `assets/hardware_boards.yaml` (apollo510_evb),
@@ -484,8 +491,8 @@ The verdict (schema `hct.candidate_eval` v3) has these fields:
 `agent-loop` wraps the [agent loop](#agent-loop) into one campaign: a
 headless Claude agent edits one kernel family in its own ns-cmsis-nn tree,
 and three wrapper scripts are its only way to build, disassemble and run
-on a board. Every eval runs `candidate eval` once per leg (`tcm`, `mram`)
-and appends a row to the campaign ledger.
+on a board. Every eval runs `candidate eval` once per leg (`tcm`, `mram`,
+and `sram` when listed) and appends a row to the campaign ledger.
 
 Needs, on the bench host: `uv`, `git`, `patch`, `bench-agent`, the
 `claude` CLI (logged in), the Arm toolchain (`arm-none-eabi-size`,
@@ -500,7 +507,7 @@ or `softmax-s8.example.yaml`:
 name: conv-s8                  # lowercase, digits, dashes
 board: apollo510_evb           # tester board id
 bench_id: apollo510_evb        # bench-agent board id (default: board)
-legs: [tcm, mram]              # default: both when the board has MRAM
+legs: [tcm, mram]              # default: both when the board has MRAM; add sram to time activations in SRAM
 toolchains: [gcc]              # or [gcc, atfe]; atfe needs ATFE_ROOT
 target:
   op: Convolve                 # `hardware run --op`
@@ -630,8 +637,9 @@ uv run helia_core_tester agent-loop stop -w ~/campaigns/conv-s8
   wait for the next one. Each leg runs under `bench-agent run --timeout`
   and `timeout`, both cut to fit `submit_deadline_s`. Once a leg ends
   below stage `score` or with a verdict worse than `no_gain`, later legs
-  are skipped. An `mram` leg runs only after the `tcm` leg on the same
-  toolchain passes; other toolchains still run. Skipped legs show as
+  are skipped. Each placement leg runs only after the previous one listed
+  (`tcm`, then `mram`, then `sram`) on the same toolchain passes; other
+  toolchains still run. Skipped legs show as
   `{"verdict": "skipped", "reason": ...}` in the view and the ledger. The
   overall verdict is the worst leg that ran, and `pass` needs every leg.
   - A submit that cannot take the submit lock in time (another submit is

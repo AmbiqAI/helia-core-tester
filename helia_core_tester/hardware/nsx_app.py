@@ -66,7 +66,8 @@ KERNEL_SHIM = "# Shim: delegates to the native ns-cmsis-nn NSX build.\nadd_subdi
 KERNEL_ALIGN_BYTES = 64
 
 # tcm: all operands in DTCM. mram: weights, bias in MRAM.
-PLACEMENTS = ("tcm", "mram")
+# sram: as mram, with the workspace in SRAM.
+PLACEMENTS = ("tcm", "mram", "sram")
 
 # Options the last successful build used.
 OPTIONS_FILE = ".hct-options.json"
@@ -528,7 +529,7 @@ def render_app(
     repo_root: Optional[Path] = None,
 ) -> AppRender:
     """Write nsx.yml, modules.cmake, CMakeLists.txt, local kernels."""
-    if options.placement == "mram" and not board.has_mram:
+    if options.placement != "tcm" and not board.has_mram:
         raise AppRenderError(f"{board.id} has no cached MRAM; use tcm")
     if options.cmsis_nn_root is not None:
         # App files must not land in root.

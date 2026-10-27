@@ -22,6 +22,10 @@
 #include "hct_mram_stub.h"
 #endif
 
+#if defined(HCT_ACTIVATIONS_SRAM) && !defined(HCT_PLACEMENT_MRAM)
+#error "HCT_ACTIVATIONS_SRAM needs HCT_PLACEMENT_MRAM"
+#endif
+
 /* The Armv8.1-M PMU (8 x 16-bit event counters + 32-bit CCNTR on Cortex-M55) is only
  * present when the device header says so; a Cortex-M4 hardware build or the host
  * harness compile take the DWT-only path below. */
@@ -290,6 +294,11 @@ typedef struct
     const void *cold_addr[HCT_SERVER_MAX_BLOBS];
     int32_t cold_bytes[HCT_SERVER_MAX_BLOBS];
     uint8_t cold_count;
+#if defined(HCT_ACTIVATIONS_SRAM)
+    /* Used workspace, cleaned and evicted before each call. */
+    void *workspace_addr;
+    int32_t workspace_bytes;
+#endif
 } hct_window_t;
 
 extern hct_window_t hct_window;
@@ -316,6 +325,13 @@ static inline bool hct_window_open(void)
         {
             SCB_InvalidateDCache_by_Addr((volatile void *)hct_window.cold_addr[index], hct_window.cold_bytes[index]);
         }
+#if defined(HCT_ACTIVATIONS_SRAM)
+        /* Activations start cold too. Clean first: the CPU wrote the inputs. */
+        if (hct_window.workspace_bytes > 0)
+        {
+            SCB_CleanInvalidateDCache_by_Addr((volatile void *)hct_window.workspace_addr, hct_window.workspace_bytes);
+        }
+#endif
         if (hct_window.inverted)
         {
             return true;

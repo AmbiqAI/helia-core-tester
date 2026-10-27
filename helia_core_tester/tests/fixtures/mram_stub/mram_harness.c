@@ -1,4 +1,4 @@
-/* Host harness for MRAM weights placement. */
+/* Host harness for MRAM weights and SRAM activations placement. */
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -594,6 +594,37 @@ static int test_derived(uintptr_t base)
 
 #endif
 
+#if defined(HCT_ACTIVATIONS_SRAM)
+/* Each timed call cleans and evicts the used workspace once. */
+static int test_cold_workspace(void)
+{
+    static hct_server_session_t s;
+    uint32_t cleans;
+    uint32_t invalidations;
+    uint32_t used;
+    int status = open_session(&s, workspace, sizeof(workspace), "sram_a");
+    if (status != 0) return 1000 + status;
+    if (send_meta(&s, "sram_a", kCase, 3u) != HCTP_STATUS_OK) return 1010;
+    if (stream(&s, kCase) != HCTP_STATUS_OK) return 1011;
+    /* finish_case resets it; input twins can add more. */
+    used = s.workspace_used_bytes;
+    cleans = hct_mram_stub.clean_invalidate_calls;
+    invalidations = hct_mram_stub.invalidate_calls;
+    status = run_case(&s);
+    if (status != 0) return 1020 + status;
+    cleans = hct_mram_stub.clean_invalidate_calls - cleans;
+    invalidations = hct_mram_stub.invalidate_calls - invalidations;
+    /* Two MRAM ranges per call, one workspace range. */
+    if (cleans == 0u || invalidations != 2u * cleans) return 1030;
+    if (hct_mram_stub.last_clean_invalidate != (const volatile void *)workspace) return 1031;
+    if (used == 0u || hct_mram_stub.last_clean_invalidate_bytes < (int32_t)used ||
+        hct_mram_stub.last_clean_invalidate_bytes > (int32_t)sizeof(workspace)) return 1032;
+    if (drain(&s) != HCTP_MSG_SESSION_COMPLETE) return 1033;
+    printf("workspace cold\n");
+    return 0;
+}
+#endif
+
 #if HCT_BLOB_STORE_BYTES > 0
 static const uint64_t kKeys[3] = {0x1111111111111111ull, 0x2222222222222222ull, 0x3333333333333333ull};
 
@@ -747,6 +778,14 @@ int main(void)
         if (status == 0) status = test_pool_fit(base);
         if (status == 0) status = test_derived(base);
     }
+#endif
+#if defined(HCT_ACTIVATIONS_SRAM)
+    if (status == 0) status = (hct_benchmark_server_capability_flags() & HCT_CAP_ACTIVATIONS_SRAM) == 0u ? 11 : 0;
+    if (status == 0) status = test_cold_workspace();
+#else
+    /* Activations stay in TCM: nothing to clean. */
+    if (status == 0) status = hct_mram_stub.clean_invalidate_calls != 0u ? 12 : 0;
+    if (status == 0) status = (hct_benchmark_server_capability_flags() & HCT_CAP_ACTIVATIONS_SRAM) != 0u ? 13 : 0;
 #endif
 #if HCT_BLOB_STORE_BYTES > 0
     if (status == 0) status = test_store();

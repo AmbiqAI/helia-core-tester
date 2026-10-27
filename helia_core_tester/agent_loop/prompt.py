@@ -16,12 +16,16 @@ from helia_core_tester.hardware.pmu_explain import classify_route, load_ceilings
 from helia_core_tester.hardware.score import load_bundle
 
 from .config import Campaign
+from .ledger import gate_leg
 
 TEMPLATE = Path(__file__).with_name("prompt.md.j2")
 LEG_TEXT = {
     "tcm": "all operands in tightly coupled memory, no cache. Pure compute.",
     "mram": ("weights in MRAM behind the data cache, cache cold before each call. "
              "This is how models deploy; memory access order and tiling show here."),
+    "sram": ("weights in MRAM and activations and scratch in SRAM, both behind the data cache, "
+             "cold before each call. Most deployments keep activations here: a loop order that "
+             "re-reads an activation after the cache has evicted it pays a refill each time."),
 }
 TOOLCHAIN_TEXT = {"gcc": " Built with gcc.", "atfe": " Built with ATfE clang."}
 # Spaced, lowercase op names.
@@ -88,6 +92,13 @@ def _patch_files(diff: bytes) -> list[str]:
     return sorted({f.decode(errors="replace") for f in found})
 
 
+def _gates(campaign: Campaign) -> list[tuple[str, str]]:
+    """(earlier, later) placements; one compiler shows all."""
+    runs = [r for r in campaign.runs if r.toolchain == campaign.toolchains[0]]
+    names = {r.name: r.placement for r in runs}
+    return [(names[gate], r.placement) for r in runs if (gate := gate_leg(r, campaign.runs))]
+
+
 def render_prompt(campaign: Campaign, rows: list[dict], paths: dict[str, Path],
                   start_diff: Optional[bytes] = None) -> str:
     """Fill the template; paths has submit, check, disasm, results."""
@@ -119,6 +130,6 @@ def render_prompt(campaign: Campaign, rows: list[dict], paths: dict[str, Path],
         legs=[{"name": leg.name, "text": LEG_TEXT[leg.placement] + (TOOLCHAIN_TEXT[leg.toolchain] if many or has_atfe else "")}
               for leg in campaign.runs],
         first_leg=campaign.runs[0].name,
-        gates_mram={"tcm", "mram"} <= set(campaign.legs), toolchains=campaign.toolchains if many else (), has_atfe=has_atfe,
+        gates=_gates(campaign), toolchains=campaign.toolchains if many else (), has_atfe=has_atfe,
         evals=campaign.evals, size_evals=campaign.size_budget, start=start, **{k: str(v) for k, v in paths.items()},
     )

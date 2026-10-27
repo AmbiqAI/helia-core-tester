@@ -438,6 +438,19 @@ static void window_arm_inverted(void)
     hct_window.armed = true;
 }
 
+/* The window evicts this range: every byte the case uses, twins too. */
+static void window_cold_workspace(const hct_server_session_t *session)
+{
+#if defined(HCT_ACTIVATIONS_SRAM)
+    const uint32_t used =
+        (session->twin_end > session->workspace_used_bytes) ? session->twin_end : session->workspace_used_bytes;
+    hct_window.workspace_addr = session->workspace;
+    hct_window.workspace_bytes = (int32_t)used;
+#else
+    (void)session;
+#endif
+}
+
 static void window_disarm(void)
 {
     hct_window.armed = false;
@@ -1656,6 +1669,7 @@ static hctp_status_t handle_run_correctness(hct_server_session_t *session)
     {
         return placed;
     }
+    window_cold_workspace(session);
     status = run_counting_prepare(session);
     session->last_kernel_status = status;
     if (kernel_status_is_fatal(session, status))
@@ -1816,6 +1830,7 @@ static hctp_status_t handle_run_performance(hct_server_session_t *session)
     const uint32_t iterations = resolve_iterations(session);
 
     place_input_twins(session);
+    window_cold_workspace(session);
 
     for (pass_index = 0u; pass_index < session->pass_count; ++pass_index)
     {

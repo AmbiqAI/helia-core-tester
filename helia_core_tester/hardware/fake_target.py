@@ -39,6 +39,7 @@ from .wire import (
     CAP_PMU_ARMV8M,
     CAP_RTT_TRANSPORT,
     CAP_WEIGHTS_MRAM,
+    CAP_ACTIVATIONS_SRAM,
     BlobDescriptor,
     CaseComplete,
     CaseMeta,
@@ -342,8 +343,10 @@ class FakeTargetTransport:
         flags = CAP_CASE_STREAMING | CAP_CORRECTNESS | CAP_PERFORMANCE | CAP_RTT_TRANSPORT | CAP_KERNEL_CATALOG | CAP_ABS_S8
         if self._pmu_present:
             flags |= CAP_PMU_ARMV8M
-        if self._placement == "mram":
+        if self._placement in transfer.MRAM_PLACEMENTS:
             flags |= CAP_WEIGHTS_MRAM
+        if self._placement == "sram":
+            flags |= CAP_ACTIVATIONS_SRAM
         if self.blob_store is not None:
             flags |= CAP_BLOB_STORE
         info = TargetInfo(
