@@ -20,21 +20,31 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 
 # Only the ">=X.Y.Z" form is supported; anything else is a config error.
-min=$(sed -n 's/^required-version *= *">=\([0-9][0-9.]*\)".*/\1/p' "${PYPROJECT}" | head -n1)
+min=$(sed -n 's/^required-version *= *">=\([0-9][0-9]*\(\.[0-9][0-9]*\)*\)".*/\1/p' "${PYPROJECT}" | head -n1)
 if [[ -z "${min}" ]]; then
     echo "check_uv_version: no 'required-version = \">=X.Y.Z\"' under [tool.uv] in ${PYPROJECT}" >&2
     exit 1
 fi
 
-have=$(uv --version 2>/dev/null | sed -n 's/^uv \([0-9][0-9.]*\).*/\1/p')
+have=$(uv --version 2>/dev/null | sed -n 's/^uv \([0-9][0-9]*\(\.[0-9][0-9]*\)*\).*/\1/p')
 if [[ -z "${have}" ]]; then
     echo "check_uv_version: could not parse 'uv --version' output: $(uv --version 2>&1 || true)" >&2
     exit 1
 fi
 
 version_lt() {
-    # True when $1 < $2 (dotted numeric versions).
-    [[ "$1" != "$2" ]] && [[ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n1)" == "$1" ]]
+    # True when $1 < $2. Pure bash so a missing/odd `sort -V` cannot turn a
+    # failed comparison into a pass.
+    local -a a b
+    IFS=. read -r -a a <<< "$1"
+    IFS=. read -r -a b <<< "$2"
+    local i n=$(( ${#a[@]} > ${#b[@]} ? ${#a[@]} : ${#b[@]} ))
+    for (( i = 0; i < n; i++ )); do
+        local x=${a[i]:-0} y=${b[i]:-0}
+        (( 10#$x < 10#$y )) && return 0
+        (( 10#$x > 10#$y )) && return 1
+    done
+    return 1
 }
 
 if version_lt "${have}" "${min}"; then
