@@ -23,6 +23,7 @@ SEEDS = (0, 1, 7, 12345)
 CONV, DW, DW16, TC16 = ("Convolve", "S8"), ("DepthwiseConv", "S8"), ("DepthwiseConv", "S16"), ("TransposeConv", "S16")
 TCF32, TCF16 = ("TransposeConv", "FP32"), ("TransposeConv", "FP16")
 SM8 = ("Softmax", "S8")
+TC8 = ("TransposeConv", "S8")
 SIG32, SIG16 = ("NNActivationFloat", "FP32"), ("NNActivationFloat", "FP16")
 
 
@@ -53,16 +54,17 @@ def test_ops_draw_independently() -> None:
 
 
 @pytest.mark.parametrize(("op", "dtype", "picked"), [
-    (None, None, (CONV, DW, DW16, TC16, TCF32, TCF16, SIG32, SIG16, SM8)),
+    (None, None, (CONV, DW, DW16, TC16, TCF32, TCF16, SIG32, SIG16, SM8, TC8)),
     ("Softmax", "S8", (SM8,)),
     ("softmax", None, (SM8,)),
     ("TransposeConv", "S16", (TC16,)),
-    ("transpose_conv", None, (TC16,)),
+    ("TransposeConv", "S8", (TC8,)),
+    ("transpose_conv", None, (TC16, TC8)),
     ("Convolve", None, (CONV,)),
     ("DepthwiseConv", "s8", (DW,)),
     ("DepthwiseConv", "S16", (DW16,)),
     ("depthwise_conv", None, (DW, DW16)),
-    (None, "S8", (CONV, DW, SM8)),
+    (None, "S8", (CONV, DW, SM8, TC8)),
     (None, "s16", (DW16, TC16)),
 ])
 def test_select_ops_matches_filters(op, dtype, picked) -> None:
@@ -71,14 +73,14 @@ def test_select_ops_matches_filters(op, dtype, picked) -> None:
 
 @pytest.mark.parametrize(("op", "dtype"), [
     ("FullyConnected", None), ("Convolve", "S16"), (None, "S4"), ("rs", None), ("DepthwiseConv", "S4"),
-    ("TransposeConv", "S8"), ("Softmax", "S16"),
+    ("TransposeConv", "S4"), ("Softmax", "S16"),
     # A typo fails even beside a match.
     ("Convolve,Pad", "S8"),
     # Drawn names cannot be filtered.
     ("rs7_conv", None),
 ])
 def test_select_ops_refuses_unknown(op, dtype) -> None:
-    with pytest.raises(ValueError, match="NNActivationFloat FP32, NNActivationFloat FP16, Softmax S8$"):
+    with pytest.raises(ValueError, match="NNActivationFloat FP16, Softmax S8, TransposeConv S8$"):
         rs.select_ops(op, dtype)
 
 

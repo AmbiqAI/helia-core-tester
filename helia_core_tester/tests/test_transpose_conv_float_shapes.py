@@ -24,7 +24,7 @@ SECRET = "s3cret-hidden-seed-0123"
 
 def test_float_keys_get_their_routes() -> None:
     assert rs.select_ops("TransposeConv", "fp32") == (TCF32,) and rs.select_ops("TransposeConv", "FP16") == (TCF16,)
-    assert rs.select_ops("TransposeConv", None) == (("TransposeConv", "S16"), TCF32, TCF16)
+    assert rs.select_ops("TransposeConv", None) == (("TransposeConv", "S16"), TCF32, TCF16, ("TransposeConv", "S8"))
     assert [rs.GENERATORS[k].stream for k in (TCF32, TCF16)] == [4, 5]
     layer = rs.Layer(2, 3, 4, 5, 3, 3, 2, 2, transpose=True)
     routes = {dtype: rs.layer_route("TransposeConv", layer, True, dtype) for dtype in ("S16", "FP32", "FP16")}
