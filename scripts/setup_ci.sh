@@ -66,6 +66,13 @@ if ! command_exists uv; then
 fi
 echo -e "${GREEN}✓ uv found${NC}"
 
+# Old uv builds ignore [tool.uv] required-version, so enforce it here before
+# anything downloads.
+if ! "${SCRIPT_DIR}/check_uv_version.sh" "${REPO_ROOT}/pyproject.toml"; then
+    echo -e "${RED}uv is too old for this repository.${NC}" >&2
+    exit 1
+fi
+
 # Create downloads directory
 mkdir -p "${DOWNLOADS_DIR}"
 
