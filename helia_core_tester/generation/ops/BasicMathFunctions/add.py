@@ -6,6 +6,7 @@ from typing import Dict, Any
 import numpy as np
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.binary_basic_math_base import (
+    broadcast_cmsis_dims,
     BinaryBasicMathBase,
     resolve_quant_preset,
 )
@@ -181,9 +182,9 @@ class OpAdd(BinaryBasicMathBase):
         output_shape = self._ensure_shape_tuple(op_tensors['outputs'][0]['shape'])
         
         builder = TemplateContextBuilder()
-        input1_dims = builder.nhwc_to_cmsis_dims(input1_shape)
-        input2_dims = builder.nhwc_to_cmsis_dims(input2_shape)
-        output_dims = builder.nhwc_to_cmsis_dims(output_shape)
+        input1_dims, input2_dims, output_dims = broadcast_cmsis_dims(
+            self.desc.get("operator", "?"), input1_shape, input2_shape, output_shape
+        )
         activation_dtype = self.tensor_dtype("input")
 
         if kernel_info["float_kernel"]:
