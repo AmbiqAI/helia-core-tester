@@ -123,6 +123,24 @@ int32_t hct_dtype_range(int32_t dtype, int32_t *qmin, int32_t *qmax)
     }
 }
 
+/* TFLite quantizes an activation bound in float, zero_point + (int32)roundf(f / scale),
+ * and clamps it to the dtype range. The float is saturated before the int conversion:
+ * a tiny scale makes f / scale exceed int32 and the raw cast would be UB. */
+static int32_t quantize_bound(float f, float scale, int32_t zero_point, int32_t qmin, int32_t qmax)
+{
+    const float q = roundf(f / scale);
+    if (!(q < 2147483648.0f))
+    {
+        return qmax;
+    }
+    if (q < -2147483648.0f)
+    {
+        return qmin;
+    }
+    const int64_t v = (int64_t)zero_point + (int64_t)(int32_t)q;
+    return v < qmin ? qmin : (v > qmax ? qmax : (int32_t)v);
+}
+
 int32_t hct_activation_range_quantized(
     int32_t activation, int32_t dtype, float scale, int32_t zero_point, int32_t *act_min, int32_t *act_max)
 {
@@ -137,8 +155,6 @@ int32_t hct_activation_range_quantized(
     {
         return HCT_E_PARAM;
     }
-/* TFLite quantizes the bound in float: zero_point + (int32)roundf(f / scale). */
-#define HCT_QUANTIZE(f) (zero_point + (int32_t)roundf((f) / scale))
     int32_t lo = qmin;
     int32_t hi = qmax;
     switch (activation)
@@ -146,20 +162,19 @@ int32_t hct_activation_range_quantized(
     case HCT_ACT_NONE:
         break;
     case HCT_ACT_RELU:
-        lo = HCT_QUANTIZE(0.0f) > qmin ? HCT_QUANTIZE(0.0f) : qmin;
+        lo = quantize_bound(0.0f, scale, zero_point, qmin, qmax);
         break;
     case HCT_ACT_RELU6:
-        lo = HCT_QUANTIZE(0.0f) > qmin ? HCT_QUANTIZE(0.0f) : qmin;
-        hi = HCT_QUANTIZE(6.0f) < qmax ? HCT_QUANTIZE(6.0f) : qmax;
+        lo = quantize_bound(0.0f, scale, zero_point, qmin, qmax);
+        hi = quantize_bound(6.0f, scale, zero_point, qmin, qmax);
         break;
     case HCT_ACT_RELU_N1_TO_1:
-        lo = HCT_QUANTIZE(-1.0f) > qmin ? HCT_QUANTIZE(-1.0f) : qmin;
-        hi = HCT_QUANTIZE(1.0f) < qmax ? HCT_QUANTIZE(1.0f) : qmax;
+        lo = quantize_bound(-1.0f, scale, zero_point, qmin, qmax);
+        hi = quantize_bound(1.0f, scale, zero_point, qmin, qmax);
         break;
     default:
         return HCT_E_PARAM;
     }
-#undef HCT_QUANTIZE
     *act_min = lo;
     *act_max = hi;
     return HCT_OK;

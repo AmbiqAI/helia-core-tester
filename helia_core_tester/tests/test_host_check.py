@@ -224,6 +224,37 @@ def test_step_runs_and_writes_its_report(tmp_path, monkeypatch) -> None:
     assert [f["name"] for f in data["modes"]["m0"]["failures"]] == ["case_bad"]
 
 
+def test_step_passes_when_every_selected_case_is_not_applicable(tmp_path, monkeypatch) -> None:
+    # A selection of only MVE-gated cases leaves the m0 host build nothing to judge;
+    # that must not refuse the build as "no int cases found".
+    tree = _checkout(tmp_path)
+    config = _config(tmp_path, cmsis_nn_root=tree, host_kernels=["m0"])
+    cases = tmp_path / "generated" / "int" / "cortex-m55"
+    monkeypatch.setattr(HostCheckStep, "_targets", lambda self: [("cortex-m55", cases)])
+    _described_case(cases, "case_needs_mve", "hct_missing() == 0", required_capabilities=["mve"])
+    monkeypatch.setenv(hk.CACHE_ENV, str(tmp_path / "cache"))
+    report_path = tmp_path / "reports" / "host_check.json"
+    monkeypatch.setattr(HostCheckStep, "_report_path", lambda self, cpu: report_path)
+    result = HostCheckStep(config).execute()
+    assert result.status == StepStatus.SUCCESS, result.message
+    data = json.loads(report_path.read_text())
+    assert data["modes"]["m0"]["total"] == 0
+    assert [c["name"] for c in data["modes"]["m0"]["not_applicable"]] == ["case_needs_mve"]
+
+
+def test_step_still_fails_on_an_empty_tree(tmp_path, monkeypatch) -> None:
+    tree = _checkout(tmp_path)
+    config = _config(tmp_path, cmsis_nn_root=tree, host_kernels=["m0"])
+    cases = tmp_path / "generated" / "int" / "cortex-m55"
+    cases.mkdir(parents=True)
+    monkeypatch.setattr(HostCheckStep, "_targets", lambda self: [("cortex-m55", cases)])
+    monkeypatch.setenv(hk.CACHE_ENV, str(tmp_path / "cache"))
+    monkeypatch.setattr(HostCheckStep, "_report_path", lambda self, cpu: tmp_path / "r.json")
+    result = HostCheckStep(config).execute()
+    assert result.status == StepStatus.FAILED
+    assert "1 host-check failure(s)" in result.message
+
+
 def test_failing_host_check_blocks_the_build_even_without_fail_fast(tmp_path, monkeypatch) -> None:
     config = _config(tmp_path, skip_generation=True, fail_fast=False)
     calls = []

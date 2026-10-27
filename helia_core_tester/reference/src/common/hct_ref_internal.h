@@ -112,6 +112,14 @@ uint16_t hct_f32_to_f16(float f);
 /* binary64 -> binary16, rounded once to nearest even. */
 uint16_t hct_f64_to_f16(double d);
 
+/* `scaled + offset` clamped to [lo, hi], with the add in int64: a requantized value
+ * at +-INT32_MAX plus a non-zero offset would overflow int32 (UB). */
+static inline int32_t hct_offset_clamp_i32(int32_t scaled, int32_t offset, int32_t lo, int32_t hi)
+{
+    const int64_t v = (int64_t)scaled + (int64_t)offset;
+    return v < lo ? lo : (v > hi ? hi : (int32_t)v);
+}
+
 /* Clamp that propagates NaN (std::min(std::max(x, lo), hi) as TFLite applies it). */
 static inline float hct_clamp_f32(float x, float lo, float hi)
 {

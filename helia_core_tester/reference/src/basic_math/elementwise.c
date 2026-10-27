@@ -97,9 +97,9 @@ static int32_t mul_quantized(const HctMulParams *p, const HctTensor *inputs, int
         hct_broadcast2_offsets(&bc, i, &o1, &o2);
         const int32_t product =
             (p->input1_offset + hct_load_i32(&inputs[0], o1)) * (p->input2_offset + hct_load_i32(&inputs[1], o2));
-        const int32_t out =
-            p->output_offset + hct_multiply_by_quantized_multiplier(product, p->output_multiplier, p->output_shift);
-        hct_store_i32(&outputs[0], i, clamp_i32(out, p->activation_min, p->activation_max));
+        const int32_t scaled = hct_multiply_by_quantized_multiplier(product, p->output_multiplier, p->output_shift);
+        hct_store_i32(&outputs[0], i,
+                      hct_offset_clamp_i32(scaled, p->output_offset, p->activation_min, p->activation_max));
     }
     return HCT_OK;
 }
@@ -310,10 +310,10 @@ static int32_t squared_difference_quantized(const HctSquaredDifferenceParams *p,
         const int32_t scaled1 = hct_multiply_by_quantized_multiplier(shifted1, p->input1_multiplier, p->input1_shift);
         const int32_t scaled2 = hct_multiply_by_quantized_multiplier(shifted2, p->input2_multiplier, p->input2_shift);
         const int32_t raw_diff = scaled1 - scaled2;
-        const int32_t out =
-            hct_multiply_by_quantized_multiplier(raw_diff * raw_diff, p->output_multiplier, p->output_shift) +
-            p->output_offset;
-        hct_store_i32(&outputs[0], i, clamp_i32(out, p->activation_min, p->activation_max));
+        const int32_t scaled =
+            hct_multiply_by_quantized_multiplier(raw_diff * raw_diff, p->output_multiplier, p->output_shift);
+        hct_store_i32(&outputs[0], i,
+                      hct_offset_clamp_i32(scaled, p->output_offset, p->activation_min, p->activation_max));
     }
     return HCT_OK;
 }
@@ -516,10 +516,9 @@ static int32_t abs_quantized(const HctAbsParams *p, const HctTensor *inputs, int
     {
         int32_t value = hct_load_i32(&inputs[0], i) - p->input_zero_point;
         value = value < 0 ? -value : value;
-        const int32_t out =
-            (p->needs_rescale ? hct_multiply_by_quantized_multiplier(value, p->multiplier, p->shift) : value) +
-            p->output_zero_point;
-        hct_store_i32(&outputs[0], i, clamp_i32(out, qmin, qmax));
+        const int32_t scaled =
+            p->needs_rescale ? hct_multiply_by_quantized_multiplier(value, p->multiplier, p->shift) : value;
+        hct_store_i32(&outputs[0], i, hct_offset_clamp_i32(scaled, p->output_zero_point, qmin, qmax));
     }
     return HCT_OK;
 }

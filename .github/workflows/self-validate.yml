@@ -151,6 +151,7 @@ jobs:
   # and a migrated template failing closed instead of rendering a hand-written call.
   # scripts/assert_contract_summary.py turns those observations into the verdict.
   contract:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

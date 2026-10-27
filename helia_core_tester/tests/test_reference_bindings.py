@@ -149,6 +149,23 @@ def test_reference_call_runs_probes_and_records() -> None:
     assert record["outputs"] == {"output": [2, 3]}
 
 
+def test_reference_call_keeps_rank_0_inputs() -> None:
+    # gather's output rank follows the indices' rank: a scalar index must stay rank 0
+    # through ReferenceCall, both in the call made and in the provenance recorded.
+    call = ReferenceCall(entry="gather", params={"axis": 0},
+                         inputs={"input": np.arange(4, dtype=np.int32), "indices": np.array(2, np.int32)},
+                         output_shapes={"output": ()})
+    assert call.inputs["indices"].shape == ()
+    assert call.inputs["indices"].flags["C_CONTIGUOUS"]
+    out = call.output()
+    assert out.shape == () and int(out) == 2
+    assert call.provenance(seeds={}, library_key="k")["inputs"]["indices"]["shape"] == []
+    strided = np.arange(6, dtype=np.float32)[::2]
+    assert ReferenceCall(entry="add_f32", params=FLOAT_PARAMS,
+                         inputs={"input1": strided, "input2": np.ones(3, np.float32)},
+                         output_shapes={"output": (3,)}).inputs["input1"].flags["C_CONTIGUOUS"]
+
+
 def test_reference_record_is_strict_json(tmp_path) -> None:
     path = _call().to_json(tmp_path / "r.json", seeds={"case_seed": 1}, library_key="k")
     record = json.loads(path.read_text(), parse_constant=lambda c: pytest.fail(f"non-strict JSON constant {c}"))

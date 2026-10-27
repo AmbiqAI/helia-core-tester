@@ -100,10 +100,10 @@ static int32_t relu(const HctReluParams *p, const HctTensor *inputs, int32_t num
     }
     for (int64_t i = 0; i < count; ++i)
     {
-        int32_t v = p->output_offset + hct_multiply_by_quantized_multiplier(hct_load_i32(&inputs[0], i) - p->input_offset,
-                                                                            p->output_multiplier, p->output_shift);
-        v = v < p->activation_min ? p->activation_min : (v > p->activation_max ? p->activation_max : v);
-        hct_store_i32(&outputs[0], i, v);
+        const int32_t scaled = hct_multiply_by_quantized_multiplier(hct_load_i32(&inputs[0], i) - p->input_offset,
+                                                                    p->output_multiplier, p->output_shift);
+        hct_store_i32(&outputs[0], i,
+                      hct_offset_clamp_i32(scaled, p->output_offset, p->activation_min, p->activation_max));
     }
     return HCT_OK;
 }
@@ -167,8 +167,7 @@ static int32_t leaky_relu(const HctLeakyReluParams *p, const HctTensor *inputs, 
         const int32_t scaled =
             x >= 0 ? hct_multiply_by_quantized_multiplier(x, p->identity_multiplier, p->identity_shift)
                    : hct_multiply_by_quantized_multiplier(x, p->alpha_multiplier, p->alpha_shift);
-        const int32_t v = p->output_offset + scaled;
-        hct_store_i32(&outputs[0], i, v < qmin ? qmin : (v > qmax ? qmax : v));
+        hct_store_i32(&outputs[0], i, hct_offset_clamp_i32(scaled, p->output_offset, qmin, qmax));
     }
     return HCT_OK;
 }
@@ -245,8 +244,7 @@ static int32_t prelu_quantized(const HctPreluParams *p, const HctTensor *inputs,
             const int32_t a = p->alpha_offset + hct_load_i32(&inputs[1], oa);
             v = hct_multiply_by_quantized_multiplier(x * a, p->alpha_multiplier, p->alpha_shift);
         }
-        v += p->output_offset;
-        hct_store_i32(&outputs[0], i, v < qmin ? qmin : (v > qmax ? qmax : v));
+        hct_store_i32(&outputs[0], i, hct_offset_clamp_i32(v, p->output_offset, qmin, qmax));
     }
     return HCT_OK;
 }

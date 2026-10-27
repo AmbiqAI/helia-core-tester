@@ -54,7 +54,8 @@ class ReferenceCall:
         if set(self.output_shapes) - set(shapes):
             raise KeyError(f"{self.entry}: unknown outputs {sorted(set(self.output_shapes) - set(shapes))}")
         object.__setattr__(self, "output_shapes", shapes)
-        object.__setattr__(self, "inputs", {n: np.ascontiguousarray(a) for n, a in self.inputs.items()})
+        # np.require keeps rank 0 (numpy<2's ascontiguousarray promotes a scalar to (1,)).
+        object.__setattr__(self, "inputs", {n: np.require(a, requirements="C") for n, a in self.inputs.items()})
 
     @property
     def output_names(self) -> Tuple[str, ...]:

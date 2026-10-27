@@ -92,7 +92,10 @@ class HostCheckStep(StepBase):
                     reports[mode] = report.to_json()
                     checked_total += report.total
                     failures_total += len(report.failures)
-                    level = self.logger.info if report.ok else self.logger.error
+                    # A selection whose every case needs a capability the host build lacks
+                    # (e.g. only MVE-gated cases) leaves nothing to judge: not a failure.
+                    all_not_applicable = report.total == 0 and bool(report.not_applicable) and not report.failures
+                    level = self.logger.info if (report.ok or all_not_applicable) else self.logger.error
                     level(
                         f"host-check {cpu} [{mode}]: {report.passed}/{report.total} passed, "
                         f"{len(report.failures)} failed, {len(report.advisory)} advisory "
@@ -110,7 +113,7 @@ class HostCheckStep(StepBase):
                         )
                     if len(report.failures) > _LOGGED_FAILURES:
                         self.logger.error(f"  ... {len(report.failures) - _LOGGED_FAILURES} more in the report")
-                    if report.total == 0:
+                    if report.total == 0 and not all_not_applicable:
                         failures_total += 1
                         self.logger.error(f"host-check {cpu} [{mode}]: no int cases found under {cases_root}")
                 path = self._report_path(cpu)

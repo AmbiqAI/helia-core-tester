@@ -32,7 +32,7 @@ STAMP_FILENAME = ".stamp"
 
 # Version prefix of the stamp payload itself. Bump when the payload layout
 # changes so old stamps cannot accidentally validate against new semantics.
-_STAMP_SCHEMA = "helia-core-tester/generation-stamp/8"
+_STAMP_SCHEMA = "helia-core-tester/generation-stamp/9"
 
 # The lock file is the whole resolved dependency set, so it covers every package
 # that can move emitted bytes -- numpy's RNG streams, jinja2 and pyyaml -- without anyone having to
@@ -49,14 +49,20 @@ _EXTERNAL_GENERATOR_SOURCES = (
 
 # Subtrees (or single files) of the ns-cmsis-nn checkout that are generation
 # inputs: the public headers drive the temp-sizer probe's choice of template
-# variant, and the exported kernel contract (contract/ir.py) is what call-site
-# rendering and symbol checks read instead of the headers. No golden is read
-# from the checkout (they come from the tester's C reference). Changing this
-# list is a stamp-schema bump: an uncovered input would let a stale case be
-# reused after that input changed.
+# variant, the exported kernel contract (contract/ir.py) is what call-site
+# rendering and symbol checks read instead of the headers, and the host planner
+# (Planner/ plus the Source/ files its sources.txt names, read through
+# python/ns_cmsis_nn_contracts) decides ctx sizes, kernel sums, packed streams
+# and route constants that land in the emitted C. No golden is read from the
+# checkout (they come from the tester's C reference). Changing this list is a
+# stamp-schema bump: an uncovered input would let a stale case be reused after
+# that input changed.
 _CMSIS_NN_INPUT_SUBTREES = (
     "Include",
+    "Planner",
+    "Source",
     "Tests/KernelContracts",
+    "python/ns_cmsis_nn_contracts",
 )
 
 _version_hash_cache: Optional[str] = None

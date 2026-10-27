@@ -109,6 +109,22 @@ def test_relu6_upper_bound_saturates_at_the_dtype_limit(lib) -> None:
     assert p["activation_max"] == 127
 
 
+def test_relu_output_offset_add_saturates_instead_of_wrapping(lib) -> None:
+    # A requantized value at INT32_MAX plus a non-zero offset must clamp, not overflow int32.
+    p = {**_relu_prepare(lib, "s8", 0.1, 0, 0.1, 0, math.inf), "output_offset": -100,
+         "output_multiplier": 2**31 - 1, "output_shift": 30, "activation_min": -128}
+    out = _unary(lib, "relu_s8", p, np.array([1, 0, -1], np.int8))
+    assert out.tolist() == [127, -100, -128]
+
+
+@pytest.mark.parametrize("activation, want", [(2, (0, 127)), (3, (-128, 127)), (1, (0, 127))])
+def test_activation_range_saturates_for_tiny_scales(lib, activation, want) -> None:
+    # 6 / 1e-12 does not fit int32: the bound saturates at the dtype limit, no UB cast.
+    out = lib.prepare("activation_range_quantized",
+                      {"activation": activation, "dtype": dtype_code("int8"), "scale": 1e-12, "zero_point": 0})
+    assert (out["min"], out["max"]) == want
+
+
 # --------------------------------------------------------------------- LeakyRelu
 
 
