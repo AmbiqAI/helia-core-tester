@@ -1,144 +1,62 @@
-"""Float activation operation implementation."""
+"""Float activation operation (arm_nn_activation_f32/f16): goldens from the C reference.
+
+Relu, relu6, leaky relu and none are exact in the kernel, so their golden is the exact result rounded once.
+On the shipped build sigmoid, tanh and hardswish follow the kernel's own arithmetic on the case's target
+(kernel_faithful: nn_activation_f32_cmsis per float32 target, nn_activation_f16_mve and tanh_lut_mve_f16 on
+Helium), compared at PyTorch's tolerances; the exact result stays the oracle (kf.check_close_to_exact). Every
+other build, and float16 off Helium, keeps the exact golden widened by the activation's guard budget. A
+descriptor's tightened comparison wins on every build (kf.comparison_context).
+"""
 
 from pathlib import Path
 
 import numpy as np
-import tensorflow as tf
 
-from helia_core_tester.core.cpu_targets import get_cpu_profile
+from helia_core_tester.generation.ops._shared import kernel_faithful as kf
 from helia_core_tester.generation.ops._shared.base import OperationBase
-
-
-_ACTIVATION_LAYERS = {
-    "ARM_NN_FLT_ACT_SIGMOID": tf.keras.activations.sigmoid,
-    "ARM_NN_FLT_ACT_TANH": tf.keras.activations.tanh,
-    "ARM_NN_FLT_ACT_NONE": tf.keras.activations.linear,
-}
-
-
-def _fp16(value) -> np.ndarray:
-    return np.asarray(value, dtype=np.float16)
-
-
-# float16 tanh LUT sampled over x in [0, 4] with 256 intervals, matching
-# arm_nn_tanh_lut_f16 in Source/NNSupportFunctions/arm_nntables_flt.c:
-#   arm_nn_tanh_lut_f16[i] = float16(tanh(4 * i / 256))
-_TANH_LUT256_F16 = np.tanh(4.0 * np.arange(257, dtype=np.float64) / 256.0).astype(np.float16)
-
-
-def _tanh_reference_f16(input_data: np.ndarray) -> np.ndarray:
-    """Scalar LUT reference with separately rounded half-precision operations.
-
-    Models round-to-nearest without flushing subnormals. Optimized scalar code
-    may contract interpolation, so off-grid bitwise parity is not promised.
-    The table is independently sampled from tanh, not read from the kernel.
-    """
-    x = _fp16(input_data)
-    is_nan = (x.view(np.uint16) & 0x7fff) > 0x7c00
-    # Classify before indexing: NaNs must never undergo an integer conversion.
-    ax = _fp16(np.abs(np.where(is_nan, _fp16(0.0), x)))
-    saturate = ax > _fp16(4.0)
-    t = _fp16(np.minimum(ax, _fp16(4.0)) * _fp16(64.0))
-    idx = np.minimum(t.astype(np.uint16), np.uint16(255))
-    frac = _fp16(t - idx.astype(np.float16))
-    y0 = _TANH_LUT256_F16[idx]
-    diff = _fp16(_TANH_LUT256_F16[idx + 1] - y0)
-    interp = _fp16(y0 + _fp16(diff * frac))
-    magnitude = np.where(saturate, _fp16(1.0), interp)
-    return _fp16(np.where(is_nan, x, np.copysign(magnitude, x)))
-
-
-def _tanh_reference_f16_mve(input_data: np.ndarray) -> np.ndarray:
-    """Mirror the float16 MVE tanh path (arm_nn_vtanh_lut_direct_mve_f16).
-
-    Reproduces the Helium kernel's LUT + linear interpolation and float16 rounding
-    so generated expectations match Cortex-M55 MVE output bit-for-bit.
-    """
-    x = _fp16(input_data)
-    ax = _fp16(np.abs(x))
-    saturate = ax > _fp16(4.0)
-    ax = _fp16(np.minimum(ax, _fp16(4.0)))
-    # t = ax * (256 / 4); idx = floor(t) clamped to [0, 255]; frac = t - idx
-    t = _fp16(ax * _fp16(64.0))
-    idx = np.minimum(t.astype(np.uint16), np.uint16(255))
-    frac = _fp16(t - idx.astype(np.float16))
-    y0 = _TANH_LUT256_F16[idx]
-    y1 = _TANH_LUT256_F16[idx + 1]
-    diff = _fp16(y1 - y0)
-    # vfmaq performs a single-rounded multiply-add; evaluate exactly then round once.
-    interp = _fp16(y0.astype(np.float64) + diff.astype(np.float64) * frac.astype(np.float64))
-    magnitude = np.where(saturate, _fp16(1.0), interp)
-    result = np.where(x < _fp16(0.0), _fp16(-magnitude), magnitude)
-    return result.astype(np.float16)
-
-
-def _activation_reference(
-    input_data: np.ndarray,
-    activation_type: str,
-    act_param: float,
-    activation_dtype: str = "FP32",
-    *,
-    use_mve_tanh: bool = False,
-) -> np.ndarray:
-    if activation_type == "ARM_NN_FLT_ACT_TANH" and str(activation_dtype).upper() == "FP16":
-        if use_mve_tanh:
-            return _tanh_reference_f16_mve(input_data)
-        return _tanh_reference_f16(input_data)
-
-    data = input_data.astype(np.float32)
-    if activation_type == "ARM_NN_FLT_ACT_SIGMOID":
-        return 1.0 / (1.0 + np.exp(-data))
-    if activation_type == "ARM_NN_FLT_ACT_TANH":
-        return np.tanh(data)
-    if activation_type == "ARM_NN_FLT_ACT_HARDSWISH":
-        return data * np.clip(data + 3.0, 0.0, 6.0) / 6.0
-    if activation_type == "ARM_NN_FLT_ACT_LEAKY_RELU":
-        return np.where(data >= 0.0, data, data * float(act_param))
-    if activation_type == "ARM_NN_FLT_ACT_RELU":
-        return np.maximum(data, 0.0)
-    if activation_type == "ARM_NN_FLT_ACT_RELU6":
-        return np.clip(data, 0.0, 6.0)
-    if activation_type == "ARM_NN_FLT_ACT_NONE":
-        return data
-    raise ValueError(f"Unsupported float activation type: {activation_type}")
+from helia_core_tester.generation.harness.simple import tensor_case_pool
 
 
 class OpNNActivationFloat(OperationBase):
     """Generate float activation parity tests."""
 
-    def build_keras_model(self) -> tf.keras.Model:
-        input_shape = tuple(self.desc["input_shape"])
-        activation_type = str(self.desc["activation_type"]).upper()
-        act_param = float(self.desc.get("act_param", 0.0))
-
-        inputs = tf.keras.Input(shape=input_shape[1:], dtype=tf.float32, name="input")
-        if activation_type in _ACTIVATION_LAYERS:
-            output = tf.keras.layers.Activation(_ACTIVATION_LAYERS[activation_type])(inputs)
-        elif activation_type == "ARM_NN_FLT_ACT_HARDSWISH":
-            output = tf.keras.layers.Lambda(lambda x: x * tf.nn.relu6(x + 3.0) / 6.0)(inputs)
-        elif activation_type == "ARM_NN_FLT_ACT_LEAKY_RELU":
-            output = tf.keras.layers.LeakyReLU(negative_slope=act_param)(inputs)
-        elif activation_type == "ARM_NN_FLT_ACT_RELU":
-            output = tf.keras.layers.Lambda(tf.nn.relu)(inputs)
-        elif activation_type == "ARM_NN_FLT_ACT_RELU6":
-            output = tf.keras.layers.Lambda(tf.nn.relu6)(inputs)
-        else:
-            raise ValueError(f"Unsupported float activation type: {activation_type}")
-
-        return tf.keras.Model(inputs=inputs, outputs=output)
+    def uses_reference(self) -> bool:
+        return True
 
     def _activation_symbol(self) -> str:
         return str(self.desc["activation_type"]).upper()
 
+    def _kernel_call(self, activation_type: str, activation_dtype: str, input_data: np.ndarray, act_param: float,
+                     exact):
+        """The golden's reference call, and whether it is the kernel's own arithmetic on this build.
+
+        Relu, relu6, leaky relu and none round at most one product, so the exact call is the kernel's result on
+        every build. On the shipped build sigmoid, tanh and hardswish follow the kernel: float32 on each float
+        target (Helium, scalar FPU, soft float), float16 on Helium. Every other case keeps the exact golden,
+        widened by the activation's guard budget (kf.activation_atol)."""
+        from helia_core_tester.generation.reference.abi import float_activation_code
+        from helia_core_tester.generation.reference.call import ReferenceCall
+
+        code = float_activation_code(activation_type)
+        if activation_type not in kf.APPROXIMATED_ACTIVATIONS:
+            return exact, True
+        target = kf.float_route(self) if activation_dtype == "FP32" else None
+        if target is not None:
+            return kf.nn_activation_f32_cmsis_call(input_data, code, act_param, target), True
+        if activation_dtype == "FP16" and kf.mve_float16_route(self):
+            if activation_type == "ARM_NN_FLT_ACT_TANH":
+                return ReferenceCall("tanh_lut_mve_f16", {"unused": 0}, dict(exact.inputs), dict(exact.output_shapes),
+                                     quant=exact.quant), True
+            return kf.nn_activation_f16_mve_call(input_data, code, act_param), True
+        return exact, False
+
     def generate_c_files(self, output_dir: Path) -> None:
+        from helia_core_tester.generation.reference.abi import float_activation_code
+        from helia_core_tester.generation.reference.call import ReferenceCall
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
         name = self.desc["name"]
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
-
-        input_shape = tuple(self.desc["input_shape"])
+        input_shape = tuple(int(d) for d in self.desc["input_shape"])
         activation_dtype = self.tensor_dtype("input", default="FP32")
         if activation_dtype == "FP16":
             float_dtype = np.float16
@@ -158,17 +76,17 @@ class OpNNActivationFloat(OperationBase):
             dtype=float_dtype,
         )
         activation_type = self._activation_symbol()
-        # Select the reference by generation profile, not compiled kernel route.
-        # M55-generated cases also run on the scalar fallback; off-grid rounding
-        # can differ there, so existing comparison budgets remain necessary.
-        use_mve_tanh = get_cpu_profile(self.target_cpu).has_mve
-        output_data = _activation_reference(
-            input_data,
-            activation_type,
-            float(self.desc.get("act_param", 0.0)),
-            activation_dtype,
-            use_mve_tanh=use_mve_tanh,
-        ).astype(float_dtype)
+        act_param = float(self.desc.get("act_param", 0.0))
+        exact = ReferenceCall(
+            "nn_activation_f16" if activation_dtype == "FP16" else "nn_activation_f32",
+            {"activation_type": float_activation_code(activation_type), "act_param": act_param},
+            {"input": np.ascontiguousarray(input_data)}, {"output": input_shape},
+            quant={"activation_type": activation_type},
+        )
+        call, faithful = self._kernel_call(activation_type, activation_dtype, input_data, act_param, exact)
+        output_data = self.reference_golden(call)
+        if call is not exact:
+            kf.check_close_to_exact(name, call, exact, kf.activation_atol(input_data, activation_type))
 
         builder = TemplateContextBuilder()
         context = {
@@ -182,17 +100,13 @@ class OpNNActivationFloat(OperationBase):
             "output_dtype": output_dtype,
             "kernel_fn": kernel_fn,
         }
+        bound = 0.0 if faithful else kf.activation_atol(input_data, activation_type)
+        context.update(kf.comparison_context(self, float_dtype, bound))
 
-        cmake_context = {
-            "name": name,
-            "operator": self.desc.get("operator", "NNActivationFloat"),
-            "operator_name": "nn_activation_float",
-        }
-        self._write_op_outputs(
-            output_dir,
-            "nn_activation_float",
-            "ActivationFunctions/nn_activation_float/nn_activation_float.h.j2",
-            "ActivationFunctions/nn_activation_float/nn_activation_float.c.j2",
-            context,
-            cmake_context,
+        self.render_harness_case(
+            output_dir, stem="nn_activation_float", context=context,
+            pool=tensor_case_pool(context, {"size": context["size"], "type": context["activation_symbol"],
+                                            "act_param": context["act_param_literal"]}, dims=(), output_count=str(context["size"])),
+            validation_key="ActivationFunctions/nn_activation_float/nn_activation_float.c.j2", label="NNActivationFloat",
+            operator="NNActivationFloat", sidecar=True,
         )

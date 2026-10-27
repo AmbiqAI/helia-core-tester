@@ -273,7 +273,7 @@ padding: VALID
 fault: negative_dim
 expected_status: ARM_CMSIS_NN_ARG_ERROR
 ---
-# BEGIN mlperf model shapes (scripts/extract_model_shapes.py)
+# BEGIN mlperf model shapes (layer shapes of the MLPerf Tiny int8 models)
 operator: AvgPool
 name: avg_pool_mlperf_ic_l12_s8
 activation_dtype: S8
@@ -307,3 +307,17 @@ pool_size: [3, 3]
 strides: [3, 3]
 padding: VALID
 # END mlperf model shapes
+---
+# Contract conformance (Phase 2 T4a, AmbiqAI/ns-cmsis-nn#829): arm_avgpool_s8 (scratch on DSP builds only), checked on the target against the
+# checkout's planner on every build (see generation/conformance.py).
+operator: AvgPool
+name: avg_pool_conformance_pool3x3_stride2_c20_s8
+conformance: true
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint: {call_style: per_tensor}
+input_shape: [1, 12, 22, 20]
+pool_size: [3, 3]
+strides: [2, 2]
+padding: SAME

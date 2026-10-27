@@ -33,6 +33,8 @@ from helia_core_tester.generation.ops.ActivationFunctions.nn_activation_float im
     OpNNActivationFloat,
 )
 from helia_core_tester.core.cpu_targets import missing_required_capabilities
+from helia_core_tester.generation.ops._shared import kernel_faithful as kf
+from helia_core_tester.generation.ops._shared.conv_reference import DEPTHWISE_F16_ACC32_MACRO
 from helia_core_tester.generation.test_ops import _required_capabilities, default_seed_for_case
 
 GOLDEN_CASE = "nn_activation_float_tanh_f16"
@@ -174,7 +176,6 @@ def _emit_header(output_dir: Path) -> str:
     # The generator's own seed derivation, so the fixture is the same text a real
     # `helia_core_tester generate` run produces, not a test-only artifact.
     op = OpNNActivationFloat(desc, default_seed_for_case(GOLDEN_CASE), target_cpu=GOLDEN_CPU)
-    (output_dir / f"{GOLDEN_CASE}.tflite").touch()
     op.generate_c_files(output_dir)
     return (output_dir / "includes" / f"{GOLDEN_CASE}_nn_activation_float.h").read_text()
 
@@ -209,9 +210,8 @@ def test_tanh_lut_grid_cases_emit_exact_discriminators(
 ) -> None:
     name = f"nn_activation_float_tanh_lut_{kind}_f16"
     op = OpNNActivationFloat(_descriptor(name), seed, target_cpu=cpu)
-    # Emitter-only check, deliberately bypassing admission (DSP remains gated).
-    # Header emission does not read the model; full generation is qualified separately.
-    (tmp_path / f"{name}.tflite").touch()
+    # Emitter-only check, deliberately bypassing admission (DSP remains gated);
+    # full generation is qualified separately.
     op.generate_c_files(tmp_path)
     header = (tmp_path / "includes" / f"{name}_nn_activation_float.h").read_text()
     for suffix, bits in (("input", input_bits), ("expected_output", output_bits)):
@@ -275,6 +275,13 @@ ROUTED_CASES = [
 ]
 ROUTED_CPU = "cortex-m55"
 
+# Goldens that follow a feature macro of the configured ns-cmsis-nn checkout: a checkout that declares the
+# macro emits the `<name>.<tag>.h` fixture instead (the .c text does not depend on it). Default FP16
+# depthwise sums in float32 from ns-cmsis-nn#881 on.
+CHECKOUT_GATED_HEADERS = {
+    "depthwise_conv_float_default_f16": (DEPTHWISE_F16_ACC32_MACRO, "acc32"),
+}
+
 
 def _finite_golden_dir() -> Path:
     return _repo_root() / "helia_core_tester" / "tests" / "fixtures" / "finite_goldens"
@@ -308,6 +315,9 @@ def test_routed_operator_keeps_its_finite_golden(
     emitted_path = test_dir / "includes" / filename if kind == "h" else test_dir / filename
     emitted = emitted_path.read_text()
     fixture = _finite_golden_dir() / filename
+    gate = CHECKOUT_GATED_HEADERS.get(case_name)
+    if kind == "h" and gate is not None and kf.checkout_declares(gate[0]):
+        fixture = fixture.with_name(f"{case_name}_{op_suffix}.{gate[1]}.h")
     expected = fixture.read_text()
 
     if kind == "h":

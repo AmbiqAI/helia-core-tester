@@ -1,9 +1,10 @@
 """
-Main TFLite model generation for Helia-Core Tester.
-Thin generator that discovers YAML descriptors and generates TFLite models.
+Test-case generation for Helia-Core Tester.
+Thin driver that discovers YAML descriptors and renders each case, its golden from the C reference.
 """
 
 import hashlib
+import os
 import re
 import json
 import shutil
@@ -17,7 +18,7 @@ import yaml
 from helia_core_tester.core.discovery import find_descriptors_dir, find_generated_tests_dir, find_repo_root
 from helia_core_tester.core.cpu_targets import missing_required_capabilities, normalize_cpu
 from helia_core_tester.generation.golden_check import DegenerateGoldenError, check_case_golden
-from helia_core_tester.generation.kernel_dispatch import DEPTHWISE_CONV_S8_PLANAR_RULE, DIRECT_ENTRIES
+from helia_core_tester.generation.kernel_dispatch import DEPTHWISE_CONV_S8_PLANAR_RULE
 from helia_core_tester.generation.io.dtypes import descriptor_matches_dtype_filter, resolve_comparison, resolve_tensor_dtypes
 from helia_core_tester.generation.io.descriptors import descriptor_matches_op, load_all_descriptors, unmatched_ops
 from helia_core_tester.core.path_layout import generation_report_dir
@@ -30,12 +31,54 @@ from helia_core_tester.generation.reuse import (
     reset_case_dir,
     write_stamp,
 )
-from helia_core_tester.generation.utils.temp_sizer_probe import kernel_source_exists, missing_header_symbols
+from helia_core_tester.contract import render as contract_render
+from helia_core_tester.generation.entry import EntryError, apply_entry_manifest
+from helia_core_tester.generation.kernel_gate import gate_kernel_symbols
+from helia_core_tester.generation.utils.temp_sizer_probe import kernel_source_exists
 
 
-def default_seed_for_case(name: str) -> int:
-    """Deterministic per-case seed, independent of PYTHONHASHSEED."""
-    return int.from_bytes(hashlib.sha256(name.encode("utf-8")).digest()[:4], "little")
+RUN_SEED_ENV = "HCT_SEED"
+REQUIRE_CONTRACT_ENV = "HELIA_CORE_TESTER_REQUIRE_CONTRACT"
+
+
+def default_seed_for_case(name: str, run_seed: int = 0) -> int:
+    """The case's own seed: the run seed mixed with the case name, independent of PYTHONHASHSEED.
+
+    Two cases of one run never share a draw, and the same run seed reproduces every case. Run seed
+    0 is the historical per-name seed, so pinned fixtures and `HCT_SEED=0` keep their draws."""
+    if int(run_seed) == 0:
+        return int.from_bytes(hashlib.sha256(name.encode("utf-8")).digest()[:4], "little")
+    payload = f"{int(run_seed)}\0{name}".encode("utf-8")
+    return int.from_bytes(hashlib.sha256(payload).digest()[:4], "little")
+
+
+# Draws a fresh seed can make degenerate (a flat golden) are redrawn this many times in all.
+DEGENERATE_DRAW_ATTEMPTS = 3
+
+
+def redraw_seed(case_seed: int, attempt: int) -> int:
+    """The seed of a case's draw `attempt`: the case seed itself first, then seeds derived from it,
+    so `--seed N --name X` reproduces whichever draw a run kept."""
+    if attempt < 0 or attempt >= DEGENERATE_DRAW_ATTEMPTS:
+        raise ValueError(f"redraw attempt must be in [0, {DEGENERATE_DRAW_ATTEMPTS}), got {attempt}")
+    if attempt == 0:
+        return int(case_seed)
+    payload = f"{int(case_seed)}\0redraw\0{attempt}".encode("utf-8")
+    return int.from_bytes(hashlib.sha256(payload).digest()[:4], "little")
+
+
+def resolve_run_seed(filters: Dict[str, Any]) -> tuple[int, bool]:
+    """The run seed and whether the caller chose it.
+
+    `--seed N` pins it (reuse stamps match again); otherwise HCT_SEED, else a fresh draw, so every
+    run redraws every case's data. A fresh seed is printed and recorded so a failure reproduces
+    with `--seed N`. `--fresh-seed` marks a seed the pipeline drew itself as not chosen."""
+    if filters.get("seed") is not None:
+        return int(filters["seed"]), not bool(filters.get("fresh_seed"))
+    env = os.environ.get(RUN_SEED_ENV)
+    if env is not None and env.strip():
+        return int(env.strip(), 0), True
+    return int.from_bytes(os.urandom(4), "little"), False
 
 
 def _descriptor_family(desc: Dict[str, Any]) -> str:
@@ -159,8 +202,9 @@ def _required_kernel_symbols(desc: Dict[str, Any]) -> list[str]:
     """Public ns-cmsis-nn kernel symbols a descriptor's generated test calls.
 
     Descriptors listing ``required_kernel_symbols`` are generated only when
-    every symbol is declared in the target ns-cmsis-nn checkout's public
-    headers (per-symbol codegen probe, see temp_sizer_probe). This lets one
+    the target ns-cmsis-nn checkout's signature export has every symbol and
+    the implementation manifest's records for them hold on the target (see
+    kernel_gate). This lets one
     tester pin serve several in-flight ns-cmsis-nn kernel branches: each
     branch declares only its own kernels and the rest skip cleanly instead
     of failing the build with references to missing symbols.
@@ -175,10 +219,10 @@ def _required_kernel_symbols(desc: Dict[str, Any]) -> list[str]:
     raw = list(raw)
     if desc.get("entry"):
         raw.append(desc["entry"])
-        # The entry's second scratch query too.
-        direct = DIRECT_ENTRIES.get(desc["entry"])
-        if direct and direct.entry_buffer_size_fn:
-            raw.append(direct.entry_buffer_size_fn)
+    sizers = desc.get("entry_sizer")
+    if sizers:
+        # One query, or the entry's own beside the family's (scratch takes the larger answer).
+        raw.extend([sizers] if isinstance(sizers, str) else list(sizers))
     if desc.get("planar_supported") is not None:
         raw.append(DEPTHWISE_CONV_S8_PLANAR_RULE)
     ordered: list[str] = []
@@ -197,6 +241,17 @@ def _resolved_tensor_dtypes(desc: Dict[str, Any]) -> Dict[str, str]:
 
 def _resolved_comparison(desc: Dict[str, Any]) -> Dict[str, Any]:
     return dict(desc.get("resolved_comparison") or resolve_comparison(desc, _resolved_tensor_dtypes(desc)))
+
+
+def _entry_manifest_failure(desc: Dict[str, Any], error: Exception) -> Dict[str, Any]:
+    return {
+        "name": desc.get("name"),
+        "operator": desc.get("operator"),
+        "family": _descriptor_family(desc),
+        "parity_kind": _descriptor_parity_kind(desc),
+        "stage": "entry_manifest",
+        "exception": str(error),
+    }
 
 
 def _skip_manifest_entry(
@@ -250,10 +305,17 @@ def _manifest_entry(
         "suite": _descriptor_suite(desc),
         "path": str(test_dir),
         "relative_test_dir": str(test_dir.relative_to(generated_tests_dir)),
-        "tflite": str(test_dir / f"{desc['name']}.tflite"),
         "c_sources": sorted(p.name for p in test_dir.glob("*.c")),
+        # Provenance of the reference golden; None for a status-only or self-checking case.
+        "reference": (
+            str(test_dir / f"{desc['name']}.reference.json")
+            if (test_dir / f"{desc['name']}.reference.json").is_file()
+            else None
+        ),
         "cpu": cpu,
         "reused": reused,
+        "run_seed": desc.get("run_seed"),
+        "case_seed": desc.get("case_seed"),
     }
 
 
@@ -284,6 +346,20 @@ def _reused_manifest_entry(
     )
 
 
+def _write_reference_record(op, test_dir: Path, name: str, *, run_seed: int, case_seed: int) -> None:
+    """Write `<name>.reference.json`; a case with a golden but no recorded call is an error."""
+    if op.reference is None:
+        if op.status_only() or op.self_checking():
+            return
+        raise RuntimeError(f"{name}: {type(op).__name__} recorded no ReferenceCall; every golden comes "
+                           "from the C reference (only a status-only or self-checking case has none)")
+    from helia_core_tester.generation.reference.bindings import loaded_library_key
+
+    op.reference.to_json(test_dir / f"{name}.reference.json",
+                         seeds={"run_seed": int(run_seed), "case_seed": int(case_seed)},
+                         library_key=loaded_library_key())
+
+
 def _write_descriptor(path: Path, desc: Dict[str, Any]) -> None:
     with open(path, 'w') as f:
         yaml.dump(desc, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
@@ -294,16 +370,18 @@ def generate_test(
     out_dir: str,
     seed: Optional[int] = None,
     cpu: str = "cortex-m55",
-    conversion_failures: Optional[List[Dict[str, Any]]] = None,
     generation_failures: Optional[List[Dict[str, Any]]] = None,
+    run_seed: int = 0,
+    kernel_numerics: str = "shipped",
 ) -> None:
     """
-    Generate TFLite model for a descriptor.
+    Generate one descriptor's test case.
     
     Args:
         desc: YAML descriptor
         out_dir: Output directory for generated files
-        seed: Optional random seed (if None, uses hash of test name)
+        seed: The case's seed; None derives it from `run_seed` and the case name
+        run_seed: The run's seed, recorded with the case so the draw reproduces
     """
     name = desc['name']
     operator = desc['operator']
@@ -316,10 +394,20 @@ def generate_test(
 
     op_class = op_map[operator]
 
-    # Initialize operation with deterministic seed
+    if kernel_numerics not in ("shipped", "bounded"):
+        raise ValueError(f"kernel_numerics must be 'shipped' or 'bounded', got {kernel_numerics!r}")
     if seed is None:
-        seed = default_seed_for_case(name)
+        seed = default_seed_for_case(name, run_seed)
+    try:
+        desc = apply_entry_manifest(desc)
+    except EntryError as e:
+        if generation_failures is not None:
+            generation_failures.append(_entry_manifest_failure(desc, e))
+        print(f"ERROR: {e}")
+        raise
     op = op_class(desc, seed, target_cpu=cpu)
+    op.run_seed = int(run_seed)
+    op.kernel_numerics = kernel_numerics
 
     try:
         op.validate_descriptor()
@@ -342,81 +430,22 @@ def generate_test(
     test_dir = _descriptor_test_dir(Path(out_dir), desc)
     test_dir.mkdir(parents=True, exist_ok=True)
 
-    # Save the complete descriptor as YAML in the test directory
-    descriptor_path = test_dir / "descriptor.yaml"
-    _write_descriptor(descriptor_path, desc)
-    comparison = desc.get("resolved_comparison")
+    # Save the complete descriptor as YAML in the test directory, with the seeds that drew it.
+    _write_descriptor(test_dir / "descriptor.yaml", {**desc, "run_seed": int(run_seed), "case_seed": int(seed)})
 
-    # Build Keras model (skip for ops that generate LiteRT models directly)
-    if op.needs_keras_model():
-        try:
-            model = op.build_keras_model()
-        except Exception as e:
-            if generation_failures is not None:
-                import traceback
-                generation_failures.append({
-                    "name": name,
-                    "operator": operator,
-                    "family": _descriptor_family(desc),
-                    "parity_kind": _descriptor_parity_kind(desc),
-                    "stage": "build_model",
-                    "exception": repr(e),
-                    "traceback": traceback.format_exc(),
-                })
-            print(f"ERROR: Model build failed for {name} ({operator}): {e}")
-            raise
-    else:
-        model = None
-    
-    # Convert to TFLite (some ops allow no-tflite fallback)
-    tflite_path = test_dir / f"{name}.tflite"
-    try:
-        op.convert_to_tflite(model, str(tflite_path), seed)
-        print(f"Generated TFLite model: {name}")
-    except Exception as e:
-        if op.allow_no_tflite():
-            print(f"INFO: Skipping TFLite generation for {name}: {e}")
-        else:
-            if conversion_failures is not None:
-                import traceback
-                conversion_failures.append({
-                    "name": name,
-                    "operator": operator,
-                    "family": _descriptor_family(desc),
-                    "parity_kind": _descriptor_parity_kind(desc),
-                    "exception": repr(e),
-                    "traceback": traceback.format_exc(),
-                })
-            if generation_failures is not None:
-                import traceback
-                generation_failures.append({
-                    "name": name,
-                    "operator": operator,
-                    "family": _descriptor_family(desc),
-                    "parity_kind": _descriptor_parity_kind(desc),
-                    "stage": "conversion",
-                    "exception": repr(e),
-                    "traceback": traceback.format_exc(),
-                })
-            print(f"ERROR: TFLite conversion failed for {name} ({operator}): {e}")
-            raise
-    
-    # Generate C/H files from templates
     try:
         op.generate_c_files(test_dir)
         op.assert_input_mode_consumed()
         check_case_golden(test_dir, desc)
-        if desc.get("resolved_comparison") != comparison:
-            # The data set the tolerance.
-            _write_descriptor(descriptor_path, desc)
-    except NotImplementedError:
-        # Operator doesn't support C file generation yet
-        print(f"INFO: {name} - C file generation not implemented")
+        _write_reference_record(op, test_dir, name, run_seed=run_seed, case_seed=seed)
     except Exception as e:
         import traceback
-        print(f"ERROR: Failed to generate C/H files for {name}: {e}")
-        print(f"ERROR: Traceback:")
-        traceback.print_exc()
+        # A degenerate draw may be redrawn by the caller, which reports the one it gives up on.
+        if not isinstance(e, DegenerateGoldenError):
+            print(f"ERROR: Failed to generate C/H files for {name}: {e}")
+            print(f"ERROR: Reproduce with --seed {int(run_seed)} --name {name}")
+            print(f"ERROR: Traceback:")
+            traceback.print_exc()
         if generation_failures is not None:
             generation_failures.append({
                 "name": name,
@@ -426,6 +455,8 @@ def generate_test(
                 "stage": "c_files",
                 "exception": repr(e),
                 "traceback": traceback.format_exc(),
+                "run_seed": int(run_seed),
+                "case_seed": int(seed),
             })
         # Do not silently continue: an unexpected failure to generate C/H files
         # must fail this descriptor's generation (and therefore the overall
@@ -435,8 +466,15 @@ def generate_test(
 
 def test_generation(test_filters):
     """
-    Generate TFLite models for all descriptors.
+    Generate the test cases of every selected descriptor.
     """
+    # One seed per run: every case's draw derives from it, and it is recorded everywhere.
+    run_seed, seed_chosen = resolve_run_seed(test_filters)
+    test_filters = {**test_filters, "run_seed": run_seed, "seed_chosen": seed_chosen}
+    if seed_chosen:
+        print(f"Run seed: {run_seed} (chosen; unchanged cases are reused)")
+    else:
+        print(f"Run seed: {run_seed} (fresh: every case is redrawn; pass --seed {run_seed} to reproduce or reuse)")
     # Load all descriptors using discovery
     random_shapes = test_filters.get("random_shapes")
     hidden_dir = test_filters.get("hidden_dir")
@@ -481,9 +519,9 @@ def test_generation(test_filters):
 
     start_time = datetime.now(timezone.utc)
     target_cpu = normalize_cpu(test_filters.get('cpu') or "cortex-m55")
+    kernel_numerics = test_filters.get("kernel_numerics") or "shipped"
     suite_mode = _suite_mode(test_filters)
         
-    # Generate TFLite models for each descriptor.
     generated_override = test_filters.get("generated_tests_dir")
     top_generated = (
         Path(generated_override).resolve()
@@ -505,13 +543,31 @@ def test_generation(test_filters):
     version_hash = generator_version_hash()
     manifest_entries: List[Dict[str, Any]] = []
     skipped_entries: List[Dict[str, Any]] = []
-    conversion_failures: List[Dict[str, Any]] = []
     generation_failures: List[Dict[str, Any]] = []
-    # Per-run cache for the per-symbol codegen probe (one header scan per
-    # distinct kernel symbol, however many descriptors require it).
-    symbol_declared_cache: Dict[str, bool] = {}
+    contracts = contract_render.load_current_contracts()
     symbol_source_cache: Dict[str, bool] = {}
     for desc in filtered_descriptors:
+        if desc.get("conformance") and not contracts.present:
+            # Conformance checks the library against the checkout's planner; a checkout without the
+            # contract has neither. A leg that requires the contract fails instead of skipping.
+            reason = (f"the ns-cmsis-nn checkout ({contracts.root or 'unresolved'}) has no kernel contract, so it "
+                      "has no planner to conform to (needs ns_cmsis_nn_contracts, AmbiqAI/ns-cmsis-nn#889)")
+            if os.environ.get(REQUIRE_CONTRACT_ENV):
+                print(f"ERROR: {desc['name']}: {reason}")
+                generation_failures.append({**_entry_manifest_failure(desc, ValueError(reason)),
+                                            "stage": "conformance"})
+                continue
+            entry = _skip_manifest_entry(desc, cpu=target_cpu, missing_capabilities=[], status="skipped_conformance")
+            entry["reason"] = reason
+            skipped_entries.append(entry)
+            print(f"Skipping {desc['name']}: {reason}")
+            continue
+        try:
+            desc = apply_entry_manifest(desc, contracts)
+        except EntryError as error:
+            print(f"ERROR: {error}")
+            generation_failures.append(_entry_manifest_failure(desc, error))
+            continue
         missing_capabilities = missing_required_capabilities(target_cpu, _required_capabilities(desc))
         if missing_capabilities:
             skipped_entries.append(
@@ -526,32 +582,30 @@ def test_generation(test_filters):
                 f"{', '.join(missing_capabilities)}"
             )
             continue
-        missing_symbols: List[str] = []
-        for symbol in _required_kernel_symbols(desc):
-            if symbol not in symbol_declared_cache:
-                symbol_declared_cache[symbol] = not missing_header_symbols([symbol])
-            if not symbol_declared_cache[symbol]:
-                missing_symbols.append(symbol)
-        # Backstop (hct#92 review): a symbol the header probe reports as
-        # undeclared while its kernel source ships in the checkout means the
-        # probe missed a declaration (renamed symbol, or a public header
-        # outside the probed set). Silently skipping would delete every
-        # dependent case with exit 0 and green CI, so fail generation loudly
-        # instead. Genuinely absent kernels (no source file) keep the skip.
+        gate = gate_kernel_symbols(contracts, _required_kernel_symbols(desc), target_cpu,
+                                   expected_status=str(desc.get("expected_status", "ARM_CMSIS_NN_SUCCESS")))
+        missing_symbols = list(gate.missing_symbols)
+        # Backstop (hct#92 review): a symbol the signature export lacks while its
+        # kernel source ships in the checkout means the export is stale or the
+        # symbol is declared outside the exported headers. Silently skipping would
+        # delete every dependent case with exit 0 and green CI, so fail generation
+        # loudly instead. Genuinely absent kernels (no source file) keep the skip.
         contradicted_symbols: List[str] = []
         for symbol in missing_symbols:
             if symbol not in symbol_source_cache:
-                symbol_source_cache[symbol] = kernel_source_exists(symbol)
+                symbol_source_cache[symbol] = kernel_source_exists(symbol, contracts.root)
             if symbol_source_cache[symbol]:
                 contradicted_symbols.append(symbol)
-        if contradicted_symbols:
-            message = (
-                f"Kernel symbol probe contradiction for {desc['name']}: "
-                f"{', '.join(contradicted_symbols)} declared in no probed public header, "
-                f"but the checkout ships Source/**/<symbol>.c. The probe missed a "
-                f"declaration (renamed symbol or unprobed public header); refusing to "
-                f"silently skip. Update _PUBLIC_HEADER_NAMES / required_kernel_symbols."
-            )
+        if contradicted_symbols or gate.contradictions:
+            message = f"Kernel contract contradiction for {desc['name']}: "
+            if contradicted_symbols:
+                message += (
+                    f"{', '.join(contradicted_symbols)} not in the signature export ({contracts.path}), "
+                    f"but the checkout ships Source/**/<symbol>.c; the export is stale or the symbol is "
+                    f"declared outside the exported headers. Refusing to silently skip."
+                )
+            if gate.contradictions:
+                message += ("; " if contradicted_symbols else "") + "; ".join(gate.contradictions)
             print(f"ERROR: {message}")
             generation_failures.append({
                 "name": desc.get("name"),
@@ -577,18 +631,29 @@ def test_generation(test_filters):
                 f"{', '.join(missing_symbols)}"
             )
             continue
+        if gate.unmet:
+            entry = _skip_manifest_entry(desc, cpu=target_cpu, missing_capabilities=[])
+            entry["unmet_kernel_requirements"] = [unmet.as_dict() for unmet in gate.unmet]
+            skipped_entries.append(entry)
+            print(
+                f"Skipping {desc['name']} on {target_cpu}: "
+                + "; ".join(f"{u.symbol} ({u.implementation}) requires {', '.join(u.unmet)}" for u in gate.unmet)
+            )
+            continue
         case_name = str(desc["name"])
         test_dir = _descriptor_test_dir(Path(top_generated), desc)
+        case_seed = default_seed_for_case(case_name, run_seed)
         stamp = case_stamp(
             desc,
             case_name=case_name,
             cpu=target_cpu,
             suite=suite_mode,
-            seed=test_filters.get("seed") if test_filters.get("seed") is not None
-            else default_seed_for_case(case_name),
+            seed=case_seed,
             version_hash=version_hash,
+            kernel_numerics=kernel_numerics,
         )
-        if not force_generate and case_reusable(test_dir, stamp):
+        # A fresh seed never matches a stamp: skip the hashing, the run redraws every case.
+        if not force_generate and seed_chosen and case_reusable(test_dir, stamp):
             reused_entry = _reused_manifest_entry(
                 test_dir, generated_tests_dir=Path(top_generated), cpu=target_cpu
             )
@@ -597,23 +662,38 @@ def test_generation(test_filters):
                 reused_count += 1
                 continue
         try:
-            # The directory, stamp included, goes away before any file is
-            # touched and the stamp comes back only once the case is whole, so
-            # an interrupted run can never leave a stamp standing over
-            # half-written output nor a file from the previous shape of this
-            # case beside the new ones.
-            reset_case_dir(test_dir)
-            generate_test(
-                desc,
-                str(top_generated),
-                seed=test_filters.get('seed'),
-                cpu=target_cpu,
-                conversion_failures=conversion_failures,
-                generation_failures=generation_failures,
-            )
+            for attempt in range(DEGENERATE_DRAW_ATTEMPTS):
+                drawn_seed = redraw_seed(case_seed, attempt)
+                # The directory, stamp included, goes away before any file is
+                # touched and the stamp comes back only once the case is whole, so
+                # an interrupted run can never leave a stamp standing over
+                # half-written output nor a file from the previous shape of this
+                # case beside the new ones.
+                reset_case_dir(test_dir)
+                try:
+                    generate_test(
+                        desc,
+                        str(top_generated),
+                        seed=drawn_seed,
+                        cpu=target_cpu,
+                        kernel_numerics=kernel_numerics,
+                        generation_failures=generation_failures,
+                        run_seed=run_seed,
+                    )
+                    break
+                except DegenerateGoldenError as e:
+                    if random_shapes:
+                        raise
+                    if attempt + 1 == DEGENERATE_DRAW_ATTEMPTS:
+                        print(f"ERROR: Failed to generate C/H files for {case_name}: {e} "
+                              f"(after {DEGENERATE_DRAW_ATTEMPTS} draws)")
+                        print(f"ERROR: Reproduce with --seed {int(run_seed)} --name {case_name}")
+                        raise
+                    generation_failures[:] = [f for f in generation_failures if f.get("name") != case_name]
+                    print(f"Redrawing {case_name} (attempt {attempt + 2} of {DEGENERATE_DRAW_ATTEMPTS}): {e}")
             manifest_entries.append(
                 _manifest_entry(
-                    desc,
+                    {**desc, "run_seed": run_seed, "case_seed": drawn_seed},
                     test_dir=test_dir,
                     generated_tests_dir=Path(top_generated),
                     cpu=target_cpu,
@@ -632,14 +712,10 @@ def test_generation(test_filters):
                 )
                 print(f"Dropping {case_name}: {e}")
                 continue
-            print(f"Failed to generate TFLite model for {desc['name']}: {e}")
+            print(f"Failed to generate {desc['name']}: {e}")
             # Continue with other models
             continue
             
-    conversion_failures = sorted(
-        conversion_failures,
-        key=lambda item: (str(item.get("name", "")), str(item.get("operator", "")), str(item.get("exception", ""))),
-    )
     generation_failures = sorted(
         generation_failures,
         key=lambda item: (
@@ -686,13 +762,6 @@ def test_generation(test_filters):
         f"Successfully produced {produced_count} test case(s): "
         f"{generated_count} generated, {reused_count} reused"
     )
-    conversion_failures_path = report_dir / "conversion_failures.json"
-    conversion_failures_path.write_text(json.dumps(conversion_failures, indent=2))
-    if conversion_failures:
-        failed_names = ", ".join(f["name"] for f in conversion_failures)
-        print(f"Conversion failures ({len(conversion_failures)}): {failed_names}")
-    else:
-        print("Conversion failures (0)")
     generation_failures_path = report_dir / "generation_failures.json"
     generation_failures_path.write_text(json.dumps(generation_failures, indent=2))
     if generation_failures:
@@ -727,7 +796,11 @@ def test_generation(test_filters):
         "cpu": target_cpu,
         "generated_tests_dir": str(top_generated),
         "manifest_path": str(manifest_path) if manifest_path else None,
+        "run_seed": run_seed,
+        "seed_chosen": seed_chosen,
     }
+    # The seed on its own, for scripts that only need to replay the run.
+    (report_dir / "run_seed.json").write_text(json.dumps({"run_seed": run_seed, "seed_chosen": seed_chosen}, indent=2))
     if manifest_path:
         try:
             manifest_pointer["manifest_relative_path"] = str(manifest_path.relative_to(repo_root))
@@ -737,7 +810,7 @@ def test_generation(test_filters):
 
     end_time = datetime.now(timezone.utc)
     status = "success"
-    if conversion_failures or generation_failures:
+    if generation_failures:
         status = "partial_failure" if produced_count > 0 or skipped_entries else "failed_no_generated_tests"
     elif produced_count == 0 and skipped_entries:
         status = "skipped_only"
@@ -767,7 +840,8 @@ def test_generation(test_filters):
             "wtype": test_filters.get("wtype"),
             "name": test_filters.get("name"),
             "limit": test_filters.get("limit"),
-            "seed": test_filters.get("seed"),
+            "seed": run_seed,
+            "seed_chosen": seed_chosen,
             "suite": suite_mode,
             "float_precision": float_precision_mode,
             "force_generate": force_generate,
@@ -786,15 +860,16 @@ def test_generation(test_filters):
             "skipped_kernel_symbol": sum(
                 1 for entry in skipped_entries if entry.get("status") == "skipped_kernel_symbol"
             ),
+            "skipped_conformance": sum(
+                1 for entry in skipped_entries if entry.get("status") == "skipped_conformance"
+            ),
             "skipped_degenerate": sum(
                 1 for entry in skipped_entries if entry.get("status") == "skipped_degenerate"
             ),
-            "conversion_failures": len(conversion_failures),
             "generation_failures": len(generation_failures),
         },
         "outputs": {
             "generated_tests_dir": str(top_generated),
-            "conversion_failures": str(conversion_failures_path),
             "generation_failures": str(generation_failures_path),
             "capability_skips": str(capability_skips_path),
             "manifest_pointer": str(manifest_pointer_path),
@@ -802,7 +877,7 @@ def test_generation(test_filters):
     }
     (report_dir / "generation_summary.json").write_text(json.dumps(summary, indent=2))
     # A selection that matches nothing is a different fault from a selection
-    # whose cases all failed to convert, and only the caller can tell which one
+    # whose cases all failed to generate, and only the caller can tell which one
     # they meant, so say which happened.
     assert produced_count > 0 or skipped_entries or filtered_descriptors, (
         f"Filter matched no descriptors out of {len(descriptors)} loaded "
@@ -810,11 +885,7 @@ def test_generation(test_filters):
         f"wtype={test_filters.get('wtype')!r}, name={test_filters.get('name')!r}, "
         f"limit={test_filters.get('limit')!r}, suite={suite_mode!r})"
     )
-    assert produced_count > 0 or skipped_entries, "No TFLite models were generated"
-    assert not conversion_failures, (
-        f"Conversion failures occurred for {len(conversion_failures)} descriptor(s): "
-        f"{', '.join(str(f.get('name')) for f in conversion_failures)}"
-    )
+    assert produced_count > 0 or skipped_entries, "No test cases were generated"
     assert not generation_failures, (
         f"Generation failures occurred for {len(generation_failures)} descriptor(s): "
         f"{', '.join(str(f.get('name')) for f in generation_failures)}"
@@ -849,6 +920,8 @@ def _write_manifest_and_cmake(
             "float_precision": _float_precision_mode(test_filters),
             **_shape_filters(test_filters),
         },
+        "run_seed": test_filters.get("run_seed"),
+        "seed_chosen": test_filters.get("seed_chosen"),
         "tests": entries,
         "skipped": skipped_entries,
     }
@@ -877,7 +950,7 @@ def _write_manifest_and_cmake(
 
 def test_generated_files_exist(test_filters):
     """
-    Verify that generated TFLite files exist and are valid.
+    Verify that every generated case has its headers.
     This should run AFTER test_generation().
     """
     # Don't generate, just validate what test_generation() created
@@ -902,15 +975,7 @@ def test_generated_files_exist(test_filters):
                 pytest.skip("Only capability-skipped descriptors are present")
         assert len(test_dirs) > 0, "No test directories found"
     
-    # Check that each test has TFLite file or generated headers
     for test_dir in test_dirs:
-        name = test_dir.name
-        tflite_file = test_dir / f"{name}.tflite"
-        if tflite_file.exists():
-            # Check that file is not empty
-            assert tflite_file.stat().st_size > 0, f"{name}.tflite is empty"
-            continue
-
         includes_dir = test_dir / "includes"
         headers = list(includes_dir.glob("*.h")) if includes_dir.exists() else []
-        assert headers, f"Missing {name}.tflite and no generated headers"
+        assert headers, f"{test_dir.name}: no generated headers"

@@ -10,7 +10,7 @@ import yaml
 from helia_core_tester.generation.test_ops import generate_test
 from helia_core_tester.generation.ops.BasicMathFunctions.argmin import OpArgMin
 from helia_core_tester.generation.ops.BasicMathFunctions.argmax import OpArgMax
-from helia_core_tester.generation.ops._shared.arg_extrema_reference import (
+from helia_core_tester.tests.reference_models import (
     arg_extrema_reference,
 )
 from helia_core_tester.generation.ops._shared.arg_extrema_float import float_arg_kernel
@@ -171,7 +171,7 @@ def test_float_dispatch_rejects_integer_input():
     "legacy,effective", [(None, "S16"), ("S8", "S16"), ("S16", "S8")]
 )
 def test_integer_arg_emitted_dtype_precedence(tmp_path, kind, legacy, effective):
-    from tensorflow.lite.python import schema_py_generated as schema
+    import json
 
     name = f"arg{kind}_dtype"
     desc = dict(
@@ -185,12 +185,10 @@ def test_integer_arg_emitted_dtype_precedence(tmp_path, kind, legacy, effective)
         desc["activation_dtype"] = legacy
     generate_test(desc, str(tmp_path), seed=500)
     case = tmp_path / "BasicMathFunctions" / name
-    model = schema.Model.GetRootAsModel((case / f"{name}.tflite").read_bytes(), 0)
-    graph = model.Subgraphs(0)
+    record = json.loads((case / f"{name}.reference.json").read_text())
     width = 16 if effective == "S16" else 8
-    expected_type = schema.TensorType.INT16 if width == 16 else schema.TensorType.INT8
-    assert graph.Tensors(graph.Inputs(0)).Type() == expected_type
-    assert graph.Tensors(graph.Outputs(0)).Type() == schema.TensorType.INT32
+    assert record["entry"] == f"arg_{kind}_s{width}"
+    assert record["inputs"]["input"]["dtype"] == f"int{width}"
     source = (case / f"{name}_arg{kind}.c").read_text()
     header = (case / "includes" / f"{name}_arg{kind}.h").read_text()
     assert f"arm_arg{kind}_s{width}(" in source

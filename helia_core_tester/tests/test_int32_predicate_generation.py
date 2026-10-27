@@ -1,5 +1,6 @@
 """INT32 predicate references and generated API contracts. Refs #478."""
 
+import re
 from pathlib import Path
 
 import numpy as np
@@ -8,7 +9,9 @@ import yaml
 
 from helia_core_tester.generation.ops.ComparisonFunctions.comparison import OpComparison
 from helia_core_tester.generation.ops.SelectFunctions.select_v2 import OpSelectV2
-from helia_core_tester.generation.utils.temp_sizer_probe import missing_header_symbols
+from helia_core_tester.contract.ir import load_contract_set
+from helia_core_tester.generation.kernel_gate import gate_kernel_symbols
+from helia_core_tester.tests.contract_checkout import function, write_checkout
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -28,67 +31,47 @@ def descriptors():
     return result
 
 
-class RecordingInterpreter:
-    def __init__(self, interpreter):
-        self.interpreter = interpreter
-        self.inputs = {}
-        self.result = None
-
-    def __getattr__(self, name):
-        return getattr(self.interpreter, name)
-
-    def set_tensor(self, index, value):
-        self.inputs[index] = value.copy()
-        self.interpreter.set_tensor(index, value)
-
-    def get_tensor(self, index):
-        self.result = self.interpreter.get_tensor(index)
-        return self.result
-
-
 @pytest.mark.parametrize("desc", descriptors(), ids=lambda d: d["name"])
-def test_int32_reference_and_call(desc, tmp_path, monkeypatch):
+def test_int32_reference_and_call(desc, tmp_path):
     cls = OpComparison if desc["operator"] == "Comparison" else OpSelectV2
     op = cls(desc, seed=7, target_cpu="cortex-m55")
-    model = tmp_path / (desc["name"] + ".tflite")
-    op.convert_to_tflite(None, str(model), 7)
-    interpreter = RecordingInterpreter(op.load_litert_interpreter(str(model)))
-    monkeypatch.setattr(op, "load_litert_interpreter", lambda _: interpreter)
     op.generate_c_files(tmp_path)
-    values = [interpreter.inputs[d["index"]] for d in interpreter.get_input_details()]
+    call = op.reference
+    assert call is not None
+    result = call.output()
     if cls is OpComparison:
+        assert call.entry == "comparison_s32"
+        values = [call.inputs["input1"], call.inputs["input2"]]
         expected = getattr(np, desc["operation"])(*values)
         assert all(v.dtype == np.int32 for v in values)
-        assert set(interpreter.result.flat) == {False, True}
+        assert set(np.asarray(result, dtype=bool).flat) == {False, True}
         suffix = "comparison"
     else:
+        assert call.entry == "select_v2"
+        values = [call.inputs["condition"].astype(np.bool_), call.inputs["x"], call.inputs["y"]]
         expected = np.where(*values)
-        assert values[0].dtype == np.bool_
         assert values[1].dtype == values[2].dtype == np.int32
         suffix = "select_v2"
-    np.testing.assert_array_equal(interpreter.result, expected)
+    np.testing.assert_array_equal(np.asarray(result).astype(expected.dtype), expected)
+    assert not list(tmp_path.rglob("*.tflite"))
     source = (tmp_path / (desc["name"] + "_" + suffix + ".c")).read_text()
     (symbol,) = desc["required_kernel_symbols"]
     assert symbol + "(" in source
     if cls is OpComparison:
-        call = source.split(symbol + "(", 1)[1].split(");", 1)[0]
-        assert len(call.split(",")) == 6  # No context or requantization parameters.
+        code = re.sub(r"/\*.*?\*/|//[^\n]*", " ", source, flags=re.S)
+        args = code.split(symbol + "(", 1)[1].split(");", 1)[0]
+        assert len(args.split(",")) == 6  # No context or requantization parameters.
     else:
         assert "HELIA_VALIDATE_OUTPUTS" in source
         assert "EXACT_INT" in source
 
 
 def test_required_symbols_skip_older_core(tmp_path):
-    include = tmp_path / "Include"
-    include.mkdir()
-    (include / "arm_nnfunctions.h").write_text(
-        "/* no INT32 predicate declarations */\n"
-    )
+    root = write_checkout(tmp_path, [function("arm_equal_s8", [("const int8_t *", "input", "in")])])
+    contracts = load_contract_set(root)
     for desc in descriptors():
-        assert (
-            missing_header_symbols(desc["required_kernel_symbols"], tmp_path)
-            == desc["required_kernel_symbols"]
-        )
+        gate = gate_kernel_symbols(contracts, desc["required_kernel_symbols"], "cortex-m55")
+        assert gate.missing_symbols == tuple(desc["required_kernel_symbols"])
 
 
 @pytest.mark.parametrize(
@@ -98,12 +81,10 @@ def test_required_symbols_skip_older_core(tmp_path):
 def test_int32_reference_failure_is_not_hidden(cls, name, tmp_path, monkeypatch):
     desc = next(d for d in descriptors() if d["name"] == name)
     op = cls(desc, seed=7, target_cpu="cortex-m55")
-    model = tmp_path / (name + ".tflite")
-    op.convert_to_tflite(None, str(model), 7)
 
     def unavailable(_):
         raise RuntimeError("reference unavailable")
 
-    monkeypatch.setattr(op, "load_litert_interpreter", unavailable)
+    monkeypatch.setattr(op, "reference_golden", unavailable)
     with pytest.raises(RuntimeError, match="reference unavailable"):
         op.generate_c_files(tmp_path)

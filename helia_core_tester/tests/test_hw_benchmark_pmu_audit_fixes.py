@@ -5,8 +5,6 @@ Covers:
   F003 - depthwise_conv.yaml zero-sized filter multiplier fixed to 1, plus
          positive-dimension / channel-agreement validation for DepthwiseConv.
   F004 - S4 "no_bias" depthwise descriptors actually declare use_bias: false.
-  F009 - NNActivationS16._simulate_activation() writes through a real view
-         instead of a throwaway copy from .flatten().
   F010 - load_all_descriptors() fails atomically (DescriptorLoadError) unless
          best_effort=True is explicitly requested.
   F012 - setup_dependencies.download_file() requires and verifies a pinned
@@ -26,9 +24,6 @@ from helia_core_tester.generation.io.descriptors import (
     DescriptorLoadError,
     load_all_descriptors,
     load_descriptor,
-)
-from helia_core_tester.generation.ops.ActivationFunctions.nn_activation_s16 import (
-    OpNNActivationS16,
 )
 
 
@@ -106,36 +101,6 @@ def test_f003_depthwise_conv_rejects_channel_mismatch():
 def test_f004_s4_no_bias_descriptors_disable_bias(name):
     descs = _depthwise_descriptors()
     assert descs[name]["use_bias"] is False
-
-
-# ---------------------------------------------------------------------------
-# F009
-# ---------------------------------------------------------------------------
-
-def test_f009_activation_s16_writes_through_view_not_copy():
-    op = OpNNActivationS16.__new__(OpNNActivationS16)
-    # Avoid depending on the real sigmoid table file location.
-    op._load_sigmoid_table = lambda: list(range(256))
-
-    input_data = np.array([[100, -100, 0, 3000, -3000]], dtype=np.int32)
-    out = op._simulate_activation(input_data, left_shift=0, act_type="SIGMOID")
-
-    assert out.dtype == np.int16
-    assert out.shape == input_data.shape
-    # Prior to the fix, out.flatten() returned a copy, so `out` itself was
-    # never written and stayed as np.empty_like garbage; a real bug fix must
-    # produce a result that is not trivially uniform for varied inputs.
-    assert len(set(out.flatten().tolist())) > 1
-
-
-def test_f009_activation_s16_deterministic_across_calls():
-    op = OpNNActivationS16.__new__(OpNNActivationS16)
-    op._load_sigmoid_table = lambda: list(range(256))
-    input_data = np.array([[1, 2, 3, -4, -5]], dtype=np.int32)
-
-    out1 = op._simulate_activation(input_data, left_shift=0, act_type="TANH")
-    out2 = op._simulate_activation(input_data, left_shift=0, act_type="TANH")
-    assert np.array_equal(out1, out2)
 
 
 # ---------------------------------------------------------------------------
@@ -285,9 +250,12 @@ def test_f014_depthwise_conv_generation_has_no_debug_log_side_effect():
 # any future regression toward the incorrect "-0.5 offset" formula is caught.
 # ---------------------------------------------------------------------------
 
-from helia_core_tester.generation.ops.ReshapeFunctions.resize_nearest_neighbor import (
-    OpResizeNearestNeighbor,
-)
+from helia_core_tester.tests.test_resize_nearest_tie_rounding import nearest_indices  # noqa: E402
+
+
+def _nearest_index(out_idx, in_size, out_size, align_corners, half_pixel_centers):
+    """The source index the C reference golden (TFLite GetNearestNeighbor) picks."""
+    return int(nearest_indices(in_size, out_size, align_corners, half_pixel_centers)[out_idx])
 
 
 def test_f011_half_pixel_upsampling_known_indices():
@@ -296,7 +264,7 @@ def test_f011_half_pixel_upsampling_known_indices():
     # out_idx: 0 -> 0.25 -> 0 | 1 -> 0.75 -> 0 | 2 -> 1.25 -> 1 | 3 -> 1.75 -> 1
     expected = [0, 0, 1, 1]
     actual = [
-        OpResizeNearestNeighbor._nearest_index(i, in_size=2, out_size=4, align_corners=False, half_pixel_centers=True)
+        _nearest_index(i, in_size=2, out_size=4, align_corners=False, half_pixel_centers=True)
         for i in range(4)
     ]
     assert actual == expected
@@ -307,7 +275,7 @@ def test_f011_half_pixel_downsampling_known_indices():
     # out_idx: 0 -> (0+0.5)*2=1.0 -> floor 1 | 1 -> (1+0.5)*2=3.0 -> floor 3
     expected = [1, 3]
     actual = [
-        OpResizeNearestNeighbor._nearest_index(i, in_size=4, out_size=2, align_corners=False, half_pixel_centers=True)
+        _nearest_index(i, in_size=4, out_size=2, align_corners=False, half_pixel_centers=True)
         for i in range(2)
     ]
     assert actual == expected
@@ -318,7 +286,7 @@ def test_f011_align_corners_known_indices():
     # scaled = out_idx * 0.5, roundf (ties away from zero): 0, 0.5->1, 1, 1.5->2, 2
     expected = [0, 1, 1, 2, 2]
     actual = [
-        OpResizeNearestNeighbor._nearest_index(i, in_size=3, out_size=5, align_corners=True, half_pixel_centers=False)
+        _nearest_index(i, in_size=3, out_size=5, align_corners=True, half_pixel_centers=False)
         for i in range(5)
     ]
     assert actual == expected
@@ -329,7 +297,7 @@ def test_f011_no_half_pixel_no_align_corners_known_indices():
     # scaled = out_idx * 2.0 -> floor: 0 -> 0, 1 -> 2
     expected = [0, 2]
     actual = [
-        OpResizeNearestNeighbor._nearest_index(i, in_size=4, out_size=2, align_corners=False, half_pixel_centers=False)
+        _nearest_index(i, in_size=4, out_size=2, align_corners=False, half_pixel_centers=False)
         for i in range(2)
     ]
     assert actual == expected
@@ -345,7 +313,7 @@ def test_f011_half_pixel_formula_omits_bilinear_style_minus_half_offset():
     for out_idx in range(out_size):
         correct = int(np.floor((out_idx + 0.5) * scale))
         incorrect_with_minus_half = int(np.floor((out_idx + 0.5) * scale - 0.5))
-        actual = OpResizeNearestNeighbor._nearest_index(
+        actual = _nearest_index(
             out_idx, in_size=in_size, out_size=out_size, align_corners=False, half_pixel_centers=True
         )
         assert actual == correct

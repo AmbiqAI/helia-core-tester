@@ -1,23 +1,25 @@
-#ifndef ABS_FLOAT_DEFAULT_F32_ABS_H
-#define ABS_FLOAT_DEFAULT_F32_ABS_H
+#ifndef ABS_FLOAT_DEFAULT_F32_HARNESS_H
+#define ABS_FLOAT_DEFAULT_F32_HARNESS_H
 
 #include <stdint.h>
-// Golden arrays may carry NAN/INFINITY, and this header is included ahead of any
-// other translation-unit include that would define them.
+// Input arrays may carry NAN/INFINITY tokens, and this header is included ahead of
+// any other translation-unit include that would define them.
 #include <math.h>
 #include "arm_nnfunctions.h"
 #include "arm_nn_types.h"
 
-// Input dimensions
 static const cmsis_nn_dims abs_float_default_f32_input_dims = {
-    .n = 1, .h = 4,
-    .w = 4, .c = 8
+    .n = 1,
+    .h = 4,
+    .w = 4,
+    .c = 8
 };
 
-// Output dimensions
 static const cmsis_nn_dims abs_float_default_f32_output_dims = {
-    .n = 1, .h = 4,
-    .w = 4, .c = 8
+    .n = 1,
+    .h = 4,
+    .w = 4,
+    .c = 8
 };
 
 // Input data (for testing)

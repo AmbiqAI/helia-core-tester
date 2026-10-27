@@ -12,6 +12,7 @@ import zlib
 import numpy as np
 
 from .comparison import FLOAT_HEADROOM, strict_comparison
+from .fixed_point import UNIT_MULTIPLIER, UNIT_SHIFT, requantize_np
 from .pathutil import write_text_lf
 from .transfer import derived_mram_extent, mram_extent, staged_extent
 
@@ -19,7 +20,6 @@ from helia_core_tester.generation.golden_check import EDGE_CASE_KEY
 from helia_core_tester.generation.io.descriptors import load_descriptor
 from helia_core_tester.generation.io.dtypes import FLOAT_DTYPES
 from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
-from helia_core_tester.generation.utils.tflite_utils import calculate_per_channel_multiplier_shift, requantize_np
 
 
 _DTYPE_TO_NUMPY = {
@@ -487,7 +487,8 @@ def build_convolve_s8_case_bundle(
     input_data = rng.integers(-8, 9, size=input_shape, dtype=np.int16).astype(np.int8)
     weights = rng.integers(-4, 5, size=filter_shape, dtype=np.int16).astype(np.int8)
     bias = rng.integers(-32, 33, size=(output_channels,), dtype=np.int32)
-    multiplier, shift = calculate_per_channel_multiplier_shift(np.ones(output_channels, dtype=np.float32))
+    multiplier = np.full(output_channels, UNIT_MULTIPLIER, dtype=np.int32)
+    shift = np.full(output_channels, UNIT_SHIFT, dtype=np.int32)
     expected_output = _conv2d_s8(
         input_data,
         weights,

@@ -13,39 +13,9 @@ class OpPad(OperationBase):
     Pad operation.
     """
 
-    def needs_keras_model(self) -> bool:
-        return False
+    def uses_reference(self) -> bool:
+        return True
 
-    def build_keras_model(self):
-        raise NotImplementedError("Pad uses LiteRT-only model generation.")
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        """Convert model to LiteRT (single-op)."""
-        from helia_core_tester.generation.utils.litert_builder import build_pad_op
-
-        activation_dtype = self.tensor_dtype("input")
-        if activation_dtype == "S16":
-            dtype = "int16"
-        elif activation_dtype == "FP32":
-            dtype = "float32"
-        elif activation_dtype == "FP16":
-            dtype = "float16"
-        else:
-            dtype = "int8"
-
-        input_shape = tuple(self.desc['input_shape'])
-        paddings = self.desc.get('paddings')
-        if paddings is None:
-            raise ValueError("Pad requires paddings")
-
-        model_bytes = build_pad_op(
-            input_shape=input_shape,
-            paddings=paddings,
-            dtype=dtype,
-        )
-        with open(out_path, "wb") as f:
-            f.write(model_bytes)
-    
     def _select_cmsis_pad_kernel(self) -> Dict[str, str]:
         """
         Select appropriate CMSIS-NN kernel function for Pad operation.
@@ -86,12 +56,10 @@ class OpPad(OperationBase):
         """
         Generate C and H files from templates for Pad operation.
         """
+        from helia_core_tester.generation.reference.call import ReferenceCall
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
-        
+
         name = self.desc['name']
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
         
         # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_pad_kernel()
@@ -100,6 +68,8 @@ class OpPad(OperationBase):
         paddings = self.desc.get('paddings')
         if paddings is None:
             raise ValueError("Pad requires paddings")
+        if len(input_shape) != 4 or len(paddings) != 4 or any(len(p) != 2 for p in paddings):
+            raise ValueError(f"Pad is rank 4 only: input_shape {input_shape}, paddings {paddings}")
         pre_pad = [int(p[0]) for p in paddings]
         post_pad = [int(p[1]) for p in paddings]
         output_shape = tuple(
@@ -137,15 +107,12 @@ class OpPad(OperationBase):
         else:
             raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
 
-        output_data = np.pad(
-            input_q,
-            ((pre_pad[0], post_pad[0]),
-             (pre_pad[1], post_pad[1]),
-             (pre_pad[2], post_pad[2]),
-             (pre_pad[3], post_pad[3])),
-            mode="constant",
-            constant_values=pad_value,
-        )
+        output_data = self.reference_golden(ReferenceCall(
+            "pad", {"mode": 0},
+            {"input": input_q,
+             "paddings": np.array([pre_pad, post_pad], dtype=np.int32).T.copy(),
+             "pad_value": np.array([pad_value], dtype=input_q.dtype)},
+            {"output": output_shape}))
 
         self.rng.__setstate__(rng_state)
         
@@ -170,26 +137,21 @@ class OpPad(OperationBase):
         }
         
         # Render templates
-        includes_api_dir = output_dir / "includes"
-        includes_api_dir.mkdir(parents=True, exist_ok=True)
+        self.render_harness_case(
+            Path(output_dir), stem="pad", context=context, pool=pad_argument_pool(context),
+            validation_key="PadFunctions/pad/pad.c.j2", label="Pad", operator="Pad",
+        )
         
-        h_content = self.render_template("PadFunctions/pad/pad.h.j2", context)
-        h_path = includes_api_dir / f"{name}_pad.h"
-        with open(h_path, 'w') as f:
-            f.write(h_content)
-        
-        c_content = self.render_template("PadFunctions/pad/pad.c.j2", context)
-        c_path = output_dir / f"{name}_pad.c"
-        with open(c_path, 'w') as f:
-            f.write(c_content)
-        
-        cmake_context = {
-            'name': name,
-            'operator': self.desc.get('operator', 'Pad'),
-            'operator_name': 'pad'
-        }
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
-        cmake_path = output_dir / "CMakeLists.txt"
-        with open(cmake_path, 'w') as f:
-            f.write(cmake_content)
-        
+
+
+from helia_core_tester.generation.harness import ArrayLiteral, Declaration  # noqa: E402
+from helia_core_tester.generation.harness.simple import dims_count, dims_declaration, tensor_case_pool  # noqa: E402
+
+
+def pad_argument_pool(context):
+    n = context["name"]
+    extra = (dims_declaration(f"{n}_pre_pad", context["pre_pad_dims"]), dims_declaration(f"{n}_post_pad", context["post_pad_dims"]))
+    value = f"{context['pad_value']}f" if context.get("float_kernel") else str(context["pad_value"])
+    return tensor_case_pool(context, {"pad_value": value, "input_size": f"&{n}_input_dims", "pre_pad": f"&{n}_pre_pad",
+                                      "post_pad": f"&{n}_post_pad"},
+                            extra_header=extra, output_count=dims_count(context["output_dims"]))

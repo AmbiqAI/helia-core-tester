@@ -10,9 +10,11 @@ unavailable ACLE definitions). That makes a full mutation run take minutes
 instead of the hours an FVP sweep would need. FVP-based scoring is an
 explicit non-goal of this MVP (see issue #76).
 
-Scope: the int suite, DSP ("Armv7E-M on host") build mode. Float kernels
-(f16/f32) are excluded from the host library; f16 needs a host half-float
-story and is deferred with the FVP leg.
+Scope: the int suite. Two build modes: "dsp" ("Armv7E-M on host", the
+mutation default) and "m0" (no ARM_MATH_* define at all: ns-cmsis-nn's
+pure-C cortex-m0 configuration, which needs no shim and is what the
+pre-FVP host check runs). Float kernels (f16/f32) are excluded from the host
+library; f16 needs a host half-float story and is deferred with the FVP leg.
 """
 
 from __future__ import annotations
@@ -24,6 +26,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence
+
+from helia_core_tester.utils.host_compiler import find_host_cc
 
 _HOST_DIR = Path(__file__).resolve().parent / "host"
 DSP_SHIM = _HOST_DIR / "dsp_shim.h"
@@ -46,8 +50,14 @@ KERNEL_SOURCE_DIRS = (
     "Source/SVDFunctions",
 )
 
-# Float kernels are not part of the host build (see module docstring).
+BUILD_MODES = ("dsp", "m0")
+
+# Float kernels are not part of the mutation host build (see module docstring).
 _EXCLUDED_NAME_PARTS = ("f16", "fp16", "f32", "_flt")
+# The host check keeps the f32 sources: int cases call f32<->int bridges such as
+# arm_quantize_f32_s8, and plain-C f32 compiles everywhere. f16 stays out until
+# the host _Float16 story is settled.
+HOST_CHECK_EXCLUDED_NAME_PARTS = ("f16", "fp16")
 
 # Host DSP kernels need the DSP size.
 _MVE_SIZER = re.compile(r"\b(arm_\w+_get_buffer_size)_mve\b")
@@ -87,31 +97,43 @@ def _run(cmd: Sequence[str], **kwargs) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, capture_output=True, text=True, **kwargs)
 
 
-def kernel_sources(tree_root: Path) -> List[Path]:
+def all_int_source_dirs(tree_root: Path) -> List[str]:
+    """Every Source/*Functions directory of the tree (the host check builds them all)."""
+    source = tree_root / "Source"
+    if not source.is_dir():
+        raise HostBuildError(f"kernel source dir missing: {source}")
+    return sorted(f"Source/{d.name}" for d in source.iterdir() if d.is_dir() and d.name.endswith("Functions"))
+
+
+def kernel_sources(
+    tree_root: Path,
+    source_dirs: Optional[Sequence[str]] = None,
+    excluded_name_parts: Sequence[str] = _EXCLUDED_NAME_PARTS,
+) -> List[Path]:
     files: List[Path] = []
-    for rel in KERNEL_SOURCE_DIRS:
+    for rel in KERNEL_SOURCE_DIRS if source_dirs is None else source_dirs:
         directory = tree_root / rel
         if not directory.is_dir():
             raise HostBuildError(f"kernel source dir missing: {directory}")
         for f in sorted(directory.glob("*.c")):
             lowered = f.name.lower()
-            if any(part in lowered for part in _EXCLUDED_NAME_PARTS):
+            if any(part in lowered for part in excluded_name_parts):
                 continue
             files.append(f)
     return files
 
 
-def _base_cflags(tree_root: Path) -> List[str]:
-    return [
-        "-O1",
-        "-g",
-        "-fno-strict-aliasing",
-        "-DARM_MATH_DSP",
-        "-include",
-        str(DSP_SHIM),
-        "-I",
-        str(tree_root / "Include"),
-    ]
+def _resolve_cc(cc: Optional[str]) -> str:
+    return cc if cc else find_host_cc()
+
+
+def _base_cflags(tree_root: Path, mode: str = "dsp") -> List[str]:
+    if mode not in BUILD_MODES:
+        raise HostBuildError(f"unknown host build mode {mode!r} (expected one of {', '.join(BUILD_MODES)})")
+    flags = ["-O1", "-g", "-fno-strict-aliasing"]
+    if mode == "dsp":
+        flags += ["-DARM_MATH_DSP", "-include", str(DSP_SHIM)]
+    return flags + ["-I", str(tree_root / "Include")]
 
 
 def host_sizer_defines(sources: Iterable[Path]) -> List[str]:
@@ -121,13 +143,22 @@ def host_sizer_defines(sources: Iterable[Path]) -> List[str]:
     return [f"-D{name}_mve={name}" for name in sorted(names)]
 
 
-def build_kernel_lib(tree_root: Path, out_dir: Path, cc: str = "gcc", jobs: int = 8) -> Path:
+def build_kernel_lib(
+    tree_root: Path,
+    out_dir: Path,
+    cc: Optional[str] = None,
+    jobs: int = 8,
+    mode: str = "dsp",
+    source_dirs: Optional[Sequence[str]] = None,
+    excluded_name_parts: Sequence[str] = _EXCLUDED_NAME_PARTS,
+) -> Path:
     """Compile the int kernel sources into a static library. Returns its path."""
+    cc = _resolve_cc(cc)
     obj_dir = out_dir / "obj"
     if obj_dir.exists():
         shutil.rmtree(obj_dir)
     obj_dir.mkdir(parents=True)
-    cflags = _base_cflags(tree_root)
+    cflags = _base_cflags(tree_root, mode)
 
     def compile_one(src: Path) -> Optional[str]:
         obj = obj_dir / (src.stem + ".o")
@@ -137,7 +168,7 @@ def build_kernel_lib(tree_root: Path, out_dir: Path, cc: str = "gcc", jobs: int 
         return None
 
     with ThreadPoolExecutor(max_workers=jobs) as pool:
-        errors = [e for e in pool.map(compile_one, kernel_sources(tree_root)) if e]
+        errors = [e for e in pool.map(compile_one, kernel_sources(tree_root, source_dirs, excluded_name_parts)) if e]
     if errors:
         raise HostBuildError("kernel library compile failed:\n" + "\n".join(errors[:5]))
 
@@ -150,9 +181,10 @@ def build_kernel_lib(tree_root: Path, out_dir: Path, cc: str = "gcc", jobs: int 
     return lib
 
 
-def build_runtime_obj(tester_root: Path, tree_root: Path, out_dir: Path, cc: str = "gcc") -> Path:
+def build_runtime_obj(tester_root: Path, tree_root: Path, out_dir: Path, cc: Optional[str] = None) -> Path:
     """Compile the shared test runtime once, with helia_test_finish renamed away
     so the exiting host implementation in host_finish.c takes its place."""
+    cc = _resolve_cc(cc)
     src = tester_root / "src" / "test_runtime" / "helia_test_runtime.c"
     obj = out_dir / "helia_test_runtime_host.o"
     proc = _run(
@@ -197,10 +229,12 @@ def build_and_run_case(
     runtime_obj: Path,
     tester_root: Path,
     bin_dir: Path,
-    cc: str = "gcc",
+    cc: Optional[str] = None,
     timeout_s: int = 60,
+    mode: str = "dsp",
 ) -> CaseResult:
     """Compile one generated case against the kernel library and execute it."""
+    cc = _resolve_cc(cc)
     name = case_dir.name
     family = case_dir.parent.name
     sources = sorted(case_dir.glob("*.c"))
@@ -209,7 +243,7 @@ def build_and_run_case(
     binary = bin_dir / name
     cmd = [
         cc,
-        *_base_cflags(tree_root),
+        *_base_cflags(tree_root, mode),
         *host_sizer_defines(sources),
         "-I",
         str(tester_root / "src"),
@@ -245,13 +279,18 @@ def run_all_cases(
     runtime_obj: Path,
     tester_root: Path,
     bin_dir: Path,
-    cc: str = "gcc",
+    cc: Optional[str] = None,
     jobs: int = 8,
+    mode: str = "dsp",
+    timeout_s: int = 60,
 ) -> List[CaseResult]:
+    cc = _resolve_cc(cc)
     bin_dir.mkdir(parents=True, exist_ok=True)
 
     def one(case_dir: Path) -> CaseResult:
-        return build_and_run_case(case_dir, tree_root, lib, runtime_obj, tester_root, bin_dir, cc=cc)
+        return build_and_run_case(
+            case_dir, tree_root, lib, runtime_obj, tester_root, bin_dir, cc=cc, timeout_s=timeout_s, mode=mode
+        )
 
     with ThreadPoolExecutor(max_workers=jobs) as pool:
         return list(pool.map(one, case_dirs))

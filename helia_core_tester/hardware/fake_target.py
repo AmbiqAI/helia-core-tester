@@ -13,9 +13,8 @@ from typing import Any, Mapping
 
 import numpy as np
 
-from helia_core_tester.generation.utils.tflite_utils import requantize_np
-
 from .boards import DEFAULT_BOARD_ID, resolve_board
+from .fixed_point import requantize_np
 from .hctp import HEADER_SIZE, Frame, FrameDecoder, MessageType, SessionFrameValidator, encode_frame
 from .measurement import (
     MAX_CASES_PER_PLAN,

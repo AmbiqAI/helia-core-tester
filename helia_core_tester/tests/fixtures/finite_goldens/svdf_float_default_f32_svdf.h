@@ -1,11 +1,12 @@
-#ifndef SVDF_FLOAT_DEFAULT_F32_SVDF_H
-#define SVDF_FLOAT_DEFAULT_F32_SVDF_H
+#ifndef SVDF_FLOAT_DEFAULT_F32_HARNESS_H
+#define SVDF_FLOAT_DEFAULT_F32_HARNESS_H
 
 #include <stdint.h>
-// Golden arrays may carry NAN/INFINITY, and this header is included ahead of any
-// other translation-unit include that would define them.
+// Input arrays may carry NAN/INFINITY tokens, and this header is included ahead of
+// any other translation-unit include that would define them.
 #include <math.h>
 #include "arm_nnfunctions.h"
+#include "arm_nn_types.h"
 
 static const cmsis_nn_dims svdf_float_default_f32_input_dims = {
     .n = 1, .h = 4, .w = 1, .c = 1
@@ -60,5 +61,6 @@ static const float svdf_float_default_f32_bias[] = {
 static const float svdf_float_default_f32_expected_output[] = {
     -0.58907944f, 0.535856307f, -0.663787723f, -0.428822726f
 };
+
 
 #endif

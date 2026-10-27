@@ -28,9 +28,6 @@ def _repo_root() -> Path:
 class _StubOp(OperationBase):
     """Minimal concrete OperationBase so the sampling helpers can be exercised alone."""
 
-    def build_keras_model(self):  # pragma: no cover - never called by these tests
-        raise NotImplementedError
-
     def generate_c_files(self, output_dir):  # pragma: no cover - never called
         raise NotImplementedError
 
@@ -555,8 +552,8 @@ def test_generated_nonfinite_literals_survive_fast_math(tmp_path: Path, flags: l
 
 
 def test_activation_reference_encodes_the_propagation_and_clamping_contract() -> None:
-    from helia_core_tester.generation.ops.ActivationFunctions.nn_activation_float import (
-        _activation_reference,
+    from helia_core_tester.tests.reference_models import (
+        activation_reference as _activation_reference,
     )
 
     sweep = np.array([np.nan, np.inf, -np.inf], dtype=np.float32)
@@ -636,8 +633,8 @@ def test_soft_float_tanh_nan_case_expects_a_nan_back() -> None:
     """The #314 guard is only a guard if the golden is a NaN: the reference must
     propagate, not clamp the lane to tanh(xmax) the way the MVE leg does.
     """
-    from helia_core_tester.generation.ops.ActivationFunctions.nn_activation_float import (
-        _activation_reference,
+    from helia_core_tester.tests.reference_models import (
+        activation_reference as _activation_reference,
     )
 
     old = np.seterr(all="ignore")

@@ -4,16 +4,9 @@ from pathlib import Path
 
 import numpy as np
 import yaml
-import pytest
 
 from helia_core_tester.generation.io.descriptors import load_descriptor
 from helia_core_tester.generation.io.dtypes import descriptor_matches_dtype_filter
-from helia_core_tester.generation.utils.litert_builder import (
-    LITERT_AVAILABLE,
-    build_unary_same_shape_op,
-    litert,
-)
-from helia_core_tester.generation.utils.litert_utils import load_litert_model
 from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
 
@@ -63,7 +56,7 @@ def test_tensor_dtypes_only_descriptor_derives_legacy_quantized_side(tmp_path: P
     assert desc["activation_dtype"] == "S8"
     assert desc.get("weight_dtype") is None
     assert desc["resolved_tensor_dtypes"] == {"input": "S8", "output": "FP32"}
-    assert desc["resolved_comparison"] == {"mode": "float", "atol": 5.0e-5, "rtol": 2.0e-5}
+    assert desc["resolved_comparison"] == {"mode": "float", "atol": 1.0e-5, "rtol": 1.3e-6}
 
 
 def test_tensor_dtypes_only_descriptor_uses_fp16_default_comparison(tmp_path: Path) -> None:
@@ -84,7 +77,7 @@ def test_tensor_dtypes_only_descriptor_uses_fp16_default_comparison(tmp_path: Pa
 
     assert desc["activation_dtype"] == "FP16"
     assert desc["resolved_tensor_dtypes"] == {"input": "FP16", "output": "FP16"}
-    assert desc["resolved_comparison"] == {"mode": "float", "atol": 1.0e-3, "rtol": 1.0e-3}
+    assert desc["resolved_comparison"] == {"mode": "float", "atol": 1.0e-5, "rtol": 1.0e-3}
 
 
 def test_tensor_dtypes_accept_fp16_and_comparison_override(tmp_path: Path) -> None:
@@ -148,32 +141,15 @@ def test_template_context_formats_standalone_float_literals_for_c() -> None:
 
 
 def _load_nn_activation_float_module(monkeypatch):
-    import importlib.util
-    import sys
+    """The numpy activation models, which the C reference entries are checked against."""
     from types import SimpleNamespace
 
-    fake_tf = SimpleNamespace(
-        keras=SimpleNamespace(
-            Model=object,
-            activations=SimpleNamespace(sigmoid=lambda x: x, tanh=lambda x: x, linear=lambda x: x),
-        ),
-        nn=SimpleNamespace(),
-    )
-    monkeypatch.setitem(sys.modules, "tensorflow", fake_tf)
+    from helia_core_tester.tests import reference_models as models
 
-    module_path = (
-        Path(__file__).resolve().parents[1]
-        / "generation"
-        / "ops"
-        / "ActivationFunctions"
-        / "nn_activation_float.py"
-    )
-    spec = importlib.util.spec_from_file_location("nn_activation_float_test_module", module_path)
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return SimpleNamespace(_activation_reference=models.activation_reference,
+                           _TANH_LUT256_F16=models.TANH_LUT256_F16,
+                           _tanh_reference_f16=models.tanh_reference_f16,
+                           _tanh_reference_f16_mve=models.tanh_reference_f16_mve)
 
 
 def test_nn_activation_float_fp16_tanh_reference_matches_scalar_fallback(monkeypatch) -> None:
@@ -375,33 +351,3 @@ def test_float_param_builders_use_public_float_activation_defaults() -> None:
     for params in (conv, dw, fc, tconv):
         assert params["activation_min"] == -1.0e30
         assert params["activation_max"] == 1.0e30
-
-
-@pytest.mark.skipif(not LITERT_AVAILABLE, reason="ai_edge_litert is required for float LiteRT round-trips")
-@pytest.mark.parametrize(
-    ("dtype", "expected_tensor_type_name"),
-    [
-        ("FP32", "FLOAT32"),
-        ("FP16", "FLOAT16"),
-    ],
-)
-def test_future_fp_ops_can_use_shared_litert_builder_without_infra_changes(
-    tmp_path: Path,
-    dtype: str,
-    expected_tensor_type_name: str,
-) -> None:
-    model_bytes = build_unary_same_shape_op(
-        op_name="ABS",
-        input_shape=(1, 4),
-        dtype=dtype,
-        output_dtype=dtype,
-    )
-    model_path = tmp_path / f"abs_{dtype.lower()}.tflite"
-    model_path.write_bytes(model_bytes)
-
-    model, subgraph = load_litert_model(str(model_path))
-    input_tensor = subgraph.tensors[subgraph.inputs[0]]
-    output_tensor = subgraph.tensors[subgraph.outputs[0]]
-
-    assert getattr(litert.TensorType, expected_tensor_type_name) == input_tensor.type
-    assert input_tensor.type == output_tensor.type

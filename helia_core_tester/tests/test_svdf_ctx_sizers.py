@@ -10,6 +10,7 @@ computed in Python). A descriptor without the new keys renders none of the asser
 from __future__ import annotations
 
 import copy
+import re
 from pathlib import Path
 
 import pytest
@@ -92,10 +93,15 @@ def test_each_kernel_sizes_scratch_through_its_own_sizers(
     output_check = f'HELIA_VALIDATE_SIZER("{kernel}_output_ctx_get_buffer_size"'
     assert input_check in rendered
     assert output_check in rendered
-    first_allocation = min(
-        (rendered.index(token) for token in ("malloc(", f"{kernel}(") if token in rendered),
-        default=len(rendered),
+    # The harness's bound <name>_run wrapper is defined ahead of run_svdf; the call that
+    # matters is the one run_svdf makes through it.
+    body = rendered[rendered.index("static int32_t run_svdf(void)"):]
+    offset = len(rendered) - len(body)
+    first_allocation = offset + min(
+        (body.index(token) for token in ("malloc(", "_run(") if token in body),
+        default=len(body),
     )
+    assert re.search(rf"return {kernel}\(", rendered), "the harness binds the kernel call from the contract"
     assert rendered.index(input_check) < first_allocation
     assert rendered.index(output_check) < first_allocation
 
@@ -103,7 +109,7 @@ def test_each_kernel_sizes_scratch_through_its_own_sizers(
 def test_int_template_no_longer_hardcodes_scratch_arithmetic(
     tmp_path: Path, checked_in_descriptors: dict[str, dict]
 ) -> None:
-    template = (_template_dir() / "svdf.c.j2").read_text()
+    template = (_template_dir() / "svdf.fragment.j2").read_text()
     assert "* sizeof(int32_t)" not in template
     assert "_FEATURE_BATCHES * sizeof" not in template
     assert "_UNIT_COUNT * sizeof" not in template
@@ -244,9 +250,8 @@ def test_sentinels_on_renders_sizer_only_probes(
         assert "65538" not in rendered
 
     # Sizer-only: the probe structs never reach the kernel call.
-    kernel_call = rendered[rendered.index(f"= {kernel}(") :]
-    kernel_call = kernel_call[: kernel_call.index(";")]
-    assert "probe_" not in kernel_call
+    for call in re.findall(rf"(?:return {kernel}|\w+_svdf\w*_run|\b\w+_run)\((.*?)\);", rendered, flags=re.S):
+        assert "probe_" not in call
 
 
 # ---------------------------------------------------------------------------

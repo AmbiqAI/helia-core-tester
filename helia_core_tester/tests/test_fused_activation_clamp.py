@@ -166,12 +166,17 @@ def test_conv_builder_propagates_a_bad_output_scale() -> None:
         _conv({"activation_dtype": "S16", "activation": "RELU"}, {"scale": 0.0, "zero_point": 0})
 
 
-def test_fully_connected_int_path_uses_the_shared_clamp() -> None:
-    op = OpFullyConnected.__new__(OpFullyConnected)
-    op.desc = {"activation": "RELU6"}
-    quant = {"scale": 2.4, "zero_point": -10}
-    assert op._compute_activation_range(quant, np.dtype(np.int8)) == clamp(op.desc, "S8", quant) == (-10, -7)
-    assert op._compute_activation_range(S16_OUT, np.dtype(np.int16)) == (0, 12000)
+def test_fully_connected_int_path_clamps_at_the_reference_range(tmp_path) -> None:
+    """The FC golden's clamp is TFLite's CalculateActivationRangeQuantized on the output quantization,
+    from the C reference, the same range the shared builder clamp derives."""
+    desc = {"operator": "FullyConnected", "name": "fc_relu6_s8", "activation_dtype": "S8", "weight_dtype": "S8",
+            "input_shape": [1, 8], "filter_shape": [4, 8], "activation": "RELU6"}
+    op = OpFullyConnected(desc, 500, target_cpu="cortex-m55")
+    op.generate_c_files(tmp_path)
+    call = op.reference
+    out = call.quant["output"]
+    want = clamp(desc, "S8", {"scale": out["scale"], "zero_point": out["zero_point"]})
+    assert (call.params["activation_min"], call.params["activation_max"]) == want
 
 
 CORPUS_FILES = (
@@ -264,42 +269,38 @@ def _bmm(activation) -> "OpBatchMatMul":
         "input_2_shape": [1, 3, 4],
         "activation": activation,
     }
-    return OpBatchMatMul(desc, 1)
+    return OpBatchMatMul(desc, 500, target_cpu="cortex-m55")
 
 
 @pytest.mark.parametrize("activation", ["RELU", "RELU6", "relu", "TANH"])
 def test_batch_matmul_rejects_a_fused_activation(activation, tmp_path) -> None:
-    for call in (lambda op: op.build_keras_model(), lambda op: op.generate_c_files(tmp_path)):
+    for call in (lambda op: op.validate_descriptor(), lambda op: op.generate_c_files(tmp_path)):
         with pytest.raises(ValueError, match="BatchMatMul has no fused activation"):
             call(_bmm(activation))
 
 
 @pytest.mark.parametrize("activation", ["NONE", None])
-def test_batch_matmul_without_activation_builds(activation) -> None:
-    assert _bmm(activation).build_keras_model() is not None
+def test_batch_matmul_without_activation_generates(activation, tmp_path) -> None:
+    op = _bmm(activation)
+    op.validate_descriptor()
+    op.generate_c_files(tmp_path)
+    assert op.reference is not None
 
 
-def _layer_kinds(model) -> list[str]:
-    return [type(layer).__name__ for layer in model.layers]
-
-
-@pytest.mark.parametrize(("activation", "relu_max"), [("relu", None), ("relu6", 6.0), ("Relu6", 6.0)])
-def test_model_builders_accept_the_names_the_clamp_accepts(activation: str, relu_max) -> None:
+@pytest.mark.parametrize("activation", ["relu", "relu6", "Relu6"])
+def test_case_builders_accept_the_names_the_clamp_accepts(activation: str, tmp_path) -> None:
     from helia_core_tester.generation.ops.ConvolutionFunctions.depthwise_conv import OpDepthwiseConv
 
     base = {"activation_dtype": "S8", "weight_dtype": "S8", "padding": "SAME", "strides": [1, 1]}
-    dw = OpDepthwiseConv(
-        {**base, "operator": "DepthwiseConv", "name": "dw_case_s8", "input_shape": [1, 4, 4, 2],
-         "filter_shape": [3, 3, 2, 1], "depth_multiplier": 1, "activation": activation},
-        1,
-    ).build_keras_model()
-    relus = [layer for layer in dw.layers if type(layer).__name__ == "ReLU"]
-    assert len(relus) == 1
-    assert (None if relus[0].max_value is None else float(relus[0].max_value)) == relu_max
-
-    fc = OpFullyConnected(
-        {**base, "operator": "FullyConnected", "name": "fc_case_s8", "input_shape": [1, 8],
-         "filter_shape": [4, 8], "activation": activation},
-        1,
-    ).build_keras_model()
-    assert "ReLU" in _layer_kinds(fc)
+    cases = (
+        OpDepthwiseConv({**base, "operator": "DepthwiseConv", "name": "dw_case_s8", "input_shape": [1, 4, 4, 2],
+                         "filter_shape": [3, 3, 2, 1], "depth_multiplier": 1, "activation": activation},
+                        500, target_cpu="cortex-m55"),
+        OpFullyConnected({**base, "operator": "FullyConnected", "name": "fc_case_s8", "input_shape": [1, 8],
+                          "filter_shape": [4, 8], "activation": activation}, 500, target_cpu="cortex-m55"),
+    )
+    for op in cases:
+        op.generate_c_files(tmp_path / op.desc["name"])
+        out = op.reference.quant["output"]
+        want = clamp({"activation": activation}, "S8", {"scale": out["scale"], "zero_point": out["zero_point"]})
+        assert (op.reference.params["activation_min"], op.reference.params["activation_max"]) == want

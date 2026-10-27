@@ -68,7 +68,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "hard_swish_compat",
         "OpHardSwishCompat",
         "ActivationFunctions/hard_swish_compat.yaml",
-        "ActivationFunctions/hard_swish",
+        None,
     ),
     "PReLU": _spec(
         "PReLU",
@@ -76,7 +76,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "prelu",
         "OpPReLU",
         descriptor_relpaths=("ActivationFunctions/prelu.yaml", "ActivationFunctions/prelu_float.yaml"),
-        template_relpath="ActivationFunctions/prelu",
+        template_relpath=None,
     ),
     "PReLUScalar": _spec(
         "PReLUScalar",
@@ -84,29 +84,29 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "prelu_scalar",
         "OpPReLUScalar",
         "ActivationFunctions/prelu_scalar.yaml",
-        "ActivationFunctions/prelu_scalar",
+        None,
     ),
-    "Clamp": _spec("Clamp", "ActivationFunctions", "clamp", "OpClamp", "ActivationFunctions/clamp.yaml", "ActivationFunctions/clamp"),
+    "Clamp": _spec("Clamp", "ActivationFunctions", "clamp", "OpClamp", "ActivationFunctions/clamp.yaml", None),
     "NNActivationS16": _spec(
         "NNActivationS16",
         "ActivationFunctions",
         "nn_activation_s16",
         "OpNNActivationS16",
         None,
-        "ActivationFunctions/nn_activation",
+        None,
     ),
-    "Relu": _spec("Relu", "ActivationFunctions", "relu", "OpRelu", "ActivationFunctions/relu.yaml", "ActivationFunctions/relu"),
-    "Relu6": _spec("Relu6", "ActivationFunctions", "relu6", "OpRelu6", "ActivationFunctions/relu6.yaml", "ActivationFunctions/relu6"),
-    "LeakyRelu": _spec("LeakyRelu", "ActivationFunctions", "leaky_relu", "OpLeakyRelu", "ActivationFunctions/leaky_relu.yaml", "ActivationFunctions/leaky_relu"),
-    "Tanh": _spec("Tanh", "ActivationFunctions", "tanh", "OpTanh", "ActivationFunctions/tanh.yaml", "ActivationFunctions/tanh"),
-    "Logistic": _spec("Logistic", "ActivationFunctions", "logistic", "OpLogistic", "ActivationFunctions/logistic.yaml", "ActivationFunctions/logistic"),
+    "Relu": _spec("Relu", "ActivationFunctions", "relu", "OpRelu", "ActivationFunctions/relu.yaml", None),
+    "Relu6": _spec("Relu6", "ActivationFunctions", "relu6", "OpRelu6", "ActivationFunctions/relu6.yaml", None),
+    "LeakyRelu": _spec("LeakyRelu", "ActivationFunctions", "leaky_relu", "OpLeakyRelu", "ActivationFunctions/leaky_relu.yaml", None),
+    "Tanh": _spec("Tanh", "ActivationFunctions", "tanh", "OpTanh", "ActivationFunctions/tanh.yaml", None),
+    "Logistic": _spec("Logistic", "ActivationFunctions", "logistic", "OpLogistic", "ActivationFunctions/logistic.yaml", None),
     "Gelu": _spec(
         "Gelu",
         "ActivationFunctions",
         "gelu",
         "OpGelu",
         descriptor_relpaths=("ActivationFunctions/gelu_float.yaml", "ActivationFunctions/gelu_float16.yaml"),
-        template_relpath="ActivationFunctions/gelu",
+        template_relpath=None,
     ),
     "HardSwishPrecise": _spec(
         "HardSwishPrecise",
@@ -117,7 +117,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
             "ActivationFunctions/hard_swish_precise.yaml",
             "ActivationFunctions/hard_swish_float.yaml",
         ),
-        template_relpath="ActivationFunctions/hard_swish",
+        template_relpath=None,
     ),
     "Abs": _spec(
         "Abs",
@@ -125,7 +125,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "abs",
         "OpAbs",
         descriptor_relpaths=("BasicMathFunctions/abs.yaml", "BasicMathFunctions/abs_float.yaml"),
-        template_relpath="BasicMathFunctions/abs",
+        template_relpath=None,
     ),
     "Add": _spec(
         "Add",
@@ -133,7 +133,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "add",
         "OpAdd",
         descriptor_relpaths=("BasicMathFunctions/add.yaml", "BasicMathFunctions/add_float.yaml"),
-        template_relpath="BasicMathFunctions/add",
+        template_relpath=None,
     ),
     "Sub": _spec(
         "Sub",
@@ -141,11 +141,11 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "sub",
         "OpSub",
         descriptor_relpaths=("BasicMathFunctions/sub.yaml", "BasicMathFunctions/sub_float.yaml"),
-        template_relpath="BasicMathFunctions/sub",
+        template_relpath=None,
     ),
     "Div": _spec(
         "Div", "BasicMathFunctions", "div", "OpDiv",
-        "BasicMathFunctions/div_float.yaml", "BasicMathFunctions/mul",
+        "BasicMathFunctions/div_float.yaml", None,
     ),
     "Mul": _spec(
         "Mul",
@@ -153,7 +153,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "mul",
         "OpMul",
         descriptor_relpaths=("BasicMathFunctions/mul.yaml", "BasicMathFunctions/mul_float.yaml"),
-        template_relpath="BasicMathFunctions/mul",
+        template_relpath=None,
     ),
     "Fill": _spec(
         "Fill",
@@ -161,7 +161,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "fill",
         "OpFill",
         "BasicMathFunctions/fill_float.yaml",
-        "BasicMathFunctions/fill",
+        None,
         rationale=(
             "arm_nn_fill_f32/f16 (ns-cmsis-nn#475) ship under Source/BasicMathFunctions; "
             "Fill was a tester-only extension with no generated templates before them."
@@ -173,7 +173,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "chunked_equivalence",
         "OpChunkedEquivalence",
         "BasicMathFunctions/chunked_equivalence.yaml",
-        "BasicMathFunctions/chunked_equivalence",
+        None,
         rationale=(
             "Block-size invariance property cases (issue #81): one full-length elementwise "
             "call is the bit-exact reference for chunked calls over the same data, so "
@@ -186,7 +186,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "minmax",
         "OpMinMax",
         descriptor_relpaths=("BasicMathFunctions/maximum.yaml", "BasicMathFunctions/maximum_float.yaml"),
-        template_relpath="BasicMathFunctions/minmax",
+        template_relpath=None,
     ),
     "Minimum": _spec(
         "Minimum",
@@ -194,7 +194,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "minmax",
         "OpMinMax",
         descriptor_relpaths=("BasicMathFunctions/minimum.yaml", "BasicMathFunctions/minimum_float.yaml"),
-        template_relpath="BasicMathFunctions/minmax",
+        template_relpath=None,
     ),
     "Mean": _spec(
         "Mean",
@@ -202,12 +202,12 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "mean",
         "OpMean",
         descriptor_relpaths=("BasicMathFunctions/mean.yaml", "BasicMathFunctions/mean_float.yaml"),
-        template_relpath="BasicMathFunctions/mean",
+        template_relpath=None,
     ),
     "ReduceMax": _spec(
         "ReduceMax", "BasicMathFunctions", "reduce_max", "OpReduceMax",
         descriptor_relpaths=("BasicMathFunctions/reduce_max.yaml", "BasicMathFunctions/reduce_max_float.yaml"),
-        template_relpath="BasicMathFunctions/reduce_max",
+        template_relpath=None,
     ),
     "ReduceSum": _spec(
         "ReduceSum",
@@ -215,33 +215,33 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "reduce_sum",
         "OpReduceSum",
         "BasicMathFunctions/reduce_sum_float.yaml",
-        "BasicMathFunctions/reduce_sum",
+        None,
     ),
     "ReduceMin": _spec(
         "ReduceMin", "BasicMathFunctions", "reduce_min", "OpReduceMin",
         descriptor_relpaths=("BasicMathFunctions/reduce_min.yaml", "BasicMathFunctions/reduce_min_float.yaml"),
-        template_relpath="BasicMathFunctions/reduce_min",
+        template_relpath=None,
     ),
     "ArgMax": _spec(
         "ArgMax", "BasicMathFunctions", "argmax", "OpArgMax",
         descriptor_relpaths=("BasicMathFunctions/argmax.yaml", "BasicMathFunctions/argmax_float.yaml"),
-        template_relpath="BasicMathFunctions/argmax",
+        template_relpath=None,
     ),
     "ArgMin": _spec(
         "ArgMin", "BasicMathFunctions", "argmin", "OpArgMin",
         descriptor_relpaths=("BasicMathFunctions/argmin.yaml", "BasicMathFunctions/argmin_float.yaml"),
-        template_relpath="BasicMathFunctions/argmin",
+        template_relpath=None,
     ),
-    "Sqrt": _spec("Sqrt", "BasicMathFunctions", "sqrt", "OpSqrt", template_relpath="BasicMathFunctions/sqrt", descriptor_relpaths=("BasicMathFunctions/sqrt.yaml", "BasicMathFunctions/sqrt_float.yaml")),
-    "Rsqrt": _spec("Rsqrt", "BasicMathFunctions", "rsqrt", "OpRsqrt", template_relpath="BasicMathFunctions/rsqrt", descriptor_relpaths=("BasicMathFunctions/rsqrt.yaml", "BasicMathFunctions/rsqrt_float.yaml")),
-    "Comparison": _spec("Comparison", "ComparisonFunctions", "comparison", "OpComparison", "ComparisonFunctions/comparison.yaml", "ComparisonFunctions/comparison"),
+    "Sqrt": _spec("Sqrt", "BasicMathFunctions", "sqrt", "OpSqrt", template_relpath=None, descriptor_relpaths=("BasicMathFunctions/sqrt.yaml", "BasicMathFunctions/sqrt_float.yaml")),
+    "Rsqrt": _spec("Rsqrt", "BasicMathFunctions", "rsqrt", "OpRsqrt", template_relpath=None, descriptor_relpaths=("BasicMathFunctions/rsqrt.yaml", "BasicMathFunctions/rsqrt_float.yaml")),
+    "Comparison": _spec("Comparison", "ComparisonFunctions", "comparison", "OpComparison", "ComparisonFunctions/comparison.yaml", None),
     "Concatenation": _spec(
         "Concatenation",
         "ConcatenationFunctions",
         "concatenation",
         "OpConcatenation",
         descriptor_relpaths=("ConcatenationFunctions/concatenation.yaml", "ConcatenationFunctions/concatenation_float.yaml"),
-        template_relpath="ConcatenationFunctions/concatenation",
+        template_relpath=None,
     ),
     "Split": _spec(
         "Split",
@@ -249,7 +249,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "split",
         "OpSplit",
         descriptor_relpaths=("ConcatenationFunctions/split.yaml", "ConcatenationFunctions/split_float.yaml"),
-        template_relpath="ConcatenationFunctions/split",
+        template_relpath=None,
     ),
     "Pack": _spec(
         "Pack",
@@ -257,7 +257,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "pack",
         "OpPack",
         "ConcatenationFunctions/pack_float.yaml",
-        "ConcatenationFunctions/pack",
+        None,
     ),
     "Unpack": _spec(
         "Unpack",
@@ -265,7 +265,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "unpack",
         "OpUnpack",
         "ConcatenationFunctions/unpack_float.yaml",
-        "ConcatenationFunctions/unpack",
+        None,
     ),
     "Convolve": _spec(
         "Convolve",
@@ -273,7 +273,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "convolve",
         "OpConvolve",
         descriptor_relpaths=("ConvolutionFunctions/convolve.yaml", "ConvolutionFunctions/convolve_float.yaml"),
-        template_relpath="ConvolutionFunctions/convolve",
+        template_relpath=None,  # rendered by common/harness
     ),
     "DepthwiseConv": _spec(
         "DepthwiseConv",
@@ -281,7 +281,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "depthwise_conv",
         "OpDepthwiseConv",
         descriptor_relpaths=("ConvolutionFunctions/depthwise_conv.yaml", "ConvolutionFunctions/depthwise_conv_float.yaml"),
-        template_relpath="ConvolutionFunctions/depthwise_conv",
+        template_relpath=None,  # rendered by common/harness
     ),
     "TransposeConv": _spec(
         "TransposeConv",
@@ -289,7 +289,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "transpose_conv",
         "OpTransposeConv",
         descriptor_relpaths=("ConvolutionFunctions/transpose_conv.yaml", "ConvolutionFunctions/transpose_conv_float.yaml"),
-        template_relpath="ConvolutionFunctions/transpose_conv",
+        template_relpath=None,  # rendered by common/harness
     ),
     "FullyConnected": _spec(
         "FullyConnected",
@@ -297,7 +297,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "fully_connected",
         "OpFullyConnected",
         descriptor_relpaths=("FullyConnectedFunctions/fully_connected.yaml", "FullyConnectedFunctions/fully_connected_float.yaml"),
-        template_relpath="FullyConnectedFunctions/fully_connected",
+        template_relpath=None,  # rendered by common/harness
     ),
     "BatchMatMul": _spec(
         "BatchMatMul",
@@ -305,14 +305,14 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "batch_matmul",
         "OpBatchMatMul",
         descriptor_relpaths=("FullyConnectedFunctions/batch_matmul.yaml", "FullyConnectedFunctions/batch_matmul_float.yaml"),
-        template_relpath="FullyConnectedFunctions/batch_matmul",
+        template_relpath=None,  # rendered by common/harness
     ),
     "Gather": _spec(
         "Gather",
         "GatherFunctions",
         "gather",
         "OpGather",
-        template_relpath="GatherFunctions/gather",
+        template_relpath=None,
         descriptor_relpaths=(
             "GatherFunctions/gather.yaml",
             "GatherFunctions/gather_float.yaml",
@@ -323,7 +323,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "GatherFunctions",
         "gather_nd",
         "OpGatherND",
-        template_relpath="GatherFunctions/gather_nd",
+        template_relpath=None,
         descriptor_relpaths=(
             "GatherFunctions/gather_nd.yaml",
             "GatherFunctions/gather_nd_float.yaml",
@@ -345,14 +345,14 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         descriptor_relpaths=("LSTMFunctions/gru_unidirectional_float.yaml",),
         template_relpath="LSTMFunctions/gru_unidirectional",
     ),
-    "Requantize": _spec("Requantize", "NNSupportFunctions", "requantize", "OpRequantize", "NNSupportFunctions/requantize.yaml", "NNSupportFunctions/requantize"),
+    "Requantize": _spec("Requantize", "NNSupportFunctions", "requantize", "OpRequantize", "NNSupportFunctions/requantize.yaml", None),
     "BatchNorm": _spec(
         "BatchNorm",
         "NNSupportFunctions",
         "batch_norm",
         "OpBatchNorm",
         "NNSupportFunctions/batch_norm_float.yaml",
-        "NNSupportFunctions/batch_norm",
+        None,
     ),
     "Pad": _spec(
         "Pad",
@@ -360,7 +360,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "pad",
         "OpPad",
         descriptor_relpaths=("PadFunctions/pad.yaml", "PadFunctions/pad_float.yaml"),
-        template_relpath="PadFunctions/pad",
+        template_relpath=None,
     ),
     "AvgPool": _spec(
         "AvgPool",
@@ -368,7 +368,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "avg_pool",
         "OpAvgPool",
         descriptor_relpaths=("PoolingFunctions/avg_pool.yaml", "PoolingFunctions/avg_pool_float.yaml"),
-        template_relpath="PoolingFunctions/avg_pool",
+        template_relpath=None,
     ),
     "MaxPool": _spec(
         "MaxPool",
@@ -376,7 +376,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "max_pool",
         "OpMaxPool",
         descriptor_relpaths=("PoolingFunctions/max_pool.yaml", "PoolingFunctions/max_pool_float.yaml"),
-        template_relpath="PoolingFunctions/max_pool",
+        template_relpath=None,
     ),
     "Quantize": _spec(
         "Quantize",
@@ -384,7 +384,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "quantize",
         "OpQuantize",
         descriptor_relpaths=("QuantizationFunctions/quantize.yaml", "QuantizationFunctions/quantize_float.yaml"),
-        template_relpath="QuantizationFunctions/quantize",
+        template_relpath=None,
     ),
     "Dequantize": _spec(
         "Dequantize",
@@ -392,7 +392,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "dequantize",
         "OpDequantize",
         descriptor_relpaths=("QuantizationFunctions/dequantize.yaml", "QuantizationFunctions/dequantize_float.yaml"),
-        template_relpath="QuantizationFunctions/dequantize",
+        template_relpath=None,
     ),
     "Reshape": _spec(
         "Reshape",
@@ -400,11 +400,11 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "reshape",
         "OpReshape",
         descriptor_relpaths=("ReshapeFunctions/reshape.yaml", "ReshapeFunctions/reshape_float.yaml"),
-        template_relpath="ReshapeFunctions/reshape",
+        template_relpath=None,
     ),
     "ResizeBilinear": _spec(
         "ResizeBilinear", "ReshapeFunctions", "resize_bilinear", "OpResizeBilinear",
-        "ReshapeFunctions/resize_bilinear.yaml", "ReshapeFunctions/resize_bilinear",
+        "ReshapeFunctions/resize_bilinear.yaml", None,
     ),
     "ResizeNearestNeighbor": _spec(
         "ResizeNearestNeighbor",
@@ -412,7 +412,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "resize_nearest_neighbor",
         "OpResizeNearestNeighbor",
         "ReshapeFunctions/resize_nearest_neighbor.yaml",
-        "ReshapeFunctions/resize_nearest_neighbor",
+        None,
     ),
     "SquaredDifference": _spec(
         "SquaredDifference",
@@ -423,12 +423,12 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
             "BasicMathFunctions/squared_difference.yaml",
             "BasicMathFunctions/squared_difference_float.yaml",
         ),
-        template_relpath="BasicMathFunctions/squared_difference",
+        template_relpath=None,
     ),
-    "SpaceToDepth": _spec("SpaceToDepth", "ReshapeFunctions", "space_to_depth", "OpSpaceToDepth", "ReshapeFunctions/space_to_depth.yaml", "ReshapeFunctions/space_to_depth"),
-    "DepthToSpace": _spec("DepthToSpace", "ReshapeFunctions", "depth_to_space", "OpDepthToSpace", "ReshapeFunctions/depth_to_space.yaml", "ReshapeFunctions/depth_to_space"),
-    "SpaceToBatchND": _spec("SpaceToBatchND", "ReshapeFunctions", "space_to_batch_nd", "OpSpaceToBatchND", "ReshapeFunctions/space_to_batch_nd.yaml", "ReshapeFunctions/space_to_batch_nd"),
-    "BatchToSpaceND": _spec("BatchToSpaceND", "ReshapeFunctions", "batch_to_space_nd", "OpBatchToSpaceND", "ReshapeFunctions/batch_to_space_nd.yaml", "ReshapeFunctions/batch_to_space_nd"),
+    "SpaceToDepth": _spec("SpaceToDepth", "ReshapeFunctions", "space_to_depth", "OpSpaceToDepth", "ReshapeFunctions/space_to_depth.yaml", None),
+    "DepthToSpace": _spec("DepthToSpace", "ReshapeFunctions", "depth_to_space", "OpDepthToSpace", "ReshapeFunctions/depth_to_space.yaml", None),
+    "SpaceToBatchND": _spec("SpaceToBatchND", "ReshapeFunctions", "space_to_batch_nd", "OpSpaceToBatchND", "ReshapeFunctions/space_to_batch_nd.yaml", None),
+    "BatchToSpaceND": _spec("BatchToSpaceND", "ReshapeFunctions", "batch_to_space_nd", "OpBatchToSpaceND", "ReshapeFunctions/batch_to_space_nd.yaml", None),
     "SVDF": _spec(
         "SVDF",
         "SVDFunctions",
@@ -443,7 +443,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "softmax",
         "OpSoftmax",
         descriptor_relpaths=("SoftmaxFunctions/softmax.yaml", "SoftmaxFunctions/softmax_float.yaml"),
-        template_relpath="SoftmaxFunctions/softmax",
+        template_relpath=None,
     ),
     "StridedSlice": _spec(
         "StridedSlice",
@@ -451,7 +451,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "strided_slice",
         "OpStridedSlice",
         descriptor_relpaths=("StridedSliceFunctions/strided_slice.yaml", "StridedSliceFunctions/strided_slice_float.yaml"),
-        template_relpath="StridedSliceFunctions/strided_slice",
+        template_relpath=None,
     ),
     "Transpose": _spec(
         "Transpose",
@@ -459,7 +459,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "transpose",
         "OpTranspose",
         descriptor_relpaths=("TransposeFunctions/transpose.yaml", "TransposeFunctions/transpose_float.yaml"),
-        template_relpath="TransposeFunctions/transpose",
+        template_relpath=None,
     ),
     "NNActivationFloat": _spec(
         "NNActivationFloat",
@@ -467,7 +467,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "nn_activation_float",
         "OpNNActivationFloat",
         "ActivationFunctions/nn_activation_float.yaml",
-        "ActivationFunctions/nn_activation_float",
+        None,
     ),
     "Squeeze": _spec(
         "Squeeze",
@@ -475,28 +475,18 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "squeeze",
         "OpSqueeze",
         "TesterExtensions/squeeze.yaml",
-        "TesterExtensions/squeeze",
+        None,
         parity_kind="extension",
         rationale="Tester-only op retained for existing standalone generation coverage.",
     ),
-    "VariableUpdate": _spec(
-        "VariableUpdate",
-        "TesterExtensions",
-        "variable_update",
-        "OpVariableUpdate",
-        None,
-        None,
-        parity_kind="extension",
-        rationale="Tester-only stateful op kept public but isolated from CMSIS parity families.",
-    ),
-    "Tile": _spec("Tile", "TileFunctions", "tile", "OpTile", "TileFunctions/tile.yaml", "TileFunctions/tile"),
-    "BroadcastTo": _spec("BroadcastTo", "BroadcastFunctions", "broadcast_to", "OpBroadcastTo", "BroadcastFunctions/broadcast_to.yaml", "BroadcastFunctions/broadcast_to"),
-    "ScatterNd": _spec("ScatterNd", "ScatterFunctions", "scatter_nd", "OpScatterNd", "ScatterFunctions/scatter_nd.yaml", "ScatterFunctions/scatter_nd"),
-    "MirrorPad": _spec("MirrorPad", "PadFunctions", "mirror_pad", "OpMirrorPad", "PadFunctions/mirror_pad.yaml", "PadFunctions/mirror_pad"),
-    "SelectV2": _spec("SelectV2", "SelectFunctions", "select_v2", "OpSelectV2", "SelectFunctions/select_v2.yaml", "SelectFunctions/select_v2"),
-    "Where": _spec("Where", "SelectFunctions", "where", "OpWhere", "SelectFunctions/where.yaml", "SelectFunctions/where"),
-    "ReverseSequence": _spec("ReverseSequence", "ReverseSequenceFunctions", "reverse_sequence", "OpReverseSequence", "ReverseSequenceFunctions/reverse_sequence.yaml", "ReverseSequenceFunctions/reverse_sequence"),
-    "DynamicUpdateSlice": _spec("DynamicUpdateSlice", "DynamicUpdateSliceFunctions", "dynamic_update_slice", "OpDynamicUpdateSlice", "DynamicUpdateSliceFunctions/dynamic_update_slice.yaml", "DynamicUpdateSliceFunctions/dynamic_update_slice"),
+    "Tile": _spec("Tile", "TileFunctions", "tile", "OpTile", "TileFunctions/tile.yaml", None),
+    "BroadcastTo": _spec("BroadcastTo", "BroadcastFunctions", "broadcast_to", "OpBroadcastTo", "BroadcastFunctions/broadcast_to.yaml", None),
+    "ScatterNd": _spec("ScatterNd", "ScatterFunctions", "scatter_nd", "OpScatterNd", "ScatterFunctions/scatter_nd.yaml", None),
+    "MirrorPad": _spec("MirrorPad", "PadFunctions", "mirror_pad", "OpMirrorPad", "PadFunctions/mirror_pad.yaml", None),
+    "SelectV2": _spec("SelectV2", "SelectFunctions", "select_v2", "OpSelectV2", "SelectFunctions/select_v2.yaml", None),
+    "Where": _spec("Where", "SelectFunctions", "where", "OpWhere", "SelectFunctions/where.yaml", None),
+    "ReverseSequence": _spec("ReverseSequence", "ReverseSequenceFunctions", "reverse_sequence", "OpReverseSequence", "ReverseSequenceFunctions/reverse_sequence.yaml", None),
+    "DynamicUpdateSlice": _spec("DynamicUpdateSlice", "DynamicUpdateSliceFunctions", "dynamic_update_slice", "OpDynamicUpdateSlice", "DynamicUpdateSliceFunctions/dynamic_update_slice.yaml", None),
 }
 
 

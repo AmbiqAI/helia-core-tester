@@ -6,6 +6,7 @@ from typing import Dict, Any, List
 import numpy as np
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.ops.ConcatenationFunctions.concat_pool import concatenation_argument_pool
 
 
 class OpConcatenation(OperationBase):
@@ -13,48 +14,9 @@ class OpConcatenation(OperationBase):
     Concatenation operation - concatenates tensors along an axis.
     """
     
-    def needs_keras_model(self) -> bool:
-        return False
+    def uses_reference(self) -> bool:
+        return True
 
-    def build_keras_model(self):
-        raise NotImplementedError("Concatenation uses LiteRT-only model generation.")
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        from helia_core_tester.generation.utils.litert_builder import build_concat_op
-
-        activation_dtype = self.tensor_dtype("input", default=str(self.desc.get("activation_dtype", "S8")))
-        if activation_dtype == "S8":
-            dtype = "int8"
-        elif activation_dtype == "S16":
-            dtype = "int16"
-        elif activation_dtype == "S32":
-            dtype = "int32"
-        elif activation_dtype == "FP32":
-            dtype = "float32"
-        elif activation_dtype == "FP16":
-            dtype = "float16"
-        else:
-            raise NotImplementedError(f"Unsupported Concatenation dtype: {activation_dtype}")
-
-        input_shapes = []
-        if "input_1_shape" in self.desc:
-            i = 1
-            while f"input_{i}_shape" in self.desc:
-                input_shapes.append(tuple(self.desc[f"input_{i}_shape"]))
-                i += 1
-        elif "input_shape" in self.desc:
-            input_shapes.append(tuple(self.desc["input_shape"]))
-
-        axis = int(self.desc.get("axis", -1))
-
-        model_bytes = build_concat_op(
-            input_shapes=input_shapes,
-            axis=axis,
-            dtype=dtype,
-        )
-        with open(out_path, "wb") as f:
-            f.write(model_bytes)
-    
     def _axis_call_style(self, axis: int, input_rank: int) -> str:
         if axis < 0:
             axis += input_rank
@@ -150,10 +112,9 @@ class OpConcatenation(OperationBase):
         """
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
         
+        from helia_core_tester.generation.reference.call import ReferenceCall
+
         name = self.desc['name']
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
         
         # Build input shapes from descriptor
         input_shapes = []
@@ -297,18 +258,18 @@ class OpConcatenation(OperationBase):
         
         self.rng.__setstate__(rng_state)
 
-        # Compute expected output (no arithmetic, just concatenate)
-        if call_style == "axis_x":
-            output_data = np.concatenate(input_q_list, axis=3)
-        elif call_style == "axis_y":
-            output_data = np.concatenate(input_q_list, axis=2)
-        elif call_style == "axis_z":
-            output_data = np.concatenate(input_q_list, axis=1)
-        elif call_style == "axis_w":
-            output_data = np.concatenate(input_q_list, axis=0)
-        else:
-            output_data = np.concatenate(input_q_list, axis=axis)
-        
+        # The per-axis entry points take WZYX-laid-out operands, so their golden is the
+        # concatenation of those arrays along the matching WZYX axis.
+        concat_axis = {"axis_x": 3, "axis_y": 2, "axis_z": 1, "axis_w": 0}.get(call_style, axis)
+        output_data_shape = list(input_q_list[0].shape)
+        output_data_shape[concat_axis] = sum(int(part.shape[concat_axis]) for part in input_q_list)
+        output_data = self.reference_golden(ReferenceCall(
+            "concatenation", {"axis": int(concat_axis)},
+            {"data": np.concatenate([np.ascontiguousarray(part).ravel() for part in input_q_list]),
+             "extents": np.array([part.shape[concat_axis] for part in input_q_list], dtype=np.int32)},
+            {"output": tuple(output_data_shape)},
+        ))
+
         # Format arrays
         expected_output_array_str = builder.format_array_as_c_literal(output_data)
         input_concat_dims_array_str = builder.format_array_as_c_literal(np.array(input_concat_dims, dtype=np.int32))
@@ -349,27 +310,9 @@ class OpConcatenation(OperationBase):
         if kernel_info["output_c_type"] in {"float", "float16_t"}:
             context["validation_mode"] = "float"
         
-        # Render templates
-        includes_api_dir = output_dir / "includes"
-        includes_api_dir.mkdir(parents=True, exist_ok=True)
-        
-        h_content = self.render_template("ConcatenationFunctions/concatenation/concatenation.h.j2", context)
-        h_path = includes_api_dir / f"{name}_concatenation.h"
-        with open(h_path, 'w') as f:
-            f.write(h_content)
-        
-        c_content = self.render_template("ConcatenationFunctions/concatenation/concatenation.c.j2", context)
-        c_path = output_dir / f"{name}_concatenation.c"
-        with open(c_path, 'w') as f:
-            f.write(c_content)
-        
-        cmake_context = {
-            'name': name,
-            'operator': self.desc.get('operator', 'Concatenation'),
-            'operator_name': 'concatenation'
-        }
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
-        cmake_path = output_dir / "CMakeLists.txt"
-        with open(cmake_path, 'w') as f:
-            f.write(cmake_content)
+        self.render_harness_case(
+            output_dir, stem="concatenation", context=context, pool=concatenation_argument_pool(context),
+            validation_key="ConcatenationFunctions/concatenation/concatenation.c.j2", label="Concatenation",
+            operator="Concatenation",
+        )
         

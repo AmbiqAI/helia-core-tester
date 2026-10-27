@@ -1,7 +1,9 @@
 """Issue #123: HardSwishPrecise takes an explicit hint.extras.prescale.
 
 The prescale derived from the scales is 0 for every realistic scale, so without
-an override the kernel's prescale shift is never exercised.
+an override the kernel's prescale shift is never exercised. The C reference's
+hard_swish_precise_prepare derives or pins it; these tests hold that against an
+independent scalar model of the kernel's int32 steps.
 """
 
 from __future__ import annotations
@@ -13,16 +15,19 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from helia_core_tester.generation.golden_check import case_problems
 from helia_core_tester.core.discovery import find_descriptors_dir
+from helia_core_tester.generation.golden_check import case_problems
 from helia_core_tester.generation.io.descriptors import (
     _validate_and_normalize_descriptor,
     expand_descriptor_variations,
     load_descriptor,
 )
-from helia_core_tester.generation.ops._shared.hard_swish_base import PRESCALE_MAX, HardSwishFamilyBase
+from helia_core_tester.generation.ops._shared.hard_swish_base import PRESCALE_MAX
 from helia_core_tester.generation.ops.ActivationFunctions.hard_swish_compat import OpHardSwishCompat
 from helia_core_tester.generation.ops.ActivationFunctions.hard_swish_precise import OpHardSwishPrecise
+from helia_core_tester.generation.reference.abi import dtype_code
+from helia_core_tester.generation.reference.bindings import ReferenceKernelError, get_bindings
+from helia_core_tester.tests.test_reference_activation import _model_hard_swish_precise
 
 # The Unity suite's s = 1/128 parameter set, keyed as in the generated kernel call.
 UNITY_PARAMS = {
@@ -36,6 +41,7 @@ UNITY_PARAMS = {
 }
 # The template context names the multiplier output_mult.
 UNITY_CONTEXT = {("output_mult" if k == "output_multiplier" else k): v for k, v in UNITY_PARAMS.items()}
+REJECTED = r"hint\.extras\.prescale \d+ either lets x \+ relu_q3 or x \* relu6 leave int32"
 
 
 def _desc(dtype: str = "S8", length: int = 37, **extras) -> dict:
@@ -59,16 +65,25 @@ def _desc(dtype: str = "S8", length: int = 37, **extras) -> dict:
 def _context(monkeypatch, desc: dict, tmp_path: Path, op_cls=OpHardSwishPrecise) -> dict:
     captured = {}
 
-    def capture(self, output_dir, stem, h_template, c_template, context, *args, **kwargs):
-        captured.update(context)
+    def capture(self, output_dir, **kwargs):
+        captured.update(kwargs["context"])
+        captured["_reference"] = self.reference
 
-    monkeypatch.setattr(op_cls, "_write_op_outputs", capture)
+    monkeypatch.setattr(op_cls, "render_harness_case", capture)
+    monkeypatch.setattr(op_cls, "_generate_float_c_files", lambda self, *a, **k: None, raising=False)
     op_cls(desc, seed=7, target_cpu="cortex-m55").generate_c_files(tmp_path)
     return captured
 
 
 def _ints(literal: str) -> np.ndarray:
     return np.array([int(v) for v in re.findall(r"-?\d+", literal)], dtype=np.int64)
+
+
+def _prepare(dtype: str, scale: float, zero_point: int = 0, prescale: int = -1) -> dict:
+    return get_bindings().prepare("hard_swish_precise_prepare", {
+        "dtype": dtype_code("int8" if dtype == "S8" else "int16"), "input_scale": scale,
+        "input_zero_point": zero_point, "output_scale": scale, "output_zero_point": zero_point,
+        "prescale": prescale})
 
 
 def test_override_reproduces_the_unity_parameter_set(monkeypatch, tmp_path: Path) -> None:
@@ -87,12 +102,8 @@ def test_golden_applies_the_prescale_shift(monkeypatch, tmp_path: Path, dtype: s
     ctx = _context(monkeypatch, _desc(dtype, prescale=4), tmp_path)
     x = _ints(ctx["input_data_array"])
     golden = _ints(ctx["expected_output_array"])
-    xr = (np.clip(x + 384, 0, 768) + 8) >> 4
-    expected = np.array(
-        [HardSwishFamilyBase._requantize(int(v) * int(r), 1431655765, -5) for v, r in zip(x, xr)]
-    )
-    lo, hi = (-128, 127) if dtype == "S8" else (-32768, 32767)
-    np.testing.assert_array_equal(golden, np.clip(expected, lo, hi))
+    kind = dtype.lower()
+    np.testing.assert_array_equal(golden, [_model_hard_swish_precise(int(v), UNITY_PARAMS, kind) for v in x])
     # The shift loses precision, so prescale 4 and 0 must give different goldens.
     plain = _context(monkeypatch, _desc(dtype), tmp_path)
     assert plain["input_data_array"] == ctx["input_data_array"]
@@ -111,7 +122,7 @@ def test_boundary_prescales_are_accepted(monkeypatch, tmp_path: Path, dtype: str
 def test_prescale_that_zeroes_the_relu6_term_is_rejected(
     monkeypatch, tmp_path: Path, dtype: str, prescale: int
 ) -> None:
-    with pytest.raises(ValueError, match="rounds the relu6 term .* to 0 for every input"):
+    with pytest.raises(ValueError, match=REJECTED):
         _context(monkeypatch, _desc(dtype, prescale=prescale), tmp_path)
 
 
@@ -128,66 +139,51 @@ def test_prescale_that_overflows_int32_is_rejected(monkeypatch, tmp_path: Path) 
     # so prescale 1 gives 32767 * 114688 (overflow) and 2 gives 32767 * 57344 (fits).
     tiny = {"input_scale": 2.0**-16, "output_scale": 2.0**-16}
     for prescale in (0, 1):
-        with pytest.raises(ValueError, match="overflows int32"):
+        with pytest.raises(ValueError, match=REJECTED):
             _context(monkeypatch, _desc("S16", prescale=prescale, **tiny), tmp_path)
     assert _context(monkeypatch, _desc("S16", **tiny), tmp_path)["prescale"] == 2
     assert _context(monkeypatch, _desc("S16", prescale=2, **tiny), tmp_path)["prescale"] == 2
 
 
-S16 = (-32768, 32767)
-
-
-@pytest.mark.parametrize(
-    ("prescale", "relu_q3", "relu_q6", "input_zp", "fits"),
-    [
-        # xr clamps to relu_q6 at x = 32767: 32767 * 65538 fits int32, 32767 * 65539 does not.
-        # (An independent |x| <= 32768 bound would reject the first: x = -32768 only
-        # reaches x + relu_q3 = 7232.)
-        (0, 40000, 65538, 0, True),
-        (0, 40000, 65539, 0, False),
-        # Negative side at zp 32767 (x in [-65535, 0]): min of x * (x + relu_q3) is at
-        # x = -relu_q3 / 2; 92681 gives -46340 * 46341 (fits), 92682 gives -46341^2 (overflow).
-        (0, 92681, 2 * 92681, 32767, True),
-        (0, 92682, 2 * 92682, 32767, False),
-        # xr rounds half up: (131075 + 1) >> 1 = 65538 fits, (131077 + 1) >> 1 = 65539 does not;
-        # flooring would give 65538 for both.
-        (1, 100000, 131075, 0, True),
-        (1, 100000, 131077, 0, False),
-        # x + relu_q3 itself must stay in int32 before the clamp.
-        (PRESCALE_MAX, 2**31 - 32768, 2**31 - 1, 0, True),
-        (PRESCALE_MAX, 2**31 - 32767, 2**31 - 1, 0, False),
-    ],
-)
-def test_overflow_check_boundary(prescale: int, relu_q3: int, relu_q6: int, input_zp: int, fits: bool) -> None:
-    args = (prescale, relu_q3, relu_q6, input_zp, *S16)
-    assert HardSwishFamilyBase._prescale_overflows(*args) is (not fits)
-    if fits:
-        HardSwishFamilyBase._check_prescale_fits(*args)
-    else:
-        with pytest.raises(ValueError, match="overflows int32"):
-            HardSwishFamilyBase._check_prescale_fits(*args)
-
-
 def _scalar_overflows(prescale: int, relu_q3: int, relu_q6: int, input_zp: int, qmin: int, qmax: int) -> bool:
-    """Reference: the golden simulation's own scalar steps over every input code."""
+    """Reference: the kernel's own scalar int32 steps over every input code."""
     lo, hi = np.iinfo(np.int32).min, np.iinfo(np.int32).max
     for q in range(qmin, qmax + 1):
         x = q - input_zp
-        xr = HardSwishFamilyBase._clamp(x + relu_q3, 0, relu_q6)
-        xr = HardSwishFamilyBase._nonneg_divide_by_pot_s32(xr, prescale)
+        xr = min(max(x + relu_q3, 0), relu_q6)
+        if prescale:
+            xr = (xr + (1 << (prescale - 1))) >> prescale
         if not (lo <= x + relu_q3 <= hi and lo <= x * xr <= hi):
             return True
     return False
 
 
-@pytest.mark.parametrize("relu_q6", [0, 6, 768, 65538, 131072, 393216])
-@pytest.mark.parametrize(("input_zp", "bounds"), [(0, S16), (32767, S16), (-128, (-128, 127)), (127, (-128, 127))])
-def test_derived_prescale_is_the_smallest_safe_one(relu_q6: int, input_zp: int, bounds) -> None:
-    relu_q3 = (relu_q6 + 1) // 2
-    prescale = HardSwishFamilyBase._derive_prescale(relu_q3, relu_q6, input_zp, *bounds)
-    assert not _scalar_overflows(prescale, relu_q3, relu_q6, input_zp, *bounds)
-    if prescale:
-        assert _scalar_overflows(prescale - 1, relu_q3, relu_q6, input_zp, *bounds)
+def _q(scale: float) -> tuple[int, int]:
+    return int(np.floor(3.0 / scale + 0.5)), int(np.floor(6.0 / scale + 0.5))
+
+
+@pytest.mark.parametrize("scale", [2.0**-7, 1e-4, 9.2e-5, 2.0**-14, 5e-5, 2.0**-16, 1e-5])
+@pytest.mark.parametrize(("dtype", "zero_point", "bounds"), [("S16", 0, (-32768, 32767)), ("S8", -128, (-128, 127)),
+                                                             ("S8", 127, (-128, 127))])
+def test_derived_prescale_is_the_smallest_safe_one(scale: float, dtype: str, zero_point: int, bounds) -> None:
+    try:
+        p = _prepare(dtype, scale, zero_point)
+    except ReferenceKernelError:
+        pytest.skip("relu_q6 outside the kernel's range at this scale")
+    relu_q3, relu_q6 = _q(float(np.float32(scale)))
+    assert (p["relu_q3"], p["relu_q6"]) == (relu_q3, relu_q6)
+    assert not _scalar_overflows(p["prescale"], relu_q3, relu_q6, zero_point, *bounds)
+    if p["prescale"]:
+        assert _scalar_overflows(p["prescale"] - 1, relu_q3, relu_q6, zero_point, *bounds)
+
+
+def test_prepare_pins_a_prescale_only_where_the_kernel_stays_in_int32() -> None:
+    # 2^-16: prescale 2 is the smallest safe one for s16 (see the overflow case above).
+    assert _prepare("S16", 2.0**-16)["prescale"] == 2
+    assert _prepare("S16", 2.0**-16, prescale=3)["prescale"] == 3
+    for prescale in (0, 1, -2, PRESCALE_MAX + 1):
+        with pytest.raises(ReferenceKernelError, match="E_PARAM"):
+            _prepare("S16", 2.0**-16, prescale=prescale)
 
 
 def test_compat_rejects_prescale(monkeypatch, tmp_path: Path) -> None:
@@ -214,24 +210,22 @@ def test_float_route_rejects_prescale(monkeypatch, tmp_path: Path, dtype: str) -
 
 
 @pytest.mark.parametrize(
-    ("extras", "dtype", "descriptor_quantized"),
+    ("extras", "dtype", "pinned"),
     [
         ({}, "S8", False),
         ({"prescale": 4}, "S8", False),
         ({"input_scale": 0.0078125}, "S8", True),
         ({"output_zero_point": 0}, "S8", True),
-        ({}, "S16", True),
     ],
 )
-def test_pinned_quantization_skips_the_calibrated_tflite(tmp_path: Path, extras, dtype, descriptor_quantized) -> None:
+def test_pinned_quantization_comes_from_the_descriptor(monkeypatch, tmp_path: Path, extras, dtype, pinned) -> None:
     desc = _desc(dtype)
     desc["hint"]["extras"] = dict(extras)
-    op = OpHardSwishPrecise(desc, seed=7, target_cpu="cortex-m55")
-    assert op.needs_keras_model() is (not descriptor_quantized)
-    if descriptor_quantized:
-        out = tmp_path / "case.tflite"
-        op.convert_to_tflite(None, str(out), 7)
-        assert not out.exists()
+    call = _context(monkeypatch, desc, tmp_path)["_reference"]
+    if pinned:
+        assert call.quant["input"]["scale"] == float(np.float32(extras.get("input_scale", 1.0)))
+    else:
+        assert call.quant["input"]["scale"] != 1.0
 
 
 def _schema() -> dict:
@@ -256,6 +250,7 @@ def test_schema_ties_prescale_to_hard_swish_precise(operator: str, ok: bool) -> 
     assert jsonschema.Draft202012Validator(rule).is_valid(doc) is ok
     assert jsonschema.Draft202012Validator(rule).is_valid({"operator": operator, "hint": {"extras": {}}})
 
+
 PRESCALE_CASES = [
     "hard_swish_precise_vector_prescale4_s8",
     "hard_swish_precise_vector_1760_lut_prescale4_s8",
@@ -272,20 +267,13 @@ _SHIPPED = {
 
 @pytest.mark.parametrize("name", PRESCALE_CASES)
 def test_shipped_prescale_cases_have_live_goldens(tmp_path: Path, name: str) -> None:
-    pytest.importorskip("tensorflow")
-    from helia_core_tester.core.config import Config
     from helia_core_tester.generation.test_ops import generate_test
 
     assert _SHIPPED[name]["hint"]["extras"]["prescale"] == 4
-    generate_test(_SHIPPED[name], str(tmp_path), seed=Config.seed)
+    generate_test(_SHIPPED[name], str(tmp_path))
     (case_dir,) = tmp_path.glob(f"*/{name}")
     assert case_problems(case_dir) == []
-    # Every quantization parameter is pinned, so no calibrated model is shipped beside the case.
     assert list(case_dir.rglob("*.tflite")) == []
-    c_text = next(case_dir.rglob("*_hard_swish.c")).read_text()
+    reference = json.loads(next(case_dir.rglob("*.reference.json")).read_text())
     # Through the real pipeline the parameters come from the descriptor alone, giving the Unity set.
-    params = {
-        key: int(value)
-        for value, key in re.findall(r"^\s*(-?\d+),\s*// (\w+)", c_text, flags=re.M)
-    }
-    assert {k: params.get(k) for k in UNITY_PARAMS} == UNITY_PARAMS
+    assert {k: reference["params"][k] for k in UNITY_PARAMS} == UNITY_PARAMS

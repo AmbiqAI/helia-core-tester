@@ -123,7 +123,6 @@ def generated_abs(request, tmp_path):
     directory = tmp_path / name
     directory.mkdir()
     op = OpAbs(desc, seed=500, target_cpu="cortex-m55")
-    op.convert_to_tflite(None, str(directory / f"{name}.tflite"), 500)
     op.generate_c_files(directory)
     (directory / "descriptor.yaml").write_text(yaml.safe_dump(desc))
     return GeneratedTestCase(
@@ -145,7 +144,6 @@ def _bridge(case, tmp_path):
 def test_mask_policy_uses_generator_normalization(generated_abs, tmp_path):
     generated_abs.descriptor["nonfinite_policy"] = " MASK "
     op = OpAbs(generated_abs.descriptor, seed=500, target_cpu="cortex-m55")
-    op.convert_to_tflite(None, str(generated_abs.directory / "normalized.tflite"), 500)
     op.generate_c_files(generated_abs.directory)
     bundle = _bridge(generated_abs, tmp_path)
     assert bundle.comparison["nonfinite_mask"] == [1] * 3 + [0] * 125

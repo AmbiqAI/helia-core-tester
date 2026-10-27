@@ -20,12 +20,13 @@ def array(header, name, dtype):
 
 
 @pytest.mark.parametrize("desc", DESCRIPTORS, ids=lambda d: d["name"])
-def test_real_litert_generation(desc, tmp_path, monkeypatch):
+def test_reference_generation(desc, tmp_path, monkeypatch):
     monkeypatch.setenv("CMSIS_NN_REPO_ROOT", str(ROOT))
     op = OpDiv(desc, seed=831, target_cpu="cortex-m55")
     name = desc["name"]
-    op.convert_to_tflite(None, str(tmp_path / (name + ".tflite")), 831)
     op.generate_c_files(tmp_path)
+    assert op.reference is not None and op.reference.entry in ("div_f16", "div_f32")
+    assert not list(tmp_path.rglob("*.tflite"))
     text = (tmp_path / (name + "_mul.c")).read_text()
     header = (tmp_path / "includes" / (name + "_mul.h")).read_text()
     sidecar = json.loads((tmp_path / (name + "_mul.sidecar.json")).read_text())
@@ -71,7 +72,7 @@ def test_oracle_failure_is_not_hidden(tmp_path, monkeypatch):
     op = OpDiv(DESCRIPTORS[0], seed=831, target_cpu="cortex-m55")
     def unavailable(*args):
         raise RuntimeError("oracle unavailable")
-    monkeypatch.setattr(op, "load_litert_interpreter", unavailable)
+    monkeypatch.setattr(op, "reference_golden", unavailable)
     with pytest.raises(RuntimeError, match="oracle unavailable"):
         op.generate_c_files(tmp_path)
 

@@ -1,18 +1,19 @@
-#ifndef GRU_UNIDIRECTIONAL_FLOAT_STREAM_F32_GRU_UNIDIRECTIONAL_H
-#define GRU_UNIDIRECTIONAL_FLOAT_STREAM_F32_GRU_UNIDIRECTIONAL_H
+#ifndef GRU_UNIDIRECTIONAL_FLOAT_STREAM_F32_HARNESS_H
+#define GRU_UNIDIRECTIONAL_FLOAT_STREAM_F32_HARNESS_H
 
 #include <stdint.h>
-// Golden arrays may carry NAN/INFINITY, and this header is included ahead of any
-// other translation-unit include that would define them.
+// Input arrays may carry NAN/INFINITY tokens, and this header is included ahead of
+// any other translation-unit include that would define them.
 #include <math.h>
 #include "arm_nnfunctions.h"
+#include "arm_nn_types.h"
 
 static const float32_t gru_unidirectional_float_stream_f32_input_tensor[] = {
     -0.552010536f, 0.700960755f, 0.046279561f, -0.580457091f, -0.335887522f, 0.995170832f, -0.769025385f, 0.636148214f, 0.134862736f, -0.883449435f, -0.229363516f, -0.605748594f
 };
 
 static const float32_t gru_unidirectional_float_stream_f32_expected_output[] = {
-    -0.115517467f, 0.095142797f, 0.074682564f, -0.202843547f, 0.013375819f, 0.161503315f, 0.01629303f, -0.251079768f, -0.107977256f, 0.219803914f, 0.146138877f, -0.335386336f, -0.319535255f, 0.079132512f, 0.421752572f, -0.310964793f,
+    -0.115513958f, 0.09513738f, 0.074678771f, -0.202843487f, 0.013373456f, 0.161500335f, 0.016290838f, -0.25107348f, -0.107977673f, 0.219795346f, 0.146131411f, -0.33537963f, -0.319533527f, 0.079127938f, 0.4217408f, -0.310958505f,
 };
 
 static const float32_t gru_unidirectional_float_stream_f32_update_gate_input_weights[] = {
@@ -62,5 +63,6 @@ static const float32_t gru_unidirectional_float_stream_f32_candidate_gate_input_
 static const float32_t gru_unidirectional_float_stream_f32_candidate_gate_hidden_bias[] = {
     -0.047623701f, -0.024587061f, 0.094939403f, -0.235755116f
 };
+
 
 #endif

@@ -1,0 +1,64 @@
+{#
+  SVDF body fragment for the generic harness: `header`, `file_scope` and `test_body` are
+  imported by svdf_argument_pool; the kernel is called through <name>_run, which the harness
+  binds from the kernel contract.
+#}
+{% from "common/standalone/runtime_common.j2" import helia_guard_declare %}
+{% from "common/standalone/validation.j2" import validation_outputs with context %}
+{% macro file_scope() %}
+{# Declare only the buffers this fault mode actually passes to the kernel so a
+   NULL-substituted buffer never becomes an unused static (-Wunused-variable). #}
+{{ helia_guard_declare(data_dtype, name ~ "_state", state_size) }}
+{% if fault != "null_input_ctx_buf" %}{{ helia_guard_declare(data_dtype, name ~ "_scratch_input", scratch_input_size) }}
+{% endif %}{% if fault != "null_output_ctx_buf" %}{{ helia_guard_declare(data_dtype, name ~ "_scratch_output", scratch_output_size) }}
+{% endif %}{% if fault != "null_output" %}{{ helia_guard_declare(data_dtype, name ~ "_output", output_size) }}
+{% endif %}
+
+/*
+ * Fault-injection test case: exercises an {{ kernel_fn }}
+ * argument-validation branch. Fault mode: {{ fault }}.
+ */
+static int32_t run_svdf(void)
+{
+    const cmsis_nn_context ctx = {0};
+    const cmsis_nn_context input_ctx = {
+        .buf = {% if fault == "null_input_ctx_buf" %}NULL{% else %}{{ name }}_scratch_input{% endif %},
+        .size = {% if fault == "null_input_ctx_buf" %}0{% elif fault == "small_input_ctx_size" %}1{% else %}sizeof({{ name }}_scratch_input){% endif %},
+    };
+    const cmsis_nn_context output_ctx = {
+        .buf = {% if fault == "null_output_ctx_buf" %}NULL{% else %}{{ name }}_scratch_output{% endif %},
+        .size = {% if fault == "null_output_ctx_buf" %}0{% elif fault == "small_output_ctx_size" %}1{% else %}sizeof({{ name }}_scratch_output){% endif %},
+    };
+    {{ svdf_params_type }} svdf_params = {{ name }}_svdf_params;
+{% if fault == "zero_rank" %}
+    svdf_params.rank = 0;
+{% endif %}
+    const {{ data_dtype }} *input_arg = {% if fault == "null_input" %}NULL{% else %}{{ name }}_input_sequence{% endif %};
+    {{ data_dtype }} *output_arg = {% if fault == "null_output" %}NULL{% else %}{{ name }}_output{% endif %};
+
+    for (int i = 0; i < {{ state_size }}; ++i)
+    {
+        {{ name }}_state[i] = {{ name }}_initial_state[i];
+    }
+
+    return {{ name }}_run(input_arg, output_arg, &ctx, &input_ctx, &output_ctx, &svdf_params, {{ name }}_state);
+}
+{% endmacro %}
+{% macro test_body() %}
+    HELIA_GUARD_ARM({{ name }}_state, false /* seeded inside the run function */);
+{% if fault != "null_input_ctx_buf" %}    HELIA_GUARD_ARM({{ name }}_scratch_input, true /* pure scratch: poison-safe */);
+{% endif %}{% if fault != "null_output_ctx_buf" %}    HELIA_GUARD_ARM({{ name }}_scratch_output, true /* pure scratch: poison-safe */);
+{% endif %}{% if fault != "null_output" %}    HELIA_GUARD_ARM({{ name }}_output, true /* rejected call must not write it: poison */);
+{% endif %}    int32_t status = run_svdf();
+    int failures = 0;
+    HELIA_GUARD_CHECK({{ name }}_state, "{{ validation_label | default("SVDF") }} state", failures);
+{% if fault != "null_input_ctx_buf" %}    HELIA_GUARD_CHECK({{ name }}_scratch_input, "{{ validation_label | default("SVDF") }} scratch input", failures);
+{% endif %}{% if fault != "null_output_ctx_buf" %}    HELIA_GUARD_CHECK({{ name }}_scratch_output, "{{ validation_label | default("SVDF") }} scratch output", failures);
+{% endif %}{% if fault != "null_output" %}    HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("SVDF") }} output", failures);
+{% if expected_status != "ARM_CMSIS_NN_SUCCESS" %}    HELIA_GUARD_CHECK_UNTOUCHED({{ name }}_output, "{{ validation_label | default("SVDF") }} output", failures);
+{% endif %}{% endif %}    HELIA_VALIDATE_EXPECTED_STATUS(
+        "{{ validation_label | default("SVDF") }}",
+        status,
+        {{ expected_status }}
+    );
+{% endmacro %}

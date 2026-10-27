@@ -108,8 +108,6 @@ name: squared_difference_ident_s16
 operator: SquaredDifference
 activation_dtype: S16
 weight_dtype: S8
-hint:
-  s16_builder: keras_fake_quant
 input_1_shape: [1, 2, 3, 4]
 input_2_shape: [1, 2, 3, 4]
 ---

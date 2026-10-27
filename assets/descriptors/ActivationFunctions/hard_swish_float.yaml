@@ -2,11 +2,13 @@
 # (ns-cmsis-nn PR #413, contract from #410): status fn(input, output, size),
 # computing x * min(max(x + 3, 0), 6) / 6 elementwise as
 # x * clamp(fma(x, 1/6, 0.5), 0, 1), so x >= 3 returns x bit-exactly and
-# x <= -3 returns exact zero; the f16 kernel evaluates in float32 and
-# rounds once. Goldens use a float64 reference cast once to the output
-# dtype; both saturated regions agree bit-exactly with the kernel by
-# construction and the curved region sits well inside the repo's default
-# float tolerances (measured max error 1.24e-7 f32 / 3.4e-4 f16 in #413).
+# x <= -3 returns exact zero; the f16 kernel evaluates in float32 and rounds
+# once on its scalar leg, and in float16 (x * (clamp(x + 3, 0, 6) * h(1/6)))
+# on Helium. On the shipped build the golden is the kernel's own arithmetic
+# (hard_swish_f32_cmsis, hard_swish_f16_mve) at assert_close's defaults; every
+# other case's is the exact result rounded once, widened by
+# kernel_faithful.hard_swish_atol. Both saturated regions agree bit-exactly
+# with the kernel by construction.
 #
 # Inputs sample [-8, 8]. The default (128-element) cases exercise every
 # region (zero, curved, identity); the tail cases exist to execute the

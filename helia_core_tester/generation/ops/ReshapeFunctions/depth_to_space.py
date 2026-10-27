@@ -2,7 +2,6 @@
 DepthToSpace operation implementation.
 """
 
-from typing import Dict
 import numpy as np
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.base import OperationBase
@@ -13,36 +12,17 @@ class OpDepthToSpace(OperationBase):
     DepthToSpace operation.
     """
 
-    def needs_keras_model(self) -> bool:
-        return False
-
-    def build_keras_model(self):
-        raise NotImplementedError("DepthToSpace uses LiteRT-only model generation.")
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        from helia_core_tester.generation.utils.litert_builder import build_depth_to_space_op
-
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
-        dtype = 'int16' if activation_dtype == 'S16' else 'int8'
-
-        model_bytes = build_depth_to_space_op(
-            input_shape=self.desc['input_shape'],
-            block_size=int(self.desc.get('block_size', 2)),
-            dtype=dtype,
-        )
-        with open(out_path, "wb") as f:
-            f.write(model_bytes)
+    def uses_reference(self) -> bool:
+        return True
 
     def generate_c_files(self, output_dir) -> None:
         """
         Generate C and H files from templates for DepthToSpace.
         """
+        from helia_core_tester.generation.reference.call import ReferenceCall
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
         name = self.desc['name']
-        tflite_path = Path(output_dir) / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
 
         activation_dtype = self.desc.get('activation_dtype', 'S8')
         if activation_dtype == 'S16':
@@ -56,7 +36,9 @@ class OpDepthToSpace(OperationBase):
             np_in_dtype = np.int8
             qmin, qmax = -128, 127
         input_shape = tuple(self.desc['input_shape'])
-        block_size = int(self.desc.get('block_size', 2))
+        if 'block_size' not in self.desc:
+            raise ValueError(f"{name}: 'block_size' is required in the descriptor")
+        block_size = int(self.desc['block_size'])
         n, h, w, c = input_shape
         out_c = c // (block_size * block_size)
         output_shape = (n, h * block_size, w * block_size, out_c)
@@ -70,15 +52,15 @@ class OpDepthToSpace(OperationBase):
         input_q = self.rng.integers(qmin, qmax + 1, size=input_shape, dtype=np_in_dtype)
         self.rng.__setstate__(rng_state)
 
-        x = input_q.reshape(n, h, w, block_size, block_size, out_c)
-        x = np.transpose(x, (0, 1, 3, 2, 4, 5))
-        output_data = x.reshape(output_shape)
+        output_data = self.reference_golden(ReferenceCall(
+            "depth_to_space", {"block_size": block_size}, {"input": np.ascontiguousarray(input_q)},
+            {"output": output_shape}))
 
         context = {
             'name': name,
             'input_dims': input_dims,
             'output_dims': output_dims,
-            'block_size': int(self.desc.get('block_size', 1)),
+            'block_size': block_size,
             'input_data_array': builder.format_array_as_c_literal(input_q),
             'expected_output_array': builder.format_array_as_c_literal(output_data),
             'input_dtype': c_type,
@@ -87,18 +69,18 @@ class OpDepthToSpace(OperationBase):
             'output_size': int(np.prod(output_shape)),
         }
 
-        includes_api_dir = Path(output_dir) / "includes"
-        includes_api_dir.mkdir(parents=True, exist_ok=True)
+        self.render_harness_case(
+            Path(output_dir), stem="depth_to_space", context=context, pool=depth_to_space_argument_pool(context),
+            validation_key="ReshapeFunctions/depth_to_space/depth_to_space.c.j2", label="DepthToSpace", operator="DepthToSpace",
+        )
 
-        h_content = self.render_template("ReshapeFunctions/depth_to_space/depth_to_space.h.j2", context)
-        (includes_api_dir / f"{name}_depth_to_space.h").write_text(h_content)
-        c_content = self.render_template("ReshapeFunctions/depth_to_space/depth_to_space.c.j2", context)
-        (Path(output_dir) / f"{name}_depth_to_space.c").write_text(c_content)
 
-        cmake_context = {
-            'name': name,
-            'operator': self.desc.get('operator', 'DepthToSpace'),
-            'operator_name': 'depth_to_space',
-        }
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
-        (Path(output_dir) / "CMakeLists.txt").write_text(cmake_content)
+from helia_core_tester.generation.harness import Declaration  # noqa: E402
+from helia_core_tester.generation.harness.simple import tensor_case_pool  # noqa: E402
+
+
+def depth_to_space_argument_pool(context):
+    n = context["name"]
+    extra = (Declaration(f"{n}_block_size", "int32_t", str(context["block_size"])),)
+    return tensor_case_pool(context, {"block_size": f"{n}_block_size"}, extra_header=extra,
+                            output_count=f"({context['output_size']})")

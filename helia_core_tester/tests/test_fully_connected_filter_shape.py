@@ -13,15 +13,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-pytest.importorskip("tensorflow")
-
-from helia_core_tester.core.config import Config  # noqa: E402
-from helia_core_tester.core.discovery import find_descriptors_dir  # noqa: E402
-from helia_core_tester.generation.io import descriptors as desc_io  # noqa: E402
-from helia_core_tester.generation.ops.FullyConnectedFunctions.fully_connected import (  # noqa: E402
+from helia_core_tester.core.config import Config
+from helia_core_tester.core.discovery import find_descriptors_dir
+from helia_core_tester.generation.io import descriptors as desc_io
+from helia_core_tester.generation.ops.FullyConnectedFunctions.fully_connected import (
     OpFullyConnected,
 )
-from helia_core_tester.generation.test_ops import generate_test  # noqa: E402
+from helia_core_tester.generation.test_ops import generate_test
 
 BASE = "fully_connected_default_s8"  # input [3, 1, 2, 10]
 S4_BASE = "fully_connected_bias_s4"  # input [1, 1, 1, 8]
@@ -85,7 +83,7 @@ def test_mismatched_in_features_is_rejected(base_desc, in_features):
         match=r"^%s: FullyConnected filter_shape InFeatures \(%d\) must equal the flattened input feature count \(20\)"
         % (BASE, in_features),
     ):
-        OpFullyConnected(base_desc, 1).build_keras_model()
+        OpFullyConnected(base_desc, 1).validate_descriptor()
 
 
 def test_last_input_dim_gets_a_flatten_hint(base_desc):
@@ -108,7 +106,7 @@ def test_float_4d_case_with_last_dim_width_is_rejected(shipped, name):
     desc = copy.deepcopy(shipped[name])  # [1, 2, 3, 4], [6, 24]
     desc["filter_shape"] = [6, 4]
     with pytest.raises(ValueError, match=rf"^{name}: .*did you mean \[6, 24\]\?"):
-        OpFullyConnected(desc, 1).build_keras_model()
+        OpFullyConnected(desc, 1).validate_descriptor()
 
 
 def test_numpy_integer_dims_are_accepted(base_desc):
@@ -174,13 +172,11 @@ def test_schema_rejects_the_same_shapes_at_load_time(field, value, schema_reject
 
 
 def test_s4_path_rejects_a_mismatched_filter(shipped, tmp_path):
-    """S4 builds its LiteRT model directly from filter_shape, without Keras."""
     desc = copy.deepcopy(shipped[S4_BASE])
     desc["input_shape"] = [1, 1, 2, 8]  # 16 features, filter still [4, 8]
-    out = tmp_path / f"{S4_BASE}.tflite"
     with pytest.raises(ValueError, match=rf"^{S4_BASE}: .*did you mean \[4, 16\]\?"):
-        OpFullyConnected(desc, Config.seed).convert_to_tflite(None, str(out), Config.seed)
-    assert not out.exists()
+        OpFullyConnected(desc, Config.seed).generate_c_files(tmp_path)
+    assert not list(tmp_path.rglob("*"))
 
 
 def test_generate_test_fails_closed_on_a_mismatch(base_desc, tmp_path):
@@ -192,15 +188,6 @@ def test_generate_test_fails_closed_on_a_mismatch(base_desc, tmp_path):
     assert not any(tmp_path.rglob("*")), "nothing may be written for a rejected descriptor"
 
 
-def _weights_shape_from_tflite(tflite_path: Path) -> list:
-    op = OpFullyConnected({"name": "probe"}, 1)
-    model, subgraph = op.load_litert_model(str(tflite_path))
-    from helia_core_tester.generation.utils.litert_utils import get_operator_tensors_from_litert
-
-    tensors = get_operator_tensors_from_litert(model, subgraph, op._find_fully_connected_op_index(model, subgraph))
-    return [int(v) for v in tensors["weights"].shape]
-
-
 def _header_dims(header: str, name: str, which: str) -> dict:
     match = re.search(rf"{name}_{which}_dims = \{{([^}}]*)\}}", header)
     assert match, f"{which}_dims not found"
@@ -208,83 +195,24 @@ def _header_dims(header: str, name: str, which: str) -> dict:
 
 
 @pytest.mark.parametrize("name", ["fully_connected_default_s8", "fully_connected_per_tensor_s16"])
-def test_converted_weights_and_header_match_the_declared_filter(shipped, tmp_path, name):
+def test_reference_weights_and_header_match_the_declared_filter(shipped, tmp_path, name):
     desc = shipped[name]
     out_ch, in_features = desc["filter_shape"]
     assert in_features != desc["input_shape"][-1]
-    generate_test(desc, str(tmp_path), seed=Config.seed)
-    (tflite,) = tmp_path.rglob(f"{name}.tflite")
-    assert _weights_shape_from_tflite(tflite) == [out_ch, in_features]
-    header = next(tflite.parent.rglob(f"{name}_fully_connected.h")).read_text()
+    op = OpFullyConnected(copy.deepcopy(desc), 500, target_cpu="cortex-m55")
+    op.generate_c_files(tmp_path)
+    assert list(op.reference.inputs["filter"].shape) == [out_ch, in_features]
+    assert not list(tmp_path.rglob("*.tflite"))
+    header = next(tmp_path.rglob(f"{name}_fully_connected.h")).read_text()
     assert _header_dims(header, name, "filter") == {"n": in_features, "h": 1, "w": 1, "c": out_ch}
     assert _header_dims(header, name, "input")["c"] == in_features
     assert _header_dims(header, name, "output")["c"] == out_ch
 
 
-def _convert(desc: dict, out: Path) -> None:
-    op = OpFullyConnected(desc, Config.seed)
-    out.mkdir()
-    op.convert_to_tflite(op.build_keras_model(), str(out / f"{desc['name']}.tflite"), Config.seed)
-
-
-def test_converted_weights_disagreeing_with_descriptor_are_rejected(base_desc, tmp_path):
-    """Fault injection: the model on disk no longer matches the descriptor's filter."""
-    out = tmp_path / "case"
-    _convert(base_desc, out)
-    tampered = copy.deepcopy(base_desc)
-    tampered["filter_shape"][0] = 7  # OutCh in the model stays 6
-    with pytest.raises(ValueError, match=re.escape(f"{BASE}: converted FullyConnected weights [OutCh, InFeatures]=[6, 20]")):
-        OpFullyConnected(tampered, Config.seed).generate_c_files(out)
-
-
-@pytest.mark.parametrize("filter_shape", [[5, 8], [3, 8]])
-def test_s4_c_files_reject_an_outch_only_mismatch(shipped, tmp_path, filter_shape):
-    """Fault injection: OutCh agrees with nothing in the S4 model, though InFeatures still matches the input."""
-    desc = copy.deepcopy(shipped[S4_BASE])
-    out = tmp_path / "case"
-    out.mkdir()
-    OpFullyConnected(desc, Config.seed).convert_to_tflite(None, str(out / f"{S4_BASE}.tflite"), Config.seed)
-    tampered = copy.deepcopy(desc)
-    tampered["filter_shape"] = filter_shape
-    with pytest.raises(
-        ValueError,
-        match=re.escape(
-            f"{S4_BASE}: converted FullyConnected S4 weights [OutCh, InFeatures]=[4, 8] "
-            f"do not match the descriptor's filter_shape {filter_shape}"
-        ),
-    ):
-        OpFullyConnected(tampered, Config.seed).generate_c_files(out)
-    assert not list(out.rglob("*.c"))
-    assert not list(out.rglob("*.h"))
-
-
-def test_weightless_model_fails_closed(base_desc, tmp_path, monkeypatch):
-    """Fault injection: no weight tensor in the model stops generation before any C is written."""
-    out = tmp_path / "case"
-    _convert(base_desc, out)
-    import helia_core_tester.generation.utils.litert_utils as litert_utils
-
-    real = litert_utils.get_operator_tensors_from_litert
-
-    def without_weights(*args, **kwargs):
-        tensors = dict(real(*args, **kwargs))
-        tensors["weights"] = None
-        return tensors
-
-    monkeypatch.setattr(litert_utils, "get_operator_tensors_from_litert", without_weights)
-    with pytest.raises(RuntimeError, match="weight quantization could not be recovered"):
-        OpFullyConnected(base_desc, Config.seed).generate_c_files(out)
-    assert not list(out.rglob("*.c"))
-
-
 def test_s4_c_files_reject_a_mismatched_filter(shipped, tmp_path):
-    """The S4 C path takes filter dims from the descriptor, not the model; it validates them."""
-    desc = copy.deepcopy(shipped[S4_BASE])
-    out = tmp_path / "case"
-    out.mkdir()
-    OpFullyConnected(desc, Config.seed).convert_to_tflite(None, str(out / f"{S4_BASE}.tflite"), Config.seed)
-    tampered = copy.deepcopy(desc)
+    """The S4 C path takes filter dims from the descriptor; it validates them."""
+    tampered = copy.deepcopy(shipped[S4_BASE])
     tampered["filter_shape"] = [4, 16]
     with pytest.raises(ValueError, match=r"InFeatures \(16\) must equal the flattened input feature count \(8\)"):
-        OpFullyConnected(tampered, Config.seed).generate_c_files(out)
-    assert not list(out.rglob("*.c"))
+        OpFullyConnected(tampered, Config.seed).generate_c_files(tmp_path)
+    assert not list(tmp_path.rglob("*.c"))

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from helia_core_tester.hardware.case_bundle import load_case_bundle
@@ -35,12 +36,17 @@ def test_argmax_s16_case_uses_s32_output(tmp_path: Path) -> None:
 
 
 def test_mean_s8_case_extracts_axis_and_quant_scalars(tmp_path: Path) -> None:
+    cases = discover_or_skip(PROJECT_ROOT, family="BasicMathFunctions", name_filter="mean_default_s8")
+    assert cases
     manifest = _bridge(tmp_path, "mean_default_s8")
     scalars = manifest["serialized_scalar_parameters"]
+    # The quantization scalars are drawn per run, so the bridge is checked against the case's own
+    # sidecar rather than against pinned values.
+    generated = json.loads(next(cases[0].directory.glob("*.sidecar.json")).read_text())["scalars"]
     assert (scalars["axis_n"], scalars["axis_h"], scalars["axis_w"], scalars["axis_c"]) == (0, 1, 1, 0)
-    assert scalars["input_offset"] == 0
-    assert scalars["output_offset"] == -2
-    assert scalars["out_shift"] == -3
+    assert scalars["input_offset"] == generated["input_offset"]
+    assert scalars["output_offset"] == generated["out_offset"]
+    assert scalars["out_shift"] == generated["out_shift"]
     assert manifest["correctness_comparison"] == {"mode": "tolerant_int", "tolerance": 1}
 
 

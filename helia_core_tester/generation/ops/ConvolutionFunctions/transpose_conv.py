@@ -4,15 +4,156 @@ TransposeConv operation implementation.
 
 from typing import Dict, Any
 import numpy as np
-import tensorflow as tf
 from helia_core_tester.generation.ops._shared.base import OperationBase
-from helia_core_tester.generation.ops._shared.quant_knobs import clamp_golden, kernel_init, value_range
+from helia_core_tester.generation.entry import resolve_entry
+from helia_core_tester.generation.harness import (
+    ArgumentPool,
+    ArrayLiteral,
+    Declaration,
+    GuardedBuffer,
+    Provider,
+    SizeQuery,
+)
+from helia_core_tester.generation.harness.faults import common_fault, null_context_buffer, struct_copy, with_fault
 from helia_core_tester.generation.ops._shared.shape_checks import require_positive_int_dims
-from helia_core_tester.generation.ops._shared.sum_bound import tconv_tolerance
 from pathlib import Path
 
-# Data draws before a bounded case fails.
-REDRAWS = 8
+TRANSPOSE_CONV_VALIDATION_KEY = "ConvolutionFunctions/transpose_conv/transpose_conv.c.j2"
+
+
+def transpose_conv_argument_pool(context: Dict[str, Any]) -> ArgumentPool:
+    """Every value a TransposeConv case can pass to a public transpose-conv kernel or its scratch queries."""
+    n = context["name"]
+    upper = n.upper()
+    float_kernel = bool(context.get("float_kernel"))
+    tc = context["transpose_conv_params"]
+
+    def dims(d: Dict[str, Any]) -> Dict[str, Any]:
+        return {"n": d["n"], "h": d["h"], "w": d["w"], "c": d["c"]}
+
+    geometry = {
+        "stride": {"w": tc["stride_w"], "h": tc["stride_h"]},
+        "dilation": {"w": tc["dilation_w"], "h": tc["dilation_h"]},
+        "padding": {"w": tc["pad_w"], "h": tc["pad_h"]},
+        "padding_offsets": {"w": tc["pad_offset_w"], "h": tc["pad_offset_h"]},
+    }
+    if float_kernel:
+        params_init = {**geometry, "activation": {"min": context["transpose_activation_min_literal"],
+                                                  "max": context["transpose_activation_max_literal"]}}
+    else:
+        params_init = {"input_offset": tc["input_offset"], "output_offset": tc["output_offset"], **geometry,
+                       "activation": {"min": tc["activation_min"], "max": tc["activation_max"]}}
+    out_c = context["output_dims"]["c"]
+    header = [
+        Declaration(f"{n}_input_dims", "cmsis_nn_dims", dims(context["input_dims"]), comment="Input dimensions"),
+        Declaration(f"{n}_filter_dims", "cmsis_nn_dims", dims(context["filter_dims"]),
+                    comment="Filter dimensions (C_OUT, HK, WK, C_IN)"),
+        Declaration(f"{n}_output_dims", "cmsis_nn_dims", dims(context["output_dims"]), comment="Output dimensions"),
+        Declaration(f"{n}_bias_dims", "cmsis_nn_dims", {"n": 1, "h": 1, "w": 1, "c": out_c}, comment="Bias dimensions"),
+        Declaration(f"{n}_transpose_conv_params",
+                    context.get("transpose_conv_params_type") or "cmsis_nn_transpose_conv_params", params_init,
+                    comment="Transpose convolution parameters"),
+    ]
+    has_biases = bool(context["has_biases"])
+    params_expr = f"&{n}_transpose_conv_params"
+    values = {
+        "ctx": f"&{n}_ctx", "transpose_conv_params": params_expr, "transposed_conv_params": params_expr,
+        "input_dims": f"&{n}_input_dims", "filter_dims": f"&{n}_filter_dims", "filter_data": f"{n}_weights",
+        "bias_dims": f"&{n}_bias_dims", "bias_data": f"{n}_biases" if has_biases else "NULL",
+        "output_dims": f"&{n}_output_dims", "out_dims": f"&{n}_output_dims",
+        "layout": context.get("kernel_layout") or "ARM_NN_LAYOUT_NHWC",
+    }
+    if not float_kernel:
+        quant = context["quant_params"]
+        if quant.get("per_channel"):
+            multiplier, shift = ArrayLiteral(quant["multiplier_array"]), ArrayLiteral(quant["shift_array"])
+        else:
+            multiplier, shift = f"{{ {quant['multiplier']} }}", f"{{ {quant['shift']} }}"
+        header += [
+            Declaration(f"{n}_multiplier", "int32_t", multiplier, storage="static", array=True,
+                        comment="Quantization parameters (per-channel)"),
+            Declaration(f"{n}_shift", "int32_t", shift, storage="static", array=True),
+            Declaration(f"{n}_quant_params", "cmsis_nn_per_channel_quant_params",
+                        {"multiplier": f"{n}_multiplier", "shift": f"{n}_shift"}),
+        ]
+        values["quant_params"] = f"&{n}_quant_params"
+    bias_ctype = context["bias_dtype"]
+    header += [
+        Declaration(f"{n}_weights", context.get("weight_dtype") or "int8_t", ArrayLiteral(context["weights_array"]),
+                    array=True, comment="Weights"),
+        Declaration(f"{n}_biases", bias_ctype, ArrayLiteral(context["biases_array"]), array=True, comment="Biases")
+        if has_biases else Declaration(f"{n}_biases", f"{bias_ctype}*", "NULL", comment="No biases"),
+        Declaration(f"{n}_input", context["input_dtype"], ArrayLiteral(context["input_data_array"]), array=True,
+                    comment="Input data (for testing)"),
+        Declaration(f"{n}_expected_output", context["output_dtype"], ArrayLiteral(context["expected_output_array"]),
+                    array=True, comment="Expected output (golden)"),
+    ]
+    if context.get("direct_s16"):
+        # arm_transpose_conv_s16 never reads output_ctx and documents no size for it.
+        reverse = Provider(
+            param="reverse_conv_ctx", aliases=("output_ctx",), expr=f"&{n}_reverse_conv_ctx",
+            declarations=(Declaration(f"{n}_reverse_conv_ctx", "cmsis_nn_context", {"buf": "NULL", "size": 0},
+                                      storage="static", comment="output_ctx: not accessed by the s16 kernel"),),
+        )
+    else:
+        reverse = Provider(
+            param="reverse_conv_ctx", aliases=("output_ctx",), expr=f"&{n}_reverse_conv_ctx",
+            declarations=(Declaration(f"{n}_reverse_conv_ctx", "cmsis_nn_context", storage="static",
+                                      comment="Reverse convolution context (output_ctx of the kernels)"),),
+            buffers=(GuardedBuffer(f"{n}_reverse_conv_ctx_buffer", "uint8_t", f"{upper}_REVERSE_CONV_CTX_SIZE",
+                                   count_value=str(context["reverse_conv_ctx_size"]), label="reverse_conv_ctx"),),
+            setup=(f"    // Initialize reverse convolution context buffer (output_ctx parameter)\n"
+                   f"    {n}_reverse_conv_ctx.buf = {n}_reverse_conv_ctx_buffer;\n"
+                   f"    {n}_reverse_conv_ctx.size = {upper}_REVERSE_CONV_CTX_SIZE;"),
+            size_query=SizeQuery(context["kernel_get_reverse_buffer_size_fn"], "reverse_required_buffer_size",
+                                 f"{upper}_REVERSE_CONV_CTX_SIZE"),
+        )
+    providers = [reverse]
+    if context.get("has_weight_sum"):
+        providers.append(Provider(
+            param="weight_sum_ctx", expr=f"&{n}_weight_sum_ctx",
+            declarations=(Declaration(f"{n}_weight_sum_ctx", "cmsis_nn_context", storage="static",
+                                      comment="Weight sum context for s8 transpose convolutions"),),
+            buffers=(GuardedBuffer(f"{n}_weight_sum_buffer", "uint8_t", f"{upper}_WEIGHT_SUM_BUFFER_SIZE",
+                                   count_value=f"({out_c} * sizeof(int32_t))", label="weight_sum"),),
+            setup=(f"    // Initialize weight sum context and compute weight_sum\n"
+                   f"    {n}_weight_sum_ctx.buf = {n}_weight_sum_buffer;\n"
+                   f"    {n}_weight_sum_ctx.size = {upper}_WEIGHT_SUM_BUFFER_SIZE;\n\n"
+                   f"    int32_t lhs_offset = {n}_transpose_conv_params.input_offset;\n"
+                   f"    arm_convolve_weight_sum(\n"
+                   f"        (int32_t *){n}_weight_sum_ctx.buf,\n"
+                   f"        {n}_weights,\n"
+                   f"        &{n}_input_dims,\n"
+                   f"        &{n}_filter_dims,\n"
+                   f"        &{n}_output_dims,\n"
+                   f"        lhs_offset,\n"
+                   f"        {n + '_biases' if has_biases else 'NULL'}\n"
+                   f"    );"),
+        ))
+    else:
+        values["weight_sum_ctx"] = "NULL"
+    output = context["output_dims"]
+    return ArgumentPool(
+        name=n, values=values, header=header, providers=tuple(providers),
+        output_count=f"({output['n']} * {output['h']} * {output['w']} * {output['c']})", benchmark=False,
+    )
+
+
+def transpose_conv_fault(pool: ArgumentPool, kind: str, context: Dict[str, Any]) -> ArgumentPool:
+    """The pool of a TransposeConv fault case: the passing pool with the faulted argument edited."""
+    n = context["name"]
+    edit = common_fault(pool, kind, layout=context.get("kernel_layout"))
+    if edit is None and kind == "nonunit_dilation":
+        edit = struct_copy(pool, kind, "transpose_conv_params",
+                           context.get("transpose_conv_params_type") or "cmsis_nn_transpose_conv_params",
+                           f"{n}_transpose_conv_params", {"dilation.w": 2})
+    elif edit is None and kind == "null_weight_sum_ctx":
+        edit = null_context_buffer(pool, kind, "weight_sum_ctx", f"{n}_weight_sum_ctx")
+    elif edit is None and kind == "null_reverse_conv_ctx_buf":
+        edit = null_context_buffer(pool, kind, "reverse_conv_ctx", f"{n}_reverse_conv_ctx")
+    if edit is None:
+        raise ValueError(f"{n}: no TransposeConv fault edit for {kind!r}")
+    return with_fault(pool, edit)
 
 
 class OpTransposeConv(OperationBase):
@@ -53,15 +194,14 @@ class OpTransposeConv(OperationBase):
                     "(stride <= 2 and input channels > 16)",
                 )
 
+    def uses_reference(self) -> bool:
+        return True
+
     def validate_descriptor(self) -> None:
         self.declared_filter_shape()
 
     def declared_filter_shape(self) -> tuple:
-        """Validated descriptor filter_shape [KH, KW, OutCh, InCh].
-
-        Keras takes InCh from the input tensor, so a descriptor InCh that differs
-        from the input channel count would be silently replaced; reject it.
-        """
+        """Validated descriptor filter_shape [KH, KW, OutCh, InCh]; its InCh must be the input depth."""
         name = self.desc.get('name', '<unnamed>')
         filter_shape = self.desc.get('filter_shape')
         input_shape = self.desc.get('input_shape')
@@ -85,134 +225,31 @@ class OpTransposeConv(OperationBase):
             )
         return kh, kw, out_ch, in_ch
 
-    def build_keras_model(self) -> tf.keras.Model:
-        """Build Keras model for TransposeConv operation.
-        """
-        input_shape = self.desc['input_shape']
-        filter_shape = self.declared_filter_shape()
-        
-        # Build input layer (exclude batch dimension in Input shape)
-        inputs = tf.keras.Input(
-            shape=input_shape[1:],
-            batch_size=input_shape[0] if len(input_shape) > 0 else None,
-            dtype=tf.float32,
-            name='input'
-        )
-        
-        # TransposeConv layer
-        # filter_shape is [KH, KW, OutCh, InCh] in TensorFlow format
-        transpose_conv_kwargs = {
-            'filters': filter_shape[2],  # Number of output channels (third dimension)
-            'kernel_size': filter_shape[0:2],  # Kernel height and width (first two dimensions)
-            'strides': tuple(self.desc.get('strides', [1, 1])),
-            'padding': str(self.desc.get('padding', 'valid')).lower(),
-            'use_bias': self.desc.get('use_bias', True),
-            'name': 'transpose_conv'
-        }
-    
-        weights_init = kernel_init(self.desc, 123)
-        if self.desc.get('positive_weights'):
-            # Same bound, one sign.
-            weights_init = lambda shape, dtype=None, _init=weights_init: tf.abs(_init(shape, dtype))
-        transpose_conv_kwargs['kernel_initializer'] = weights_init
-        
-        if transpose_conv_kwargs['use_bias']:
-            bias_lo, bias_hi = value_range(self.desc, 'bias_range', (-0.5, 0.5))
-            transpose_conv_kwargs['bias_initializer'] = tf.keras.initializers.RandomUniform(
-                minval=bias_lo, maxval=bias_hi, seed=321
-            )
-        
-        layer = tf.keras.layers.Conv2DTranspose(**transpose_conv_kwargs)
-        outputs = layer(inputs)
-        # The converter fuses these into the op.
-        activation = self.activation_name()
-        if activation == 'RELU':
-            outputs = tf.keras.layers.ReLU()(outputs)
-        elif activation == 'RELU6':
-            outputs = tf.keras.layers.ReLU(max_value=6)(outputs)
-        elif activation != 'NONE':
-            raise ValueError(f"Unsupported activation: {activation}")
-        
-        model = tf.keras.Model(inputs=[inputs], outputs=[outputs], name='transpose_conv_model')
-        return model
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        """Convert Keras model to TFLite with quantization."""
-        self.round_float16_weights(model)
-        # Create converter
-        if str(self.desc.get('activation_dtype', 'S8')).upper() in ('S16', 'FP32', 'FP16'):
-            from helia_core_tester.generation.ops._shared.fixed_batch import converter_for_batched_model
-
-            # Keep the descriptor's batch in the model.
-            converter = converter_for_batched_model(model, [self.desc['input_shape']])
-        else:
-            converter = tf.lite.TFLiteConverter.from_keras_model(model)
-        
-        # Apply quantization based on activation_dtype
-        activation_dtype = str(self.desc.get('activation_dtype', 'S8')).upper()
-        
-        if activation_dtype == 'S8':
-            converter.optimizations = [tf.lite.Optimize.DEFAULT]
-            converter.target_spec.supported_types = [tf.int8]
-            converter.inference_input_type = tf.int8
-            converter.inference_output_type = tf.int8
-        elif activation_dtype == 'S16':
-            converter.optimizations = [tf.lite.Optimize.DEFAULT]
-            converter.target_spec.supported_ops = [
-                tf.lite.OpsSet.EXPERIMENTAL_TFLITE_BUILTINS_ACTIVATIONS_INT16_WEIGHTS_INT8
-            ]
-            converter.inference_input_type = tf.int16
-            converter.inference_output_type = tf.int16
-        elif activation_dtype == 'FP16':
-            converter.optimizations = []
-            converter.target_spec.supported_types = [tf.float16]
-        elif activation_dtype == 'FP32':
-            converter.optimizations = []
-        
-        # Generate representative dataset
-        calibration = value_range(self.desc, 'calibration_range', (-8.0, 8.0))
-
-        def representative_data_gen():
-            rep_rng = np.random.default_rng(42)
-            for _ in range(128): 
-                if 'input_shape' in self.desc:
-                    inputs = rep_rng.uniform(*calibration, size=self.desc['input_shape']).astype(np.float32)
-                    yield [inputs]
-                elif 'input_1_shape' in self.desc and 'input_2_shape' in self.desc:
-                    inputs1 = rep_rng.uniform(-8.0, 8.0, size=self.desc['input_1_shape']).astype(np.float32)
-                    inputs2 = rep_rng.uniform(-8.0, 8.0, size=self.desc['input_2_shape']).astype(np.float32)
-                    yield [inputs1, inputs2]
-        
-        converter.representative_dataset = representative_data_gen
-        
-        # Convert and save
-        tflite_model = converter.convert()
-        with open(out_path, 'wb') as f:
-            f.write(tflite_model)
-        if self.desc.get('wide_bias') or self.desc.get('min_effective_scale'):
-            from helia_core_tester.generation.ops._shared.bias_init import patch_requant
-
-            patch_requant(out_path, self.desc, self.seed)
-    
-    def _bounded_draw(self, shape, dtype, reference, weights, biases, params) -> tuple:
-        """Input and golden; scaled tolerance if asked."""
-        low, high = value_range(self.desc, 'input_range', (-1.0, 1.0))
-        base = self.comparison_config()
-        for attempt in range(REDRAWS):
-            # Attempt 0 keeps the unbounded data.
-            rng = np.random.default_rng([self.seed, attempt]) if attempt else None
-            data = self._sample_uniform(shape, low=low, high=high, dtype=dtype, rng=rng)
-            golden = reference([data])
-            if not self.desc.get('sum_bound'):
-                return data, golden
-            atol = tconv_tolerance(data, weights, biases, params, golden, base['rtol'], base['atol'])
-            if atol is not None:
-                self.desc['comparison'] = {'atol': atol, 'rtol': base['rtol']}
-                self.desc['resolved_comparison'] = self.comparison_config()
-                return data, golden
-        raise ValueError(f"{self.desc['name']}: reordered sums exceed half the tolerance")
-
     def _select_cmsis_transpose_conv_kernel(self) -> Dict[str, str]:
+        info = self._table_transpose_conv_kernel()
+        entry = self.desc.get("entry")
+        if entry:
+            if self.desc.get("fault"):
+                raise ValueError(f"{self.desc.get('name')}: entry {entry!r} is not supported with fault")
+            info.update(resolve_entry(
+                "TransposeConv", str(entry),
+                activation_dtype=self.desc.get("activation_dtype", "S8"),
+                weight_dtype=self.desc.get("weight_dtype", "S8"),
+                cpu=self.target_cpu, desc=self.desc,
+            ))
+        return info
+
+    def _render_transpose_conv(self, output_dir: Path, context: Dict[str, Any]) -> None:
+        pool = transpose_conv_argument_pool(context)
+        fault = self.fault_kind()
+        if fault:
+            self._check_fault_reachable(fault, context)
+            context.update(self.fault_context())
+            pool = transpose_conv_fault(pool, fault, context)
+        self.render_harness_files(output_dir, stem="transpose_conv", context=context, pool=pool,
+                                  validation_key=TRANSPOSE_CONV_VALIDATION_KEY, label="Transpose convolution")
+
+    def _table_transpose_conv_kernel(self) -> Dict[str, str]:
         """
         Select appropriate CMSIS-NN transpose convolution kernel function.
         
@@ -279,247 +316,32 @@ class OpTransposeConv(OperationBase):
         """
         from pathlib import Path
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
-        # from helia_core_tester.generation.utils.tflite_utils import run_inference
         
         name = self.desc['name']
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
-        
+        self.declared_filter_shape()
+
         # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_transpose_conv_kernel()
         float_kernel = kernel_info["input_c_type"] in {"float", "float16_t"}
         float_dtype = np.float16 if kernel_info["input_c_type"] == "float16_t" else np.float32
         
-        # Load LiteRT model for tensor extraction
-        from helia_core_tester.generation.utils.litert_utils import (
-            load_litert_model, get_operator_tensors_from_litert
-        )
-        
-        model, subgraph = load_litert_model(str(tflite_path))
-        
-        # Get operator tensors (find TRANSPOSE_CONV if present)
-        if len(subgraph.operators) == 0:
-            raise ValueError("No operators found in model")
+        from helia_core_tester.generation.ops._shared.conv_reference import transpose_conv_reference_case
 
-        transpose_op_index = 0
-        try:
-            from ai_edge_litert import schema_py_generated as litert
-            for i, op in enumerate(subgraph.operators):
-                opcode = model.operatorCodes[op.opcodeIndex]
-                if opcode.builtinCode == litert.BuiltinOperator.TRANSPOSE_CONV:
-                    transpose_op_index = i
-                    break
-        except Exception:
-            transpose_op_index = 0
-        
-        op_tensors = get_operator_tensors_from_litert(model, subgraph, transpose_op_index)
-        
-        # Extract shapes from LiteRT
-        if not op_tensors['inputs']:
-            raise ValueError("No input tensors found")
-        if not op_tensors['outputs']:
-            raise ValueError("No output tensors found")
-        
-        # For TransposeConv, the operator inputs are: [output_shape_param, weights, input_data]
-        # The actual input data tensor is the subgraph input, not necessarily op_tensors['inputs'][0]
-        # Find the input data tensor (should be 4D and match subgraph inputs)
-        input_shape = None
-        subgraph_input_indices = set(subgraph.inputs)
-        
-        for input_tensor_info in op_tensors['inputs']:
-            tensor_shape = input_tensor_info['shape']
-            tensor_idx = input_tensor_info.get('index', -1)
-            # The actual input data is the subgraph input (4D tensor)
-            if tensor_idx in subgraph_input_indices and tensor_shape is not None and len(tensor_shape) == 4:
-                input_shape = tensor_shape
-                break
-        
-        # Fallback: use first 4D input tensor
-        if input_shape is None:
-            for input_tensor_info in op_tensors['inputs']:
-                tensor_shape = input_tensor_info['shape']
-                if tensor_shape is not None and len(tensor_shape) == 4:
-                    input_shape = tensor_shape
-                    break
-        
-        # Final fallback: use descriptor shape
-        if input_shape is None:
-            input_shape = self.desc.get('input_shape', [1, 1, 1, 1])
-            print(f"Warning: Could not find input shape from LiteRT, using descriptor shape: {input_shape}")
-        
-        # Get output shape
-        output_shape = None
-        if op_tensors['outputs']:
-            output_shape = op_tensors['outputs'][0]['shape']
-        if output_shape is None and subgraph.outputs:
-            try:
-                from helia_core_tester.generation.utils.litert_utils import get_tensor_shape_from_litert
-                output_tensor = subgraph.tensors[subgraph.outputs[0]]
-                output_shape = get_tensor_shape_from_litert(output_tensor)
-            except Exception:
-                output_shape = None
-        if output_shape is None:
-            try:
-                interpreter = self.load_litert_interpreter(str(tflite_path))
-                out_details = interpreter.get_output_details()
-                if out_details:
-                    output_shape = tuple(out_details[0]["shape"])
-            except Exception:
-                output_shape = None
-        
-        # Ensure shapes are tuples
-        if input_shape is not None:
-            input_shape = tuple(input_shape)
-        if output_shape is not None:
-            output_shape = tuple(output_shape)
-        
-        # Ensure input_shape is 4D (NHWC)
-        if len(input_shape) == 1:
-            # If shape is [1], use descriptor shape
-            input_shape = tuple(self.desc.get('input_shape', [1, 1, 1, 1]))
-        elif len(input_shape) < 4:
-            # Pad with batch dimension if needed
-            input_shape = (1,) + input_shape if len(input_shape) == 3 else input_shape
-        
-        # Ensure output_shape is 4D (NHWC)
-        if len(output_shape) < 4:
-            output_shape = (1,) + output_shape if len(output_shape) == 3 else output_shape
-        
-        # Extract quantization parameters from LiteRT
-        # For TransposeConv, find the actual input data tensor (4D, in subgraph inputs)
-        # not the output shape parameter (1D)
-        input_quant_litert = None
-        subgraph_input_indices = set(subgraph.inputs)
-        for input_tensor_info in op_tensors['inputs']:
-            tensor_idx = input_tensor_info.get('index', -1)
-            tensor_shape = input_tensor_info['shape']
-            if tensor_idx in subgraph_input_indices and tensor_shape is not None and len(tensor_shape) == 4:
-                input_quant_litert = input_tensor_info['quantization']
-                break
-        
-        # Fallback to first input if not found
-        if input_quant_litert is None:
-            input_quant_litert = op_tensors['inputs'][0]['quantization']
-        
-        output_quant_litert = op_tensors['outputs'][0]['quantization']
-        
-        input_quant = {
-            'scale': input_quant_litert.get('scale', 1.0),
-            'zero_point': input_quant_litert.get('zero_point', 0),
-            'per_channel': input_quant_litert.get('per_channel', False)
-        }
-        output_quant = {
-            'scale': output_quant_litert.get('scale', 1.0),
-            'zero_point': output_quant_litert.get('zero_point', 0),
-            'per_channel': output_quant_litert.get('per_channel', False)
-        }
-        
-        # Handle per-channel quantization (convert to scalar if needed)
-        if isinstance(input_quant['scale'], (list, np.ndarray)):
-            input_quant['scale'] = input_quant['scale'][0] if len(input_quant['scale']) > 0 else 1.0
-        if isinstance(input_quant['zero_point'], (list, np.ndarray)):
-            input_quant['zero_point'] = input_quant['zero_point'][0] if len(input_quant['zero_point']) > 0 else 0
-        if isinstance(output_quant['scale'], (list, np.ndarray)):
-            output_quant['scale'] = output_quant['scale'][0] if len(output_quant['scale']) > 0 else 1.0
-        if isinstance(output_quant['zero_point'], (list, np.ndarray)):
-            output_quant['zero_point'] = output_quant['zero_point'][0] if len(output_quant['zero_point']) > 0 else 0
-        
-        # Find weight quantization (from weight tensor in inputs)
-        weight_quant = None
-        bias_tensor_data = None
-        use_bias = self.desc.get('use_bias', True)
-        for input_tensor_info in op_tensors['inputs']:
-            if input_tensor_info['data'] is not None:
-                tensor_shape = input_tensor_info.get('shape', [])
-                if len(tensor_shape) > 1:
-                    # weight tensor
-                    weight_quant = input_tensor_info['quantization']
-                elif len(tensor_shape) == 1 and use_bias:
-                    # bias tensor
-                    bias_tensor_data = input_tensor_info['data']
-        
-        quant_params = {
-            'input': input_quant or {'scale': 1.0, 'zero_point': 0, 'per_channel': False},
-            'output': output_quant or {'scale': 1.0, 'zero_point': 0, 'per_channel': False},
-            'weight': weight_quant or input_quant or {'scale': 1.0, 'zero_point': 0, 'per_channel': False}
-        }
-        
-        # Extract weights and biases from LiteRT
-        weights = op_tensors['weights']
-        if use_bias and bias_tensor_data is not None:
-            biases = bias_tensor_data
-        else:
-            biases = op_tensors['biases']
-        
-        # Load LiteRT interpreter for inference
-        interpreter = self.load_litert_interpreter(str(tflite_path))
-        
-        if weights is not None:
-            filter_shape = tuple(weights.shape)
-            if len(filter_shape) == 4:
-
-                filter_dims = {
-                    'n': int(filter_shape[0]),  # OutCh (first dimension in TFLite)
-                    'h': int(filter_shape[1]),  # KH (second dimension)
-                    'w': int(filter_shape[2]),  # KW (third dimension)
-                    'c': int(filter_shape[3])   # InCh (fourth dimension)
-                }
-            else:
-                raise ValueError(f"Unsupported filter shape: {filter_shape}")
-            kh, kw, out_ch, in_ch = self.declared_filter_shape()
-            declared = {'n': out_ch, 'h': kh, 'w': kw, 'c': in_ch}
-            if filter_dims != declared:
-                raise ValueError(
-                    f"{self.desc.get('name')}: converted TransposeConv filter "
-                    f"[OutCh, KH, KW, InCh]={list(filter_shape)} does not match the descriptor's "
-                    f"filter_shape [KH, KW, OutCh, InCh]={[kh, kw, out_ch, in_ch]}"
-                )
-            if not float_kernel and weights.dtype != np.int8:
-                weights = weights.astype(np.int8)
-        else:
-            # Fallback: descriptor format [KH, KW, OutCh, InCh]
-            fs = self.declared_filter_shape()
-            filter_dims = {
-                'n': int(fs[2]),  # OutCh
-                'h': int(fs[0]),  # KH
-                'w': int(fs[1]),  # KW
-                'c': int(fs[3])   # InCh
-            }
-        
+        case = transpose_conv_reference_case(self, kernel_info, float_kernel, float_dtype)
+        input_shape, output_shape = case["input_shape"], case["output_shape"]
+        weights, biases = case["weights"], case["biases"]
+        transpose_conv_params = case["params"]
+        filter_dims = {'n': int(weights.shape[0]), 'h': int(weights.shape[1]), 'w': int(weights.shape[2]),
+                       'c': int(weights.shape[3])}
         builder = TemplateContextBuilder()
         input_dims = builder.nhwc_to_cmsis_dims(input_shape)
         output_dims = builder.nhwc_to_cmsis_dims(output_shape)
-        
-        # Build transpose conv parameters
-        transpose_conv_params = builder.build_transpose_conv_params(
-            self.desc,
-            input_shape,
-            (filter_dims['h'], filter_dims['w']),
-            output_shape,
-            quant_params['input'],
-            quant_params['output']
-        )
         if float_kernel:
             has_biases = biases is not None and biases.size > 0
-            if weights is not None and weights.dtype != float_dtype:
-                weights = weights.astype(float_dtype)
-            if has_biases and biases.dtype != float_dtype:
-                biases = biases.astype(float_dtype)
-
-            interpreter_input_dtype = interpreter.get_input_details()[0]['dtype']
-
-            def float_reference(operands, _dtype=float_dtype, _in_dtype=interpreter_input_dtype):
-                return clamp_golden(self.desc, self.run_inference(
-                    str(tflite_path), operands[0].astype(_in_dtype)
-                ).astype(_dtype))
-
-            input_data, output_data = self._bounded_draw(
-                input_shape, float_dtype, float_reference, weights, biases if has_biases else None,
-                transpose_conv_params)
-
+            input_data = case["input"]
             output_data, nonfinite_context = self.apply_nonfinite_policy(
-                output_data, reference=float_reference, inputs=[input_data]
+                case["output"], reference=self.reference_probe,
+                inputs=[input_data, case["filter_operand"], case["bias_operand"]]
             )
 
             weights_array_str = builder.format_array_as_c_literal(weights)
@@ -562,26 +384,10 @@ class OpTransposeConv(OperationBase):
                 'transpose_activation_min_literal': builder.format_float_literal(transpose_conv_params['activation_min']),
                 'transpose_activation_max_literal': builder.format_float_literal(transpose_conv_params['activation_max']),
             }
+            context.update(case.get("comparison") or {})
             context.update(nonfinite_context)
-            fault = self.fault_kind()
-            c_template = "ConvolutionFunctions/transpose_conv/transpose_conv.c.j2"
-            if fault:
-                self._check_fault_reachable(fault, context)
-                context.update(self.fault_context())
-                c_template = "ConvolutionFunctions/transpose_conv/transpose_conv_fault.c.j2"
-            includes_api_dir = output_dir / "includes"
-            includes_api_dir.mkdir(parents=True, exist_ok=True)
-            
-            h_content = self.render_template("ConvolutionFunctions/transpose_conv/transpose_conv.h.j2", context)
-            h_path = includes_api_dir / f"{name}_transpose_conv.h"
-            with open(h_path, 'w') as f:
-                f.write(h_content)
-            
-            c_content = self.render_template(c_template, context)
-            c_path = output_dir / f"{name}_transpose_conv.c"
-            with open(c_path, 'w') as f:
-                f.write(c_content)
-            
+            self._render_transpose_conv(output_dir, context)
+
             cmake_context = {
                 'name': name,
                 'operator': self.desc.get('operator', 'TransposeConv'),
@@ -593,58 +399,7 @@ class OpTransposeConv(OperationBase):
                 f.write(cmake_content)
             return
         
-        # Build quantization parameters
-        # The effective scale for multiplier/shift is NOT output_scale directly!
-        # It should be: effective_scale = (input_scale * weight_scale) / output_scale
-        input_quant = quant_params['input']
-        output_quant = quant_params['output']
-        weight_quant = quant_params.get('weights', quant_params.get('weight', output_quant))
-        
-        input_scale = input_quant.get('scale', 1.0)
-        if isinstance(input_scale, (list, np.ndarray)):
-            input_scale = float(input_scale[0])
-        else:
-            input_scale = float(input_scale)
-        
-        output_scale = output_quant.get('scale', 1.0)
-        if isinstance(output_scale, (list, np.ndarray)):
-            output_scale = float(output_scale[0])
-        else:
-            output_scale = float(output_scale)
-        
-        weight_scale = weight_quant.get('scale', 1.0)
-        per_channel = bool(weight_quant.get('per_channel', False))
-        
-        # Calculate effective scales: (input_scale * weight_scale) / output_scale
-        if per_channel and isinstance(weight_scale, np.ndarray):
-            # Per-channel: effective_scale[i] = (input_scale * weight_scale[i]) / output_scale
-            # in double precision, as TFLite computes it. The weight scales are float32.
-            effective_scales = (input_scale * weight_scale.astype(np.float64)) / output_scale
-            # Create a temporary quant_params dict with effective scales
-            effective_quant = {
-                'scale': effective_scales,
-                'zero_point': output_quant.get('zero_point', 0),
-                'per_channel': True
-            }
-            quant_params_dict = builder.build_quant_params(effective_quant, per_channel=True)
-        else:
-            # Per-tensor: effective_scale = (input_scale * weight_scale) / output_scale
-            if isinstance(weight_scale, (list, np.ndarray)):
-                weight_scale = float(weight_scale[0])
-            else:
-                weight_scale = float(weight_scale)
-            effective_scale = (input_scale * weight_scale) / output_scale
-            # Ensure effective_scale is a Python float, not numpy scalar
-            effective_scale = float(effective_scale)
-            effective_quant = {
-                'scale': effective_scale,
-                'zero_point': output_quant.get('zero_point', 0),
-                'per_channel': False
-            }
-            quant_params_dict = builder.build_quant_params(effective_quant, per_channel=False)
-        
-        quant_params_dict['per_channel'] = per_channel
-        
+        quant_params_dict = case["quant_params"]
 
         has_weight_sum = False
         weight_sum_size = 0
@@ -665,48 +420,7 @@ class OpTransposeConv(OperationBase):
         else:
             biases_array_str = ""
         
-        # Generate input data and quantize to the interpreter's real input dtype
-        # IMPORTANT: Reset RNG to seed to ensure input data matches what was used
-        # during TFLite conversion (representative dataset generation may have advanced RNG)
-        rng_state = self.rng.__getstate__()
-        self.rng = np.random.default_rng(self.seed)
-        input_data = self.generate_input_data()
-        self.rng.__setstate__(rng_state)
-        
-        input_scale = quant_params['input'].get('scale', 1.0)
-        input_zp = quant_params['input'].get('zero_point', 0)
-        if isinstance(input_scale, (list, np.ndarray)):
-            input_scale = input_scale[0]
-        if isinstance(input_zp, (list, np.ndarray)):
-            input_zp = input_zp[0]
-        
-        if kernel_info["input_c_type"] == "int8_t":
-            qmin, qmax = -128, 127
-            np_in_dtype = np.int8
-        elif kernel_info["input_c_type"] == "int16_t":
-            qmin, qmax = -32768, 32767
-            np_in_dtype = np.int16
-        else:
-            raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
-        
-        input_q = np.round(input_data / float(input_scale) + float(input_zp)).astype(np.int32)
-        input_q = np.clip(input_q, qmin, qmax).astype(np_in_dtype)
-        
-        # Run inference (dtype must match interpreter input)
-        if is_s16:
-            # Reference kernels: TFLM's int16x8 TransposeConv.
-            from ai_edge_litert.interpreter import OpResolverType
-            from helia_core_tester.generation.utils.litert_utils import run_inference_litert_tensor
-
-            out_index = int(subgraph.operators[transpose_op_index].outputs[0])
-            output_data = run_inference_litert_tensor(
-                str(tflite_path), input_q, out_index, op_resolver_type=OpResolverType.BUILTIN_REF
-            )
-        else:
-            output_data = self.run_inference(str(tflite_path), input_q)
-        output_data = clamp_golden(self.desc, output_data.astype(np_in_dtype))
-        
-        # Format input and output arrays
+        input_q, output_data = case["input"], case["output"]
         input_data_array_str = builder.format_array_as_c_literal(input_q)
         expected_output_array_str = builder.format_array_as_c_literal(output_data)
 
@@ -770,30 +484,8 @@ class OpTransposeConv(OperationBase):
             'reverse_conv_ctx_size': reverse_conv_ctx_size,
             'direct_s16': is_s16,
         }
-        fault = self.fault_kind()
-        c_template = "ConvolutionFunctions/transpose_conv/transpose_conv.c.j2"
-        if fault:
-            self._check_fault_reachable(fault, context)
-            context.update(self.fault_context())
-            c_template = "ConvolutionFunctions/transpose_conv/transpose_conv_fault.c.j2"
+        self._render_transpose_conv(output_dir, context)
 
-        # Render templates
-        includes_api_dir = output_dir / "includes"
-        includes_api_dir.mkdir(parents=True, exist_ok=True)
-        
-        h_content = self.render_template("ConvolutionFunctions/transpose_conv/transpose_conv.h.j2", context)
-        h_path = includes_api_dir / f"{name}_transpose_conv.h"
-        with open(h_path, 'w') as f:
-            f.write(h_content)
-        
-        c_content = self.render_template(c_template, context)
-        c_path = output_dir / f"{name}_transpose_conv.c"
-        with open(c_path, 'w') as f:
-            f.write(c_content)
-        
-        # Also create a symlink or copy with the old naming convention for compatibility
-        # (if needed by CMakeLists.txt pattern matching)
-        
         cmake_context = {
             'name': name,
             'operator': self.desc.get('operator', 'TransposeConv'),

@@ -4,6 +4,35 @@ from typing import Dict
 import numpy as np
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.harness import ArgumentPool, ArrayLiteral, Declaration, FaultEdit, HarnessInput
+from helia_core_tester.generation.harness.faults import with_fault
+
+
+def broadcast_to_argument_pool(context):
+    """BroadcastTo reads its shapes from a params struct; an argument-error case hands the kernel NULL
+    for the input, the params or the output."""
+    n, ctype = context["name"], context["c_type"]
+    shapes = lambda key: "{ " + ", ".join(str(int(v)) for v in context[key]) + " }"
+    header = [
+        Declaration(f"{n}_input_shape", "int32_t", shapes("input_shape"), array=True),
+        Declaration(f"{n}_output_shape", "int32_t", shapes("output_shape"), array=True),
+        Declaration(f"{n}_params", "cmsis_nn_broadcast_to_params",
+                    {"rank": str(context["rank"]), "input_shape": f"{n}_input_shape",
+                     "output_shape": f"{n}_output_shape"}),
+        Declaration(f"{n}_input", ctype, ArrayLiteral(context["input_data_array"]), array=True),
+        Declaration(f"{n}_expected_output", ctype, ArrayLiteral(context["expected_output_array"]), array=True),
+    ]
+    pool = ArgumentPool(
+        name=n, values={"params": context["params_arg"]}, header=header, benchmark=False, scratch_buffer=False,
+        output_count=str(context["output_size"]), output_ctype=ctype,
+        inputs=(HarnessInput("input_data", "input", f"{n}_input", ctype),),
+    )
+    nulls = {}
+    if context["input_arg"] == "NULL":
+        nulls["input_data"] = "NULL"
+    if context["output_arg"] == "NULL":
+        nulls["output_data"] = "NULL"
+    return with_fault(pool, FaultEdit(kind="arg_error", values=nulls)) if nulls else pool
 
 
 class OpBroadcastTo(OperationBase):
@@ -13,14 +42,12 @@ class OpBroadcastTo(OperationBase):
     _ARG_ERROR = "ARM_CMSIS_NN_ARG_ERROR"
     _ARG_ERROR_CASES = {"input", "params", "output"}
 
-    def needs_keras_model(self) -> bool:
-        return False
+    def uses_reference(self) -> bool:
+        return not self.status_only()
 
-    def allow_no_tflite(self) -> bool:
+    def status_only(self) -> bool:
+        # An ARG_ERROR case checks the kernel's status, not an output.
         return self._expected_status() != self._SUCCESS
-
-    def build_keras_model(self):
-        raise NotImplementedError("BroadcastTo uses LiteRT-only model generation.")
 
     def _expected_status(self) -> str:
         expected_status = str(self.desc.get("expected_status", self._SUCCESS))
@@ -45,38 +72,6 @@ class OpBroadcastTo(OperationBase):
     def _params_rank(self, default_rank: int) -> int:
         return int(self._extras().get("params_rank", default_rank))
 
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        if self._expected_status() != self._SUCCESS:
-            raise RuntimeError("BroadcastTo expected error; skip LiteRT generation.")
-
-        from helia_core_tester.generation.utils.litert_builder import (
-            build_shape_transform_op, TensorSpec,
-        )
-        import ai_edge_litert.schema_py_generated as litert
-
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
-        dtype = 'int16' if activation_dtype == 'S16' else 'int8'
-
-        input_shape = tuple(self.desc['input_shape'])
-        output_shape = tuple(self.desc['output_shape'])
-
-        shape_tensor = TensorSpec(
-            name="shape",
-            shape=(len(output_shape),),
-            tensor_type=litert.TensorType.INT32,
-            is_input=False,
-            data=np.array(output_shape, dtype=np.int32),
-        )
-
-        model_bytes = build_shape_transform_op(
-            op_name="BROADCAST_TO",
-            input_shape=input_shape,
-            output_shape=output_shape,
-            dtype=dtype,
-            extra_input_tensors=[shape_tensor],
-        )
-        self._write_tflite_bytes(out_path, model_bytes)
-
     def _select_kernel(self) -> Dict[str, str]:
         activation_dtype = self.desc.get('activation_dtype', 'S8')
         if activation_dtype == 'S16':
@@ -84,6 +79,7 @@ class OpBroadcastTo(OperationBase):
         return {'kernel_fn': 'arm_broadcast_to_s8', 'c_type': 'int8_t', 'np_dtype': 'int8', 'qmin': -128, 'qmax': 127}
 
     def generate_c_files(self, output_dir: Path) -> None:
+        from helia_core_tester.generation.reference.call import ReferenceCall
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
         name = self.desc['name']
@@ -99,36 +95,12 @@ class OpBroadcastTo(OperationBase):
         np_dtype = np.int16 if ki['np_dtype'] == 'int16' else np.int8
         input_data = rng.integers(ki['qmin'], ki['qmax'] + 1, size=input_shape, dtype=np_dtype)
 
-        if expected_status == self._SUCCESS:
-            # Use TFLite TILE op (INT32) as interpreter proxy for BROADCAST_TO.
-            # BROADCAST_TO is not registered in this runtime; TILE with multiples achieves the same result.
-            from ai_edge_litert.interpreter import Interpreter
-            from helia_core_tester.generation.utils.litert_builder import LiteRtSingleOpBuilder, TensorSpec
-            import ai_edge_litert.schema_py_generated as litert
-
-            multiples = [output_shape[i] // input_shape[i] for i in range(data_rank)]
-            builder = LiteRtSingleOpBuilder(op_name="TILE")
-            inp_idx = builder.add_tensor(TensorSpec(
-                name="input", shape=tuple(input_shape), tensor_type=litert.TensorType.INT32, is_input=True,
-            ))
-            mult_idx = builder.add_tensor(TensorSpec(
-                name="multiples", shape=(data_rank,), tensor_type=litert.TensorType.INT32,
-                is_input=False, data=np.array(multiples, dtype=np.int32),
-            ))
-            out_idx = builder.add_tensor(TensorSpec(
-                name="output", shape=tuple(output_shape), tensor_type=litert.TensorType.INT32, is_output=True,
-            ))
-            builder.add_operator("TILE", inputs=[inp_idx, mult_idx], outputs=[out_idx],
-                options=None, options_type=litert.BuiltinOptions.NONE)
-            interp = Interpreter(model_content=bytes(builder.build()))
-            interp.allocate_tensors()
-            inp_details = interp.get_input_details()
-            out_details = interp.get_output_details()
-            interp.set_tensor(inp_details[0]["index"], input_data.astype(np.int32))
-            interp.invoke()
-            output_data = interp.get_tensor(out_details[0]["index"]).astype(np_dtype)
-        else:
+        if self.status_only():
+            # The kernel rejects the call before writing; the array only sizes the output buffer.
             output_data = np.zeros(output_shape, dtype=np_dtype)
+        else:
+            output_data = self.reference_golden(ReferenceCall(
+                "broadcast_to", {"unused": 0}, {"input": input_data}, {"output": tuple(output_shape)}))
 
         builder = TemplateContextBuilder()
         context = {
@@ -148,16 +120,7 @@ class OpBroadcastTo(OperationBase):
             'output_arg': 'NULL' if arg_error_case == 'output' else f'{name}_output',
         }
 
-        includes_dir = output_dir / "includes"
-        includes_dir.mkdir(parents=True, exist_ok=True)
-
-        h_content = self.render_template("BroadcastFunctions/broadcast_to/broadcast_to.h.j2", context)
-        (includes_dir / f"{name}_broadcast_to.h").write_text(h_content)
-
-        c_content = self.render_template("BroadcastFunctions/broadcast_to/broadcast_to.c.j2", context)
-        (output_dir / f"{name}_broadcast_to.c").write_text(c_content)
-
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", {
-            'name': name, 'operator': 'BroadcastTo', 'operator_name': 'broadcast_to'
-        })
-        (output_dir / "CMakeLists.txt").write_text(cmake_content)
+        self.render_harness_case(
+            output_dir, stem="broadcast_to", context=context, pool=broadcast_to_argument_pool(context),
+            validation_key="BroadcastFunctions/broadcast_to/broadcast_to.c.j2", label="BroadcastTo", operator="BroadcastTo",
+        )

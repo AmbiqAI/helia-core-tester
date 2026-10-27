@@ -30,7 +30,9 @@ def test_full_pipeline_bootstraps_runtime_env_once_and_reuses(monkeypatch, tmp_p
     cfg = Config(
         project_root=root,
         skip_generation=True,
-        _explicit_overrides={"project_root", "skip_generation"},
+        # The host check needs no runtime env; this test is about build/run's.
+        skip_host_check=True,
+        _explicit_overrides={"project_root", "skip_generation", "skip_host_check"},
     )
 
     expected_runtime_env = _runtime_env(root)

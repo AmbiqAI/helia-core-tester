@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from helia_core_tester.generation.entry import resolve_entry
 from helia_core_tester.generation.io.descriptors import load_all_descriptors
-from helia_core_tester.generation.kernel_dispatch import resolve_direct_entry
 from helia_core_tester.generation.test_ops import _required_kernel_symbols, generate_test
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -23,37 +23,52 @@ def _descriptor(name: str) -> dict:
 
 def _source(name: str, tmp_path: Path, **overrides) -> str:
     generate_test({**_descriptor(name), **overrides}, str(tmp_path))
-    case_dir = next(p.parent for p in tmp_path.rglob(f"{name}.tflite"))
+    case_dir = next(p.parent for p in tmp_path.rglob(f"{name}.reference.json"))
     return "".join(p.read_text() for p in case_dir.glob("*.c"))
 
 
-def test_packed_entry_resolves_to_its_family_and_gates_the_case() -> None:
-    assert resolve_direct_entry("FullyConnected", _ENTRY, "S8", "S8") == {
+def test_packed_entry_resolves_from_the_contract_without_scratch() -> None:
+    """The manifest record binds no buffer to ctx (the kernel sums live only while packing)."""
+    assert resolve_entry("FullyConnected", _ENTRY, activation_dtype="S8", weight_dtype="S8", cpu="cortex-m55",
+                         desc={"name": "x"}) == {
         "kernel_fn": _ENTRY,
-        "kernel_get_buffer_size_fn": f"{_ENTRY}_get_packed_size",
-        "entry_family": "fully_connected_packed_s8",
+        "entry_family": "contract",
+        "kernel_needs_layout": False,
+        "buffer_size_needs_layout": False,
+        "kernel_get_buffer_size_fn": None,
+        "entry_scratch_bytes": 0,
     }
     assert _required_kernel_symbols(_descriptor(_IN_GATE)) == [_ENTRY]
 
 
-def test_case_packs_once_after_the_gate_and_calls_only_the_entry(tmp_path: Path) -> None:
+def test_case_packs_once_before_the_call_and_checks_the_gate(tmp_path: Path) -> None:
     source = _source(_IN_GATE, tmp_path)
-    body = source[source.index("_test_case_run(void)"):]
+    code = re.sub(r"/\*.*?\*/|//[^\n]*", " ", source, flags=re.S)
+    run = code[code.index("_run("):code.index("_test_case_run(void)")]
 
-    gate = body.index("arm_nn_fc_packed_s8_supported(")
+    # The stream is sized by the entry's own query, then built in the run by the manifest record's prepare
+    # steps, each bound to the case's arguments: sums first, then the packer.
+    assert re.search(rf"int32_t packed_size = {_ENTRY}_get_packed_size\(\s*&\w+_filter_dims\s*\)", run)
     vector_sum = re.search(
-        r"arm_vector_sum_s8\(\s*\w+_kernel_sum,\s*13,\s*5,\s*\w+_weights,\s*\w+_fc_params\.input_offset,\s*0,\s*\w+_biases\s*\)",
-        body,
+        r"arm_vector_sum_s8\(\s*\w+_kernel_sum,\s*\w+_filter_dims\.n,\s*\w+_output_dims\.c,\s*\w+_weights,"
+        r"\s*\w+_fc_params\.input_offset,\s*\w+_fc_params\.filter_offset,\s*\w+_biases\s*\)",
+        run,
     )
-    pack = body.index(f"{_ENTRY}_pack(")
-    run = re.search(r"_run\(\w+_input,", body).start()
-    assert vector_sum and gate < vector_sum.start() < pack < run
-    assert re.search(r"HELIA_VALIDATE_SCALAR_EQ_INT\([^;]*\b1,\s*arm_nn_fc_packed_s8_supported", body, re.S)
+    pack = re.search(rf"{_ENTRY}_pack\(\s*&\w+_filter_dims,\s*\w+_weights,\s*\w+_kernel_sum,\s*&\w+_quant_params,"
+                     r"\s*\(int8_t \*\)\w+_packed\s*\)", run)
+    assert pack
+    pack = pack.start()
     call = re.search(rf"return {_ENTRY}\(\s*&\w+_fc_params,\s*&\w+_input_dims,\s*input,\s*&\w+_filter_dims,"
-                     r"\s*\(const int8_t \*\)\w+_buffer,\s*&\w+_output_dims,\s*output\s*\);", source)
-    assert call
+                     r"\s*\(const int8_t \*\)\w+_packed,\s*&\w+_output_dims,\s*output\s*\)", run)
+    assert vector_sum and call and vector_sum.start() < pack < call.start()
     assert source.count(f"{_ENTRY}(") == 1
     assert "arm_fully_connected_s8(" not in source and "arm_fully_connected_wrapper_s8(" not in source
+    # The gate the entry's caller asks, and the stream's slack, are checked in the test body.
+    body = source[source.index("_test_case_run(void)"):]
+    assert re.search(r"HELIA_VALIDATE_SCALAR_EQ_INT\([^;]*\b1,\s*arm_nn_fc_packed_s8_supported", body, re.S)
+    assert "HELIA_GUARD_CHECK_SLACK(" in body
+    # The stream bound keeps the scratch macro's name: the hardware bridge sizes the stream from it.
+    assert re.search(rf"#define {_IN_GATE.upper()}_BUFFER_SIZE_MAX \d+", source)
 
 
 def test_declined_case_expects_the_gate_closed_and_an_untouched_output(tmp_path: Path) -> None:
@@ -68,3 +83,30 @@ def test_declined_case_expects_the_gate_closed_and_an_untouched_output(tmp_path:
 def test_per_tensor_case_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="per-channel quantization only"):
         _source(_IN_GATE, tmp_path, hint={"call_style": "per_tensor", "force_per_tensor": True})
+
+
+def test_the_packed_size_is_the_packers(tmp_path: Path) -> None:
+    from helia_core_tester.generation.ops.FullyConnectedFunctions.fully_connected import fc_packed_stream_bytes
+
+    # ceil(C / 4) blocks, each four rows of K rounded up to 16 plus 48 bytes of parameters.
+    for k, c in ((13, 5), (1, 1), (16, 4), (17, 8), (64, 9)):
+        assert fc_packed_stream_bytes({"n": k, "c": c}) == -(-c // 4) * (4 * (-(-k // 16) * 16) + 48)
+
+
+@pytest.mark.parametrize("ref, expected", [
+    (None, "NULL"), ("filter_data", "x_weights"), ("fc_params.input_offset", "x_fc_params.input_offset"),
+    ("quant_ptr.multiplier", "(x_q)->multiplier"), ("buffer:kernel_sums", "x_kernel_sum"),
+])
+def test_manifest_bindings_resolve_over_the_case(ref, expected) -> None:
+    from helia_core_tester.generation.ops.FullyConnectedFunctions.fully_connected import manifest_binding
+
+    values = {"filter_data": "x_weights", "fc_params": "&x_fc_params", "quant_ptr": "x_q"}
+    assert manifest_binding(ref, values, {"kernel_sums": "x_kernel_sum"}, "x") == expected
+
+
+@pytest.mark.parametrize("ref, message", [("buffer:other", "names no buffer"), ("output_dims.c", "does not pass")])
+def test_a_binding_the_case_cannot_supply_fails_closed(ref, message) -> None:
+    from helia_core_tester.generation.ops.FullyConnectedFunctions.fully_connected import manifest_binding
+
+    with pytest.raises(ValueError, match=message):
+        manifest_binding(ref, {"filter_data": "x_weights"}, {"kernel_sums": "x_kernel_sum"}, "x")

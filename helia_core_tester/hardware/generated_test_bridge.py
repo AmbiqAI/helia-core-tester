@@ -22,7 +22,7 @@ import re
 import struct
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable, Mapping, Optional
 
 import numpy as np
 import yaml
@@ -39,8 +39,12 @@ from .kernel_registry import (
 )
 from .pathutil import display_path
 from helia_core_tester.generation.io.descriptors import descriptor_matches_op
-from helia_core_tester.generation.kernel_dispatch import entry_scratch_bytes
-from helia_core_tester.generation.io.dtypes import descriptor_matches_dtype_filter, normalize_dtype, resolve_comparison
+from helia_core_tester.generation.io.dtypes import (
+    default_comparison_for_dtype,
+    descriptor_matches_dtype_filter,
+    normalize_dtype,
+    resolve_comparison,
+)
 from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
 
@@ -190,7 +194,7 @@ def _extract_call_args(source_text: str, function_name: str, *, expected_count: 
 
     Elementwise ops (unlike Convolve's `cmsis_nn_conv_params` struct) don't have a named
     scalar-params struct in the generated header -- their quant scalars are inlined directly
-    as call arguments (with `// name` comments) in the generated `.c` file. This is
+    as call arguments (with `// name` or `/* name */` comments) in the generated `.c` file. This is
     positional/fragile by nature (relies on the generator's fixed CMSIS-NN argument order),
     so callers must pass `expected_count` to fail loudly on any drift instead of silently
     misreading arguments.
@@ -199,7 +203,7 @@ def _extract_call_args(source_text: str, function_name: str, *, expected_count: 
     match = pattern.search(source_text)
     if match is None:
         raise UnsupportedGeneratedTestError(f"Could not find call to `{function_name}(...)` in generated source")
-    body = re.sub(r"//[^\n]*", "", match.group(1))
+    body = re.sub(r"/\*.*?\*/|//[^\n]*", "", match.group(1), flags=re.DOTALL)
     args = [a.strip() for a in body.split(",") if a.strip() != ""]
     if len(args) != expected_count:
         raise UnsupportedGeneratedTestError(
@@ -214,7 +218,7 @@ def _extract_array(header_text: str, array_name: str) -> list[int]:
     match = pattern.search(header_text)
     if match is None:
         raise UnsupportedGeneratedTestError(f"Could not find array `{array_name}` in generated header")
-    raw = re.sub(r"//[^\n]*", "", match.group(1))
+    raw = re.sub(r"/\*.*?\*/|//[^\n]*", "", match.group(1), flags=re.DOTALL)
     values = [v.strip() for v in raw.replace("\n", " ").split(",") if v.strip() != ""]
     return [int(v) for v in values]
 
@@ -228,7 +232,7 @@ def _extract_float_array(header_text: str, array_name: str) -> list[float]:
     match = pattern.search(header_text)
     if match is None:
         raise UnsupportedGeneratedTestError(f"Could not find array `{array_name}` in generated header")
-    raw = re.sub(r"//[^\n]*", "", match.group(1))
+    raw = re.sub(r"/\*.*?\*/|//[^\n]*", "", match.group(1), flags=re.DOTALL)
     raw = re.sub(r"\(\s*float16_t\s*\)", "", raw)
     values = [v.strip() for v in raw.replace("\n", " ").split(",") if v.strip() != ""]
     return [float(v.rstrip("fF")) for v in values]
@@ -239,7 +243,7 @@ def _extract_bool_array(header_text: str, array_name: str) -> list[bool]:
     match = pattern.search(header_text)
     if match is None:
         raise UnsupportedGeneratedTestError(f"Could not find array `{array_name}` in generated header")
-    raw = re.sub(r"//[^\n]*", "", match.group(1))
+    raw = re.sub(r"/\*.*?\*/|//[^\n]*", "", match.group(1), flags=re.DOTALL)
     values = [v.strip() for v in raw.replace("\n", " ").split(",") if v.strip() != ""]
     result: list[bool] = []
     for value in values:
@@ -285,7 +289,7 @@ def _extract_all_call_args(source_text: str, function_name: str, *, expected_cou
         raise UnsupportedGeneratedTestError(f"Could not find call to `{function_name}(...)` in generated source")
     parsed: list[list[str]] = []
     for match in matches:
-        body = re.sub(r"//[^\n]*", "", match.group(1))
+        body = re.sub(r"/\*.*?\*/|//[^\n]*", "", match.group(1), flags=re.DOTALL)
         args = [a.strip() for a in body.split(",") if a.strip() != ""]
         if len(args) != expected_count:
             continue
@@ -298,10 +302,12 @@ def _extract_all_call_args(source_text: str, function_name: str, *, expected_cou
 
 
 def _extract_first_cmsis_function_name(source_text: str) -> str:
-    match = re.search(r"\b(arm_[A-Za-z0-9_]+)\s*\(", source_text)
-    if match is None:
-        raise UnsupportedGeneratedTestError("Could not find a CMSIS-NN `arm_*` call in generated source")
-    return str(match.group(1))
+    """The first `arm_*(` call in the source. The harness's parity assert spells the return type
+    `arm_cmsis_nn_status (` ahead of any call, so the status type is not a candidate."""
+    for match in re.finditer(r"\b(arm_[A-Za-z0-9_]+)\s*\(", source_text):
+        if match.group(1) != "arm_cmsis_nn_status":
+            return str(match.group(1))
+    raise UnsupportedGeneratedTestError("Could not find a CMSIS-NN `arm_*` call in generated source")
 
 
 def _comparison_from_generated_source(source_text: str) -> dict[str, int | float | str]:
@@ -323,6 +329,30 @@ def _comparison_from_generated_source(source_text: str) -> dict[str, int | float
         if mode == "NONE":
             return {"mode": "none"}
     raise UnsupportedGeneratedTestError("Could not find a concrete HELIA_VALIDATE_OUTPUTS(...) call in generated source")
+
+
+def _emitted_float_comparison(directory: Path, resolved: dict) -> dict:
+    """A float case's comparison as its generated source states it: the generator may tighten the
+    descriptor's comparison to the kernel-faithful tolerance or widen it by a derived bound, and the
+    hardware leg must judge the case the way the FVP leg does. Non-float cases keep `resolved`."""
+    if resolved.get("mode") != "float":
+        return resolved
+    try:
+        source = _find_source_file(directory).read_text(encoding="utf-8")
+    except (UnsupportedGeneratedTestError, OSError):
+        return resolved
+    try:
+        emitted = _comparison_from_generated_source(source)
+        if emitted.get("mode") == "float":
+            return emitted
+    except (UnsupportedGeneratedTestError, ValueError):
+        pass
+    try:
+        masked = _extract_all_call_args(source, "HELIA_VALIDATE_FLOATS_MASKED", expected_count=8)
+        atol, rtol = (float(str(masked[0][i]).strip().rstrip("fF")) for i in (4, 5))
+    except (UnsupportedGeneratedTestError, ValueError, IndexError):
+        return resolved
+    return {**resolved, "mode": "float", "atol": atol, "rtol": rtol}
 
 
 def _extract_expected_status_from_source(source_text: str) -> str | None:
@@ -607,16 +637,42 @@ def _with_weight_sums(scratch: int, channels: int) -> int:
     return _align_up(int(scratch), 16) + channels * 4
 
 
+def _entry_ctx_buffer(descriptor: Optional[Mapping[str, Any]]) -> Optional[tuple[str, str]]:
+    """(record id, buffer) of the manifest record whose sized ctx buffer a descriptor's entry takes, else None."""
+    if not descriptor or not descriptor.get("entry"):
+        return None
+    from helia_core_tester.contract import render
+    from helia_core_tester.generation.entry import ENTRY_IMPLEMENTATION_KEY, apply_entry_manifest, ctx_buffer
+
+    contracts = render.load_current_contracts()
+    if not contracts.present:
+        return None
+    desc = apply_entry_manifest(descriptor, contracts)
+    record_id = desc.get(ENTRY_IMPLEMENTATION_KEY)
+    if record_id is None:
+        return None
+    record = next(r for r in contracts.implementations_of(str(desc["entry"]).strip()) if r.id == record_id)
+    buffer = ctx_buffer(record, f"{desc.get('name', '<unnamed>')}: entry {desc['entry']!r}")
+    return (record_id, buffer.name) if buffer is not None and buffer.size_query is not None else None
+
+
 def _depthwise_s8_scratch_bytes(
-    input_dims: dict[str, int], filter_dims: dict[str, int], output_dims: dict[str, int], entry: str | None = None
+    input_dims: dict[str, int], filter_dims: dict[str, int], output_dims: dict[str, int], *, ch_mult: int,
+    stride: tuple[int, int], padding: tuple[int, int], dilation: tuple[int, int],
+    descriptor: Optional[Mapping[str, Any]] = None,
 ) -> int:
-    """Bound wrapper or entry scratch plus weight sums."""
-    scratch = TemplateContextBuilder.calculate_depthwise_buffer_size_max(input_dims, filter_dims, output_dims, output_dtype="S8")
-    scratch = max(scratch, entry_scratch_bytes(entry, input_dims))
-    # One input channel may run as conv.
-    if input_dims["c"] == 1:
-        conv = TemplateContextBuilder.calculate_buffer_size_max(input_dims, filter_dims, output_dims, output_dtype="S8")
-        scratch = max(scratch, conv + _shape_product(tuple(filter_dims.values())))
+    """The wrapper's scratch on every build (the checkout's planner, which counts the DW->conv route's
+    transposed filter too) or, for a manifest entry, the larger of that and its ctx buffer's, plus weight sums."""
+    from helia_core_tester.contract import planner
+    from helia_core_tester.generation.ops.ConvolutionFunctions.depthwise_conv import dw_operands
+
+    dims = {name: tuple(int(d[k]) for k in "nhwc") for name, d in
+            (("input_dims", input_dims), ("filter_dims", filter_dims), ("output_dims", output_dims))}
+    layer = dict(dims, ch_mult=int(ch_mult), stride=tuple(stride), padding=tuple(padding), dilation=tuple(dilation))
+    scratch = planner.planned_ctx_bytes("depthwise_conv_wrapper_s8", None, **layer)
+    entry = _entry_ctx_buffer(descriptor)
+    if entry is not None:
+        scratch = max(scratch, planner.planned_buffer_bytes(*entry, None, **dw_operands(layer)))
     return _with_weight_sums(scratch, output_dims["c"])
 
 
@@ -649,8 +705,9 @@ def discover_generated_tests(
         descriptor = yaml.safe_load(descriptor_path.read_text(encoding="utf-8"))
         if select is not None and not select.matches(name, descriptor):
             continue
-        descriptor["resolved_comparison"] = resolve_comparison(
-            descriptor, descriptor.get("resolved_tensor_dtypes")
+        descriptor["resolved_comparison"] = _emitted_float_comparison(
+            directory,
+            resolve_comparison(descriptor, descriptor.get("resolved_tensor_dtypes")),
         )
         results.append(GeneratedTestCase(name=name, cpu=cpu, family=family, directory=directory, descriptor=descriptor, suite=suite))
         if limit is not None and len(results) >= limit:
@@ -1104,7 +1161,7 @@ def _build_convolve_case(
     # legitimately diverges between MVE and scalar accumulation and must use a float
     # atol/rtol default instead (matches the DepthwiseConv builder's same policy).
     comparison = dict(
-        descriptor.get("resolved_comparison", {"mode": "exact_int"} if activation_dtype not in ("FP32", "FP16") else {"mode": "float", "atol": 0.001, "rtol": 0.001})
+        descriptor.get("resolved_comparison", {"mode": "exact_int"} if activation_dtype not in ("FP32", "FP16") else default_comparison_for_dtype(activation_dtype))
     )
     manifest_header = _generated_manifest_header(
         project_root, generated_test, case_id, descriptor_path, descriptor_text
@@ -1605,7 +1662,9 @@ def _build_depthwise_conv_case(
         )
     else:
         scratch_bytes = _depthwise_s8_scratch_bytes(
-            input_dims, filter_dims, output_dims, entry=generated_test.descriptor.get("entry")
+            input_dims, filter_dims, output_dims, ch_mult=ch_mult or 1, stride=(stride_h or 1, stride_w or 1),
+            padding=(pad_h, pad_w), dilation=(dilation_h or 1, dilation_w or 1),
+            descriptor=generated_test.descriptor,
         )
 
     arrays = [
@@ -1633,7 +1692,7 @@ def _build_depthwise_conv_case(
     # activations legitimately diverge between MVE and scalar accumulation and must use
     # the descriptor's resolved float tolerance instead, matching the Convolve builder.
     comparison = (
-        dict(descriptor.get("resolved_comparison", {"mode": "float", "atol": 0.001, "rtol": 0.001}))
+        dict(descriptor.get("resolved_comparison", default_comparison_for_dtype(activation_dtype)))
         if activation_dtype in ("FP32", "FP16")
         else {"mode": "exact_int"}
     )
@@ -1974,11 +2033,18 @@ def _build_pooling_case(
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
-    scratch_bytes = (
-        int(TemplateContextBuilder.calculate_pooling_buffer_size_max(input_dims, output_dims, pooling_type="AVERAGE", output_dtype=activation_dtype))
-        if operator == "AvgPool"
-        else 0
-    )
+    if operator == "AvgPool" and activation_dtype == "S8":
+        from helia_core_tester.contract import planner
+
+        # arm_avgpool_s8's scratch on every build, from the checkout's planner.
+        scratch_bytes = planner.planned_ctx_bytes(
+            "pool_s8", None, max_pool=False, input_dims=input_shape, kernel_hw=(filter_dims["h"], filter_dims["w"]),
+            output_dims=output_shape, stride=(stride_h or 1, stride_w or 1), padding=(pad_h, pad_w))
+    elif operator == "AvgPool":
+        scratch_bytes = int(TemplateContextBuilder.calculate_pooling_buffer_size_max(
+            input_dims, output_dims, pooling_type="AVERAGE", output_dtype=activation_dtype))
+    else:
+        scratch_bytes = 0
 
     arrays = [
         (1, "input_0", activation_dtype, input_shape, input_data, False, False),
@@ -3259,7 +3325,7 @@ def _build_abs_case(
         blob_roles=[_manifest_blob_entry(blob) for blob in blobs],
         expected_output={"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
         comparison=dict(
-            descriptor.get("resolved_comparison", {"mode": "exact_int"} if activation_dtype not in ("FP32", "FP16") else {"mode": "float", "atol": 0.001, "rtol": 0.001})
+            descriptor.get("resolved_comparison", {"mode": "exact_int"} if activation_dtype not in ("FP32", "FP16") else default_comparison_for_dtype(activation_dtype))
         ),
         scratch_bytes=0,
         capabilities=[cmsis_function],
@@ -3694,7 +3760,7 @@ def _write_elementwise_binary_bundle(
         blob_roles=[_manifest_blob_entry(blob) for blob in blobs],
         expected_output={"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
         comparison=dict(
-            descriptor.get("resolved_comparison", {"mode": "exact_int"} if activation_dtype not in ("FP32", "FP16") else {"mode": "float", "atol": 0.001, "rtol": 0.001})
+            descriptor.get("resolved_comparison", {"mode": "exact_int"} if activation_dtype not in ("FP32", "FP16") else default_comparison_for_dtype(activation_dtype))
         ),
         scratch_bytes=0,
         capabilities=[f"{cmsis_function}"],
@@ -4166,7 +4232,7 @@ def _build_fully_connected_case(
     # descriptors named "batchN") and its `test_case_run()` only ever validates the first
     # `FULLY_CONNECTED_..._OUTPUT_SIZE` (= output_required) elements against
     # `_expected_output` -- the full `_input`/`_expected_output` header arrays retain the
-    # complete original (possibly multi-row) LiteRT tensor for documentation/traceability,
+    # complete original (possibly multi-row) tensor for documentation/traceability,
     # but only their leading slice is ever fed to/compared against the real single-invocation
     # kernel call. Slice to match that same ground-truth single-invocation behavior rather
     # than rejecting these descriptors outright.
@@ -5175,7 +5241,8 @@ def _build_lstm_case(project_root: Path, generated_test: GeneratedTestCase, *, o
 
 
 # Dispatch table: (family, operator) -> builder. Add new bridged ops here (and a matching
-# entry in assets/kernel_registry.yaml + a firmware handler) to extend hardware coverage.
+# registry row + adapter spec; see the header of assets/kernel_registry.yaml) to extend
+# hardware coverage.
 _BUILDERS: dict[tuple[str, str], Callable[..., CaseBundle]] = {
     ("ConvolutionFunctions", "Convolve"): _build_convolve_case,
     ("ConvolutionFunctions", "DepthwiseConv"): _build_depthwise_conv_case,

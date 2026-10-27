@@ -13,13 +13,14 @@ from typing import Optional
 
 import typer
 
-from helia_core_tester.core.config import DEFAULT_RUN_JOBS_CAP, DEFAULT_TIMEOUT_SECONDS, Config
+from helia_core_tester.core.config import DEFAULT_RUN_JOBS_CAP, DEFAULT_TIMEOUT_SECONDS, Config, parse_report_formats
 from helia_core_tester.core.discovery import ensure_arm_toolchain_on_path
 from helia_core_tester.core.logging import setup_logger
 from helia_core_tester.core.path_layout import artifacts_root
 from helia_core_tester.core.pipeline import FullTestPipeline
-from helia_core_tester.core.steps import BuildStep, CleanStep, GenerateStep, RunStep
+from helia_core_tester.core.steps import BuildStep, CleanStep, GenerateStep, HostCheckStep, RunStep
 from helia_core_tester.reporting.coverage_merge import run_coverage_merge
+from helia_core_tester.contract.cli import contract_app
 from helia_core_tester.hardware.cli import boards as boards_command
 from helia_core_tester.hardware.cli import explain as explain_command
 from helia_core_tester.hardware.cli import hardware_app, probes_app
@@ -42,6 +43,7 @@ app = typer.Typer(
 
 app.add_typer(hardware_app, name="hardware")
 app.add_typer(probes_app, name="probes")
+app.add_typer(contract_app, name="contract")
 app.add_typer(candidate_app, name="candidate")
 app.add_typer(agent_loop_app, name="agent-loop")
 app.command(name="boards")(boards_command)
@@ -57,6 +59,13 @@ def _print_plan_item(plan_item) -> None:
         outputs = ", ".join(f"{k}={v}" for k, v in plan_item.outputs.items() if v)
         if outputs:
             typer.echo(f"   outputs: {outputs}")
+
+
+def _report_formats_callback(values: list[str]) -> list[str]:
+    try:
+        return parse_report_formats(values)
+    except ValueError as e:
+        raise typer.BadParameter(str(e)) from e
 
 
 def get_config(
@@ -148,7 +157,7 @@ def generate(
     plan: bool = typer.Option(False, "--plan", help="Print execution plan and exit"),
     project_root: Optional[Path] = typer.Option(None, "--repo-root", help="Repository root directory"),
 ):
-    """Generate TFLite models and template C/H files."""
+    """Generate the test cases (C/H files with reference goldens)."""
     config = get_config(
         cpu=cpu,
         verbosity=verbosity,
@@ -225,6 +234,35 @@ def build(
     )
 
 
+@app.command(name="host-check")
+def host_check(
+    cpu: str = typer.Option("cortex-m55", help="Target CPU(s) whose generated int trees to check, comma-separated"),
+    host_kernels: str = typer.Option("m0", "--host-kernels", help="Host kernel builds, comma-separated: m0 (pure C, no ARM_MATH_*) and/or dsp (Armv7E-M via dsp_shim.h)"),
+    jobs: Optional[int] = typer.Option(None, help="Parallel compile/run jobs"),
+    seed: Optional[int] = typer.Option(None, help="Run seed for the reproduce hints (default: the one manifest.json records)"),
+    verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help="Verbosity level (0-3)"),
+    plan: bool = typer.Option(False, "--plan", help="Print execution plan and exit"),
+    project_root: Optional[Path] = typer.Option(None, "--repo-root", help="Repository root directory"),
+    cmsis_nn_root: Optional[Path] = typer.Option(None, "--cmsis-nn-root", help="ns-cmsis-nn checkout whose kernels to check against (default: CMSIS_NN_ROOT, else the enclosing checkout)"),
+):
+    """Compile and run every generated int case on the host against the ns-cmsis-nn kernels."""
+    config = get_config(
+        cpu=cpu,
+        verbosity=verbosity,
+        plan=plan,
+        project_root=project_root,
+        jobs=jobs,
+        seed=seed,
+        suite="int",
+        host_kernels=[m.strip() for m in host_kernels.split(",") if m.strip()],
+        cmsis_nn_root=cmsis_nn_root,
+    )
+    if config.plan:
+        _print_plan_item(HostCheckStep(config).plan())
+        sys.exit(0)
+    run_step_exit(HostCheckStep(config), config, "", failure_prefix="Host check failed")
+
+
 @app.command()
 def run(
     cpu: str = typer.Option("cortex-m55", help="Target CPU(s), comma-separated (e.g. m0,m4,m55)"),
@@ -237,7 +275,11 @@ def run(
     suite: str = typer.Option("int", "--suite", help="Test suite selection: int, float, or both"),
     toolchain: str = typer.Option("gcc", "--toolchain", help="Toolchain: gcc (default) or armclang (Arm Compiler 6 on PATH; not combinable with --coverage)"),
     no_report: bool = typer.Option(False, "--no-report", help="Disable test reporting"),
-    report_formats: list[str] = typer.Option(["json"], help="Report formats (json, html, md, junit)"),
+    report_formats: list[str] = typer.Option(
+        ["json"],
+        callback=_report_formats_callback,
+        help="Report formats from json, html, md, junit: comma-separated (--report-formats json,html) or repeated (--report-formats json --report-formats html)",
+    ),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help="Verbosity level (0-3)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be done"),
     plan: bool = typer.Option(False, "--plan", help="Print execution plan and exit"),
@@ -292,11 +334,17 @@ def full(
     coverage_mve_float: bool = typer.Option(False, "--coverage-mve-float", help="Enable Cortex-M55 float MVE paths during coverage builds"),
     coverage_mve_int: bool = typer.Option(False, "--coverage-mve-int", help="Enable Cortex-M55 integer MVE paths (no ARM_MATH_AUTOVECTORIZE) during coverage builds"),
     force_generate: bool = typer.Option(False, "--force-generate", help="Regenerate every case even when its reuse stamp still matches"),
-    skip_generation: bool = typer.Option(False, "--skip-generation", help="Skip TFLite generation"),
+    skip_generation: bool = typer.Option(False, "--skip-generation", help="Skip test-case generation"),
+    skip_host_check: bool = typer.Option(False, "--skip-host-check", help="Skip the host check of the generated int cases (runs after generation, before the FVP build, and blocks it on failure)"),
+    host_kernels: str = typer.Option("m0", "--host-kernels", help="Host check kernel builds, comma-separated: m0 and/or dsp"),
     skip_build: bool = typer.Option(False, "--skip-build", help="Skip FVP build"),
     skip_run: bool = typer.Option(False, "--skip-run", help="Skip FVP test execution"),
     no_report: bool = typer.Option(False, "--no-report", help="Disable test reporting"),
-    report_formats: list[str] = typer.Option(["json"], help="Report formats (json, html, md, junit)"),
+    report_formats: list[str] = typer.Option(
+        ["json"],
+        callback=_report_formats_callback,
+        help="Report formats from json, html, md, junit: comma-separated (--report-formats json,html) or repeated (--report-formats json --report-formats html)",
+    ),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help="Verbosity level (0-3)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be done"),
     plan: bool = typer.Option(False, "--plan", help="Print execution plan and exit"),
@@ -328,6 +376,8 @@ def full(
         coverage_mve_int=coverage_mve_int,
         force_generate=force_generate,
         skip_generation=skip_generation,
+        skip_host_check=skip_host_check,
+        host_kernels=[m.strip() for m in host_kernels.split(",") if m.strip()],
         skip_build=skip_build,
         skip_run=skip_run,
         enable_reporting=not no_report,
@@ -463,6 +513,26 @@ def doctor(
         else:
             typer.echo(f"⚠ {dir_name}/ not found ({description})", err=True)
 
+    # Host toolchain: the reference library (goldens) and the host check need it,
+    # so a missing C compiler fails doctor.
+    from .generation.reference.build import describe_cache
+    from .utils.host_compiler import describe_host_toolchain
+
+    typer.echo("\nHost toolchain (reference goldens and host check):")
+    toolchain = describe_host_toolchain()
+    if toolchain.get("cc"):
+        typer.echo(f"✓ C compiler: {toolchain['cc']}")
+    else:
+        typer.echo(f"✗ C compiler: {toolchain.get('cc_error')}", err=True)
+        all_ok = False
+    cache = describe_cache()
+    if "error" in cache:
+        typer.echo(f"✗ reference library: {cache['error']}", err=True)
+        all_ok = False
+    else:
+        state = "built" if cache["built"] else "not built yet (builds on first use)"
+        typer.echo(f"✓ reference library {cache['key']}: {state} ({cache['library']})")
+
     # Hardware (J-Link/RTT) checks are informational: the FVP path never needs
     # them, so a missing tool is reported as missing without failing doctor.
     from .hardware.doctor import hardware_checks
@@ -471,6 +541,34 @@ def doctor(
     for check in hardware_checks(repo_root):
         marker = "✓" if check.ok else "⚠"
         typer.echo(f"{marker} {check.label}: {check.detail}")
+
+    # The kernel contract export is optional for a checkout (older ns-cmsis-nn have
+    # none) but never allowed to be present and wrong.
+    from .contract.ir import ContractError, load_contract_set
+    from .generation.utils.temp_sizer_probe import resolve_cmsis_nn_root
+
+    typer.echo("\nKernel contract (ns-cmsis-nn Tests/KernelContracts):")
+    cmsis_root = resolve_cmsis_nn_root()
+    try:
+        contracts = load_contract_set(cmsis_root)
+    except ContractError as error:
+        typer.echo(f"✗ kernel contract: {error}", err=True)
+        all_ok = False
+    else:
+        if contracts.present:
+            kinds = {}
+            for decl in contracts.functions.values():
+                kinds[decl.kind] = kinds.get(decl.kind, 0) + 1
+            typer.echo(f"✓ {contracts.path}: {len(contracts.functions)} public functions "
+                       f"({', '.join(f'{v} {k}' for k, v in sorted(kinds.items()))})")
+            if contracts.manifest_path is not None:
+                typer.echo(f"✓ {contracts.manifest_path}: {len(contracts.implementations)} implementations "
+                           f"(ns-cmsis-nn {contracts.library_version})")
+            else:
+                typer.echo("⚠ implementation manifest: absent (generation gates on the signature export only)")
+        else:
+            typer.echo(f"⚠ kernel contract: absent ({cmsis_root or 'no ns-cmsis-nn checkout resolved'}; "
+                       "contract-driven commands are unavailable)")
 
     if all_ok:
         typer.echo("\n✓ All preflight checks passed")

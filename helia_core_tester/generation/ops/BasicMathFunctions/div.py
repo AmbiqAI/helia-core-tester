@@ -1,10 +1,12 @@
-"""Float DIV tests against LiteRT, retaining compact broadcast operands."""
+"""Float DIV tests against the C reference, retaining compact broadcast operands."""
 
 from pathlib import Path
 
 import numpy as np
 
 from helia_core_tester.generation.ops._shared.binary_basic_math_base import BinaryBasicMathBase
+# Div renders through Mul's binary harness pool, which that module registers.
+from helia_core_tester.generation.ops.BasicMathFunctions import mul as _mul  # noqa: F401
 from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
 
@@ -23,11 +25,8 @@ class OpDiv(BinaryBasicMathBase):
         if not np.isfinite(lo) or not np.isfinite(hi) or lo > hi:
             raise ValueError("Div requires finite ordered activation bounds")
 
-    def needs_keras_model(self) -> bool:
-        return False
-
-    def build_keras_model(self):
-        raise NotImplementedError("Div uses LiteRT-only model generation.")
+    def uses_reference(self) -> bool:
+        return True
 
     def _dtype(self):
         dtype = self.tensor_dtype("input")
@@ -35,26 +34,9 @@ class OpDiv(BinaryBasicMathBase):
             raise ValueError("Div requires matching FP16 or FP32 input/output storage")
         return np.dtype("float16" if dtype == "FP16" else "float32")
 
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        import ai_edge_litert.schema_py_generated as schema
-        from helia_core_tester.generation.utils.litert_builder import build_binary_broadcast_op
-
-        self.validate_descriptor()
-        options = schema.DivOptionsT()
-        options.fusedActivationFunction = schema.ActivationFunctionType.NONE
-        # LiteRT executes FP32 division. Half tests first round the operands to
-        # FP16, widen for the oracle, then round its quotient back to FP16.
-        data = build_binary_broadcast_op(
-            op_name="DIV",
-            input_1_shape=self.desc["input_1_shape"],
-            input_2_shape=self.desc["input_2_shape"],
-            dtype="float32",
-            options=options,
-            options_type=schema.BuiltinOptions.DivOptions,
-        )
-        self._write_tflite_bytes(out_path, data)
-
     def generate_c_files(self, output_dir: Path) -> None:
+        from helia_core_tester.generation.reference.call import ReferenceCall
+
         self.validate_descriptor()
         dtype = self._dtype()
         suffix = "f16" if dtype == np.dtype("float16") else "f32"
@@ -68,19 +50,12 @@ class OpDiv(BinaryBasicMathBase):
         a = rng.uniform(-8, 8, shape_a).astype(dtype)
         b = rng.uniform(0.25, 4, shape_b).astype(dtype)
         b.flat[::2] *= -1
-        interpreter = self.load_litert_interpreter(str(output_dir / f"{name}.tflite"))
-        inputs = interpreter.get_input_details()
-        interpreter.set_tensor(inputs[0]["index"], a.astype(np.float32))
-        interpreter.set_tensor(inputs[1]["index"], b.astype(np.float32))
-        interpreter.invoke()
-        expected = interpreter.get_tensor(interpreter.get_output_details()[0]["index"]).astype(dtype)
-        # Check the runtime oracle against independently evaluated binary64
-        # quotients; all operands here are finite representable storage values.
-        independent = (a.astype(np.float64) / b.astype(np.float64)).astype(dtype)
-        np.testing.assert_array_equal(expected, independent)
         lo = dtype.type(self.desc.get("act_min", -1000))
         hi = dtype.type(self.desc.get("act_max", 1000))
-        expected = np.clip(expected, lo, hi).astype(dtype)
+        # The binary64 quotient of the stored operands, rounded once, then clamped.
+        expected = self.reference_golden(ReferenceCall(
+            f"div_{suffix}", {"activation_min": float(lo), "activation_max": float(hi)},
+            {"input1": np.ascontiguousarray(a), "input2": np.ascontiguousarray(b)}, {"output": tuple(shape_out)}))
         builder = TemplateContextBuilder()
         context = {
             "name": name,

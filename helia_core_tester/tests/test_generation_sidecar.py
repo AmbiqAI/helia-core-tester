@@ -19,6 +19,8 @@ from pathlib import Path
 
 import pytest
 
+from helia_core_tester.tests.contract_fallback import subprocess_contract_env
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -47,6 +49,7 @@ def _generate_one(tmp_path: Path, op: str, seed: int = 500) -> Path:
         cwd=str(PROJECT_ROOT),
         capture_output=True,
         text=True,
+        env=subprocess_contract_env(),
     )
     assert result.returncode == 0, result.stdout + result.stderr
     return tmp_path
@@ -75,7 +78,7 @@ def test_sidecar_kernel_fn_matches_generated_c_call(
 
     kernel_fn = sidecar["kernel_fn"]
     assert kernel_fn, "sidecar must record the resolved kernel function name"
-    assert f"= {kernel_fn}(" in c_source, (
+    assert re.search(rf"(=|return) {re.escape(kernel_fn)}\(", c_source), (
         f"sidecar kernel_fn {kernel_fn!r} not found as the actual kernel call "
         f"site in the generated .c file -- sidecar has drifted from reality"
     )

@@ -7,7 +7,6 @@ import numpy as np
 from pathlib import Path
 from helia_core_tester.generation.io.dtypes import (
     descriptor_dtype_to_c_type,
-    descriptor_dtype_to_litert_dtype,
     get_resolved_tensor_dtype,
 )
 from helia_core_tester.generation.ops._shared.base import OperationBase
@@ -50,31 +49,8 @@ class OpGather(OperationBase):
             raise NotImplementedError(f"Unsupported Gather dtype: {dtype}")
         return dtype
 
-    def needs_keras_model(self) -> bool:
-        return False
-
-    def build_keras_model(self):
-        raise NotImplementedError("Gather uses LiteRT-only model generation.")
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        from helia_core_tester.generation.utils.litert_builder import build_gather_op
-
-        dtype = descriptor_dtype_to_litert_dtype(self._element_dtype())
-
-        input_shape = tuple(self.desc["input_shape"])
-        indices_shape = tuple(self.desc["indices_shape"])
-        axis = int(self.desc.get("axis", 0))
-        batch_dims = int(self.desc.get("batch_dims", 0))
-
-        model_bytes = build_gather_op(
-            input_shape=input_shape,
-            indices_shape=indices_shape,
-            axis=axis,
-            batch_dims=batch_dims,
-            dtype=dtype,
-        )
-        with open(out_path, "wb") as f:
-            f.write(model_bytes)
+    def uses_reference(self) -> bool:
+        return True
 
     def _select_cmsis_gather_kernel(self) -> Dict[str, str]:
         dtype = self._element_dtype()
@@ -118,12 +94,10 @@ class OpGather(OperationBase):
         raise ValueError(f"Unsupported shape length: {len(shape)}")
 
     def generate_c_files(self, output_dir: Path) -> None:
+        from helia_core_tester.generation.reference.call import ReferenceCall
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
         name = self.desc["name"]
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
 
         kernel_info = self._select_cmsis_gather_kernel()
         builder = TemplateContextBuilder()
@@ -169,7 +143,8 @@ class OpGather(OperationBase):
 
         self.rng.__setstate__(rng_state)
 
-        output_q = np.take(input_q, indices_q, axis=axis)
+        output_q = self.reference_golden(ReferenceCall(
+            "gather", {"axis": axis}, {"input": input_q, "indices": indices_q}, {"output": output_shape}))
 
         input_dims = self._shape_to_dims(input_shape)
         indices_dims = self._shape_to_dims(indices_shape)
@@ -196,26 +171,33 @@ class OpGather(OperationBase):
             "output_size": int(np.prod(output_shape)),
         }
 
-        includes_api_dir = output_dir / "includes"
-        includes_api_dir.mkdir(parents=True, exist_ok=True)
+        self.render_harness_case(
+            Path(output_dir), stem="gather", context=context, pool=gather_argument_pool(context),
+            validation_key="GatherFunctions/gather/gather.c.j2", label="Gather", operator="Gather",
+        )
 
-        h_content = self.render_template("GatherFunctions/gather/gather.h.j2", context)
-        h_path = includes_api_dir / f"{name}_gather.h"
-        with open(h_path, "w") as f:
-            f.write(h_content)
 
-        c_content = self.render_template("GatherFunctions/gather/gather.c.j2", context)
-        c_path = output_dir / f"{name}_gather.c"
-        with open(c_path, "w") as f:
-            f.write(c_content)
 
-        cmake_context = {
-            "name": name,
-            "operator": self.desc.get("operator", "Gather"),
-            "operator_name": "gather",
-        }
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
-        cmake_path = output_dir / "CMakeLists.txt"
-        with open(cmake_path, "w") as f:
-            f.write(cmake_content)
+from helia_core_tester.generation.harness import ArgumentPool, ArrayLiteral, Declaration, HarnessInput  # noqa: E402
+from helia_core_tester.generation.harness.simple import dims_declaration  # noqa: E402
 
+
+def gather_argument_pool(context):
+    n = context["name"]
+    dims = ("input_dims", "indices_dims", "output_dims")
+    header = [dims_declaration(f"{n}_{d}", context[d]) for d in dims]
+    header += [Declaration(f"{n}_{k}_shape", "int32_t", ArrayLiteral(context[f"{k}_shape_array"]), array=True)
+               for k in ("input", "indices", "output")]
+    header += [
+        Declaration(f"{n}_input", context["input_dtype"], ArrayLiteral(context["input_data_array"]), array=True),
+        Declaration(f"{n}_indices", "int32_t", ArrayLiteral(context["indices_data_array"]), array=True),
+        Declaration(f"{n}_expected_output", context["output_dtype"], ArrayLiteral(context["expected_output_array"]), array=True),
+    ]
+    params = Declaration(f"{n}_params", "cmsis_nn_gather_params",
+                         {k: str(context[k]) for k in ("axis", "batch_dims", "input_rank", "coords_rank")}, storage="static")
+    return ArgumentPool(
+        name=n, values={**{d: f"&{n}_{d}" for d in dims}, "params": f"&{n}_params"}, header=header, source=(params,),
+        inputs=(HarnessInput("input_data", "input", f"{n}_input"),
+                HarnessInput("indices_data", "indices", f"{n}_indices", "int32_t")),
+        output_count=f"({context['output_size']})", benchmark=False, scratch_buffer=False,
+    )

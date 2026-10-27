@@ -76,6 +76,12 @@ def test_generated_case_calls_the_kernel(tmp_path, desc):
     assert "arm_nn_gelu_f16(" in source
     assert "helia_test_float_interval(" in source
     assert ("vmsr fpscr" in source) == bool(desc.get("fpscr_fz16"))
+    if desc.get("fpscr_fz16"):
+        # FZ16 is restored on the failing-status return as well as the passing one.
+        run = source[source.index("_run("):source.index("_test_case_run(")]
+        restore = 'vmsr fpscr, %0" : : "r"(fpscr)'
+        assert run.count(restore) == 2
+        assert run.index(restore) < run.index("return kernel_status;")
 
 
 def test_interval_validator_detects_planted_faults(tmp_path):
@@ -102,6 +108,8 @@ def test_interval_validator_detects_planted_faults(tmp_path):
         "typedef int arm_cmsis_nn_status;\n#define ARM_CMSIS_NN_SUCCESS 0\n"
         "int arm_nn_gelu_f16(const float16_t *, float16_t *, int32_t);\n"
     )
+    # The generic harness header includes it alongside arm_nnfunctions.h.
+    (tmp_path / "arm_nn_types.h").write_text("#pragma once\n")
     runtime = tmp_path / "runtime.c"
     runtime.write_text(
         "#define helia_test_finish helia_test_finish_on_target\n"

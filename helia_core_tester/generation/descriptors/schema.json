@@ -87,7 +87,6 @@
         "Transpose",
         "Unpack",
         "TransposeConv",
-        "VariableUpdate",
         "Where"
       ]
     },
@@ -116,7 +115,7 @@
       "enum": ["default", "float"]
     },
     "required_capabilities": {
-      "description": "CPU capabilities the case needs; it is skipped on CPUs that lack any of them. Names must match core/cpu_targets.py known_capabilities().",
+      "description": "CPU capabilities the case needs; it is skipped on CPUs that lack any of them. Names must match core/cpu_targets.py known_capabilities(). Not allowed on a case whose entry the implementation manifest has a record for: they follow from the record's requires.",
       "type": "array",
       "minItems": 1,
       "uniqueItems": true,
@@ -242,21 +241,33 @@
       "type": "string",
       "enum": ["strict", "mask"]
     },
-    "sum_bound": {
-      "description": "Float TransposeConv only: set atol from the data, 3 * sqrt(K) * eps32 * sqrt(sum terms^2) at the worst output (f32 accumulation for FP16 too), and redraw the input until reordered f32 host sums spend at most half the tolerance.",
-      "type": "boolean"
-    },
     "fault": {
-      "description": "Argument fault to inject before the kernel call, selecting the operator's <op>_fault.c.j2 template. Each operator validates the kind against its FAULT_KINDS; shared kinds are null_ctx_buf, null_input, null_output, zero_dim and negative_dim. A fault case asserts the returned status against expected_status and never validates outputs.",
+      "description": "Argument fault to inject before the kernel call: an operator on the generic harness applies it as a FaultEdit on its argument pool, any other selects the operator's <op>_fault.c.j2 template. Each operator validates the kind against its FAULT_KINDS; shared kinds are null_ctx_buf, null_input, null_output, zero_dim and negative_dim. A fault case asserts the returned status against expected_status and never validates outputs.",
       "type": "string",
       "pattern": "^[a-z0-9]+(?:_[a-z0-9]+)*$"
     },
     "entry": {
-      "description": "Public ns-cmsis-nn entry the generated case calls instead of the wrapper its dispatch selects (the entries in kernel_dispatch.DIRECT_ENTRIES). The case is skipped when the ns-cmsis-nn checkout does not declare the entry.",
+      "description": "Public ns-cmsis-nn entry the generated case calls instead of the wrapper its dispatch selects: for an operator whose pool binds its call from the kernel contract, any public kernel of matching precision; whether it takes weight sums, a struct-typed bias or a layout follows from its prototype. The case is skipped when the ns-cmsis-nn checkout does not declare the entry.",
       "type": "string"
     },
+    "entry_sizer": {
+      "description": "Public ns-cmsis-nn scratch-size query for an entry that has no <entry>_get_buffer_size of its own (a variant sized by its family's query). Mutually exclusive with entry_scratch; the case is skipped when the checkout does not declare it. Not allowed for an entry the ns-cmsis-nn implementation manifest has a record for: the record's ctx buffer names the query.",
+      "type": "string",
+      "pattern": "^arm_[a-z0-9_]+$"
+    },
+    "entry_scratch": {
+      "description": "Scratch for an entry that takes no sizer: 'none', or a fixed byte count. Mutually exclusive with entry_sizer. Not allowed for an entry the implementation manifest has a record for.",
+      "oneOf": [
+        {"type": "string", "enum": ["none"]},
+        {"type": "integer", "minimum": 0}
+      ]
+    },
     "autovectorize_declines": {
-      "description": "The entry declines (ARM_CMSIS_NN_NO_IMPL_ERROR, output untouched) on a build without the MVE paths it lives on: for an integer entry, a build whose ns-cmsis-nn integer sources have ARM_MATH_AUTOVECTORIZE (the default coverage build); for a float entry, a build without MVE float or whose float sources have ARM_MATH_AUTOVECTORIZE. The case expects that there and the full result elsewhere.",
+      "description": "The entry declines (ARM_CMSIS_NN_NO_IMPL_ERROR, output untouched) on a build without the MVE paths it lives on: for an integer entry, a build whose ns-cmsis-nn integer sources have ARM_MATH_AUTOVECTORIZE (the default coverage build); for a float entry, a build without MVE float or whose float sources have ARM_MATH_AUTOVECTORIZE. The case expects that there and the full result elsewhere. Not allowed for an entry the implementation manifest has a record for: it follows from the record's requires and declines.",
+      "type": "boolean"
+    },
+    "conformance": {
+      "description": "A contract conformance case (Phase 2 T4a): generation checks the case's expectation against the ns-cmsis-nn checkout's host planner on every build the case is compiled under, and the case asserts on the target that its context is exactly the planned size, that the wrapper's own route selector picks the planned route, and, for the packed FC entry, that the stream and kernel sums equal the host packer's. Supported for the s8 depthwise and FC wrappers, the packed FC entry and s8 pooling.",
       "type": "boolean"
     },
     "planar_supported": {
@@ -448,6 +459,26 @@
     "quant_preset": {
       "type": "string",
       "description": "Add, Mul (S8): 'shared' (implied when absent) gives both inputs and the output one quantization; 'distinct' gives each operand its own scale and zero point (#349). SquaredDifference: named quantization preset variant. 'default' (implied when absent) gives the s8 inputs a moderate asymmetric zero point; 'relu_range' keeps the -128 input zero point that pins every post-offset lane non-negative."
+    },
+    "quantization": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "oneOf": [
+          {
+            "required": ["scale"],
+            "properties": { "scale": { "type": "number", "exclusiveMinimum": 0 }, "zero_point": { "type": "integer" } },
+            "additionalProperties": false
+          },
+          {
+            "required": ["range"],
+            "properties": { "range": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 } },
+            "additionalProperties": false
+          }
+        ]
+      },
+      "description": "Reference-backed ops: tensor role -> explicit quantization, either {scale, zero_point} or {range: [lo, hi]} for the policy (s8 asymmetric, s16 symmetric). Overrides the op's default policy range for that role."
     },
     "degenerate_golden_reason": {
       "type": "string",
@@ -671,7 +702,6 @@
               "BatchToSpaceND",
               "ResizeBilinear",
               "ResizeNearestNeighbor",
-              "VariableUpdate",
               "Clamp",
               "NNActivationS16",
               "Gather",

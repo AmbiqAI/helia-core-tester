@@ -11,6 +11,7 @@ from helia_core_tester.core.logging import get_logger
 from helia_core_tester.core.runtime_env import RuntimeEnvContext, bootstrap_runtime_env
 from helia_core_tester.core.steps import (
     GenerateStep,
+    HostCheckStep,
     BuildStep,
     RunStep,
     CleanStep,
@@ -63,9 +64,10 @@ class FullTestPipeline:
         Run the complete test pipeline.
         
         The pipeline executes steps in order:
-        1. Generate TFLite models (if not skipped)
-        2. Build FVP executables (if not skipped)
-        3. Run tests on FVP (if not skipped)
+        1. Generate test cases (if not skipped)
+        2. Host-check the generated int cases (if not skipped)
+        3. Build FVP executables (if not skipped)
+        4. Run tests on FVP (if not skipped)
         
         Returns:
             True if all steps succeeded, False otherwise
@@ -86,7 +88,7 @@ class FullTestPipeline:
         try:
             if self.config.skip_generation:
                 if self.config.verbosity >= 1:
-                    self.logger.info("Skipping TFLite model generation (--skip-generation)")
+                    self.logger.info("Skipping test-case generation (--skip-generation)")
             elif overall_success:
                 success, stop = _run_step(
                     GenerateStep(self.config), self.logger,
@@ -94,6 +96,20 @@ class FullTestPipeline:
                 )
                 overall_success = success
                 if stop:
+                    return False
+
+            # A failing host check blocks the FVP build regardless of
+            # --no-fail-fast: building known-wrong cases only buries the failure.
+            if self.config.skip_host_check:
+                if self.config.verbosity >= 1:
+                    self.logger.info("Skipping host check (--skip-host-check)")
+            elif overall_success:
+                success, _ = _run_step(
+                    HostCheckStep(self.config), self.logger,
+                    self.config.verbosity, self.config.fail_fast
+                )
+                overall_success = success
+                if not success:
                     return False
 
             if self.config.skip_build:
@@ -144,6 +160,11 @@ class FullTestPipeline:
         else:
             plans.append(GenerateStep(self.config).plan())
 
+        if self.config.skip_host_check:
+            plans.append(StepPlan(name="host-check", will_run=False, reason="skipped by config"))
+        else:
+            plans.append(HostCheckStep(self.config).plan())
+
         if self.config.skip_build:
             plans.append(StepPlan(name="build", will_run=False, reason="skipped by config"))
         else:
@@ -156,11 +177,10 @@ class FullTestPipeline:
 
         return plans
 
-    def print_plan(self) -> None:
-        """Print a human-readable execution plan."""
-        plans = self.build_plan()
+    def plan_lines(self) -> list[str]:
+        """Render the execution plan as human-readable lines."""
         lines = ["Plan:"]
-        for idx, plan in enumerate(plans, start=1):
+        for idx, plan in enumerate(self.build_plan(), start=1):
             will = "will run" if plan.will_run else "skipped"
             lines.append(f"{idx}. {plan.name}: {will} ({plan.reason})")
             if plan.commands:
@@ -174,5 +194,9 @@ class FullTestPipeline:
                 details = ", ".join(f"{k}={v}" for k, v in plan.details.items() if v is not None)
                 if details:
                     lines.append(f"   details: {details}")
-        for line in lines:
-            self.logger.info(line)
+        return lines
+
+    def print_plan(self) -> None:
+        """Print the execution plan to stdout; it is the requested output, so verbosity does not gate it."""
+        for line in self.plan_lines():
+            print(line)

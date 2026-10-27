@@ -21,6 +21,14 @@
 
 #include <stdint.h>
 
+/* On an Arm host (e.g. aarch64 macOS) arm_nn_compiler.h includes the host's
+ * arm_acle.h, which defines __ror and friends as functions. Include it first so
+ * its include guard makes that later include a no-op, instead of the macros
+ * below rewriting the ACLE definitions themselves. */
+#if defined(__ARM_ARCH) || defined(__ARM_ACLE)
+#include <arm_acle.h>
+#endif
+
 static inline uint32_t host_ror(uint32_t v, uint32_t n)
 {
     n &= 31U;

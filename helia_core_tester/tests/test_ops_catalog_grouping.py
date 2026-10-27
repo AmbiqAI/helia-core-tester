@@ -51,7 +51,7 @@ def test_extension_ops_are_isolated_in_tester_extensions() -> None:
         for spec in iter_operator_specs()
         if spec.parity_kind == "extension"
     }
-    assert extension_operators == {"Squeeze", "VariableUpdate"}
+    assert extension_operators == {"Squeeze"}
     for operator in extension_operators:
         spec = get_operator_spec(operator)
         assert spec.family == "TesterExtensions"
@@ -80,10 +80,12 @@ def test_scaffold_operator_creates_grouped_skeleton(tmp_path: Path) -> None:
     assert created["schema"].exists()
 
     module_text = created["module"].read_text()
-    assert "def build_example_op(" in module_text
-    assert "build_unary_same_shape_op" in module_text
-    assert 'self.tensor_litert_dtype("input")' in module_text
-    assert 'output_dtype=self.tensor_litert_dtype("output")' in module_text
+    compile(module_text, str(created["module"]), "exec")
+    assert "class OpExampleOp(OperationBase):" in module_text
+    assert 'REFERENCE_ENTRY = "example_op"' in module_text
+    assert "def uses_reference(self) -> bool:\n        return True" in module_text
+    for marker in _FORBIDDEN_OP_MARKERS:
+        assert marker not in module_text.lower(), marker
 
     catalog_text = created["catalog"].read_text()
     assert '"ExampleOp": _spec("ExampleOp", "BasicMathFunctions", "example_op", "OpExampleOp"' in catalog_text
@@ -134,28 +136,31 @@ def test_ops_use_grouped_template_paths_directly() -> None:
             assert first.endswith("Functions") or first == "TesterExtensions", (path, literal)
 
 
-def test_selected_ops_define_local_litert_wrappers() -> None:
-    ops_root = _repo_root() / "helia_core_tester" / "generation" / "ops" / "BasicMathFunctions"
-    expected_wrappers = {
-        "abs.py": "build_abs_op",
-        "add.py": "build_add_op",
-        "argmax.py": "build_argmax_op",
-        "argmin.py": "build_argmin_op",
-        "rsqrt.py": "build_rsqrt_op",
-        "sqrt.py": "build_sqrt_op",
-    }
+# Markers of the removed converter/interpreter path. Comments may still cite TFLite or Keras
+# conventions as the definition a reference entry follows.
+_FORBIDDEN_OP_MARKERS = ("litert", "tflite_path", ".tflite", "tensorflow", "tf.keras", "keras_model",
+                         "convert_to_tflite", "interpreter", "flatbuffer")
 
-    for filename, wrapper_name in expected_wrappers.items():
-        text = (ops_root / filename).read_text()
-        assert f"def {wrapper_name}(" in text
-        assert f"from helia_core_tester.generation.utils.litert_builder import {wrapper_name}" not in text
 
-    litert_builder_text = (_repo_root() / "helia_core_tester" / "generation" / "utils" / "litert_builder.py").read_text()
-    assert "def build_abs_op(" not in litert_builder_text
-    assert "def build_add_op(" not in litert_builder_text
-    assert "def build_arg_op(" not in litert_builder_text
-    assert "def build_rsqrt_op(" not in litert_builder_text
-    assert "def build_sqrt_op(" not in litert_builder_text
+def _op_modules() -> list[Path]:
+    root = _repo_root() / "helia_core_tester" / "generation" / "ops"
+    return sorted(root.rglob("*.py"))
+
+
+def test_every_registered_op_module_is_scanned() -> None:
+    scanned = {".".join(("helia_core_tester", "generation", "ops", *p.relative_to(
+        _repo_root() / "helia_core_tester" / "generation" / "ops").with_suffix("").parts)) for p in _op_modules()}
+    for spec in iter_operator_specs():
+        assert spec.module_path in scanned, spec.operator
+
+
+@pytest.mark.parametrize("path", _op_modules(), ids=lambda p: f"{p.parent.name}/{p.name}")
+def test_op_modules_carry_no_converter_path(path: Path) -> None:
+    """Every operator takes its golden from the C reference: no op module builds, converts or
+    interprets a model."""
+    text = path.read_text().lower()
+    for marker in _FORBIDDEN_OP_MARKERS:
+        assert marker not in text, (path.name, marker)
 
 
 def test_root_readme_documents_add_op_workflow() -> None:

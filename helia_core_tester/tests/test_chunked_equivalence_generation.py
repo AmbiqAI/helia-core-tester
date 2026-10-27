@@ -25,6 +25,7 @@ discriminate packed-vs-tail defects like ns-cmsis-nn#343:
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import numpy as np
@@ -91,8 +92,7 @@ def test_generates_full_vs_chunked_comparison_without_golden_data(
         chunk_sizes=[3, 8, 7, 5, 4, 2],
     )
     op = OpChunkedEquivalence(desc, seed=1, target_cpu="cortex-m4")
-    assert op.needs_keras_model() is False
-    assert op.allow_no_tflite() is True
+    assert op.self_checking() and not op.uses_reference()
     op.generate_c_files(tmp_path)
 
     c_text = (tmp_path / f"{name}_chunked_equivalence.c").read_text()
@@ -242,7 +242,8 @@ def test_minmax_kernel_slices_by_dims_and_keeps_the_context_argument(tmp_path: P
     c_text = (tmp_path / f"{name}_chunked_equivalence.c").read_text()
     assert "cmsis_nn_context ctx" in c_text
     assert "cmsis_nn_dims dims = {1, 1, 1, block_size}" in c_text
-    assert "arm_minimum_s8(&ctx, input1, &dims, input2, &dims, output, &dims)" in c_text
+    call = re.sub(r"/\*.*?\*/|\s+", "", re.search(r"return arm_minimum_s8\((.*?)\);", c_text, flags=re.S).group(1))
+    assert call == "&ctx,input1,&dims,input2,&dims,output,&dims"
 
 
 def test_chunk_pattern_must_leave_a_tail_and_an_unaligned_boundary() -> None:

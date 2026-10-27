@@ -1,5 +1,5 @@
 """
-TFLite model generation step.
+Test-case generation step.
 """
 
 import os
@@ -13,10 +13,20 @@ from helia_core_tester.core.logging import get_logger
 from helia_core_tester.core.path_layout import generated_tests_dir, generated_tests_root
 from helia_core_tester.utils.command_runner import run_command
 
+SHIPPED_OPTIMIZATION = "-Ofast"
+
+
+def kernel_numerics(config) -> str:
+    """'shipped' when the kernels build as ns-cmsis-nn ships them, which kernel-faithful goldens model."""
+    shipped = config.optimization == SHIPPED_OPTIMIZATION and not config.coverage
+    return "shipped" if shipped else "bounded"
+
 
 class GenerateStep(StepBase):
-    """Step for generating TFLite models."""
+    """Step for generating test cases."""
     
+    _run_seed: Optional[tuple[int, bool]] = None
+
     def __init__(self, config):
         super().__init__(config)
         self.logger = get_logger(__name__)
@@ -75,6 +85,7 @@ class GenerateStep(StepBase):
         """Build pytest command list. include_seed=False for dry-run preview."""
         cmd = ["pytest", "test_ops.py::test_generation", "-v"]
         cmd.extend(["--cpu", cpu])
+        cmd.extend(["--kernel-numerics", kernel_numerics(self.config)])
         cmd.extend(["--suite", suite])
         if self.config.hidden_dir is None:
             cmd.extend(["--generated-tests-dir", str(self._cpu_generated_tests_dir(cpu, suite=suite))])
@@ -92,8 +103,11 @@ class GenerateStep(StepBase):
             )
             if effective_float_precision:
                 cmd.extend(["--float-precision", effective_float_precision])
-        if include_seed and self.config.seed is not None:
-            cmd.extend(["--seed", str(self.config.seed)])
+        if include_seed:
+            seed, chosen = self.run_seed()
+            cmd.extend(["--seed", str(seed)])
+            if not chosen:
+                cmd.append("--fresh-seed")
         if self.config.force_generate:
             cmd.append("--force-generate")
         if self.config.keep_unselected:
@@ -107,12 +121,28 @@ class GenerateStep(StepBase):
             cmd.extend(["--shape-seed", str(self.config.shape_seed)])
         return cmd
     
+    def run_seed(self) -> tuple[int, bool]:
+        """The run seed and whether it was chosen (--seed / HCT_SEED) rather than drawn.
+
+        Drawn once per step so every generation command of one run (each cpu and suite)
+        derives its cases from the same seed, and recorded in the step details."""
+        if self._run_seed is None:
+            from helia_core_tester.generation.test_ops import resolve_run_seed
+
+            self._run_seed = resolve_run_seed({"seed": self.config.seed})
+        return self._run_seed
+
     def _do_execute(self) -> StepResult:
-        """Execute TFLite model generation."""
+        """Execute test-case generation."""
+        seed, chosen = self.run_seed()
         if self.config.verbosity >= 1:
-            self.logger.info("Generating TensorFlow Lite models using pytest")
-        # Propagate an overridden CMSIS-NN root (--cmsis-nn-root) so LSTM
-        # unit-test data lookups (lstm_data.py) resolve against it instead of
+            self.logger.info("Generating reference models and test cases using pytest")
+            self.logger.info(
+                f"Run seed: {seed} ({'chosen' if chosen else 'fresh draw'}; pass --seed {seed} to reproduce"
+                f"{'' if chosen else ' or reuse'})"
+            )
+        # Propagate an overridden CMSIS-NN root (--cmsis-nn-root) so the
+        # temp-sizer probe and contract lookups resolve against it instead of
         # assuming the repo is nested under ns-cmsis-nn/Tests/. Uses
         # CMSIS_NN_ROOT (matching the CMake cache var name), distinct from
         # CMSIS_NN_REPO_ROOT which overrides helia-core-tester's own repo
@@ -141,12 +171,12 @@ class GenerateStep(StepBase):
                 )
             if self.config.verbosity >= 1:
                 self.logger.info(
-                    f"TFLite models generated successfully for targets={len(generation_targets)} cpus={','.join(self.config.cpus)}"
+                    f"Test cases generated successfully for targets={len(generation_targets)} cpus={','.join(self.config.cpus)}"
                 )
             return StepResult(
                 name=self.name,
                 status=StepStatus.SUCCESS,
-                message="TFLite models generated successfully",
+                message="Test cases generated successfully",
                 outputs={
                     "generated_tests_root": str(self._output_root())
                 },
@@ -157,12 +187,13 @@ class GenerateStep(StepBase):
                         "dtype": self.config.dtype_filter,
                         "name": self.config.name_filter,
                         "limit": self.config.limit,
-                        "seed": self.config.seed,
+                        "seed": seed,
+                        "seed_chosen": chosen,
                     },
                 },
             )
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
-            error_msg = f"Failed to generate TFLite models: {e}"
+            error_msg = f"Failed to generate test cases: {e}"
             self.logger.error(error_msg)
             gen_error = GenerationError(error_msg)
             gen_error.__cause__ = e

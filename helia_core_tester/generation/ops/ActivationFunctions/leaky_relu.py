@@ -4,9 +4,17 @@ LeakyRelu operation implementation with CMSIS-NN matching golden output.
 
 from typing import Dict, Any
 import numpy as np
-import tensorflow as tf
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.harness.simple import tensor_case_pool
+
+
+def leaky_relu_values(context: Dict[str, Any]) -> Dict[str, Any]:
+    """The kernel's scalars by parameter name: the alpha and identity requantisation pairs."""
+    return {"input_offset": context["input_offset"], "output_offset": context["output_offset"],
+            "output_multiplier_alpha": context["output_mult_alpha"], "output_shift_alpha": context["output_shift_alpha"],
+            "output_multiplier_identity": context["output_mult_identity"],
+            "output_shift_identity": context["output_shift_identity"], "output_size": context["output_size"]}
 
 
 class OpLeakyRelu(OperationBase):
@@ -14,15 +22,8 @@ class OpLeakyRelu(OperationBase):
     LeakyRelu operation.
     """
     
-    def build_keras_model(self) -> tf.keras.Model:
-        """Build Keras model for LeakyRelu operation."""
-        input_shape = self.desc['input_shape']
-        inputs = tf.keras.Input(shape=input_shape[1:], dtype=tf.float32, name='input')
-        # Get alpha from descriptor, default to 0.1
-        alpha = self.desc.get('alpha', 0.1)
-        x = tf.keras.layers.LeakyReLU(negative_slope=alpha)(inputs)
-        model = tf.keras.Model(inputs=inputs, outputs=x)
-        return model
+    def uses_reference(self) -> bool:
+        return True
 
     def _select_cmsis_leaky_relu_kernel(self) -> Dict[str, str]:
         """
@@ -52,106 +53,45 @@ class OpLeakyRelu(OperationBase):
         """
         Generate C and H files from templates for LeakyRelu operation.
         """
+        from helia_core_tester.generation.reference import policy
+        from helia_core_tester.generation.reference import quant as ref_quant
+        from helia_core_tester.generation.reference.bindings import get_bindings
+        from helia_core_tester.generation.reference.call import ReferenceCall
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
-        from helia_core_tester.generation.utils.tflite_utils import calculate_multiplier_shift
-        
+
         name = self.desc['name']
-        tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
-        
-        # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_leaky_relu_kernel()
-        
-        # Get alpha from descriptor (default 0.1)
         alpha = float(self.desc.get('alpha', 0.1))
-        
-        # Load LiteRT model for shape and quantization extraction
-        from helia_core_tester.generation.utils.litert_utils import get_operator_tensors_from_litert
-        model, subgraph = self.load_litert_model(str(tflite_path))
-        op_tensors = get_operator_tensors_from_litert(model, subgraph, 0)
-        
-        # Extract shapes from LiteRT
-        input_shape = op_tensors['inputs'][0]['shape']
-        output_shape = op_tensors['outputs'][0]['shape']
-        
-        # Ensure shapes are tuples
-        if input_shape is not None:
-            input_shape = tuple(input_shape)
-        if output_shape is not None:
-            output_shape = tuple(output_shape)
-        
-        # Extract quantization from LiteRT
-        input_quant = op_tensors['inputs'][0]['quantization']
-        output_quant = op_tensors['outputs'][0]['quantization']
-        
-        input_scale = input_quant.get('scale', 1.0)
-        input_zp = input_quant.get('zero_point', 0)
-        output_scale = output_quant.get('scale', 1.0)
-        output_zp = output_quant.get('zero_point', 0)
-        
-        # Handle per-channel quantization (convert to scalar)
-        if isinstance(input_scale, (list, np.ndarray)):
-            input_scale = float(input_scale[0])
-        if isinstance(input_zp, (list, np.ndarray)):
-            input_zp = int(input_zp[0])
-        if isinstance(output_scale, (list, np.ndarray)):
-            output_scale = float(output_scale[0])
-        if isinstance(output_zp, (list, np.ndarray)):
-            output_zp = int(output_zp[0])
-        
-        input_scale = float(input_scale)
-        input_zp = int(input_zp)
-        output_scale = float(output_scale)
-        output_zp = int(output_zp)
-        
+        input_shape = output_shape = tuple(int(d) for d in self.desc["input_shape"])
+        activation_dtype = self.desc.get('activation_dtype', 'S8')
+        kind = ref_quant.kind(activation_dtype)
+
         builder = TemplateContextBuilder()
-        
-        # Convert shapes to CMSIS dims
         input_dims = builder.nhwc_to_cmsis_dims(input_shape)
         output_dims = builder.nhwc_to_cmsis_dims(output_shape)
-        
-        # For LeakyReLU:
-        # Identity path (x >= 0): output = input, so effective_scale_identity = input_scale / output_scale
-        # Alpha path (x < 0): output = alpha * input, so effective_scale_alpha = (alpha * input_scale) / output_scale
-        effective_scale_identity = float(input_scale) / float(output_scale)
-        effective_scale_alpha = (alpha * float(input_scale)) / float(output_scale)
-        
-        # Calculate multipliers and shifts
-        mult_identity, shift_identity = calculate_multiplier_shift(effective_scale_identity)
-        mult_alpha, shift_alpha = calculate_multiplier_shift(effective_scale_alpha)
-        
-        # Generate input data and quantize
+
+        # The input covers the [-1, 1] draw; the output covers LeakyRelu of it.
+        in_quant = self.activation_quant("input", (-1.0, 1.0), kind)
+        out_quant = self.activation_quant("output", (min(0.0, -alpha), max(1.0, -alpha)), kind)
+        params = get_bindings().prepare("leaky_relu_prepare", {
+            "dtype": ref_quant.hct_dtype(activation_dtype), "alpha": alpha,
+            "input_scale": in_quant.scale, "input_zero_point": in_quant.zero_point,
+            "output_scale": out_quant.scale, "output_zero_point": out_quant.zero_point,
+        })
+        input_zp, output_zp = params["input_offset"], params["output_offset"]
+        mult_alpha, shift_alpha = params["alpha_multiplier"], params["alpha_shift"]
+        mult_identity, shift_identity = params["identity_multiplier"], params["identity_shift"]
+
         rng_state = self.rng.__getstate__()
         self.rng = np.random.default_rng(self.seed)
-        
         input_data = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(np.float32)
-        
         self.rng.__setstate__(rng_state)
-        
-        # Quantize inputs
-        if kernel_info["input_c_type"] == "int8_t":
-            np_in_dtype = np.int8
-            qmin, qmax = -128, 127
-        elif kernel_info["input_c_type"] == "int16_t":
-            np_in_dtype = np.int16
-            qmin, qmax = -32768, 32767
-        else:
-            raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
-        
-        input_q = np.round(input_data / float(input_scale) + float(input_zp)).astype(np.int32)
-        input_q = np.clip(input_q, qmin, qmax).astype(np_in_dtype)
-        
-        # Run inference using LiteRT interpreter
-        interpreter = self.load_litert_interpreter(str(tflite_path))
-        input_details = interpreter.get_input_details()
-        output_details = interpreter.get_output_details()
-        
-        interpreter.set_tensor(input_details[0]['index'], input_q)
-        interpreter.invoke()
-        output_data = interpreter.get_tensor(output_details[0]['index'])
-        output_data = np.array(output_data)
-        
+        input_q = policy.quantize(input_data, in_quant)
+        output_data = self.reference_golden(ReferenceCall(
+            f"leaky_relu_{kind}", params, {"input": np.ascontiguousarray(input_q)}, {"output": output_shape},
+            quant={"input": in_quant.to_json(), "output": out_quant.to_json(), "alpha": alpha},
+        ))
+
         # Format arrays
         input_array_str = builder.format_array_as_c_literal(input_q)
         expected_output_array_str = builder.format_array_as_c_literal(output_data)
@@ -178,28 +118,10 @@ class OpLeakyRelu(OperationBase):
             'kernel_fn': kernel_info["kernel_fn"],
         }
         
-        # Render templates
-        includes_api_dir = output_dir / "includes"
-        includes_api_dir.mkdir(parents=True, exist_ok=True)
-        
-        h_content = self.render_template("ActivationFunctions/leaky_relu/leaky_relu.h.j2", context)
-        h_path = includes_api_dir / f"{name}_leaky_relu.h"
-        with open(h_path, 'w') as f:
-            f.write(h_content)
-        
-        c_content = self.render_template("ActivationFunctions/leaky_relu/leaky_relu.c.j2", context)
-        c_path = output_dir / f"{name}_leaky_relu.c"
-        with open(c_path, 'w') as f:
-            f.write(c_content)
-        
-        cmake_context = {
-            'name': name,
-            'operator': self.desc.get('operator', 'LeakyRelu'),
-            'operator_name': 'leaky_relu'
-        }
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
-        cmake_path = output_dir / "CMakeLists.txt"
-        with open(cmake_path, 'w') as f:
-            f.write(cmake_content)
+        self.render_harness_case(
+            output_dir, stem="leaky_relu", context=context,
+            pool=tensor_case_pool(context, leaky_relu_values(context)),
+            validation_key="ActivationFunctions/leaky_relu/leaky_relu.c.j2", label="LeakyReLU", operator="LeakyRelu",
+        )
         
         print(f"Generated C/H files and CMakeLists.txt for {name}")

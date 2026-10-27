@@ -10,7 +10,6 @@ from helia_core_tester.generation.ops._shared.binary_basic_math_base import broa
 from helia_core_tester.generation.ops.BasicMathFunctions.add import OpAdd
 from helia_core_tester.generation.ops.BasicMathFunctions.mul import OpMul
 from helia_core_tester.generation.ops.BasicMathFunctions.sub import OpSub
-from helia_core_tester.generation.utils import litert_utils
 from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -51,10 +50,7 @@ def _header_array(header, name, dtype):
 
 
 def _generate(desc, out_dir):
-    op = OPS[desc["operator"]](desc, seed=SEED, target_cpu="cortex-m55")
-    model = op.build_keras_model() if op.needs_keras_model() else None
-    op.convert_to_tflite(model, str(out_dir / f"{desc['name']}.tflite"), SEED)
-    op.generate_c_files(out_dir)
+    OPS[desc["operator"]](dict(desc), seed=SEED, target_cpu="cortex-m55").generate_c_files(out_dir)
     return next((out_dir / "includes").glob(f"{desc['name']}*.h")).read_text()
 
 
@@ -133,16 +129,11 @@ def test_generated_dims_are_right_aligned(desc, tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("op", sorted(OPS))
-def test_inconsistent_model_output_shape_fails_closed(op, tmp_path, monkeypatch):
+def test_non_broadcastable_descriptor_fails_closed(op, tmp_path, monkeypatch):
+    # The output shape is derived from the inputs (no model to disagree with), so the
+    # only inconsistent descriptor left is one whose inputs do not broadcast.
     monkeypatch.setenv("CMSIS_NN_REPO_ROOT", str(ROOT))
-    desc = next(d for d in MIXED if d["operator"] == op and d.get("activation_dtype") == "S8")
-    real = litert_utils.get_operator_tensors_from_litert
-
-    def wrong_output(*args, **kwargs):
-        tensors = real(*args, **kwargs)
-        tensors["outputs"][0]["shape"] = [1, 2, 4, 3]
-        return tensors
-
-    monkeypatch.setattr(litert_utils, "get_operator_tensors_from_litert", wrong_output)
-    with pytest.raises(ValueError, match="is not the broadcast"):
+    desc = dict(next(d for d in MIXED if d["operator"] == op and d.get("activation_dtype") == "S8"))
+    desc["input_2_shape"] = [5, 4]
+    with pytest.raises(ValueError, match="broadcast"):
         _generate(desc, tmp_path)

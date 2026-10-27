@@ -11,7 +11,7 @@ import pytest
 from helia_core_tester.generation.io.descriptors import load_descriptor
 from helia_core_tester.generation.ops.BasicMathFunctions.sqrt import OpSqrt
 from helia_core_tester.generation.ops.BasicMathFunctions.rsqrt import OpRsqrt
-from helia_core_tester.generation.ops._shared.sqrt_float import sqrt_float_reference
+from helia_core_tester.tests.reference_models import sqrt_float_reference
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -83,38 +83,13 @@ def test_generate_every_float_descriptor(tmp_path, operator, cls):
         out = tmp_path / desc["name"]
         out.mkdir()
         op = cls(desc, seed=500, target_cpu="cortex-m55")
-        op.convert_to_tflite(None, str(out / (desc["name"] + ".tflite")), 500)
+        assert op.uses_reference()
         op.generate_c_files(out)
+        assert op.reference.entry == ("rsqrt_" if operator == "rsqrt" else "sqrt_") + desc["name"][-3:]
         source = (out / (desc["name"] + "_" + operator + ".c")).read_text()
         assert desc["required_kernel_symbols"][0] in source
         assert "HELIA_VALIDATE_EXPECTED_STATUS" in source
         assert "HELIA_VALIDATE_RETURN_FAILURES" in source
-
-
-@pytest.mark.parametrize("reciprocal,op_name", [(False, "SQRT"), (True, "RSQRT")])
-def test_positive_f32_reference_against_tflite(tmp_path, reciprocal, op_name):
-    from helia_core_tester.generation.utils.litert_builder import (
-        build_unary_same_shape_op,
-    )
-    from ai_edge_litert.interpreter import Interpreter, OpResolverType
-
-    values = np.array([0.25, 1, 2, 3, 4, 9, 17, 0.125, 65504], dtype=np.float32)
-    model = build_unary_same_shape_op(
-        op_name=op_name, input_shape=values.shape, dtype="float32"
-    )
-    interpreter = Interpreter(
-        model_content=model, experimental_op_resolver_type=OpResolverType.BUILTIN_REF
-    )
-    interpreter.allocate_tensors()
-    interpreter.set_tensor(interpreter.get_input_details()[0]["index"], values)
-    interpreter.invoke()
-    actual = (
-        interpreter.get_tensor(interpreter.get_output_details()[0]["index"])
-        .view(np.uint32)
-        .astype(np.int64)
-    )
-    expected = sqrt_float_reference(values.view(np.uint32), reciprocal).astype(np.int64)
-    assert np.max(np.abs(actual - expected)) <= int(reciprocal)
 
 
 @pytest.mark.parametrize("half", [False, True])
@@ -165,11 +140,13 @@ def test_generated_validator_detects_planted_faults(
     op = (OpRsqrt if reciprocal else OpSqrt)(desc, seed=500, target_cpu="cortex-m55")
     op.generate_c_files(tmp_path)
     (tmp_path / "arm_nnfunctions.h").write_text(
-        "#pragma once\n#include <stdint.h>\ntypedef _Float16 float16_t;\n"
+        "#pragma once\n#include <stdint.h>\ntypedef _Float16 float16_t;\ntypedef float float32_t;\n"
         "typedef int arm_cmsis_nn_status;\n#define ARM_CMSIS_NN_SUCCESS 0\n"
         "#define ARM_CMSIS_NN_ARG_ERROR -1\n"
         f"int {kernel}(const {ctype} *, {ctype} *, int32_t);\n"
     )
+    # The harness header also pulls in the types header; the stub prototypes live in one place.
+    (tmp_path / "arm_nn_types.h").write_text('#include "arm_nnfunctions.h"\n')
     (tmp_path / "arm_nnfunctions_flt.h").write_text(
         f'#include "arm_nnfunctions.h"\nint {kernel}(const {ctype} *, {ctype} *, int32_t);\n'
     )

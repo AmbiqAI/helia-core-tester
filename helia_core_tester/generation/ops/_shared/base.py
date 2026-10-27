@@ -1,19 +1,18 @@
 """
-Simplified base operation class for TFLite model generation.
-All operations inherit from this and implement build_keras_model().
+Base operation class: every operator renders its test case from templates or the generic harness,
+with the golden from the C reference library.
 """
 
 import json
 import numpy as np
-from typing import Callable, Dict, Any, List, Optional, Sequence, Tuple, Iterator
-from abc import ABC, abstractmethod
+from typing import Callable, Dict, Any, List, Optional, Sequence, Tuple
+from abc import ABC
 from pathlib import Path
 import jinja2
 
 from helia_core_tester.core.discovery import find_tester_templates_dir
 from helia_core_tester.generation.io.dtypes import (
     descriptor_dtype_to_c_type,
-    descriptor_dtype_to_litert_dtype,
     get_resolved_tensor_dtype,
     resolve_comparison,
 )
@@ -22,10 +21,22 @@ from helia_core_tester.generation.utils.template_context import TemplateContextB
 
 _JINJA2_ENV_CACHE: Dict[str, jinja2.Environment] = {}
 
-try:
-    import tensorflow as tf
-except Exception:
-    tf = None
+
+def template_environment(template_dir: str) -> jinja2.Environment:
+    """The one Jinja environment for a template directory (cached), with the
+    contract-rendering globals installed so every template, and every test that
+    renders one, sees the same `contract_call` / `contract_parity_assert`."""
+    if template_dir not in _JINJA2_ENV_CACHE:
+        from helia_core_tester.contract.render import contract_globals
+
+        env = jinja2.Environment(
+            loader=jinja2.FileSystemLoader(template_dir),
+            trim_blocks=True,
+            lstrip_blocks=True,
+        )
+        env.globals.update(contract_globals())
+        _JINJA2_ENV_CACHE[template_dir] = env
+    return _JINJA2_ENV_CACHE[template_dir]
 
 # Context keys whose values are bulk C array literals (large multi-line
 # strings holding the full input/expected-output tensor data as C source
@@ -62,13 +73,29 @@ def _is_json_serializable(value: Any) -> bool:
         return False
 
 
+def _render_pool_snippets(env, pool, render_context):
+    """A pool's C snippets (test prologue, extra checks, validation, pre- and post-passes, a
+    property case's test body and file-scope helpers) may use the validation context
+    (validation_report_limit, ...): a snippet containing `{{` is rendered against it before the
+    harness does; any other snippet is printed verbatim."""
+    from dataclasses import replace
+
+    fields = {}
+    for field in ("test_prologue", "extra_checks", "validation", "pre_call", "post_call", "test_body", "file_scope",
+                  "header_text"):
+        text = getattr(pool, field)
+        if text and "{{" in text:
+            fields[field] = env.from_string(text).render(**render_context)
+    return replace(pool, **fields) if fields else pool
+
+
 class OperationBase(ABC):
     """
     Base class for all CMSIS-NN operations.
-    
-    Each operation must implement:
-    1. build_keras_model() - Construct the Keras model
-    2. convert_to_tflite() - Convert model to TFLite with operation-specific quantization
+
+    Each operation implements generate_c_files(); a case with a golden records it through
+    reference_golden(), and the driver refuses one that recorded nothing unless the case is
+    status_only() or self_checking().
     """
     
     def __init__(self, desc: Dict[str, Any], seed: int = 1, target_cpu: str = "cortex-m55"):
@@ -82,11 +109,14 @@ class OperationBase(ABC):
         self.desc = desc
         self.seed = seed
         self.target_cpu = target_cpu
+        # "shipped": the kernels run as shipped (-Ofast, no coverage), so float goldens may reproduce their
+        # arithmetic; "bounded": any other build, exact goldens with derived bounds (kernel_faithful.py).
+        self.kernel_numerics = "shipped"
         self.rng = np.random.default_rng(seed)
-        self._litert_interpreter = None
-        self._tflite_path = None
         self._input_mode_consumed = False
         self._nonfinite_policy_applied = False
+        self._reference_call = None
+        self._golden = None
         declared = {**(desc.get("tensor_dtypes") or {})}
         declared.update({key: desc[key] for key in ("activation_dtype", "weight_dtype") if key in desc})
         storage_only = [role for role, dtype in declared.items() if str(dtype).upper() == "U16"]
@@ -96,26 +126,16 @@ class OperationBase(ABC):
                 "Dequantize bit-pattern entry only"
             )
 
-    @abstractmethod
-    def build_keras_model(self):
-        """
-        Build the Keras model for this operation.
-        
-        Returns:
-            Keras model ready for TFLite conversion
-        """
-        pass
+    def uses_reference(self) -> bool:
+        """True when this case's golden comes from the C reference library.
 
-    def round_float16_weights(self, model) -> None:
-        """Round an FP16 case's Keras weights and biases to float16 before conversion.
+        The driver refuses the case unless generate_c_files() recorded its ReferenceCall."""
+        return False
 
-        The kernel receives float16 weights and bias, so the golden output is computed from those
-        same rounded values rather than the float32 draw.
-        """
-        if model is None or str(self.desc.get("activation_dtype", "")).upper() != "FP16":
-            return
-        for layer in model.layers:
-            layer.set_weights([w.astype(np.float16).astype(np.float32) for w in layer.get_weights()])
+    @property
+    def reference(self):
+        """The ReferenceCall recorded by reference_golden(), or None."""
+        return self._reference_call
 
     def validate_descriptor(self) -> None:
         """Reject a descriptor whose fields disagree with each other, before any file is written.
@@ -124,12 +144,50 @@ class OperationBase(ABC):
         a schema cannot express.
         """
 
-    def needs_keras_model(self) -> bool:
-        """Return True if build_keras_model should be called for conversion."""
-        return True
+    def reference_golden(self, call):
+        """Run `call` on the C reference, record it as this case's golden, and return its output.
 
-    def allow_no_tflite(self) -> bool:
-        """Return True if this op can generate C/H without a .tflite."""
+        Every golden of a reference-backed operator goes through here, so the
+        record (reference.json, sidecar, manifest) always matches what was emitted."""
+        from helia_core_tester.generation.reference.call import ReferenceCall
+
+        if not isinstance(call, ReferenceCall):
+            raise TypeError(f"reference_golden takes a ReferenceCall, got {type(call).__name__}")
+        if self._reference_call is not None:
+            raise RuntimeError(f"{self.desc.get('name')}: a reference golden was already recorded for this case")
+        # A multi-output entry (Where: coordinates and a count) returns its outputs by name.
+        golden = call.output() if len(call.output_names) == 1 else call.run()
+        self._reference_call = call
+        self._golden = golden
+        return golden
+
+    def activation_quant(self, role: str, value_range: Tuple[float, float], kind: str):
+        """The descriptor's `quantization.<role>` block, else the policy over `value_range`."""
+        from helia_core_tester.generation.reference import policy
+
+        block = (self.desc.get("quantization") or {}).get(role)
+        return policy.descriptor_quant(block, kind) or policy.activation_quant(kind, value_range)
+
+    def reference_probe(self, operands: Sequence[np.ndarray]) -> np.ndarray:
+        """The recorded call re-run on replaced inputs (in the call's input order), for nonfinite masking."""
+        call = self._reference_call
+        if call is None:
+            raise RuntimeError("reference_probe needs a recorded reference call")
+        names = list(call.inputs)
+        if len(operands) != len(names):
+            raise ValueError(f"{call.entry}: {len(operands)} operands for inputs {names}")
+        replaced = {n: np.ascontiguousarray(np.asarray(o).reshape(call.inputs[n].shape), dtype=call.inputs[n].dtype)
+                    for n, o in zip(names, operands)}
+        return call.with_inputs(**replaced).output()
+
+    def status_only(self) -> bool:
+        """True for a case that asserts the kernel's returned status alone: it has no golden,
+        so it records no reference call."""
+        return False
+
+    def self_checking(self) -> bool:
+        """True for a property case whose kernel output is checked against another call of the
+        same kernel (no golden, so no reference call)."""
         return False
 
     def activation_name(self) -> str:
@@ -148,24 +206,9 @@ class OperationBase(ABC):
         """Return the C type for a tensor role."""
         return descriptor_dtype_to_c_type(self.tensor_dtype(role, default=default))
 
-    def tensor_litert_dtype(self, role: str, default: Optional[str] = None) -> str:
-        """Return the LiteRT builder dtype name for a tensor role."""
-        return descriptor_dtype_to_litert_dtype(self.tensor_dtype(role, default=default))
-
     def comparison_config(self) -> Dict[str, Any]:
         """Return the resolved comparison configuration for descriptor outputs."""
         return resolve_comparison(self.desc, self.resolved_tensor_dtypes())
-
-    def primary_execution_dtype(self) -> str:
-        """Return the primary execution dtype for unary ops and activation-like kernels."""
-        resolved = self.resolved_tensor_dtypes()
-        if "input" in resolved:
-            return resolved["input"]
-        return str(self.desc.get("activation_dtype", "S8")).upper()
-
-    def _write_tflite_bytes(self, out_path: str | Path, model_bytes: bytes) -> None:
-        """Write converted LiteRT bytes to disk."""
-        Path(out_path).write_bytes(model_bytes)
 
     def _seeded_rng(self) -> np.random.Generator:
         """Return a temporary deterministic RNG seeded from the op seed."""
@@ -626,15 +669,14 @@ class OperationBase(ABC):
         A one-signed operand cannot discriminate the sign-dependent kernel
         paths: the packed DSP loop of ns-cmsis-nn#343 dropped the sign of
         value + input_offset, and PReLU/min/max branch on it directly. Uniform
-        [-1, 1] float data plus a TFLite zero point does not guarantee the
+        [-1, 1] float data plus a policy zero point does not guarantee the
         span, so it is enforced rather than assumed (issue #81 property 2).
 
         ``steerable`` names the operands that are runtime inputs whose data the
         generator owns, i.e. the ones whose golden is recomputed from the array
         returned here. Two kinds of operand stay out of it and are check-only:
-        one baked into the TFLite model (a PReLU alpha), because the reference
-        interpreter would still use the model's copy; and one the descriptor
-        pins explicitly (``hint.extras.input_values``), because the pinned
+        a constant whose one-signedness the case is about (a PReLU alpha slope);
+        and one the descriptor pins explicitly (``hint.extras.input_values``), because the pinned
         values are the case. Either can only be waived with
         ``operand_sign_span_exempt``.
 
@@ -746,270 +788,6 @@ class OperationBase(ABC):
         return steered.reshape(array.shape)
 
     @staticmethod
-    def _quant_param_scalar(quant_params: Optional[Dict[str, Any]], key: str, default: float | int) -> float | int:
-        """Extract a scalar quantization value from LiteRT quantization metadata."""
-        if not quant_params:
-            return default
-        value = quant_params.get(key, default)
-        if isinstance(value, (list, tuple, np.ndarray)):
-            return default if len(value) == 0 else value[0]
-        return value
-    
-    def _apply_activation_quantization(self, converter) -> None:
-        """Set converter for activation-only quantization (S8 or S16) from descriptor."""
-        if tf is None:
-            raise ImportError("tensorflow is required for TFLite conversion")
-        activation_dtype = self.primary_execution_dtype()
-        if activation_dtype == "FP32":
-            converter.optimizations = []
-            return
-        if activation_dtype == "FP16":
-            converter.optimizations = []
-            converter.target_spec.supported_types = [tf.float16]
-            return
-        if activation_dtype == "S8":
-            converter.optimizations = [tf.lite.Optimize.DEFAULT]
-            converter.target_spec.supported_types = [tf.int8]
-            converter.inference_input_type = tf.int8
-            converter.inference_output_type = tf.int8
-        elif activation_dtype == "S16":
-            converter.optimizations = [tf.lite.Optimize.DEFAULT]
-            converter.target_spec.supported_ops = [
-                tf.lite.OpsSet.EXPERIMENTAL_TFLITE_BUILTINS_ACTIVATIONS_INT16_WEIGHTS_INT8,
-            ]
-            converter.inference_input_type = tf.int16
-            converter.inference_output_type = tf.int16
-        else:
-            raise NotImplementedError(f"Unsupported activation_dtype: {activation_dtype}")
-
-    def _representative_dataset_gen(self) -> Iterator[list]:
-        """Yield representative batches from descriptor (single- or dual-input)."""
-        for _ in range(100):
-            if "input_shape" in self.desc:
-                inp = self.rng.uniform(
-                    -1.0, 1.0, size=self.desc["input_shape"]
-                ).astype(np.float32)
-                yield [inp]
-            elif "input_1_shape" in self.desc and "input_2_shape" in self.desc:
-                inp1 = self.rng.uniform(
-                    -1.0, 1.0, size=self.desc["input_1_shape"]
-                ).astype(np.float32)
-                inp2 = self.rng.uniform(
-                    -1.0, 1.0, size=self.desc["input_2_shape"]
-                ).astype(np.float32)
-                yield [inp1, inp2]
-            else:
-                shape = self.desc.get("input_shape", [1, 1, 1, 1])
-                yield [self.rng.uniform(-1.0, 1.0, size=shape).astype(np.float32)]
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        """
-        Convert Keras model to TFLite with activation quantization.
-        Override in subclasses for weight/operation-specific quantization.
-        """
-        if tf is None:
-            raise ImportError("tensorflow is required for TFLite conversion")
-        converter = tf.lite.TFLiteConverter.from_keras_model(model)
-        self._apply_activation_quantization(converter)
-        converter.representative_dataset = self._representative_dataset_gen
-        tflite_model = converter.convert()
-        self._write_tflite_bytes(out_path, tflite_model)
-
-    def _convert_with_activation_quantization(
-        self,
-        model,
-        out_path: str,
-        *,
-        input_type=None,
-        output_type=None,
-        rep_seed: int,
-    ) -> None:
-        """
-        Convert Keras model to TFLite with activation quantization for S8/S16.
-        Allows overriding inference input/output types (e.g., float input or bool output).
-        """
-        if tf is None:
-            raise ImportError("tensorflow is required for TFLite conversion")
-        converter = tf.lite.TFLiteConverter.from_keras_model(model)
-
-        activation_dtype = self.primary_execution_dtype()
-        if activation_dtype == "FP32":
-            converter.optimizations = []
-            if input_type is not None:
-                converter.inference_input_type = input_type
-            if output_type is not None:
-                converter.inference_output_type = output_type
-        elif activation_dtype == "FP16":
-            converter.optimizations = []
-            converter.target_spec.supported_types = [tf.float16]
-            if input_type is not None:
-                converter.inference_input_type = input_type
-            if output_type is not None:
-                converter.inference_output_type = output_type
-        elif activation_dtype == "S8":
-            converter.optimizations = [tf.lite.Optimize.DEFAULT]
-            converter.target_spec.supported_types = [tf.int8]
-            converter.inference_input_type = input_type or tf.int8
-            converter.inference_output_type = output_type or tf.int8
-        elif activation_dtype == "S16":
-            converter.optimizations = [tf.lite.Optimize.DEFAULT]
-            converter.target_spec.supported_ops = [
-                tf.lite.OpsSet.EXPERIMENTAL_TFLITE_BUILTINS_ACTIVATIONS_INT16_WEIGHTS_INT8,
-            ]
-            converter.inference_input_type = input_type or tf.int16
-            converter.inference_output_type = output_type or tf.int16
-        else:
-            raise NotImplementedError(f"Unsupported activation dtype for conversion: {activation_dtype}")
-
-        def representative_data_gen():
-            if activation_dtype in {"FP32", "FP16"}:
-                return
-            for _ in range(100):
-                if "input_shape" in self.desc:
-                    inputs = self.rng.uniform(-1.0, 1.0, size=self.desc["input_shape"]).astype(np.float32)
-                    yield [inputs]
-                elif "input_1_shape" in self.desc and "input_2_shape" in self.desc:
-                    inputs1 = self.rng.uniform(-1.0, 1.0, size=self.desc["input_1_shape"]).astype(np.float32)
-                    inputs2 = self.rng.uniform(-1.0, 1.0, size=self.desc["input_2_shape"]).astype(np.float32)
-                    yield [inputs1, inputs2]
-                else:
-                    shape = self.desc.get("input_shape", [1, 1, 1, 1])
-                    yield [self.rng.uniform(-1.0, 1.0, size=shape).astype(np.float32)]
-        if activation_dtype not in {"FP32", "FP16"}:
-            converter.representative_dataset = representative_data_gen
-
-        tflite_model = converter.convert()
-        self._write_tflite_bytes(out_path, tflite_model)
-    
-    def load_litert_interpreter(self, tflite_path: str):
-        """
-        Load LiteRT interpreter from .tflite file.
-        
-        Args:
-            tflite_path: Path to .tflite file
-            
-        Returns:
-            LiteRT interpreter instance
-        """
-        from helia_core_tester.generation.utils.litert_utils import load_litert_interpreter
-        
-        if self._tflite_path != tflite_path or self._litert_interpreter is None:
-            interpreter = load_litert_interpreter(tflite_path)
-            self._litert_interpreter = interpreter
-            self._tflite_path = tflite_path
-        
-        return self._litert_interpreter
-    
-    def load_litert_model(self, tflite_path: str, subgraph_index: int = 0):
-        """
-        Load TFLite model using LiteRT schema.
-        
-        Args:
-            tflite_path: Path to .tflite file
-            subgraph_index: Index of subgraph to use (default: 0)
-            
-        Returns:
-            Tuple of (model, subgraph) from LiteRT schema
-        """
-        from helia_core_tester.generation.utils.litert_utils import load_litert_model
-        
-        if self._tflite_path != tflite_path or not hasattr(self, '_litert_model'):
-            model, subgraph = load_litert_model(tflite_path, subgraph_index)
-            self._litert_model = model
-            self._litert_subgraph = subgraph
-            self._tflite_path = tflite_path
-        
-        return self._litert_model, self._litert_subgraph
-    
-    def extract_quantization_params(self, tflite_path: str) -> Dict[str, Any]:
-        """
-        Extract quantization parameters from TFLite model using LiteRT schema.
-        
-        Args:
-            tflite_path: Path to .tflite file (required)
-            
-        Returns:
-            Dictionary with quantization parameters for input, output, and weights
-        """
-        from helia_core_tester.generation.utils.litert_utils import (
-            load_litert_model, get_operator_tensors_from_litert
-        )
-        
-        model, subgraph = load_litert_model(tflite_path)
-        
-        # Get first operator's tensors
-        if len(subgraph.operators) == 0:
-            raise ValueError("No operators found in model")
-        
-        op_tensors = get_operator_tensors_from_litert(model, subgraph, 0)
-        
-        # Get input quantization (first input tensor)
-        input_quant = None
-        if op_tensors['inputs']:
-            input_quant = op_tensors['inputs'][0]['quantization']
-        
-        # Get output quantization (first output tensor)
-        output_quant = None
-        if op_tensors['outputs']:
-            output_quant = op_tensors['outputs'][0]['quantization']
-        
-        # Get weight quantization (from weights tensor)
-        weight_quant = None
-        if op_tensors['weights'] is not None:
-            # Find the weight tensor in inputs
-            for input_tensor_info in op_tensors['inputs']:
-                if input_tensor_info['data'] is not None and len(input_tensor_info['shape']) > 1:
-                    weight_quant = input_tensor_info['quantization']
-                    break
-        
-        return {
-            'input': input_quant or {'scale': 1.0, 'zero_point': 0, 'per_channel': False},
-            'output': output_quant or {'scale': 1.0, 'zero_point': 0, 'per_channel': False},
-            'weight': weight_quant or input_quant or {'scale': 1.0, 'zero_point': 0, 'per_channel': False}
-        }
-    
-    def extract_weights_biases(self, tflite_path: str) -> Dict[str, Optional[np.ndarray]]:
-        """
-        Extract weights and biases from TFLite model using LiteRT schema.
-        
-        Args:
-            tflite_path: Path to .tflite file (required)
-            
-        Returns:
-            Dictionary with 'weights' and 'biases' keys
-        """
-        from helia_core_tester.generation.utils.litert_utils import (
-            load_litert_model, extract_weights_biases_from_litert
-        )
-        
-        model, subgraph = load_litert_model(tflite_path)
-        return extract_weights_biases_from_litert(model, subgraph, 0)
-
-    def load_primary_operator_tensors(self, tflite_path: str) -> Dict[str, Any]:
-        """Load the first operator tensors from a LiteRT model."""
-        from helia_core_tester.generation.utils.litert_utils import get_operator_tensors_from_litert
-
-        model, subgraph = self.load_litert_model(tflite_path)
-        if len(subgraph.operators) == 0:
-            raise ValueError("No operators found in model")
-        return get_operator_tensors_from_litert(model, subgraph, 0)
-    
-    def run_inference(self, tflite_path: str, input_data: np.ndarray) -> np.ndarray:
-        """
-        Run inference on model using LiteRT interpreter.
-        
-        Args:
-            tflite_path: Path to .tflite file
-            input_data: Input data as numpy array
-            
-        Returns:
-            Output data as numpy array
-        """
-        from helia_core_tester.generation.utils.litert_utils import run_inference_litert
-        
-        return run_inference_litert(tflite_path, input_data, subgraph_index=0)
-    
-    @staticmethod
     def _ensure_shape_tuple(shape: Any) -> Optional[Tuple[int, ...]]:
         """Normalize shape to tuple; return None if shape is None."""
         if shape is None:
@@ -1037,6 +815,15 @@ class OperationBase(ABC):
         call args, and tensor roles/tolerance structurally rather than
         re-parsing generated C source.
         """
+        from helia_core_tester.generation.harness import registry
+
+        routed = registry.lookup(c_tpl)
+        if routed is not None:
+            builder, label = routed
+            self.render_harness_case(output_dir, stem=op_suffix, context=context, pool=builder(context),
+                                     validation_key=c_tpl, label=label, operator=cmake_context["operator"],
+                                     sidecar=True)
+            return
         includes_api_dir = output_dir / "includes"
         includes_api_dir.mkdir(parents=True, exist_ok=True)
         name = context["name"]
@@ -1082,9 +869,20 @@ class OperationBase(ABC):
             "op_suffix": op_suffix,
             "kernel_fn": resolved_context.get("kernel_fn"),
             "comparison": comparison,
+            # The seeds the case's data was drawn from (run_seed is set by generate_test).
+            "run_seed": getattr(self, "run_seed", None),
+            "case_seed": self.seed,
             "resolved_tensor_dtypes": self.resolved_tensor_dtypes(),
             "scalars": scalars,
+            **({"reference": self._reference_record()} if self._reference_call is not None else {}),
         }
+
+    def _reference_record(self) -> Dict[str, Any]:
+        """Entry, parameters, ABI and library of the reference call behind the golden."""
+        from helia_core_tester.generation.reference.bindings import loaded_library_key
+
+        record = self._reference_call.provenance(library_key=loaded_library_key())
+        return {k: record[k] for k in ("entry", "abi_version", "params", "library_key")}
 
     def generate_input_data(self) -> np.ndarray:
         """
@@ -1101,6 +899,99 @@ class OperationBase(ABC):
             return self._seeded_rng().uniform(lo, hi, size=input_shape).astype(np.float32)
         return self._seeded_rng().integers(-32, 32, size=input_shape).astype(np.float32)
     
+    HARNESS_HEADER = "common/harness/harness.h.j2"
+    HARNESS_SOURCE = "common/harness/harness.c.j2"
+
+    def render_harness_files(
+        self,
+        output_dir: Path,
+        *,
+        stem: str,
+        context: Dict[str, Any],
+        pool: Any,
+        validation_key: str,
+        label: str,
+        sizer_fn: Any = "context",
+        sidecar: bool = False,
+    ) -> None:
+        """Write `includes/<name>_<stem>.h` and `<name>_<stem>.c` through the generic harness.
+
+        The header carries the pool's data; the source binds `context['kernel_fn']` and its
+        scratch query from the pool against the kernel contract. `validation_key` is the
+        operator's former template path, still the key of TemplateContextBuilder's validation
+        rules. A fault case is the same render from a pool carrying a FaultEdit. `sizer_fn`
+        overrides `context['kernel_get_buffer_size_fn']` (None: the case calls no sizer).
+        """
+        from helia_core_tester.contract import render as contract_render
+        from helia_core_tester.generation.harness import HarnessError
+        from helia_core_tester.generation.harness import plan_harness, render_declaration
+        from helia_core_tester.generation.kernel_dispatch import autovectorize_declines_if
+
+        from helia_core_tester.generation import conformance
+
+        pool = conformance.apply(pool, context, self.desc, self.target_cpu)
+        name = context["name"]
+        env = template_environment(str(find_tester_templates_dir()))
+        # Every refusal runs before anything is written, so a refused case leaves no partial output.
+        sizer = context.get("kernel_get_buffer_size_fn") if sizer_fn == "context" else sizer_fn
+        plan = plan_harness(
+            pool,
+            kernel_fn=context["kernel_fn"],
+            sizer_fn=sizer,
+            scratch_bytes=None if sizer else int(context.get("entry_scratch_bytes") or 0),
+            contracts=contract_render.load_current_contracts(),
+        )
+        expected = str(context.get("expected_status", "ARM_CMSIS_NN_SUCCESS"))
+        if plan.void_return and expected != "ARM_CMSIS_NN_SUCCESS":
+            raise HarnessError(f"{context['name']}: {context['kernel_fn']} returns void, so expected_status "
+                               f"{expected} can never be observed")
+        if plan.outputs:
+            for key, why in (("autovectorize_declines", "an autovectorize decline"),
+                             ("nonfinite_mask_array_str", "a nonfinite mask")):
+                if context.get(key):
+                    raise HarnessError(f"{context['name']}: output slots do not support {why}")
+            if expected != "ARM_CMSIS_NN_SUCCESS":
+                raise HarnessError(f"{context['name']}: output slots validate every slice, so expected_status "
+                                   f"{expected} is not supported")
+        render_context = TemplateContextBuilder.build_validation_context(validation_key, dict(context), self.desc)
+        # The build condition under which an `autovectorize_declines` entry declines (by precision).
+        render_context.setdefault("autovectorize_declines_if",
+                                  autovectorize_declines_if(str(context.get("input_dtype", ""))))
+        rendered_pool = _render_pool_snippets(env, pool, render_context)
+        includes_dir = output_dir / "includes"
+        includes_dir.mkdir(parents=True, exist_ok=True)
+        header = env.get_template(self.HARNESS_HEADER).render(
+            name=name, header_declarations=[render_declaration(d) for d in pool.header],
+            header_text=rendered_pool.header_text)
+        (includes_dir / f"{name}_{stem}.h").write_text(header)
+        if sidecar:
+            payload = self._build_generation_sidecar(stem, render_context)
+            (output_dir / f"{name}_{stem}.sidecar.json").write_text(
+                json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n")
+        render_context.update(harness=plan, pool=rendered_pool, header_name=f"{name}_{stem}.h", harness_label=label,
+                              harness_output_count=pool.output_count, harness_benchmark=pool.benchmark)
+        source = env.get_template(self.HARNESS_SOURCE).render(**render_context)
+        (output_dir / f"{name}_{stem}.c").write_text(source)
+
+    def render_harness_case(
+        self,
+        output_dir: Path,
+        *,
+        stem: str,
+        context: Dict[str, Any],
+        pool: Any,
+        validation_key: str,
+        label: str,
+        operator: str,
+        sidecar: bool = False,
+    ) -> None:
+        """render_harness_files plus the case's CMakeLists.txt, for the operators that used to
+        write their own template pair (and, with `sidecar`, the JSON sidecar)."""
+        self.render_harness_files(output_dir, stem=stem, context=context, pool=pool, validation_key=validation_key,
+                                  label=label, sidecar=sidecar)
+        cmake_context = {"name": context["name"], "operator": self.desc.get("operator", operator), "operator_name": stem}
+        (output_dir / "CMakeLists.txt").write_text(self.render_template("common/CMakeLists.txt.j2", cmake_context))
+
     def render_template(
         self, template_path: str, context: Dict[str, Any], return_context: bool = False
     ):
@@ -1113,14 +1004,7 @@ class OperationBase(ABC):
         what the generation sidecar is built from, so the sidecar is guaranteed
         to reflect what was actually rendered rather than a re-derived copy.
         """
-        template_dir = str(find_tester_templates_dir())
-        if template_dir not in _JINJA2_ENV_CACHE:
-            _JINJA2_ENV_CACHE[template_dir] = jinja2.Environment(
-                loader=jinja2.FileSystemLoader(template_dir),
-                trim_blocks=True,
-                lstrip_blocks=True,
-            )
-        env = _JINJA2_ENV_CACHE[template_dir]
+        env = template_environment(str(find_tester_templates_dir()))
         operator = str(self.desc.get("operator", ""))
         render_context = dict(context)
         if template_path.endswith(".c.j2"):
@@ -1137,74 +1021,6 @@ class OperationBase(ABC):
             except jinja2.TemplateNotFound:
                 continue
         raise jinja2.TemplateNotFound(template_path)
-    
-    def get_tensor_shapes_from_litert(self, tflite_path: str) -> Dict[str, Any]:
-        """
-        Get input and output tensor shapes using LiteRT schema.
-        
-        Args:
-            tflite_path: Path to .tflite file
-            
-        Returns:
-            Dictionary with 'input_shape' and 'output_shape' keys
-        """
-        from helia_core_tester.generation.utils.litert_utils import (
-            load_litert_model, get_operator_tensors_from_litert
-        )
-        
-        model, subgraph = load_litert_model(tflite_path)
-        
-        if len(subgraph.operators) == 0:
-            raise ValueError("No operators found in model")
-        
-        op_tensors = get_operator_tensors_from_litert(model, subgraph, 0)
-        
-        input_shape = op_tensors['inputs'][0]['shape'] if op_tensors['inputs'] else None
-        output_shape = op_tensors['outputs'][0]['shape'] if op_tensors['outputs'] else None
-        
-        if input_shape is None or output_shape is None:
-            raise ValueError("Missing shapes from LiteRT")
-        
-        return {
-            'input_shape': input_shape,
-            'output_shape': output_shape
-        }
-    
-    def get_shapes_from_litert(self, tflite_path: str, operator_index: int = 0) -> Dict[str, Any]:
-        """
-        Get input and output shapes using LiteRT schema (convenience wrapper).
-        
-        Args:
-            tflite_path: Path to .tflite file
-            operator_index: Index of the operator (default: 0)
-            
-        Returns:
-            Dictionary with 'input_shapes' (list) and 'output_shapes' (list) keys
-        """
-        from helia_core_tester.generation.utils.litert_utils import (
-            load_litert_model, get_input_output_shapes_from_litert
-        )
-        
-        model, subgraph = self.load_litert_model(tflite_path)
-        return get_input_output_shapes_from_litert(model, subgraph, operator_index)
-    
-    def get_quantization_from_litert(self, tflite_path: str, operator_index: int = 0) -> Dict[str, Any]:
-        """
-        Get input and output quantization parameters using LiteRT schema (convenience wrapper).
-        
-        Args:
-            tflite_path: Path to .tflite file
-            operator_index: Index of the operator (default: 0)
-            
-        Returns:
-            Dictionary with 'input_quantizations' (list) and 'output_quantizations' (list) keys
-        """
-        from helia_core_tester.generation.utils.litert_utils import (
-            get_input_output_quantization_from_litert
-        )
-        
-        model, subgraph = self.load_litert_model(tflite_path)
-        return get_input_output_quantization_from_litert(model, subgraph, operator_index)
     
     def generate_c_files(self, output_dir: Path) -> None:
         """

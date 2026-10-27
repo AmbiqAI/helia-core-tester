@@ -25,6 +25,7 @@ from helia_core_tester.generation.io.descriptors import descriptor_matches_op
 from helia_core_tester.mutation.catalog import MUTANTS_V1, get_mutants
 from helia_core_tester.mutation.runner import run_mutation_scoring
 from helia_core_tester.mutation.host_build import discover_cases
+from helia_core_tester.utils.host_compiler import HostCompilerMissing, find_host_cc
 
 app = typer.Typer(
     name="mutation",
@@ -186,13 +187,17 @@ def run(
     ),
     seed: int = typer.Option(500, "--seed", help="Generation seed (fixed for determinism)"),
     jobs: int = typer.Option(8, "--jobs", help="Parallel compile/run jobs"),
-    cc: str = typer.Option("gcc", "--cc", help="Host C compiler"),
+    cc: Optional[str] = typer.Option(None, "--cc", help="Host C compiler (default: $HCT_HOST_CC, then cc/gcc/clang)"),
     fail_on_survivor: bool = typer.Option(False, "--fail-on-survivor", help="Exit nonzero if any mutant survives"),
 ):
     """Score the generated cases against the mutant catalog on the host."""
     tester_root = _tester_root()
-    if shutil.which(cc) is None:
-        typer.echo(f"✗ host compiler '{cc}' not found", err=True)
+    try:
+        cc = shutil.which(cc) if cc else find_host_cc()
+        if cc is None:
+            raise HostCompilerMissing("--cc is not an executable on PATH")
+    except HostCompilerMissing as exc:
+        typer.echo(f"✗ host compiler not found: {exc}", err=True)
         raise typer.Exit(1)
 
     mutant_list = get_mutants([m.strip() for m in mutants.split(",")] if mutants else None)
