@@ -30,6 +30,13 @@ class OpConvolve(OperationBase):
         "null_weight_sum_ctx",
         "zero_stride",
         "channel_group_mismatch",
+        "output_group_mismatch",
+        "negative_batch",
+        "batch_mismatch",
+        "packed_grouped",
+        "zero_output_batch",
+        "oversized_kernel_area",
+        "oversized_patch",
         "null_input",
         "null_output",
         "invalid_layout",
@@ -87,13 +94,38 @@ class OpConvolve(OperationBase):
         if kind in self.S16_GROUP_FAULTS and kernel_fn != "arm_convolve_wrapper_s16":
             raise self.fault_unreachable(kind, f"{kernel_fn} is not covered by the s16 whole-group rule")
         if context["float_kernel"]:
-            if kind in ("null_ctx_buf", "null_weight_sum_ctx", "zero_stride", "channel_group_mismatch"):
+            grouped_f16_faults = {
+                "channel_group_mismatch",
+                "output_group_mismatch",
+                "negative_batch",
+                "batch_mismatch",
+                "packed_grouped",
+                "zero_output_batch",
+                "oversized_kernel_area",
+                "oversized_patch",
+            }
+            if kind in grouped_f16_faults and kernel_fn in {
+                "arm_convolve_f16",
+                "arm_convolve_wrapper_f16",
+            }:
+                return
+            if (
+                kind in ("null_ctx_buf", "null_weight_sum_ctx", "zero_stride")
+                or kind in grouped_f16_faults
+            ):
                 raise self.fault_unreachable(kind, f"{kernel_fn} has no such guard")
             if kind == "invalid_layout" and not context["kernel_needs_layout"]:
-                raise self.fault_unreachable(kind, f"{kernel_fn} takes no layout argument")
+                raise self.fault_unreachable(
+                    kind, f"{kernel_fn} takes no layout argument"
+                )
             return
+        if kind in ("output_group_mismatch", "negative_batch", "batch_mismatch",
+                    "packed_grouped", "zero_output_batch", "oversized_kernel_area", "oversized_patch"):
+            raise self.fault_unreachable(kind, f"{kernel_fn} has no such grouped-float guard")
         if kind in ("null_input", "null_output", "invalid_layout"):
-            raise self.fault_unreachable(kind, f"{kernel_fn} does not check pointers or layout")
+            raise self.fault_unreachable(
+                kind, f"{kernel_fn} does not check pointers or layout"
+            )
         if kind == "null_weight_sum_ctx" and kernel_fn != "arm_convolve_wrapper_s8":
             raise self.fault_unreachable(kind, f"{kernel_fn} takes no weight-sum context")
         if kind == "partial_filter_group" and int(context["filter_dims"]["c"]) < 2:
@@ -101,7 +133,9 @@ class OpConvolve(OperationBase):
         if kind == "output_not_whole_groups" and int(context["input_dims"]["c"]) < 2 * int(context["filter_dims"]["c"]):
             raise self.fault_unreachable(kind, "needs at least two groups")
         if kind == "channel_group_mismatch" and kernel_fn == "arm_convolve_wrapper_s4":
-            raise self.fault_unreachable(kind, f"{kernel_fn} has no group divisibility guard")
+            raise self.fault_unreachable(
+                kind, f"{kernel_fn} has no group divisibility guard"
+            )
         input_dims = context["input_dims"]
         filter_dims = context["filter_dims"]
         conv_params = context["conv_params"]
@@ -116,7 +150,8 @@ class OpConvolve(OperationBase):
             )
             if not is_1xn:
                 raise self.fault_unreachable(
-                    kind, "only the s8 1xN route (input h == 1, filter 1xN with N > 1, dilation.w == 1) checks stride.w"
+                    kind,
+                    "only the s8 1xN route (input h == 1, filter 1xN with N > 1, dilation.w == 1) checks stride.w",
                 )
 
     @staticmethod
@@ -144,23 +179,23 @@ class OpConvolve(OperationBase):
 
     def needs_keras_model(self) -> bool:
         return str(self.desc.get("weight_dtype", "S8")).upper() != "S4"
-    
+
     def build_keras_model(self) -> tf.keras.Model:
         input_shape = self.desc['input_shape']
         filter_shape = self.desc['filter_shape']
         groups = int(self.desc.get('groups', 1))
-        
+
         tf.keras.utils.set_random_seed(17)
-        
+
         padding = self.desc.get('padding', 'valid')
         if padding is not None:
             padding = str(padding).lower()
         else:
             padding = 'valid'
-        
+
         activation = self.activation_name()
         act = None if activation == 'NONE' else activation.lower()
-        
+
         dilation = self.desc.get('dilation', [1, 1])
         if isinstance(dilation, (int, float)):
             dilation = [int(dilation), int(dilation)]
@@ -168,7 +203,7 @@ class OpConvolve(OperationBase):
             if len(dilation) != 2:
                 raise ValueError(f"Invalid dilation: {dilation}. Must be 2 integers or a single integer")
             dilation = [int(dilation[0]), int(dilation[1])]
-        
+
         if any(d <= 0 for d in dilation):
             raise ValueError(f"Invalid dilation values: {dilation}. Must be positive integers")
 
@@ -189,14 +224,14 @@ class OpConvolve(OperationBase):
             raise ValueError(
                 f"Convolve output filters ({output_filters}) must be divisible by groups ({groups})"
             )
-        
+
         x = tf.keras.Input(
             shape=input_shape[1:],
             batch_size=input_shape[0] if len(input_shape) > 0 else None,
             dtype=tf.float32,
             name='input'
         )
-        
+
         use_bias = self.desc.get('use_bias', True)
         # A zero bias_initializer produces an all-zero bias tensor, which the
         # TFLite converter's constant-folding optimizer strips from the graph
@@ -247,7 +282,7 @@ class OpConvolve(OperationBase):
             bias_initializer=bias_initializer,
             name='conv_2d'
         )(x)
-        
+
         model = tf.keras.Model(inputs=[x], outputs=conv, name='conv_2d')
         return model
 
@@ -327,7 +362,7 @@ class OpConvolve(OperationBase):
             converter.target_spec.supported_types = [tf.float16]
         elif activation_dtype == 'FP32':
             converter.optimizations = []
-        
+
         def representative_data_gen():
             rep_rng = np.random.default_rng(42)
             for _ in range(100):
@@ -341,9 +376,9 @@ class OpConvolve(OperationBase):
                     inputs1 = rep_rng.integers(-32, 32, size=self.desc['input_1_shape']).astype(np.float32)
                     inputs2 = rep_rng.integers(-32, 32, size=self.desc['input_2_shape']).astype(np.float32)
                     yield [inputs1, inputs2]
-        
+
         converter.representative_dataset = representative_data_gen
-        
+
         tflite_model = converter.convert()
         with open(out_path, 'wb') as f:
             f.write(tflite_model)
@@ -449,15 +484,15 @@ class OpConvolve(OperationBase):
             get_tensor_shape_from_litert,
             get_tensor_quantization_from_litert,
         )
-        
+
         model, subgraph = load_litert_model(str(tflite_path))
-        
+
         # Get operator tensors from the actual CONV_2D op.
         # Dilated graphs can be lowered as SpaceToBatch -> Conv2D -> BatchToSpace,
         # so selecting op index 0 can bind to the wrong tensors.
         if len(subgraph.operators) == 0:
             raise ValueError("No operators found in model")
-        
+
         conv_op_index = 0
         bts_op_index = None
         hoisted_bias_data = None
@@ -533,13 +568,13 @@ class OpConvolve(OperationBase):
             hoisted_bias_data = None
 
         op_tensors = get_operator_tensors_from_litert(model, subgraph, conv_op_index)
-        
+
         # Extract shapes from LiteRT
         if not op_tensors['inputs']:
             raise ValueError("No input tensors found")
         if not op_tensors['outputs']:
             raise ValueError("No output tensors found")
-        
+
         input_tensor = None
         output_tensor = None
         if subgraph.inputs is not None and len(subgraph.inputs) > 0:
@@ -568,7 +603,7 @@ class OpConvolve(OperationBase):
 
         input_shape = tuple(input_shape)
         output_shape = tuple(output_shape)
-        
+
         # Extract quantization parameters from LiteRT
         if expected_tensor is not None:
             input_quant = (
@@ -583,20 +618,20 @@ class OpConvolve(OperationBase):
         else:
             input_quant = op_tensors['inputs'][0]['quantization']
             output_quant = op_tensors['outputs'][0]['quantization']
-        
+
         # Find weight quantization (from weight tensor in inputs)
         weight_quant = None
         for input_tensor_info in op_tensors['inputs']:
             if input_tensor_info['data'] is not None and len(input_tensor_info['shape']) > 1:
                 weight_quant = input_tensor_info['quantization']
                 break
-        
+
         quant_params = {
             'input': input_quant or {'scale': 1.0, 'zero_point': 0, 'per_channel': False},
             'output': output_quant or {'scale': 1.0, 'zero_point': 0, 'per_channel': False},
             'weight': weight_quant or input_quant or {'scale': 1.0, 'zero_point': 0, 'per_channel': False}
         }
-        
+
         # Extract weights and biases from LiteRT
         weights = op_tensors['weights']
         biases = op_tensors['biases']
@@ -670,7 +705,7 @@ class OpConvolve(OperationBase):
             input_quant = quant_params['input']
             output_quant = quant_params['output']
             weight_quant = quant_params.get('weight', output_quant)
-            
+
             input_scale = input_quant.get('scale', 1.0)
             if isinstance(input_scale, (list, np.ndarray)):
                 input_scale = float(input_scale[0])
@@ -685,7 +720,7 @@ class OpConvolve(OperationBase):
 
             weight_scale = weight_quant.get('scale', 1.0)
             per_channel = bool(weight_quant.get('per_channel', False))
-            
+
             # Calculate effective scales: (input_scale * weight_scale) / output_scale
             if per_channel and isinstance(weight_scale, np.ndarray):
                 # In double precision, as TFLite computes it; the weight scales are float32.
@@ -718,7 +753,7 @@ class OpConvolve(OperationBase):
                 multiplier_raw, shift_raw = calculate_multiplier_shift(effective_scale)
                 quant_params_dict['multiplier_raw'] = multiplier_raw
                 quant_params_dict['shift_raw'] = shift_raw
-            
+
             quant_params_dict['per_channel'] = per_channel
 
         # Generate input data and quantize to the interpreter's real input dtype
@@ -826,7 +861,7 @@ class OpConvolve(OperationBase):
             )
         else:
             buffer_size_max = builder.calculate_buffer_size_max(
-                input_dims, filter_dims, output_dims, 
+                input_dims, filter_dims, output_dims,
                 output_dtype=activation_dtype
             )
 
