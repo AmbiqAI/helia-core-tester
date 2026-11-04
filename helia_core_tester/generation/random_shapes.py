@@ -24,7 +24,9 @@ from helia_core_tester.hardware.generated_test_bridge import (
     _depthwise_s8_scratch_bytes,
     _with_weight_sums,
 )
-from helia_core_tester.hardware.wrapper_route import FAST_S16_TAPS, conv_route, dw_route, dw_s16_route
+from helia_core_tester.hardware.wrapper_route import (
+    CHANNELWISE, FAST_S16_TAPS, PLANAR, conv_route, dw_route, dw_s16_route, opt_variant,
+)
 from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
 # Per-case cap; keeps a 50-case stream short.
@@ -65,8 +67,8 @@ class Generator:
     stream: int
     routes: Callable[[bool], list[str]]
     draw: Callable
-    # Per-index targets; overrides route cycling.
-    plan: Optional[Callable[[int], list[str]]] = None
+    # Per-index targets from (n, routes).
+    plan: Optional[Callable[[int, list[str]], list[str]]] = None
     suite: str = "int"
     # Draws whole cases; no layer.
     layerless: bool = False
@@ -218,6 +220,37 @@ def _off_fast_path(rng: np.random.Generator, layer: Layer) -> Layer:
     return _maybe_dilate(rng, layer)
 
 
+def _tcn_variant(layer: Layer) -> str:
+    """The MVE opt algorithm for a layer."""
+    i, f = (1, layer.h, layer.w, layer.cin), (1, layer.kh, layer.kw, layer.cout)
+    o, stride, dil = (1, *layer.out_hw(), layer.cout), (layer.sh, layer.sw), (layer.dh, layer.dw)
+    return opt_variant(i, f, o, stride, layer.pads(), dil, layer.mult, True)
+
+
+def _dw_tcn(rng: np.random.Generator, variant: str) -> Layer:
+    """A dilated 1D TCN layer for one variant."""
+    lo, hi = (8, 40) if variant == PLANAR else (24, 96)
+    for _ in range(MAX_TRIES):
+        k, d = int(rng.choice([3, 5, 7, 7, 9])), int(rng.choice([1, 2, 4, 8, 16]))
+        w = 240 if rng.random() < 0.5 else int(rng.integers(64, 321))
+        cin = _channels(rng, lo, hi)
+        pad = "SAME" if rng.random() < 0.8 else "VALID"
+        layer = Layer(1, w, cin, cin, 1, k, dw=d, padding=pad)
+        if min(layer.out_hw()) >= 1 and _tcn_variant(layer) == variant:
+            return layer
+    raise RuntimeError(f"No TCN shape for {variant}")
+
+
+# TCN edges: sleepkit and heartkit layers.
+DW_DRAWS = {"tcn_planar": lambda rng: _dw_tcn(rng, PLANAR), "tcn_channelwise": lambda rng: _dw_tcn(rng, CHANNELWISE)}
+DW_EDGES = tuple(DW_DRAWS)
+
+
+def _dw_draw(rng: np.random.Generator, target: str) -> Layer:
+    edge = DW_DRAWS.get(target)
+    return edge(rng) if edge else _dw_layer(rng, target)
+
+
 def _dw16_layer(rng: np.random.Generator, route: str) -> Layer:
     """An s16 depthwise layer aimed at one route."""
     pad = _padding(rng)
@@ -263,14 +296,14 @@ def tc16_edge_count(n: int) -> int:
     return edge_count(n, len(TC16_EDGES))
 
 
-def _edge_plan(n: int, route: str, edges: tuple[str, ...]) -> list[str]:
-    """Mixed draws, then edge categories."""
+def _edge_plan(n: int, routes: list[str], edges: tuple[str, ...]) -> list[str]:
+    """Route cycling, then edge categories."""
     count = edge_count(n, len(edges))
-    return [route] * (n - count) + [edges[i % len(edges)] for i in range(count)]
+    return [routes[i % len(routes)] for i in range(n - count)] + [edges[i % len(edges)] for i in range(count)]
 
 
-def _tc16_plan(n: int) -> list[str]:
-    return _edge_plan(n, TC16_ROUTE, TC16_EDGES)
+def _tc16_plan(n: int, routes: list[str]) -> list[str]:
+    return _edge_plan(n, routes, TC16_EDGES)
 
 
 def _glorot_limit(layer: Layer) -> float:
@@ -607,7 +640,7 @@ def _tcf_gen(dtype: str, stream: int) -> Generator:
     route = TCF_ROUTES[dtype]
     return Generator(
         f"tcf{dtype[2:]}", "ConvolutionFunctions/transpose_conv_float.yaml", stream, lambda mve: [route],
-        _tcf_draw(dtype), lambda n: _edge_plan(n, route, TCF_EDGES), "float",
+        _tcf_draw(dtype), lambda n, routes: _edge_plan(n, routes, TCF_EDGES), "float",
     )
 
 
@@ -709,14 +742,17 @@ def _sig_gen(dtype: str, stream: int) -> Generator:
     route = ACT_ROUTES[dtype]
     return Generator(
         f"sig{dtype[2:]}", "ActivationFunctions/nn_activation_float.yaml", stream, lambda mve: [route],
-        _sig_draw(dtype), lambda n: _edge_plan(n, route, SIG_EDGES), "float", layerless=True,
+        _sig_draw(dtype), lambda n, routes: _edge_plan(n, routes, SIG_EDGES), "float", layerless=True,
     )
 
 
 # Register new random-shape ops here.
 GENERATORS: dict[tuple[str, str], Generator] = {
     ("Convolve", "S8"): Generator("conv", "ConvolutionFunctions/convolve.yaml", 0, _conv_routes, _conv_layer),
-    ("DepthwiseConv", "S8"): Generator("dw", "ConvolutionFunctions/depthwise_conv.yaml", 1, _dw_routes, _dw_layer),
+    ("DepthwiseConv", "S8"): Generator(
+        "dw", "ConvolutionFunctions/depthwise_conv.yaml", 1, _dw_routes, _dw_draw,
+        lambda n, routes: _edge_plan(n, routes, DW_EDGES),
+    ),
     ("DepthwiseConv", "S16"): Generator("dw16", "ConvolutionFunctions/depthwise_conv.yaml", 2, _dw16_routes, _dw16_layer),
     ("TransposeConv", "S16"): Generator(
         "tc16", "ConvolutionFunctions/transpose_conv.yaml", 3, _tc16_routes, _tc16_layer, _tc16_plan,
@@ -727,7 +763,7 @@ GENERATORS: dict[tuple[str, str], Generator] = {
     ("NNActivationFloat", "FP16"): _sig_gen("FP16", 7),
     ("Softmax", "S8"): Generator(
         "sm8", "SoftmaxFunctions/softmax.yaml", 8, lambda mve: [SOFTMAX_ROUTE], _sm_draw,
-        lambda n: _edge_plan(n, SOFTMAX_ROUTE, SOFTMAX_EDGES), layerless=True,
+        lambda n, routes: _edge_plan(n, routes, SOFTMAX_EDGES), layerless=True,
     ),
 }
 # (op, dtype) keys, in draw order.
@@ -946,7 +982,7 @@ def sample_op(key: tuple[str, str], n: int, seed: int, cpu: str, workspace: int)
     # One stream per op keeps ops independent.
     rng = np.random.default_rng([seed, gen.stream])
     routes, draw = gen.routes(mve), gen.draw
-    targets = gen.plan(n) if gen.plan else routes
+    targets = gen.plan(n, routes) if gen.plan else routes
     cases = []
     for index in range(n):
         target = targets[index % len(targets)]
@@ -963,9 +999,9 @@ def sample_op(key: tuple[str, str], n: int, seed: int, cpu: str, workspace: int)
             if oh < 1 or ow < 1:
                 continue
             route = layer_route(op, layer, mve, dtype)
-            # Planned edges keep the op's one route.
+            # Edges take any of the op's routes.
             hit = route == target or (target == DW_AS_CONV and route in CONV_ROUTES) or (
-                gen.plan is not None and route in routes)
+                target not in routes and route in routes)
             if hit and layer_macs(op, layer) <= MAX_MACS and footprint(op, layer, dtype) <= workspace:
                 break
         else:

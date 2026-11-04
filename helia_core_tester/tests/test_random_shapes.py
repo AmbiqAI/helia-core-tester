@@ -307,17 +307,29 @@ def test_streams_and_tags_unique() -> None:
 
 
 @pytest.mark.parametrize(("cpu", "digest"), [
-    ("cortex-m55", "0e7ab2bbc4ec98883baf528c60ff3f236e7b3c4920c281b11e70e671e3a7c721"),
-    ("cortex-m4", "ae31993618c4838acbcd2d8a02d22cf9a3378c4206fe49e8d1ce250c25817cb0"),
+    ("cortex-m55", "77c022d33d75a242a2d591600344a641f054e11f94a63dd6bc72b0a707e32921"),
+    ("cortex-m4", "2ef77095218dc8beb52499011a46d376bd2b2504fa0438792c514b72327543ee"),
 ])
 def test_s8_hidden_sets_unchanged(cpu: str, digest: str) -> None:
     import hashlib
 
     import yaml
 
-    # Digests pinned before s16 joined.
-    cases = rs.hidden_cases(8, SECRET.encode(), cpu, (CONV, DW))
+    # Non-edge draws, pinned before TCN edges.
+    cases = [c for c in rs.hidden_cases(8, SECRET.encode(), cpu, (CONV, DW)) if c.get("edge") not in rs.DW_EDGES]
     assert hashlib.sha256(yaml.safe_dump_all(cases, sort_keys=False).encode()).hexdigest() == digest
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_dw_tcn_edges(seed: int) -> None:
+    cases = rs.sample_cases(12, seed, ops=(DW,))
+    count = rs.edge_count(12, len(rs.DW_EDGES))
+    assert [c.get("edge") for c in cases] == [None] * (12 - count) + [rs.DW_EDGES[i % 2] for i in range(count)]
+    for case in cases[12 - count:]:
+        layer = _layer(case)
+        assert (layer.h, layer.kh, layer.mult, layer.sh, layer.sw) == (1, 1, 1, 1, 1)
+        assert case["expected_route"] == "arm_depthwise_conv_s8_opt"
+        assert rs._tcn_variant(layer) == {"tcn_planar": rs.PLANAR, "tcn_channelwise": rs.CHANNELWISE}[case["edge"]]
 
 
 @pytest.mark.parametrize("cpu", ["cortex-m55", "cortex-m4"])
