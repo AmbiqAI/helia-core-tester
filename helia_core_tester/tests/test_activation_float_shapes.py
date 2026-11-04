@@ -13,7 +13,7 @@ from helia_core_tester.generation import random_shapes as rs
 SIG32, SIG16 = ("NNActivationFloat", "FP32"), ("NNActivationFloat", "FP16")
 SECRET = b"s3cret-hidden-seed-0123"
 # Every hidden set drawn before sigmoid joined.
-PRIOR = tuple(key for key in rs.OPS if key[0] not in ("NNActivationFloat", "Softmax"))
+PRIOR = tuple(key for key in rs.OPS if key[0] not in ("NNActivationFloat", "Softmax") and key != ("TransposeConv", "S8"))
 
 
 def _digest(cases: list[dict]) -> str:

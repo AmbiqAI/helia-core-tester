@@ -105,8 +105,9 @@ def test_config_dw_s16_hidden() -> None:
 def test_config_tc16_hidden() -> None:
     c = _campaign(op="TransposeConv", dtype="S16", hidden_shapes=6, legs=["tcm"])
     assert (c.op, c.dtype, c.hidden_shapes, c.legs) == ("TransposeConv", "S16", 6, ("tcm",))
+    assert _campaign(op="TransposeConv", dtype="S8", hidden_shapes=6, legs=["tcm"]).dtype == "S8"
     with pytest.raises(ConfigError, match="hidden_shapes: No random shapes"):
-        _campaign(op="TransposeConv", dtype="S8", hidden_shapes=6)
+        _campaign(op="TransposeConv", dtype="S4", hidden_shapes=6)
 
 
 def test_config_fc_without_hidden() -> None:
