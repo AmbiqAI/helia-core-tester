@@ -414,6 +414,158 @@ dilation:
 - 1
 - 16
 ---
+# sleepkit-stage TCN layers, one per (channels, dilation): W240, k7,
+# SAME, RELU6. Up to c32 d4 runs opt planar; c32 d8 and up runs channelwise.
+operator: DepthwiseConv
+name: depthwise_conv_sleepkit_tcn_c14_d1_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: RELU6
+hint:
+  call_style: per_tensor
+input_shape: [1, 1, 240, 14]
+filter_shape: [1, 7, 14, 1]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation: [1, 1]
+---
+operator: DepthwiseConv
+name: depthwise_conv_sleepkit_tcn_c16_d1_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: RELU6
+hint:
+  call_style: per_tensor
+input_shape: [1, 1, 240, 16]
+filter_shape: [1, 7, 16, 1]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation: [1, 1]
+---
+operator: DepthwiseConv
+name: depthwise_conv_sleepkit_tcn_c16_d2_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: RELU6
+hint:
+  call_style: per_tensor
+input_shape: [1, 1, 240, 16]
+filter_shape: [1, 7, 16, 1]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation: [1, 2]
+---
+operator: DepthwiseConv
+name: depthwise_conv_sleepkit_tcn_c24_d2_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: RELU6
+hint:
+  call_style: per_tensor
+input_shape: [1, 1, 240, 24]
+filter_shape: [1, 7, 24, 1]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation: [1, 2]
+---
+operator: DepthwiseConv
+name: depthwise_conv_sleepkit_tcn_c24_d4_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: RELU6
+hint:
+  call_style: per_tensor
+input_shape: [1, 1, 240, 24]
+filter_shape: [1, 7, 24, 1]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation: [1, 4]
+---
+operator: DepthwiseConv
+name: depthwise_conv_sleepkit_tcn_c32_d4_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: RELU6
+hint:
+  call_style: per_tensor
+input_shape: [1, 1, 240, 32]
+filter_shape: [1, 7, 32, 1]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation: [1, 4]
+---
+operator: DepthwiseConv
+name: depthwise_conv_sleepkit_tcn_c32_d8_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: RELU6
+hint:
+  call_style: per_tensor
+input_shape: [1, 1, 240, 32]
+filter_shape: [1, 7, 32, 1]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation: [1, 8]
+---
+operator: DepthwiseConv
+name: depthwise_conv_sleepkit_tcn_c48_d8_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: RELU6
+hint:
+  call_style: per_tensor
+input_shape: [1, 1, 240, 48]
+filter_shape: [1, 7, 48, 1]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation: [1, 8]
+---
+operator: DepthwiseConv
+name: depthwise_conv_sleepkit_tcn_c48_d16_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: RELU6
+hint:
+  call_style: per_tensor
+input_shape: [1, 1, 240, 48]
+filter_shape: [1, 7, 48, 1]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation: [1, 16]
+---
+operator: DepthwiseConv
+name: depthwise_conv_sleepkit_tcn_c64_d16_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: RELU6
+hint:
+  call_style: per_tensor
+input_shape: [1, 1, 240, 64]
+filter_shape: [1, 7, 64, 1]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation: [1, 16]
+---
 operator: DepthwiseConv
 name: depthwise_conv_dilated_1d_k5_d4_c17_s8
 activation_dtype: S8
