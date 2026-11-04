@@ -37,7 +37,7 @@ def test_sigmoid_keys_and_streams() -> None:
 def test_prior_hidden_sets_unchanged(cpu: str, n: int, digest: str) -> None:
     # Pinned before sigmoid; TCN edges excluded.
     cases = rs.hidden_cases(n, SECRET, cpu, PRIOR)
-    assert _digest([c for c in cases if not str(c.get("edge", "")).startswith("tcn_")]) == digest
+    assert _digest([c for c in cases if c.get("edge") not in rs.DW_EDGES]) == digest
 
 
 def test_sigmoid_streams_differ() -> None:

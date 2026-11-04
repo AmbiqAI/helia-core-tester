@@ -291,6 +291,10 @@ def inner_variant(inner: Optional[str], manifest: Mapping) -> Optional[str]:
     # Without DSP, opt runs the reference kernel.
     if inner != DW_OPT or not get_cpu_profile(manifest["target_cpu"]).has_dsp:
         return None
-    i, f, o, stride, pad, dil, ch_mult, mve = _layer(manifest)
+    return opt_variant(*_layer(manifest))
+
+
+def opt_variant(i: Dims, f: Dims, o: Dims, stride: Pair, pad: Pair, dil: Pair, ch_mult: int, mve: bool) -> str:
+    """The opt algorithm under the firmware's ctx."""
     ctx_size = opt_scratch_size(i, f, o, stride, pad, dil, mve)
     return dw_opt_variant(i, f, o, stride, pad, dil, ch_mult, mve, ctx_size)

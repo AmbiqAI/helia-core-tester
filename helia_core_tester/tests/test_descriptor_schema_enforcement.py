@@ -21,6 +21,7 @@ from helia_core_tester.generation.io.dtypes import (
     LEGACY_ACTIVATION_DTYPES,
     LEGACY_WEIGHT_DTYPES,
 )
+from helia_core_tester.generation.ops._shared.bias_init import bias_is_hoisted_by_lowering
 from helia_core_tester.generation.ops.catalog import iter_operator_specs
 
 
@@ -80,12 +81,13 @@ def test_every_shipped_descriptor_passes_the_schema() -> None:
     assert len(descriptors) > 2000
 
 
-def test_dilated_cases_fuse_no_activation() -> None:
-    # Dilation unfuses it; the golden then diverges.
+def test_lowered_cases_fuse_no_activation() -> None:
+    # Lowering unfuses it; the golden then diverges.
     descriptors = desc_io.load_all_descriptors(str(_repo_root() / "assets" / "descriptors"))
     bad = [
         d["name"] for d in descriptors
-        if max(d.get("dilation") or [1]) > 1 and d.get("activation", "NONE") != "NONE"
+        if d.get("activation", "NONE") != "NONE" and bias_is_hoisted_by_lowering(
+            d.get("dilation", 1), is_float=str(d.get("activation_dtype", "")).upper() in ("FP32", "FP16"))
     ]
     assert bad == []
 

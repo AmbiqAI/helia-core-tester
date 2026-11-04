@@ -25,7 +25,7 @@ from helia_core_tester.hardware.generated_test_bridge import (
     _with_weight_sums,
 )
 from helia_core_tester.hardware.wrapper_route import (
-    CHANNELWISE, FAST_S16_TAPS, PLANAR, conv_route, dw_opt_variant, dw_route, dw_s16_route, opt_scratch_size,
+    CHANNELWISE, FAST_S16_TAPS, PLANAR, conv_route, dw_route, dw_s16_route, opt_variant,
 )
 from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
@@ -224,8 +224,7 @@ def _tcn_variant(layer: Layer) -> str:
     """The MVE opt algorithm for a layer."""
     i, f = (1, layer.h, layer.w, layer.cin), (1, layer.kh, layer.kw, layer.cout)
     o, stride, dil = (1, *layer.out_hw(), layer.cout), (layer.sh, layer.sw), (layer.dh, layer.dw)
-    ctx = opt_scratch_size(i, f, o, stride, layer.pads(), dil, True)
-    return dw_opt_variant(i, f, o, stride, layer.pads(), dil, layer.mult, True, ctx)
+    return opt_variant(i, f, o, stride, layer.pads(), dil, layer.mult, True)
 
 
 def _dw_tcn(rng: np.random.Generator, variant: str) -> Layer:
@@ -245,12 +244,6 @@ def _dw_tcn(rng: np.random.Generator, variant: str) -> Layer:
 # TCN edges: sleepkit and heartkit layers.
 DW_DRAWS = {"tcn_planar": lambda rng: _dw_tcn(rng, PLANAR), "tcn_channelwise": lambda rng: _dw_tcn(rng, CHANNELWISE)}
 DW_EDGES = tuple(DW_DRAWS)
-
-
-def _dw_plan(n: int, routes: list[str]) -> list[str]:
-    """Route cycling, then TCN edges."""
-    count = edge_count(n, len(DW_EDGES))
-    return [routes[i % len(routes)] for i in range(n - count)] + [DW_EDGES[i % len(DW_EDGES)] for i in range(count)]
 
 
 def _dw_draw(rng: np.random.Generator, target: str) -> Layer:
@@ -303,14 +296,14 @@ def tc16_edge_count(n: int) -> int:
     return edge_count(n, len(TC16_EDGES))
 
 
-def _edge_plan(n: int, route: str, edges: tuple[str, ...]) -> list[str]:
-    """Mixed draws, then edge categories."""
+def _edge_plan(n: int, routes: list[str], edges: tuple[str, ...]) -> list[str]:
+    """Route cycling, then edge categories."""
     count = edge_count(n, len(edges))
-    return [route] * (n - count) + [edges[i % len(edges)] for i in range(count)]
+    return [routes[i % len(routes)] for i in range(n - count)] + [edges[i % len(edges)] for i in range(count)]
 
 
 def _tc16_plan(n: int, routes: list[str]) -> list[str]:
-    return _edge_plan(n, TC16_ROUTE, TC16_EDGES)
+    return _edge_plan(n, routes, TC16_EDGES)
 
 
 def _glorot_limit(layer: Layer) -> float:
@@ -647,7 +640,7 @@ def _tcf_gen(dtype: str, stream: int) -> Generator:
     route = TCF_ROUTES[dtype]
     return Generator(
         f"tcf{dtype[2:]}", "ConvolutionFunctions/transpose_conv_float.yaml", stream, lambda mve: [route],
-        _tcf_draw(dtype), lambda n, routes: _edge_plan(n, route, TCF_EDGES), "float",
+        _tcf_draw(dtype), lambda n, routes: _edge_plan(n, routes, TCF_EDGES), "float",
     )
 
 
@@ -749,7 +742,7 @@ def _sig_gen(dtype: str, stream: int) -> Generator:
     route = ACT_ROUTES[dtype]
     return Generator(
         f"sig{dtype[2:]}", "ActivationFunctions/nn_activation_float.yaml", stream, lambda mve: [route],
-        _sig_draw(dtype), lambda n, routes: _edge_plan(n, route, SIG_EDGES), "float", layerless=True,
+        _sig_draw(dtype), lambda n, routes: _edge_plan(n, routes, SIG_EDGES), "float", layerless=True,
     )
 
 
@@ -757,7 +750,8 @@ def _sig_gen(dtype: str, stream: int) -> Generator:
 GENERATORS: dict[tuple[str, str], Generator] = {
     ("Convolve", "S8"): Generator("conv", "ConvolutionFunctions/convolve.yaml", 0, _conv_routes, _conv_layer),
     ("DepthwiseConv", "S8"): Generator(
-        "dw", "ConvolutionFunctions/depthwise_conv.yaml", 1, _dw_routes, _dw_draw, _dw_plan,
+        "dw", "ConvolutionFunctions/depthwise_conv.yaml", 1, _dw_routes, _dw_draw,
+        lambda n, routes: _edge_plan(n, routes, DW_EDGES),
     ),
     ("DepthwiseConv", "S16"): Generator("dw16", "ConvolutionFunctions/depthwise_conv.yaml", 2, _dw16_routes, _dw16_layer),
     ("TransposeConv", "S16"): Generator(
@@ -769,7 +763,7 @@ GENERATORS: dict[tuple[str, str], Generator] = {
     ("NNActivationFloat", "FP16"): _sig_gen("FP16", 7),
     ("Softmax", "S8"): Generator(
         "sm8", "SoftmaxFunctions/softmax.yaml", 8, lambda mve: [SOFTMAX_ROUTE], _sm_draw,
-        lambda n, routes: _edge_plan(n, SOFTMAX_ROUTE, SOFTMAX_EDGES), layerless=True,
+        lambda n, routes: _edge_plan(n, routes, SOFTMAX_EDGES), layerless=True,
     ),
 }
 # (op, dtype) keys, in draw order.

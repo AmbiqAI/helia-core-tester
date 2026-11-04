@@ -316,7 +316,7 @@ def test_s8_hidden_sets_unchanged(cpu: str, digest: str) -> None:
     import yaml
 
     # Non-edge draws, pinned before TCN edges.
-    cases = [c for c in rs.hidden_cases(8, SECRET.encode(), cpu, (CONV, DW)) if "edge" not in c]
+    cases = [c for c in rs.hidden_cases(8, SECRET.encode(), cpu, (CONV, DW)) if c.get("edge") not in rs.DW_EDGES]
     assert hashlib.sha256(yaml.safe_dump_all(cases, sort_keys=False).encode()).hexdigest() == digest
 
 
