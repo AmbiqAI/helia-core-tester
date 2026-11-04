@@ -415,7 +415,8 @@ dilation:
 - 16
 ---
 # sleepkit-stage TCN layers, one per (channels, dilation): W240, k7,
-# SAME, RELU6. Up to c32 d4 runs opt planar; c32 d8 and up runs channelwise.
+# SAME. Up to c32 d4 runs opt planar; c32 d8 and up runs channelwise.
+# Dilated graphs unfuse RELU6, so those cases clamp explicitly.
 operator: DepthwiseConv
 name: depthwise_conv_sleepkit_tcn_c14_d1_s8
 activation_dtype: S8
@@ -450,7 +451,9 @@ operator: DepthwiseConv
 name: depthwise_conv_sleepkit_tcn_c16_d2_s8
 activation_dtype: S8
 weight_dtype: S8
-activation: RELU6
+activation: NONE
+activation_min: -64
+activation_max: 96
 hint:
   call_style: per_tensor
 input_shape: [1, 1, 240, 16]
@@ -465,7 +468,9 @@ operator: DepthwiseConv
 name: depthwise_conv_sleepkit_tcn_c24_d2_s8
 activation_dtype: S8
 weight_dtype: S8
-activation: RELU6
+activation: NONE
+activation_min: -64
+activation_max: 96
 hint:
   call_style: per_tensor
 input_shape: [1, 1, 240, 24]
@@ -480,7 +485,9 @@ operator: DepthwiseConv
 name: depthwise_conv_sleepkit_tcn_c24_d4_s8
 activation_dtype: S8
 weight_dtype: S8
-activation: RELU6
+activation: NONE
+activation_min: -64
+activation_max: 96
 hint:
   call_style: per_tensor
 input_shape: [1, 1, 240, 24]
@@ -495,7 +502,9 @@ operator: DepthwiseConv
 name: depthwise_conv_sleepkit_tcn_c32_d4_s8
 activation_dtype: S8
 weight_dtype: S8
-activation: RELU6
+activation: NONE
+activation_min: -64
+activation_max: 96
 hint:
   call_style: per_tensor
 input_shape: [1, 1, 240, 32]
@@ -510,7 +519,9 @@ operator: DepthwiseConv
 name: depthwise_conv_sleepkit_tcn_c32_d8_s8
 activation_dtype: S8
 weight_dtype: S8
-activation: RELU6
+activation: NONE
+activation_min: -64
+activation_max: 96
 hint:
   call_style: per_tensor
 input_shape: [1, 1, 240, 32]
@@ -525,7 +536,9 @@ operator: DepthwiseConv
 name: depthwise_conv_sleepkit_tcn_c48_d8_s8
 activation_dtype: S8
 weight_dtype: S8
-activation: RELU6
+activation: NONE
+activation_min: -64
+activation_max: 96
 hint:
   call_style: per_tensor
 input_shape: [1, 1, 240, 48]
@@ -540,7 +553,9 @@ operator: DepthwiseConv
 name: depthwise_conv_sleepkit_tcn_c48_d16_s8
 activation_dtype: S8
 weight_dtype: S8
-activation: RELU6
+activation: NONE
+activation_min: -64
+activation_max: 96
 hint:
   call_style: per_tensor
 input_shape: [1, 1, 240, 48]
@@ -555,7 +570,9 @@ operator: DepthwiseConv
 name: depthwise_conv_sleepkit_tcn_c64_d16_s8
 activation_dtype: S8
 weight_dtype: S8
-activation: RELU6
+activation: NONE
+activation_min: -64
+activation_max: 96
 hint:
   call_style: per_tensor
 input_shape: [1, 1, 240, 64]
