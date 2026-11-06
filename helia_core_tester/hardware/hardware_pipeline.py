@@ -8,6 +8,7 @@ RTT session runner) -- never a subprocess into the tester's own CLI.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import json
 import sys
 import time
@@ -355,6 +356,8 @@ class StreamOptions:
     """Accept golden cases the past run failed."""
     hidden_set: Optional[Path] = None
     """Root from `generate --hidden-dir`; its cases join the run."""
+    placement: Optional[str] = None
+    """Known placement: public cases too big skip."""
 
     def selection(self) -> CaseSelection:
         """The op, dtype and id filters."""
@@ -444,7 +447,7 @@ def prepare_bundles(
     bundles, skipped = build_generated_test_case_bundles(
         repo_root, cpu=board.cpu, family=options.family, name_filter=options.test_name,
         limit=options.limit, suite=options.suite, fvp_gate=options.fvp_gate, board_id=board.id,
-        select=select,
+        select=select, fit=(options.placement, board.workspace_bytes) if options.placement else None,
     )
     if select.case_ids:
         names = [b.case_id.removesuffix(HW_CASE_SUFFIX) for b in bundles] + [t.name for t, _ in skipped]
@@ -642,6 +645,9 @@ def run_hardware_pipeline(
 
         # Same resolution as the CLI.
         app_options = resolve_options(nsx_app_dir(resolved_build_dir), repo_root, follow_pin=not skip_flash)
+    if options.placement is None and getattr(app_options, "placement", None):
+        # Too-big cases skip, not abort.
+        options = dataclasses.replace(options, placement=app_options.placement)
 
     # Refuse a bad hidden set first.
     hidden = hidden_bundles(repo_root, board, options) if options.hidden_set is not None else None
