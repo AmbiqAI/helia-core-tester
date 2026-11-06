@@ -1,0 +1,59 @@
+# Campaign for `helia_core_tester agent-loop init`.
+# heartkit-seg and heartkit-arr a16w8 conv layers.
+name: conv-s16
+board: apollo510_evb
+# bench-agent board id; defaults to board.
+bench_id: apollo510_evb
+legs: [tcm, mram]
+toolchains: [gcc, atfe]
+target:
+  op: Convolve
+  dtype: S16
+  # Optional: only these case ids.
+  case_ids:
+    - convolve_heartkit_seg_l03_s16
+    - convolve_heartkit_seg_l06_s16
+    - convolve_heartkit_seg_l07_s16
+    - convolve_heartkit_seg_l10_s16
+    - convolve_heartkit_seg_l13_s16
+    - convolve_heartkit_seg_l14_s16
+    - convolve_heartkit_seg_l17_s16
+    - convolve_heartkit_seg_l20_s16
+    - convolve_heartkit_seg_l21_s16
+    - convolve_heartkit_seg_l24_s16
+    - convolve_heartkit_seg_l25_s16
+    - convolve_heartkit_arr_l01_s16
+    - convolve_heartkit_arr_l05_s16
+    - convolve_heartkit_arr_l06_s16
+    - convolve_heartkit_arr_l09_s16
+    - convolve_heartkit_arr_l13_s16
+    - convolve_heartkit_arr_l14_s16
+    - convolve_heartkit_arr_l17_s16
+    - convolve_heartkit_arr_l21_s16
+    - convolve_heartkit_arr_l22_s16
+    - convolve_heartkit_arr_l25_s16
+    - convolve_heartkit_arr_l29_s16
+    - convolve_heartkit_arr_l30_s16
+    - convolve_heartkit_arr_l33_s16
+    - convolve_heartkit_arr_l37_s16
+    - convolve_heartkit_arr_l38_s16
+    - convolve_heartkit_arr_l41_s16
+kernels:
+  repo: ~/ns-cmsis-nn
+  ref: v7.47.0
+# Charged board evals for the agent.
+evals: 12
+# Last evals for cutting code size; 0 for none.
+# size_evals: 4
+# Claude --max-budget-usd.
+cost_usd: 25
+model: claude-opus-5-5
+# Random s16 conv shapes, 0 for none.
+hidden_shapes: 12
+repeats: 3
+# Outside the workspace; init makes it 0700.
+secrets_dir: ~/hct-secrets/conv-s16
+# Optional: seed the agent tree from a ledger diff.
+# start_patch: ~/campaigns/conv-s16-run1/ledger/009.diff
+# start_notes: |
+#   - What the previous run changed and what is left.

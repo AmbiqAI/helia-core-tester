@@ -55,7 +55,7 @@ def test_config_defaults_and_paths() -> None:
     ({"evals": True}, "wrong type"),
     ({"cost_usd": -1}, "cost_usd"),
     ({"op": "FullyConnected"}, "hidden_shapes: No random shapes"),
-    ({"op": "Convolve", "dtype": "S16"}, "or set 0"),
+    ({"op": "Softmax", "dtype": "S16"}, "or set 0"),
     ({"op": "Conv 2d"}, "one word"),
     ({"case_ids": ["ok", "a b"]}, "case_ids"),
     ({"size_evals": -1}, "size_evals: must be >= 0"),
