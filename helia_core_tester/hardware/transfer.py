@@ -98,7 +98,7 @@ class BlobAccumulator:
 MRAM_ROW_BYTES = 16
 MRAM_ROLES = frozenset({"weights", "bias"})
 # Placements that program weights and bias into MRAM.
-MRAM_PLACEMENTS = frozenset({"mram", "sram"})
+MRAM_PLACEMENTS = frozenset({"mram", "sram", "ssram"})
 
 
 # cmake/hardware/benchmark_server_mram.h: placement pool and cache line.

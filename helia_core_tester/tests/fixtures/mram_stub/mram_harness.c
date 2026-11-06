@@ -35,11 +35,13 @@ static const blob_spec_t kCase[3] = {
 
 static uint8_t workspace[32768u];
 #if defined(HCT_PLACEMENT_MRAM)
+#if !defined(HCT_WEIGHTS_SSRAM)
 static uint8_t probe_workspace[sizeof(workspace)];
 static uint8_t big_workspace[600u * 1024u];
-static uint8_t big_weights[BIG_WEIGHTS];
 #define POOL_BIAS_BYTES (352u * 1024u)
 static uint8_t big_bias[POOL_BIAS_BYTES];
+#endif
+static uint8_t big_weights[BIG_WEIGHTS];
 /* Weights stage here, as on the board. */
 static uint8_t stage[HCT_MRAM_POOL_BYTES];
 #endif
@@ -232,7 +234,7 @@ static hctp_status_t stream(hct_server_session_t *s, const blob_spec_t *blobs)
     return HCTP_STATUS_OK;
 }
 
-#if defined(HCT_PLACEMENT_MRAM)
+#if defined(HCT_PLACEMENT_MRAM) && !defined(HCT_WEIGHTS_SSRAM)
 /* Stream a session copy; expect a status. */
 static int probe_stream(const hct_server_session_t *s, hctp_status_t expected)
 {
@@ -279,7 +281,48 @@ static int run_case(hct_server_session_t *s)
     return send(s, HCTP_MSG_RUN_PERFORMANCE, 0u) == HCTP_STATUS_OK ? 0 : 5;
 }
 
-#if defined(HCT_PLACEMENT_MRAM)
+#if defined(HCT_WEIGHTS_SSRAM)
+/* Weights stay in the stage, cold. */
+static int test_ssram_place(void)
+{
+    static hct_server_session_t s;
+    blob_spec_t blobs[3] = {kCase[0], {"weights", big_weights, 300u * 1024u, 1u}, kCase[2]};
+    uint32_t invalidations;
+    int status;
+    for (uint32_t index = 0u; index < blobs[1].length; ++index) big_weights[index] = (uint8_t)(index * 5u);
+    /* 300 KiB of weights, 32 KiB workspace. */
+    status = open_session(&s, workspace, sizeof(workspace), "ssram_a");
+    if (status != 0) return 900 + status;
+    if (send_meta(&s, "ssram_a", blobs, 3u) != HCTP_STATUS_OK) return 910;
+    if (stream(&s, blobs) != HCTP_STATUS_OK) return 911;
+    /* Nothing reaches MRAM. */
+    if (hct_mram_stub.program_calls != 0u) return 912;
+    for (uint16_t index = 1u; index < 3u; ++index)
+    {
+        const uint8_t *placed = s.blobs[index].placed;
+        if (placed < s.stage || placed >= s.stage + s.stage_bytes || ((uintptr_t)placed & 31u) != 0u) return 913;
+        if (memcmp(placed, blobs[index].data, blobs[index].length) != 0) return 914;
+    }
+    if (hct_window.cold_count != 2u || hct_window.cold_addr[1] != s.blobs[2].placed || hct_window.cold_bytes[1] != 32) return 915;
+    invalidations = hct_mram_stub.invalidate_calls;
+    status = run_case(&s);
+    if (status != 0) return 920 + status;
+    /* Timed calls evict the weights. */
+    if (hct_mram_stub.invalidate_calls <= invalidations) return 926;
+    if (drain(&s) != HCTP_MSG_SESSION_COMPLETE) return 927;
+
+    /* Over the stage: refused at CASE_META. */
+    blobs[1].length = POOL_BYTES;
+    status = open_session(&s, workspace, sizeof(workspace), "ssram_b");
+    if (status != 0) return 930 + status;
+    if (send_meta(&s, "ssram_b", blobs, 3u) != HCTP_STATUS_NO_SPACE) return 940;
+    if (strstr(error_text(&s), "MRAM pool full") == NULL) return 941;
+    printf("ssram placed\n");
+    return 0;
+}
+#endif
+
+#if defined(HCT_PLACEMENT_MRAM) && !defined(HCT_WEIGHTS_SSRAM)
 static int test_place_and_reuse(uintptr_t base)
 {
     static hct_server_session_t s;
@@ -775,7 +818,10 @@ int main(void)
 {
     int status = 0;
     hct_stub_mram_end = (uintptr_t)hct_stub_mram + HCT_STUB_MRAM_BYTES;
-#if defined(HCT_PLACEMENT_MRAM)
+#if defined(HCT_WEIGHTS_SSRAM)
+    status = (hct_benchmark_server_capability_flags() & HCT_CAP_WEIGHTS_SSRAM) == 0u ? 14 : 0;
+    if (status == 0) status = test_ssram_place();
+#elif defined(HCT_PLACEMENT_MRAM)
     {
         const uintptr_t base = ((uintptr_t)hct_stub_mram + 0xFFFFu) & ~(uintptr_t)0xFFFFu;
         status = (hct_benchmark_server_capability_flags() & HCT_CAP_WEIGHTS_MRAM) == 0u ? 10 : 0;
@@ -790,8 +836,13 @@ int main(void)
     if (status == 0) status = (hct_benchmark_server_capability_flags() & HCT_CAP_ACTIVATIONS_SRAM) == 0u ? 11 : 0;
     if (status == 0) status = test_cold_workspace();
 #else
+#if defined(HCT_WEIGHTS_SSRAM)
+    /* Only the two kept blobs clean. */
+    if (status == 0) status = hct_mram_stub.clean_invalidate_calls != 2u ? 12 : 0;
+#else
     /* Activations stay in TCM: nothing to clean. */
     if (status == 0) status = hct_mram_stub.clean_invalidate_calls != 0u ? 12 : 0;
+#endif
     if (status == 0) status = (hct_benchmark_server_capability_flags() & HCT_CAP_ACTIVATIONS_SRAM) != 0u ? 13 : 0;
 #endif
 #if HCT_BLOB_STORE_BYTES > 0

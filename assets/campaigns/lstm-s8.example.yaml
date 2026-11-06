@@ -3,8 +3,8 @@ name: lstm-s8
 board: apollo510_evb
 # bench-agent board id; defaults to board.
 bench_id: apollo510_evb
-# DTLN weights exceed TCM: MRAM only.
-legs: [mram]
+# hpx keeps DTLN weights in SRAM.
+legs: [ssram]
 toolchains: [gcc, atfe]
 target:
   op: LSTMUnidirectional
