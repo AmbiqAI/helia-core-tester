@@ -24,6 +24,7 @@ CONV, DW, DW16, TC16 = ("Convolve", "S8"), ("DepthwiseConv", "S8"), ("DepthwiseC
 TCF32, TCF16 = ("TransposeConv", "FP32"), ("TransposeConv", "FP16")
 SM8 = ("Softmax", "S8")
 SIG32, SIG16 = ("NNActivationFloat", "FP32"), ("NNActivationFloat", "FP16")
+LSTM8 = ("LSTMUnidirectional", "S8")
 
 
 def _layer(case: dict) -> rs.Layer:
@@ -53,7 +54,9 @@ def test_ops_draw_independently() -> None:
 
 
 @pytest.mark.parametrize(("op", "dtype", "picked"), [
-    (None, None, (CONV, DW, DW16, TC16, TCF32, TCF16, SIG32, SIG16, SM8)),
+    (None, None, (CONV, DW, DW16, TC16, TCF32, TCF16, SIG32, SIG16, SM8, LSTM8)),
+    ("LSTMUnidirectional", "S8", (LSTM8,)),
+    ("lstm_unidirectional", None, (LSTM8,)),
     ("Softmax", "S8", (SM8,)),
     ("softmax", None, (SM8,)),
     ("TransposeConv", "S16", (TC16,)),
@@ -62,7 +65,7 @@ def test_ops_draw_independently() -> None:
     ("DepthwiseConv", "s8", (DW,)),
     ("DepthwiseConv", "S16", (DW16,)),
     ("depthwise_conv", None, (DW, DW16)),
-    (None, "S8", (CONV, DW, SM8)),
+    (None, "S8", (CONV, DW, SM8, LSTM8)),
     (None, "s16", (DW16, TC16)),
 ])
 def test_select_ops_matches_filters(op, dtype, picked) -> None:
@@ -78,7 +81,7 @@ def test_select_ops_matches_filters(op, dtype, picked) -> None:
     ("rs7_conv", None),
 ])
 def test_select_ops_refuses_unknown(op, dtype) -> None:
-    with pytest.raises(ValueError, match="NNActivationFloat FP32, NNActivationFloat FP16, Softmax S8$"):
+    with pytest.raises(ValueError, match="NNActivationFloat FP16, Softmax S8, LSTMUnidirectional S8$"):
         rs.select_ops(op, dtype)
 
 
@@ -318,6 +321,62 @@ def test_s8_hidden_sets_unchanged(cpu: str, digest: str) -> None:
     # Non-edge draws, pinned before TCN edges.
     cases = [c for c in rs.hidden_cases(8, SECRET.encode(), cpu, (CONV, DW)) if c.get("edge") not in rs.DW_EDGES]
     assert hashlib.sha256(yaml.safe_dump_all(cases, sort_keys=False).encode()).hexdigest() == digest
+
+
+@pytest.mark.parametrize("cpu", ["cortex-m55", "cortex-m4"])
+def test_other_hidden_sets_unchanged(cpu: str) -> None:
+    import hashlib
+
+    import yaml
+
+    # Every pre-LSTM generator, pinned on main.
+    digest = {"cortex-m55": "fe4bdb851ad62acd85859ca09bc86db172eab0216b2582db4f5520f4cd71869c",
+              "cortex-m4": "9813cf8378aea0f855698fdeabbc2e36d054b77c3f1d44a43aac06cc997420cb"}[cpu]
+    keys = tuple(key for key in rs.OPS if key != LSTM8)
+    cases = rs.hidden_cases(8, b"hct-digest-check-secret-0123456789", cpu, keys)
+    assert hashlib.sha256(yaml.safe_dump_all(cases, sort_keys=False).encode()).hexdigest() == digest
+
+
+@pytest.mark.parametrize("cpu", ["cortex-m55", "cortex-m4"])
+@pytest.mark.parametrize("seed", SEEDS)
+def test_lstm_cases_fit(cpu: str, seed: int) -> None:
+    cases = rs.sample_cases(12, seed, cpu, (LSTM8,))
+    assert rs.route_counts(cases) == {"LSTMUnidirectional": {rs.LSTM_ROUTE: 12}}
+    count = rs.edge_count(12, len(rs.LSTM_EDGES))
+    assert count == 8 and [c.get("edge") for c in cases] == [None] * 4 + list(rs.LSTM_EDGES)
+    for case in cases:
+        b, t, i, h = (case[k] for k in ("batch_size", "time_steps", "feature_size", "units"))
+        assert case["input_shape"] == [b, t, i] and min(b, t, i, h) >= 1
+        assert rs.lstm_bytes(b, t, i, h) <= rs.LSTM_MAX_BYTES < rs.min_workspace(cpu)
+        assert b * t * 4 * h * (i + h) <= rs.MAX_MACS
+        assert case["name"].startswith(f"rs{seed}_lstm8_") and case["shape_seed"] == seed
+        # No dataset: names would leak seeds.
+        assert "dataset" not in case and case["hint"]["force_cmsis"]
+        quant = case["lstm_quant"]
+        assert len(quant["weight_scales"]) == 8 and len(quant["bias_ranges"]) == 4
+        assert -128 <= quant["input_range"][0] < quant["input_range"][1] <= 127
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_lstm_edges(seed: int) -> None:
+    from helia_core_tester.generation.utils.lstm_data import LstmQuant, effective_scales, quantized_clip
+
+    cases = {c["edge"]: c for c in rs.sample_cases(12, seed, ops=(LSTM8,)) if "edge" in c}
+    shape = {edge: tuple(c[k] for k in ("batch_size", "time_steps", "feature_size", "units")) for edge, c in cases.items()}
+    assert shape["dtln"][0] == 1 and shape["dtln"][1] <= 2 and shape["dtln"][2] >= 96
+    assert not cases["dtln"]["time_major"] and cases["dtln"]["lstm_quant"]["cell_clip"] == 10.0
+    assert shape["tails"][2] % 4 and shape["tails"][3] % 4
+    assert shape["input1"][2] == 1 and shape["step1"][1] == 1 and shape["batch2"][0] == 2
+    # Each accumulator LSB moves a gate.
+    gates = effective_scales(LstmQuant.from_desc(cases["requant"]["lstm_quant"]))
+    assert min(gates[f"{g}_gate_input"] for g in ("input", "forget", "cell", "output")) >= 1.0
+    assert 0 < quantized_clip(LstmQuant.from_desc(cases["clip"]["lstm_quant"])) < 32767
+    assert cases["extreme"]["lstm_quant"]["input_zero_point"] in (-128, 127)
+
+
+def test_lstm_edges_vary() -> None:
+    draws = [[c for c in rs.sample_cases(12, seed, ops=(LSTM8,)) if "edge" in c] for seed in SEEDS]
+    assert len({str(d) for d in draws}) == len(SEEDS)
 
 
 @pytest.mark.parametrize("seed", SEEDS)

@@ -618,6 +618,180 @@ def _sm_draw(rng: np.random.Generator, target: str) -> dict[str, Any]:
     return case
 
 
+LSTM_ROUTE = "arm_lstm_unidirectional_s8"
+# Room under the smallest TCM workspace.
+LSTM_MAX_BYTES = 96 * 1024
+# DTLN layers: (input size, quant).
+LSTM_DTLN = (
+    (257, {"input_scale": 0.0686, "input_zero_point": -128, "output_scale": 0.00765, "output_zero_point": 0,
+           "cell_scale_power": -11, "weight_std": 5.0, "input_range": [-128, -104]}),
+    (128, {"input_scale": 0.00765, "input_zero_point": 0, "output_scale": 0.00736, "output_zero_point": -4,
+           "cell_scale_power": -12, "weight_std": 14.0, "input_range": [-64, 64]}),
+)
+
+
+def lstm_bytes(b: int, t: int, i: int, h: int) -> int:
+    """Firmware workspace bytes, TCM placement."""
+    state = _align_up(2 * b * h, 16)
+    # Blobs, sums, temps, cell, output.
+    used = b * t * i + 4 * h * (i + h) + 16 * h + 124
+    return _align_up(used, 16) + _align_up(32 * h, 16) + 3 * state + b * t * h + 64
+
+
+def _log_uniform(rng: np.random.Generator, lo: float, hi: float) -> float:
+    return float(np.exp(rng.uniform(np.log(lo), np.log(hi))))
+
+
+def _lstm_knobs(rng: np.random.Generator) -> dict[str, Any]:
+    """Model-style quant: scales, offsets, biases."""
+    roll = rng.random()
+    in_zp = -128 if roll < 0.3 else 0 if roll < 0.6 else int(rng.integers(-128, 128))
+    low = int(rng.integers(-128, 0)) if rng.random() < 0.5 else -128
+    spread = [float(rng.uniform(0.2, 1.5)) for _ in range(3)]
+    return {
+        "input_scale": _log_uniform(rng, 0.003, 0.1), "input_zero_point": in_zp,
+        "output_scale": _log_uniform(rng, 2.0**-9, 2.0**-6.5), "output_zero_point": int(rng.integers(-8, 9)),
+        "cell_scale_power": int(rng.integers(-15, -10)),
+        "cell_clip": 0.0 if rng.random() < 0.4 else float(rng.uniform(1.0, 10.0)),
+        "weight_scales": [_log_uniform(rng, 0.005, 0.05) for _ in range(8)],
+        "weight_std": float(rng.uniform(4.0, 20.0)),
+        # Forget bias leans positive, as Keras.
+        "bias_ranges": [[-spread[0], spread[0]], [float(rng.uniform(0.0, 0.8)), float(rng.uniform(1.0, 2.0))],
+                        [-spread[1], spread[1]], [-spread[2], spread[2]]],
+        "input_range": [low, int(rng.integers(low + 32, 128))],
+    }
+
+
+def _lstm_mixed(rng: np.random.Generator) -> tuple[tuple[int, ...], dict]:
+    """The normal mix."""
+    roll = rng.random()
+    b = 1 if roll < 0.6 else 2 if roll < 0.85 else 3
+    return (b, _size(rng, 1, 12), _channels(rng, 1, 96), _channels(rng, 1, 64)), _lstm_knobs(rng)
+
+
+def _lstm_dtln(rng: np.random.Generator) -> tuple[tuple[int, ...], dict]:
+    """DTLN-like: one step, wide input."""
+    size, base = LSTM_DTLN[int(rng.integers(0, 2))]
+    knobs = {**_lstm_knobs(rng), **base, "cell_clip": 10.0}
+    # Jitter the model scales.
+    for key in ("input_scale", "output_scale"):
+        knobs[key] *= float(rng.uniform(0.8, 1.25))
+    i = min(size, int(rng.integers(96, 258)))
+    t = 1 if rng.random() < 0.7 else 2
+    h = next(h for h in range(int(rng.integers(64, 129)), 0, -1) if lstm_bytes(1, t, i, h) <= LSTM_MAX_BYTES)
+    return (1, t, i, h), {**knobs, "time_major": False}
+
+
+def _lstm_tails(rng: np.random.Generator) -> tuple[tuple[int, ...], dict]:
+    """Units and input past full vectors."""
+    (b, t, _, _), knobs = _lstm_mixed(rng)
+    return (b, t, _lstm_tail(rng), _lstm_tail(rng)), knobs
+
+
+def _lstm_tail(rng: np.random.Generator) -> int:
+    """Size not a multiple of 4."""
+    return 16 * int(rng.integers(0, 4)) + int(rng.choice([1, 2, 3, 5, 6, 7, 9, 10, 11, 13, 14, 15]))
+
+
+def _lstm_input1(rng: np.random.Generator) -> tuple[tuple[int, ...], dict]:
+    """One input feature."""
+    (b, _, _, h), knobs = _lstm_mixed(rng)
+    return (b, _size(rng, 2, 16), 1, h), knobs
+
+
+def _lstm_step1(rng: np.random.Generator) -> tuple[tuple[int, ...], dict]:
+    """One step: no recurrent product."""
+    (_, _, i, h), knobs = _lstm_mixed(rng)
+    return (int(rng.integers(1, 4)), 1, i, h), knobs
+
+
+def _lstm_batch2(rng: np.random.Generator) -> tuple[tuple[int, ...], dict]:
+    """Two sequences per call."""
+    (_, _, i, h), knobs = _lstm_mixed(rng)
+    return (2, int(rng.integers(2, 9)), i, h), knobs
+
+
+def _lstm_requant(rng: np.random.Generator) -> tuple[tuple[int, ...], dict]:
+    """Large gate scales: one LSB moves outputs."""
+    (b, t, i, h), knobs = _lstm_mixed(rng)
+    knobs.update({
+        "input_scale": _log_uniform(rng, 0.03, 0.1), "weight_scales": [_log_uniform(rng, 0.02, 0.06) for _ in range(8)],
+        "weight_std": float(rng.uniform(1.0, 3.0)), "output_scale": _log_uniform(rng, 2.0**-11, 2.0**-9),
+        "cell_scale_power": int(rng.integers(-15, -13)), "cell_clip": 0.0, "input_range": [-24, 24],
+        "bias_ranges": [[-0.5, 0.5], [0.0, 1.0], [-0.5, 0.5], [-0.5, 0.5]],
+    })
+    return (b, max(t, 4), i, max(h, 8)), knobs
+
+
+def _lstm_clip(rng: np.random.Generator) -> tuple[tuple[int, ...], dict]:
+    """Cell state pinned at the clip."""
+    (b, t, i, h), knobs = _lstm_mixed(rng)
+    power = int(rng.integers(-15, -10))
+    # 10-90 % of the cell range.
+    clip = 2.0 ** (power + 15) * float(rng.uniform(0.1, 0.9))
+    knobs.update({"cell_scale_power": power, "cell_clip": clip,
+                  "bias_ranges": [[0.5, 2.0], [1.0, 3.0], [-2.0, 2.0], [-1.5, 1.5]]})
+    return (b, max(t, 4), i, max(h, 8)), knobs
+
+
+def _lstm_extreme(rng: np.random.Generator) -> tuple[tuple[int, ...], dict]:
+    """Scales and offsets at the limits."""
+    shape, knobs = _lstm_mixed(rng)
+    big = rng.random() < 0.5
+    in_scale = _log_uniform(rng, 0.3, 2.0) if big else _log_uniform(rng, 1e-4, 1e-3)
+    # Gate scale under 41: no int32 wrap.
+    top = min(0.2, 0.01 / in_scale)
+    knobs.update({
+        "input_scale": in_scale, "input_zero_point": int(rng.choice([-128, 127])),
+        "output_scale": 2.0 ** float(rng.uniform(-15, -12)) if big else 2.0 ** float(rng.uniform(-4, -1)),
+        "output_zero_point": int(rng.choice([-128, -100, 100, 127])),
+        "weight_scales": [_log_uniform(rng, 1e-4, top) for _ in range(8)],
+    })
+    return shape, knobs
+
+
+def _six_digits(value: Any) -> Any:
+    """Floats to 6 digits; libm drift stays hidden."""
+    if isinstance(value, float):
+        return float(f"{value:.6g}")
+    if isinstance(value, dict):
+        return {k: _six_digits(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_six_digits(v) for v in value]
+    return value
+
+
+# LSTM edge categories, highest priority first.
+LSTM_DRAWS: dict[str, Callable[[np.random.Generator], tuple[tuple[int, ...], dict]]] = {
+    "dtln": _lstm_dtln, "requant": _lstm_requant, "clip": _lstm_clip, "tails": _lstm_tails,
+    "input1": _lstm_input1, "step1": _lstm_step1, "batch2": _lstm_batch2, "extreme": _lstm_extreme,
+}
+LSTM_EDGES = tuple(LSTM_DRAWS)
+
+
+def _lstm_draw(rng: np.random.Generator, target: str) -> dict[str, Any]:
+    """An s8 LSTM case body."""
+    for _ in range(MAX_TRIES):
+        (b, t, i, h), knobs = LSTM_DRAWS.get(target, _lstm_mixed)(rng)
+        if lstm_bytes(b, t, i, h) <= LSTM_MAX_BYTES and b * t * 4 * h * (i + h) <= MAX_MACS:
+            break
+    else:
+        raise RuntimeError(f"No LSTM S8 shape for {target}")
+    time_major = bool(knobs.pop("time_major", rng.random() < 0.5))
+    # helia-rt keeps state; DTLN always.
+    stateful = target == "dtln" or bool(rng.random() < 0.5)
+    knobs = _six_digits(knobs)
+    case = {
+        "activation_dtype": "S8", "weight_dtype": "S8", "activation": "NONE", "batch_size": b, "time_steps": t,
+        "feature_size": i, "units": h, "time_major": time_major, "stateful": stateful, "input_shape": [b, t, i],
+        "hint": {"call_style": "per_tensor", "force_cmsis": True}, "lstm_quant": knobs, "expected_route": LSTM_ROUTE,
+    }
+    if target == "extreme":
+        # Extreme offsets may saturate.
+        case["degenerate_golden_reason"] = "lstm extreme edge"
+    return case
+
+
 def _conv_routes(mve: bool) -> list[str]:
     return [r for r in CONV_ROUTES if mve or r not in MVE_CONV_ROUTES]
 
@@ -764,6 +938,10 @@ GENERATORS: dict[tuple[str, str], Generator] = {
     ("Softmax", "S8"): Generator(
         "sm8", "SoftmaxFunctions/softmax.yaml", 8, lambda mve: [SOFTMAX_ROUTE], _sm_draw,
         lambda n, routes: _edge_plan(n, routes, SOFTMAX_EDGES), layerless=True,
+    ),
+    ("LSTMUnidirectional", "S8"): Generator(
+        "lstm8", "LSTMFunctions/lstm_unidirectional.yaml", 9, lambda mve: [LSTM_ROUTE], _lstm_draw,
+        lambda n, routes: _edge_plan(n, routes, LSTM_EDGES), layerless=True,
     ),
 }
 # (op, dtype) keys, in draw order.

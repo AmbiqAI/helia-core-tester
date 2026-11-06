@@ -5130,7 +5130,8 @@ def _build_lstm_case(project_root: Path, generated_test: GeneratedTestCase, *, o
     """
     _require_s8_activation(generated_test, "arm_lstm_unidirectional_s8")
     header = _find_header_file(generated_test.directory).read_text(encoding="utf-8")
-    dataset = str(generated_test.descriptor.get("dataset", ""))
+    # Drawn cases use their name.
+    dataset = str(generated_test.descriptor.get("dataset") or generated_test.descriptor.get("name", ""))
     macro = dataset.upper() + "_"
 
     def array(name: str, dtype: str) -> np.ndarray:
@@ -5148,8 +5149,14 @@ def _build_lstm_case(project_root: Path, generated_test: GeneratedTestCase, *, o
     bias = np.concatenate([array(f"{gate.lower()}_gate_bias", "S32") for gate in _LSTM_GATES])
     input_data = array("input_tensor", "S8")
     expected = array("output", "S8")
+    # Stateful cases carry a start state.
+    hidden_state = _extract_array_if_present(header, f"{dataset.lower()}_hidden_state", "S8")
+    cell_state = _extract_array_if_present(header, f"{dataset.lower()}_cell_state", "S16")
     sizes = {"input": batch * steps * input_size, "weights": 4 * hidden * (input_size + hidden), "bias": 4 * hidden, "output": batch * steps * hidden}
     actual = {"input": input_data.size, "weights": weights.size, "bias": bias.size, "output": expected.size}
+    if hidden_state is not None or cell_state is not None:
+        sizes.update(hidden=batch * hidden, cell=batch * hidden)
+        actual.update(hidden=getattr(hidden_state, "size", 0), cell=getattr(cell_state, "size", 0))
     if sizes != actual:
         raise UnsupportedGeneratedTestError(f"{generated_test.name}: LSTM tensor sizes {actual} do not match header params {sizes}.")
     arrays = [
@@ -5157,10 +5164,14 @@ def _build_lstm_case(project_root: Path, generated_test: GeneratedTestCase, *, o
         ("weights", "S8", (weights.size,), weights, False, False),
         ("bias", "S32", (bias.size,), bias, False, False),
         ("meta_0", "S32", (len(meta),), np.array(meta, dtype=np.int32), False, False),
-        ("expected_output", "S8", (expected.size,), expected, False, True),
     ]
+    if hidden_state is not None:
+        arrays += [("input_1", "S8", (hidden_state.size,), hidden_state, False, False),
+                   ("input_2", "S16", (cell_state.size,), cell_state, False, False)]
+    arrays.append(("expected_output", "S8", (expected.size,), expected, False, True))
     # Kernel sums, temp1, temp2, cell state.
     state_bytes = _align_up(batch * hidden * 2, 16)
+    hidden_bytes = _align_up(batch * hidden, 16) if hidden_state is not None else 0
     return _build_data_movement_bundle(
         project_root, generated_test,
         lookup_dtype="S8",
@@ -5170,7 +5181,7 @@ def _build_lstm_case(project_root: Path, generated_test: GeneratedTestCase, *, o
         comparison=dict(generated_test.descriptor["resolved_comparison"]),
         output_root=output_root,
         scalar_parameters={},
-        scratch_bytes=_align_up(8 * hidden * 4, 16) + 3 * state_bytes,
+        scratch_bytes=_align_up(8 * hidden * 4, 16) + 3 * state_bytes + hidden_bytes,
     )
 
 

@@ -73,8 +73,8 @@ with `--suite int` or `float`, `--op`/`--dtype`/`--case-id` also narrow generati
 
 Held-out shapes: `generate --random-shapes N --shape-seed S` draws N cases per
 generator: s8 Convolve, s8 and s16 DepthwiseConv, s16, FP32 and FP16
-TransposeConv, and s8 Softmax (`rs<S>_conv_*`, `rs<S>_dw_*`, `rs<S>_dw16_*`,
-`rs<S>_tc16_*`, `rs<S>_tcf32_*`, `rs<S>_tcf16_*`, `rs<S>_sm8_*`) instead of the
+TransposeConv, s8 Softmax and s8 LSTMUnidirectional (`rs<S>_conv_*`, `rs<S>_dw_*`, `rs<S>_dw16_*`,
+`rs<S>_tc16_*`, `rs<S>_tcf32_*`, `rs<S>_tcf16_*`, `rs<S>_sm8_*`, `rs<S>_lstm8_*`) instead of the
 `assets/` descriptors. `--op`/`--dtype`
 limit the draw to matching generators (e.g. `--op Convolve` draws only
 `rs<S>_conv_*`, the same cases as an unfiltered draw; `--op DepthwiseConv --dtype S16`
@@ -91,6 +91,14 @@ list and layer sampler in `GENERATORS` (`generation/random_shapes.py`), keyed by
 (op, dtype), with a new stream id and tag, and teach the op-specific helpers
 (`layer_route`, `footprint`, `layer_macs`, `_relu6_gain`, `_descriptor`) its layout.
 An op without layers sets `layerless` and draws whole case bodies (Softmax: `_sm_draw`).
+
+s8 LSTM cases with an `lstm_quant` block (the DTLN cases and every `lstm8`
+draw) take model-style scales, zero points, biases and cell clip, random
+int8 weights, and a golden from a port of helia-rt's (TFLM) integer LSTM
+reference (`tflm_lstm_s8`). The TFLite desktop kernel is not the reference
+here: its gemmlowp sigmoid differs from the kernel by an LSB. `stateful: true`
+cases start from a random hidden and cell state and pass `hidden_state`, as
+helia-rt does with the model's state tensors.
 
 Hidden shapes: `generate --random-shapes N --hidden-dir DIR` draws the same
 kind of cases from a secret seed instead (env `HCT_HIDDEN_SEED`, or
@@ -187,6 +195,8 @@ in one workspace: DTCM on Apollo510 and Apollo330P, and SRAM (`RWMEM`) on
 Apollo3P, whose 64 KiB TCM can't hold it. Neither path touches a D-cache, so it
 measures kernel-only cost. `mram` (Apollo510, Apollo330P)
 programs each case's weights and bias into a reserved MRAM pool past the image
+(they arrive in a 512 KiB SSRAM stage, not the workspace, so layers with up to
+the pool's 512 KiB of weights fit)
 and evicts them from the D-cache before every timed call, as a large model's
 layer sees them; activations, scratch, multipliers and shifts stay in DTCM, as
 hpx places a TCM-sized arena. The packed fully-connected kernel reads a stream
@@ -201,7 +211,9 @@ case's used workspace from the D-cache, so a loop order that re-reads an activat
 after the cache has evicted it pays the refill. The extra cost shows only once the
 working set (weights plus activations plus scratch) outgrows the D-cache; below that,
 each line misses once whatever the loop order. Give each placement its own `--build-dir`. The
-bundle records it in `session_manifest.json` `target.placement`.
+bundle records it in `session_manifest.json` `target.placement`. `hardware run`
+skips a case whose workspace the placement cannot hold (the DTLN LSTM cases
+under `tcm`) and names the bytes it needs.
 
 On boards with `blob_store_bytes` in `assets/hardware_boards.yaml` (apollo510_evb),
 the firmware caches every streamed blob in MRAM and skips blobs it already holds,
@@ -534,7 +546,7 @@ which go to cutting code size once something passed; default a third of
 `evals`, below `evals`, 0 for none). The hidden set holds only the
 target op and dtype. Hidden shapes exist for `Convolve` S8, `DepthwiseConv`
 S8 and S16, `TransposeConv` S16, FP32 and FP16, `NNActivationFloat` FP32 and
-FP16, and `Softmax` S8 only; set
+FP16, `Softmax` S8 and `LSTMUnidirectional` S8 only; set
 `hidden_shapes: 0` for other targets. Ops without MACs (Softmax) report and
 score cycles per op (one per element) instead of cycles per MAC.
 With `toolchains: [gcc, atfe]` every placement runs once per compiler:

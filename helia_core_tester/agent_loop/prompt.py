@@ -30,7 +30,8 @@ LEG_TEXT = {
 TOOLCHAIN_TEXT = {"gcc": " Built with gcc.", "atfe": " Built with ATfE clang."}
 # Spaced, lowercase op names.
 OP_TEXT = {"DepthwiseConv": "depthwise convolution", "Convolve": "convolution", "FullyConnected": "fully connected",
-           "TransposeConv": "transpose convolution", "Softmax": "softmax"}
+           "TransposeConv": "transpose convolution", "Softmax": "softmax",
+           "LSTMUnidirectional": "unidirectional LSTM"}
 
 
 def _number(raw: Any) -> Optional[float]:
