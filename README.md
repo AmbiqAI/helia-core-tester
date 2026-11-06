@@ -72,13 +72,18 @@ with `--suite int` or `float`, `--op`/`--dtype`/`--case-id` also narrow generati
 `--skip-generate`, `--skip-flash`, `--force-flash`.
 
 Held-out shapes: `generate --random-shapes N --shape-seed S` draws N cases per
-generator: s8 Convolve, s8 and s16 DepthwiseConv, s16, FP32 and FP16
-TransposeConv, and s8 Softmax (`rs<S>_conv_*`, `rs<S>_dw_*`, `rs<S>_dw16_*`,
-`rs<S>_tc16_*`, `rs<S>_tcf32_*`, `rs<S>_tcf16_*`, `rs<S>_sm8_*`) instead of the
-`assets/` descriptors. `--op`/`--dtype`
-limit the draw to matching generators (e.g. `--op Convolve` draws only
+generator: s8 and s16 Convolve, s8 and s16 DepthwiseConv, s16, FP32 and FP16
+TransposeConv, and s8 Softmax (`rs<S>_conv_*`, `rs<S>_conv16_*`, `rs<S>_dw_*`,
+`rs<S>_dw16_*`, `rs<S>_tc16_*`, `rs<S>_tcf32_*`, `rs<S>_tcf16_*`, `rs<S>_sm8_*`)
+instead of the `assets/` descriptors. `--op`/`--dtype`
+limit the draw to matching generators (e.g. `--op Convolve --dtype S8` draws only
 `rs<S>_conv_*`, the same cases as an unfiltered draw; `--op DepthwiseConv --dtype S16`
-draws only `rs<S>_dw16_*`). Every `--op` token must name a registered op by operator,
+draws only `rs<S>_dw16_*`). The s16 Convolve draw cycles the wrapper's three MVE
+callees (`arm_convolve_s16`, `_1x1_s16_ns_np_nd`, `_s16_fast_small_kernel`; only
+`arm_convolve_s16` off MVE), then spends the last third of the cases on edge
+categories: `requant` first, the rest in a seed-dependent order (`int64`, `clamp`,
+`heartkit`, `cin1`, `tail`, `stride`, `pad`, `large_k`, `pixel`). It has no batch-2
+edge: the conv bridge runs one image per case. Every `--op` token must name a registered op by operator,
 descriptor stem or path; case-name prefixes such as `rs7_conv` are refused,
 since drawn names (and hidden ids) cannot be filtered. Each op draws
 from its own seeded stream, cycling through every wrapper route and sized to fit
@@ -498,8 +503,8 @@ Needs, on the bench host: `uv`, `git`, `patch`, `bench-agent`, the
 
 ### 1. Write a campaign file
 
-Start from `assets/campaigns/conv-s8.example.yaml`, `dw-s8.example.yaml`, `dw-s16.example.yaml`
-or `softmax-s8.example.yaml`:
+Start from `assets/campaigns/conv-s8.example.yaml`, `conv-s16.example.yaml`, `dw-s8.example.yaml`,
+`dw-s16.example.yaml` or `softmax-s8.example.yaml`:
 
 ```yaml
 name: conv-s8                  # lowercase, digits, dashes

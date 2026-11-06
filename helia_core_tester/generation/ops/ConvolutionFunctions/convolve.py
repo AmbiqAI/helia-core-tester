@@ -231,6 +231,9 @@ class OpConvolve(OperationBase):
             bias_initializer = 'zeros'
         elif _case_is_float:
             bias_initializer = tf.keras.initializers.RandomUniform(minval=-0.25, maxval=0.25, seed=self.seed)
+        elif self.desc.get('bias_range'):
+            bias_lo, bias_hi = value_range(self.desc, 'bias_range', ())
+            bias_initializer = tf.keras.initializers.RandomUniform(minval=bias_lo, maxval=bias_hi, seed=self.seed)
         else:
             bias_initializer = SignedMagnitudeUniform(minval=2.0, maxval=4.0, seed=self.seed)
 
@@ -347,6 +350,11 @@ class OpConvolve(OperationBase):
         tflite_model = converter.convert()
         with open(out_path, 'wb') as f:
             f.write(tflite_model)
+
+        if self.desc.get('wide_bias') or self.desc.get('min_effective_scale'):
+            from helia_core_tester.generation.ops._shared.bias_init import patch_requant
+
+            patch_requant(out_path, self.desc, self.seed)
 
         hoisted = bias_is_hoisted_by_lowering(
             self.desc.get('dilation', [1, 1]),

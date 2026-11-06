@@ -19,8 +19,13 @@ def kernel_init(desc: Mapping[str, Any], seed: int):
 
     gain = desc.get("weight_gain")
     if gain is None:
-        return tf.keras.initializers.GlorotUniform(seed=seed)
-    return tf.keras.initializers.VarianceScaling(float(gain), "fan_avg", "uniform", seed=seed)
+        init = tf.keras.initializers.GlorotUniform(seed=seed)
+    else:
+        init = tf.keras.initializers.VarianceScaling(float(gain), "fan_avg", "uniform", seed=seed)
+    if desc.get("positive_weights"):
+        # Same bound, one sign.
+        return lambda shape, dtype=None: tf.abs(init(shape, dtype))
+    return init
 
 
 def clamp_golden(desc: Mapping[str, Any], output: np.ndarray) -> np.ndarray:
