@@ -401,12 +401,16 @@ class OpLSTMUnidirectional(OperationBase):
         if not self.desc.get("hint", {}).get("force_cmsis", False):
             return
 
-        from helia_core_tester.generation.utils.lstm_data import generate_lstm_data, build_lstm_context
+        from helia_core_tester.generation.utils.lstm_data import (
+            LstmQuant, build_lstm_context, explicit_lstm_s8, generate_lstm_data,
+        )
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
         from helia_core_tester.core.discovery import find_tester_templates_dir
 
         name = self.desc['name']
-        dataset = self.desc.get("dataset")
+        explicit = self.desc.get("lstm_quant")
+        # Drawn cases name their own data.
+        dataset = self.desc.get("dataset") or (name if explicit else None)
         if not dataset:
             raise ValueError("LSTM CMSIS test requires 'dataset' in descriptor.")
 
@@ -429,21 +433,35 @@ class OpLSTMUnidirectional(OperationBase):
         work_dir = Path(output_dir) / "_lstm_tmp"
         work_dir.mkdir(parents=True, exist_ok=True)
 
-        data = generate_lstm_data(
-            rng=self.rng,
-            activation_dtype=activation_dtype,
-            batch_size=batch_size,
-            time_steps=time_steps,
-            input_size=input_size,
-            hidden_size=hidden_size,
-            time_major=time_major,
-            templates_dir=templates_dir,
-            schema_path=schema_path,
-            work_dir=work_dir,
-            dataset=dataset,
-            input_zero_point_override=input_zero_point_override,
-            output_zero_point_override=output_zero_point_override,
-        )
+        if explicit:
+            if activation_dtype != "S8":
+                raise ValueError("lstm_quant cases must be S8.")
+            data = explicit_lstm_s8(
+                rng=self.rng,
+                batch_size=batch_size,
+                time_steps=time_steps,
+                input_size=input_size,
+                hidden_size=hidden_size,
+                time_major=time_major,
+                quant=LstmQuant.from_desc(explicit),
+                stateful=bool(self.desc.get("stateful", False)),
+            )
+        else:
+            data = generate_lstm_data(
+                rng=self.rng,
+                activation_dtype=activation_dtype,
+                batch_size=batch_size,
+                time_steps=time_steps,
+                input_size=input_size,
+                hidden_size=hidden_size,
+                time_major=time_major,
+                templates_dir=templates_dir,
+                schema_path=schema_path,
+                work_dir=work_dir,
+                dataset=dataset,
+                input_zero_point_override=input_zero_point_override,
+                output_zero_point_override=output_zero_point_override,
+            )
 
         context = build_lstm_context(
             name=name,
@@ -491,6 +509,10 @@ class OpLSTMUnidirectional(OperationBase):
             "cell_gate_bias_array": fmt(data.tensors["cell_gate_bias"], dtype=bias_cast),
             "output_gate_bias_array": fmt(data.tensors["output_gate_bias"], dtype=bias_cast),
         })
+        if "hidden_state" in data.tensors:
+            # Start state for a stateful call.
+            context["hidden_state_array"] = fmt(data.tensors["hidden_state"])
+            context["cell_state_array"] = fmt(data.tensors["cell_state"])
 
         # ns-cmsis-nn#377 / tester#71: generation-time feature probe for the
         # integer LSTM temp-buffer sizers added by ns-cmsis-nn#381. Detected

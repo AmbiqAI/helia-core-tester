@@ -260,7 +260,11 @@ static inline hct_server_blob_t *find_blob_by_role(hct_server_session_t *session
 
 static inline uint8_t *blob_ptr(hct_server_session_t *session, const hct_server_blob_t *blob)
 {
-    return blob->placed ? (uint8_t *)blob->placed : &session->workspace[blob->arena_offset];
+    if (blob->placed)
+    {
+        return (uint8_t *)blob->placed;
+    }
+    return blob->staged ? &session->stage[blob->arena_offset] : &session->workspace[blob->arena_offset];
 }
 
 static inline uint8_t *hct_output_ptr(hct_server_session_t *session)

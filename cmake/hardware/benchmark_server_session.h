@@ -69,6 +69,8 @@ typedef struct
     uint32_t bytes_received;
     /* Read-only copy outside the workspace. */
     const uint8_t *placed;
+    /* Lives in the MRAM stage. */
+    uint8_t staged;
     /* Second input copy, if twinned. */
     uint32_t twin_offset;
     uint8_t twinned;
@@ -292,6 +294,10 @@ typedef struct
     uint32_t output_stream_checksum;
     /* Next free MRAM address this case. */
     uintptr_t mram_cursor;
+    /* MRAM blob stage; NULL: workspace. */
+    uint8_t *stage;
+    uint32_t stage_bytes;
+    uint32_t stage_used;
     /* MRAM bytes this case's blobs take, each from a cache line. */
     uint32_t mram_case_bytes;
     /* Operand the adapter derives once per case (packed FC stream); MRAM placement
@@ -323,6 +329,9 @@ void hct_server_session_init(hct_server_session_t *session,
                              void *workspace,
                              uint32_t workspace_bytes,
                              const hct_boot_info_t *boot);
+
+/* Stage MRAM blobs here, off the workspace. */
+void hct_server_session_set_stage(hct_server_session_t *session, void *stage, uint32_t stage_bytes);
 
 hctp_status_t hct_server_session_accept_frame(hct_server_session_t *session,
                                               const uint8_t *frame_bytes,
