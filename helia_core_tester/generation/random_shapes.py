@@ -25,7 +25,7 @@ from helia_core_tester.hardware.generated_test_bridge import (
     _with_weight_sums,
 )
 from helia_core_tester.hardware.wrapper_route import (
-    CHANNELWISE, FAST_S16_TAPS, PLANAR, conv_route, dw_route, dw_s16_route, opt_variant,
+    CHANNELWISE, FAST_S16_TAPS, PLANAR, conv_route, conv_s16_route, dw_route, dw_s16_route, opt_variant,
 )
 from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
@@ -44,6 +44,8 @@ CONV_ROUTES = (
 # One input channel runs as conv.
 DW_AS_CONV = "as_conv"
 DW16_ROUTES = ("arm_depthwise_conv_fast_s16", "arm_depthwise_conv_s16")
+# MVE callees of the s16 conv wrapper.
+CONV16_ROUTES = ("arm_convolve_s16", "arm_convolve_1x1_s16_ns_np_nd", "arm_convolve_s16_fast_small_kernel")
 # Direct entry; no wrapper.
 TC16_ROUTE = "arm_transpose_conv_s16"
 TC16_SYMBOLS = [TC16_ROUTE, "arm_transpose_conv_s16_get_buffer_size"]
@@ -72,6 +74,8 @@ class Generator:
     suite: str = "int"
     # Draws whole cases; no layer.
     layerless: bool = False
+    # Edge draws ordered by seed.
+    edges: tuple[str, ...] = ()
 
 
 @dataclass
@@ -427,6 +431,177 @@ def _tc16_mixed(rng: np.random.Generator) -> Layer:
     return Layer(_size(rng, 1, 16), _size(rng, 1, 16), cin, cout, kh, kw, sh, sw, padding=pad, transpose=True)
 
 
+def _conv16_layer(rng: np.random.Generator, route: str) -> Layer:
+    """An s16 conv layer aimed at one route."""
+    pad = _padding(rng)
+    if route == "arm_convolve_1x1_s16_ns_np_nd":
+        cin, cout = _channels(rng, 1, 96), _channels(rng, 1, 128)
+        if rng.random() < 0.5:
+            # 1D rows, as in heartkit.
+            return Layer(1, _size(rng, 8, 256), cin, cout, 1, 1, padding=pad)
+        return Layer(_size(rng, 1, 16), _size(rng, 1, 16), cin, cout, 1, 1, padding=pad)
+    if route == "arm_convolve_s16_fast_small_kernel":
+        # Under 9 taps, no padding.
+        cin = int(rng.integers(1, 5))
+        kw = int(rng.integers(1, 8 // cin + 1))
+        kh = int(rng.integers(1, 8 // (kw * cin) + 1))
+        layer = Layer(_size(rng, 2, 24), _size(rng, 4, 32), cin, _channels(rng, 1, 48), kh, kw, *_stride(rng))
+        return _maybe_dilate(rng, layer, 0.2)
+    cin, cout = _channels(rng, 1, 64), _channels(rng, 1, 64)
+    if rng.random() < 0.3:
+        # 1D kernel along W.
+        kw, sw = int(rng.choice([3, 5, 7, 9])), int(rng.integers(1, 3))
+        return Layer(1, _size(rng, 16, 256), cin, cout, 1, kw, 1, sw, padding=pad)
+    kh, kw = _kernel(rng)
+    layer = Layer(_size(rng, 2, 24), _size(rng, 2, 24), cin, cout, kh, kw, *_stride(rng), padding=pad)
+    return _maybe_dilate(rng, layer, 0.3)
+
+
+def _conv16_mixed(rng: np.random.Generator) -> Layer:
+    """Any route; the edge sets one knob."""
+    route = str(rng.choice(CONV16_ROUTES))
+    return _conv16_layer(rng, route)
+
+
+def _conv16_requant(rng: np.random.Generator) -> Layer:
+    """Large multipliers: one LSB flips outputs."""
+    layer = Layer(_size(rng, 1, 6), _size(rng, 4, 24), _odd_channels(rng, 1, 15), int(rng.integers(1, 9)),
+                  int(rng.integers(1, 5)), int(rng.integers(1, 5)), int(rng.integers(1, 3)), int(rng.integers(1, 3)),
+                  padding=_padding(rng))
+    scale = float(rng.uniform(0.5, 2.0))
+    taps = layer.cin * layer.kh * layer.kw
+    # Accumulators near 6000 output steps.
+    amplitude = float(max(np.sqrt(3.0) * 6000.0 / (scale * 73.0 * np.sqrt(taps)), 2.0)) / 32767.0
+    calib = float(rng.uniform(2.0, 16.0))
+    # Bias near 3000 output steps.
+    bias = 3000.0 / scale * (calib / 32767.0) * (_glorot_limit(layer) / 127.0)
+    layer.knobs = {"activation": "NONE", "use_bias": True, "calibration_range": [-calib, calib],
+                   "input_range": [-calib * amplitude, calib * amplitude], "bias_range": [-2 * bias, 2 * bias],
+                   "min_effective_scale": scale}
+    return layer
+
+
+def _conv16_int64(rng: np.random.Generator) -> Layer:
+    """Bias and accumulators beyond int32."""
+    kh, kw = int(rng.integers(6, 9)), int(rng.integers(6, 9))
+    # Inputs cover the kernel: full-tap outputs.
+    h, w = kh + int(rng.integers(0, 3)), kw + int(rng.integers(0, 3))
+    layer = Layer(h, w, _odd_channels(rng, 45, 63), int(rng.integers(2, 6)), kh, kw, padding="VALID")
+    # Positive data: ~2e6 per tap, 1600+ taps.
+    layer.knobs = {"activation": "NONE", "use_bias": True, "calibration_range": [0.0, 1.0],
+                   "input_range": [0.85, 1.0], "positive_weights": True,
+                   "wide_bias": [2.0**31, float(2 ** int(rng.integers(32, 37)))]}
+    return layer
+
+
+def _conv16_clamp(rng: np.random.Generator) -> Layer:
+    """Clamps hit on both sides."""
+    layer = _conv16_mixed(rng)
+    calib = float(rng.uniform(1.0, 32.0))
+    layer.knobs = {"activation": "NONE", "use_bias": bool(rng.random() < 0.7),
+                   "calibration_range": [-calib, calib], "input_range": [-calib, calib],
+                   "activation_min": -int(rng.integers(500, 5000)), "activation_max": int(rng.integers(500, 5000))}
+    return layer
+
+
+def _conv16_batch2(rng: np.random.Generator) -> Layer:
+    """Two images in one call."""
+    layer = _conv16_mixed(rng)
+    layer.n, layer.dh, layer.dw = 2, 1, 1
+    return layer
+
+
+# Heartkit widths and channel counts.
+HEARTKIT_W = (13, 25, 50, 100, 200, 256, 400, 800)
+HEARTKIT_C = (1, 4, 6, 8, 12, 16, 18, 24, 32, 48, 64, 72, 128)
+
+
+def _conv16_heartkit(rng: np.random.Generator) -> Layer:
+    """Heartkit 1D rows: 1x1, 1x7, 1x9 stride 2."""
+    kw = int(rng.choice([1, 1, 7, 9]))
+    sw = 2 if kw == 9 else 1
+    cin, cout = (int(rng.choice(HEARTKIT_C)) for _ in range(2))
+    if rng.random() < 0.3:
+        # Off-grid channels near the model's.
+        cin, cout = cin + int(rng.integers(-1, 2)) or 1, cout + int(rng.integers(-1, 2)) or 1
+    return Layer(1, int(rng.choice(HEARTKIT_W)), cin, cout, 1, kw, 1, sw, padding="SAME")
+
+
+def _conv16_cin1(rng: np.random.Generator) -> Layer:
+    """One to three input channels."""
+    cin, cout = int(rng.choice([1, 1, 2, 3])), _odd_channels(rng, 2, 33)
+    if rng.random() < 0.5:
+        kw, sw = int(rng.integers(1, 10)), int(rng.integers(1, 3))
+        return Layer(1, _size(rng, 16, 400), cin, cout, 1, kw, 1, sw, padding=_padding(rng))
+    kh, kw = _kernel(rng)
+    return Layer(_size(rng, 2, 24), _size(rng, 2, 24), cin, cout, kh, kw, *_stride(rng), padding=_padding(rng))
+
+
+def _conv16_tail(rng: np.random.Generator) -> Layer:
+    """Cout past the last 4 or 8 lanes."""
+    layer = _conv16_mixed(rng)
+    lanes = int(rng.choice([4, 8]))
+    layer.cout = lanes * int(rng.integers(0, 6)) + int(rng.integers(1, lanes))
+    layer.cin = _odd_channels(rng, 1, 47)
+    return layer
+
+
+def _conv16_stride(rng: np.random.Generator) -> Layer:
+    """Strides 2-4, some beyond the kernel."""
+    sh, sw = int(rng.integers(1, 5)), int(rng.integers(2, 5))
+    kh, kw = int(rng.integers(1, sh + 2)), int(rng.integers(1, sw + 2))
+    return Layer(_size(rng, 2, 24), _size(rng, 4, 48), _odd_channels(rng, 1, 32), _odd_channels(rng, 1, 32),
+                 kh, kw, sh, sw, padding=_padding(rng))
+
+
+def _conv16_pad(rng: np.random.Generator) -> Layer:
+    """SAME odd pads, or VALID one-output rows."""
+    cin, cout = _odd_channels(rng, 1, 32), _odd_channels(rng, 1, 32)
+    kh, kw = int(rng.integers(1, 6)), int(rng.integers(2, 8))
+    if rng.random() < 0.5:
+        # Even kernels pad unevenly.
+        kh, kw = kh + (kh % 2), kw + (kw % 2)
+        return Layer(_size(rng, 1, 12), _size(rng, 2, 24), cin, cout, kh, kw, *_stride(rng), padding="SAME")
+    # Input matches the kernel: one output.
+    return Layer(kh, kw + int(rng.integers(0, 2)), cin, cout, kh, kw, padding="VALID")
+
+
+def _conv16_large_k(rng: np.random.Generator) -> Layer:
+    """Long dot products, few pixels."""
+    kh, kw = int(rng.integers(3, 8)), int(rng.integers(3, 8))
+    cin = int(rng.integers(600, 2000)) // (kh * kw) + 1
+    return Layer(kh + int(rng.integers(0, 3)), kw + int(rng.integers(0, 4)), cin, _odd_channels(rng, 1, 24),
+                 kh, kw, padding=_padding(rng))
+
+
+def _conv16_pixel(rng: np.random.Generator) -> Layer:
+    """One-pixel input, as in squeeze-excite."""
+    k = int(rng.choice([1, 1, 3]))
+    return Layer(1, 1, _channels(rng, 2, 96), _channels(rng, 2, 96), k, k, padding="SAME")
+
+
+# Edge categories; requant always runs.
+CONV16_DRAWS: dict[str, Callable[[np.random.Generator], Layer]] = {
+    "requant": _conv16_requant, "int64": _conv16_int64, "clamp": _conv16_clamp, "batch2": _conv16_batch2,
+    "heartkit": _conv16_heartkit, "cin1": _conv16_cin1, "tail": _conv16_tail, "stride": _conv16_stride,
+    "pad": _conv16_pad, "large_k": _conv16_large_k, "pixel": _conv16_pixel,
+}
+CONV16_EDGES = tuple(CONV16_DRAWS)
+
+
+def _conv16_draw(rng: np.random.Generator, target: str) -> Layer:
+    edge = CONV16_DRAWS.get(target)
+    return edge(rng) if edge else _conv16_layer(rng, target)
+
+
+def _seeded_plan(n: int, routes: list[str], edges: tuple[str, ...], rng: np.random.Generator) -> list[str]:
+    """Routes, then a third edges, seed-ordered."""
+    count = -(-n // 3)
+    # The first edge leads; the rest shuffle.
+    order = [edges[0], *(edges[1 + int(i)] for i in rng.permutation(len(edges) - 1))]
+    return [routes[i % len(routes)] for i in range(n - count)] + [order[i % len(order)] for i in range(count)]
+
+
 def _tcf_rms(layer: Layer, data: float) -> float:
     """Output RMS for Glorot weights, |x| <= data."""
     taps = layer.cin * max(layer.kh / layer.sh, 1.0) * max(layer.kw / layer.sw, 1.0)
@@ -631,6 +806,10 @@ def _dw16_routes(mve: bool) -> list[str]:
     return list(DW16_ROUTES)
 
 
+def _conv16_routes(mve: bool) -> list[str]:
+    return list(CONV16_ROUTES) if mve else [CONV16_ROUTES[0]]
+
+
 def _tc16_routes(mve: bool) -> list[str]:
     return [TC16_ROUTE]
 
@@ -765,6 +944,9 @@ GENERATORS: dict[tuple[str, str], Generator] = {
         "sm8", "SoftmaxFunctions/softmax.yaml", 8, lambda mve: [SOFTMAX_ROUTE], _sm_draw,
         lambda n, routes: _edge_plan(n, routes, SOFTMAX_EDGES), layerless=True,
     ),
+    ("Convolve", "S16"): Generator(
+        "conv16", "ConvolutionFunctions/convolve.yaml", 9, _conv16_routes, _conv16_draw, edges=CONV16_EDGES,
+    ),
 }
 # (op, dtype) keys, in draw order.
 OPS = tuple(GENERATORS)
@@ -822,7 +1004,8 @@ def layer_route(op: str, layer: Layer, mve: bool, dtype: str = "S8") -> str:
     i, o = (1, layer.h, layer.w, layer.cin), (1, oh, ow, layer.cout)
     stride, dil, pad = (layer.sh, layer.sw), (layer.dh, layer.dw), layer.pads()
     if op == "Convolve":
-        return conv_route(i, (layer.cout, layer.kh, layer.kw, layer.cin), o, stride, pad, dil, mve)
+        route = conv_s16_route if dtype == "S16" else conv_route
+        return route(i, (layer.cout, layer.kh, layer.kw, layer.cin), o, stride, pad, dil, mve)
     if dtype == "S16":
         return dw_s16_route(i, (1, layer.kh, layer.kw, layer.cout), o, stride, pad, dil, layer.mult)
     return dw_route(i, (1, layer.kh, layer.kw, layer.cout), o, stride, pad, dil, layer.mult, mve)
@@ -839,8 +1022,9 @@ def footprint(op: str, layer: Layer, dtype: str = "S8") -> int:
     item, bias = (2, 8) if dtype == "S16" else (1, 4)
     if op == "Convolve":
         fdims = {"h": layer.kh, "w": layer.kw, "c": layer.cin, "n": layer.cout}
-        scratch = TemplateContextBuilder.calculate_buffer_size_max(idims, fdims, odims, output_dtype="S8")
-        scratch = _with_weight_sums(scratch, layer.cout)
+        scratch = TemplateContextBuilder.calculate_buffer_size_max(idims, fdims, odims, output_dtype=dtype)
+        # S8 bridges also place weight sums.
+        scratch = scratch if dtype == "S16" else _with_weight_sums(scratch, layer.cout)
         weights = layer.kh * layer.kw * layer.cin * layer.cout
     elif op == "TransposeConv":
         fdims = {"h": layer.kh, "w": layer.kw, "c": layer.cin, "n": layer.cout}
@@ -983,6 +1167,9 @@ def sample_op(key: tuple[str, str], n: int, seed: int, cpu: str, workspace: int)
     rng = np.random.default_rng([seed, gen.stream])
     routes, draw = gen.routes(mve), gen.draw
     targets = gen.plan(n, routes) if gen.plan else routes
+    if gen.edges:
+        # Own stream: shape draws stay put.
+        targets = _seeded_plan(n, routes, gen.edges, np.random.default_rng([seed, gen.stream, 1]))
     cases = []
     for index in range(n):
         target = targets[index % len(targets)]

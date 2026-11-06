@@ -23,6 +23,7 @@ SEEDS = (0, 1, 7, 12345)
 CONV, DW, DW16, TC16 = ("Convolve", "S8"), ("DepthwiseConv", "S8"), ("DepthwiseConv", "S16"), ("TransposeConv", "S16")
 TCF32, TCF16 = ("TransposeConv", "FP32"), ("TransposeConv", "FP16")
 SM8 = ("Softmax", "S8")
+CONV16 = ("Convolve", "S16")
 SIG32, SIG16 = ("NNActivationFloat", "FP32"), ("NNActivationFloat", "FP16")
 
 
@@ -36,7 +37,7 @@ def _layer(case: dict) -> rs.Layer:
         return rs.Layer(h, w, c, cout, kh, kw, *case["strides"], padding=case["padding"], transpose=True, n=n)
     return rs.Layer(
         case["input_shape"][1], case["input_shape"][2], cin, cin * last if dw else last, kh, kw,
-        *case["strides"], *case["dilation"], padding=case["padding"], mult=last if dw else 1,
+        *case["strides"], *case["dilation"], padding=case["padding"], mult=last if dw else 1, n=case["input_shape"][0],
     )
 
 
@@ -47,30 +48,30 @@ def test_same_seed_same_cases() -> None:
 
 def test_ops_draw_independently() -> None:
     both = rs.sample_cases(10, 3)
-    assert [c for c in both if c["operator"] == "Convolve"] == rs.sample_cases(10, 3, ops=(CONV,))
-    for key in (DW16, TC16):
+    for key in (CONV, DW16, TC16, CONV16):
         assert [c for c in both if (c["operator"], c["activation_dtype"]) == key] == rs.sample_cases(10, 3, ops=(key,))
 
 
 @pytest.mark.parametrize(("op", "dtype", "picked"), [
-    (None, None, (CONV, DW, DW16, TC16, TCF32, TCF16, SIG32, SIG16, SM8)),
+    (None, None, (CONV, DW, DW16, TC16, TCF32, TCF16, SIG32, SIG16, SM8, CONV16)),
     ("Softmax", "S8", (SM8,)),
     ("softmax", None, (SM8,)),
     ("TransposeConv", "S16", (TC16,)),
     ("transpose_conv", None, (TC16,)),
-    ("Convolve", None, (CONV,)),
+    ("Convolve", None, (CONV, CONV16)),
+    ("Convolve", "S16", (CONV16,)),
     ("DepthwiseConv", "s8", (DW,)),
     ("DepthwiseConv", "S16", (DW16,)),
     ("depthwise_conv", None, (DW, DW16)),
     (None, "S8", (CONV, DW, SM8)),
-    (None, "s16", (DW16, TC16)),
+    (None, "s16", (DW16, TC16, CONV16)),
 ])
 def test_select_ops_matches_filters(op, dtype, picked) -> None:
     assert rs.select_ops(op, dtype) == picked
 
 
 @pytest.mark.parametrize(("op", "dtype"), [
-    ("FullyConnected", None), ("Convolve", "S16"), (None, "S4"), ("rs", None), ("DepthwiseConv", "S4"),
+    ("FullyConnected", None), ("Convolve", "S4"), (None, "S4"), ("rs", None), ("DepthwiseConv", "S4"),
     ("TransposeConv", "S8"), ("Softmax", "S16"),
     # A typo fails even beside a match.
     ("Convolve,Pad", "S8"),
@@ -78,7 +79,7 @@ def test_select_ops_matches_filters(op, dtype, picked) -> None:
     ("rs7_conv", None),
 ])
 def test_select_ops_refuses_unknown(op, dtype) -> None:
-    with pytest.raises(ValueError, match="NNActivationFloat FP32, NNActivationFloat FP16, Softmax S8$"):
+    with pytest.raises(ValueError, match="NNActivationFloat FP16, Softmax S8, Convolve S16$"):
         rs.select_ops(op, dtype)
 
 
@@ -185,6 +186,49 @@ def test_s16_edges_covered() -> None:
         if "activation_max" in case:
             assert -32768 <= case["activation_min"] < case["activation_max"] <= 32767
     assert any(case.get("activation_min", 0) < -128 for case in cases)
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_conv16_routes_and_plan(seed: int) -> None:
+    cases = rs.sample_cases(12, seed, ops=(CONV16,))
+    edges = [c.get("edge") for c in cases]
+    # A third are edges; requant leads.
+    assert edges[:8] == [None] * 8 and edges[8] == "requant" and len(set(edges[8:])) == 4
+    assert set(edges[9:]) <= set(rs.CONV16_EDGES[1:])
+    assert [c["expected_route"] for c in cases[:8]] == [rs.CONV16_ROUTES[i % 3] for i in range(8)]
+    assert all(c["name"].startswith(f"rs{seed}_conv16_") for c in cases)
+    plain = rs.sample_cases(12, seed, "cortex-m4", (CONV16,))
+    assert rs.route_counts(plain) == {"Convolve": {"arm_convolve_s16": 12}}
+
+
+def test_conv16_edges_vary_by_seed() -> None:
+    plans = {tuple(c.get("edge") for c in rs.sample_cases(6, seed, ops=(CONV16,))) for seed in range(40)}
+    assert len(plans) > 5
+    assert {edge for plan in plans for edge in plan} == {None, *rs.CONV16_EDGES}
+
+
+def test_conv16_edge_shapes() -> None:
+    cases = rs.sample_cases(33, 11, ops=(CONV16,))
+    by_edge = {c["edge"]: c for c in cases if c.get("edge")}
+    assert set(by_edge) == set(rs.CONV16_EDGES)
+    layers = {edge: _layer(case) for edge, case in by_edge.items()}
+    assert by_edge["requant"]["min_effective_scale"] and by_edge["requant"]["bias_range"]
+    assert by_edge["int64"]["wide_bias"][0] >= 2**31 and by_edge["int64"]["positive_weights"]
+    assert by_edge["int64"]["padding"] == "VALID"
+    assert by_edge["batch2"]["input_shape"][0] == 2 and by_edge["batch2"]["dilation"] == [1, 1]
+    assert layers["heartkit"].h == 1 and layers["heartkit"].padding == "SAME"
+    assert layers["cin1"].cin <= 3 and layers["tail"].cout % 4
+    assert layers["pixel"].h == layers["pixel"].w == 1
+    assert layers["large_k"].cin * layers["large_k"].kh * layers["large_k"].kw >= 600
+    assert max(by_edge["stride"]["strides"]) >= 2
+    clamp = by_edge["clamp"]
+    assert clamp["activation_min"] < 0 < clamp["activation_max"]
+    # Int16 fused activations floor at zero.
+    for case in cases:
+        if case["activation"] != "NONE":
+            assert case["activation_min"] >= 0
+    routes = rs.route_counts(cases)["Convolve"]
+    assert set(routes) == set(rs.CONV16_ROUTES)
 
 
 @pytest.mark.parametrize("cpu", ["cortex-m55", "cortex-m4"])
