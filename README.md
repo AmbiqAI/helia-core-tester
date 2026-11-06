@@ -82,7 +82,8 @@ draws only `rs<S>_dw16_*`). The s16 Convolve draw cycles the wrapper's three MVE
 callees (`arm_convolve_s16`, `_1x1_s16_ns_np_nd`, `_s16_fast_small_kernel`; only
 `arm_convolve_s16` off MVE), then spends the last third of the cases on edge
 categories: `requant` first, the rest in a seed-dependent order (`int64`, `clamp`,
-`batch2`, `heartkit`, `cin1`, `tail`, `stride`, `pad`, `large_k`, `pixel`). Every `--op` token must name a registered op by operator,
+`heartkit`, `cin1`, `tail`, `stride`, `pad`, `large_k`, `pixel`). It has no batch-2
+edge: the conv bridge runs one image per case. Every `--op` token must name a registered op by operator,
 descriptor stem or path; case-name prefixes such as `rs7_conv` are refused,
 since drawn names (and hidden ids) cannot be filtered. Each op draws
 from its own seeded stream, cycling through every wrapper route and sized to fit

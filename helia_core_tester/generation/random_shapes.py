@@ -504,13 +504,6 @@ def _conv16_clamp(rng: np.random.Generator) -> Layer:
     return layer
 
 
-def _conv16_batch2(rng: np.random.Generator) -> Layer:
-    """Two images in one call."""
-    layer = _conv16_mixed(rng)
-    layer.n, layer.dh, layer.dw = 2, 1, 1
-    return layer
-
-
 # Heartkit widths and channel counts.
 HEARTKIT_W = (13, 25, 50, 100, 200, 256, 400, 800)
 HEARTKIT_C = (1, 4, 6, 8, 12, 16, 18, 24, 32, 48, 64, 72, 128)
@@ -580,9 +573,10 @@ def _conv16_pixel(rng: np.random.Generator) -> Layer:
     return Layer(1, 1, _channels(rng, 2, 96), _channels(rng, 2, 96), k, k, padding="SAME")
 
 
-# Edge categories; requant always runs.
+# Edge categories; requant always runs. No
+# batch2: the conv bridge runs one image.
 CONV16_DRAWS: dict[str, Callable[[np.random.Generator], Layer]] = {
-    "requant": _conv16_requant, "int64": _conv16_int64, "clamp": _conv16_clamp, "batch2": _conv16_batch2,
+    "requant": _conv16_requant, "int64": _conv16_int64, "clamp": _conv16_clamp,
     "heartkit": _conv16_heartkit, "cin1": _conv16_cin1, "tail": _conv16_tail, "stride": _conv16_stride,
     "pad": _conv16_pad, "large_k": _conv16_large_k, "pixel": _conv16_pixel,
 }

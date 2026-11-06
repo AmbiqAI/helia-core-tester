@@ -202,20 +202,19 @@ def test_conv16_routes_and_plan(seed: int) -> None:
 
 
 def test_conv16_edges_vary_by_seed() -> None:
-    plans = {tuple(c.get("edge") for c in rs.sample_cases(6, seed, ops=(CONV16,))) for seed in range(40)}
+    plans = {tuple(c.get("edge") for c in rs.sample_cases(6, seed, ops=(CONV16,))) for seed in range(100)}
     assert len(plans) > 5
     assert {edge for plan in plans for edge in plan} == {None, *rs.CONV16_EDGES}
 
 
 def test_conv16_edge_shapes() -> None:
-    cases = rs.sample_cases(33, 11, ops=(CONV16,))
+    cases = rs.sample_cases(30, 11, ops=(CONV16,))
     by_edge = {c["edge"]: c for c in cases if c.get("edge")}
     assert set(by_edge) == set(rs.CONV16_EDGES)
     layers = {edge: _layer(case) for edge, case in by_edge.items()}
     assert by_edge["requant"]["min_effective_scale"] and by_edge["requant"]["bias_range"]
     assert by_edge["int64"]["wide_bias"][0] >= 2**31 and by_edge["int64"]["positive_weights"]
     assert by_edge["int64"]["padding"] == "VALID"
-    assert by_edge["batch2"]["input_shape"][0] == 2 and by_edge["batch2"]["dilation"] == [1, 1]
     assert layers["heartkit"].h == 1 and layers["heartkit"].padding == "SAME"
     assert layers["cin1"].cin <= 3 and layers["tail"].cout % 4
     assert layers["pixel"].h == layers["pixel"].w == 1
