@@ -8,6 +8,7 @@
 #include "benchmark_server_adapter.h"
 #include "benchmark_server_catalog.h"
 #include "benchmark_server_messages.h"
+#include "benchmark_server_mram.h"
 #include "benchmark_server_session.h"
 #include "benchmark_server_transport.h"
 #include "nsx_system.h"
@@ -23,6 +24,11 @@ typedef struct
 __attribute__((aligned(16), section(".sram_bss"))) static uint8_t g_hct_workspace[HCT_SERVER_WORKSPACE_BYTES];
 #else
 __attribute__((aligned(16))) static uint8_t g_hct_workspace[HCT_SERVER_WORKSPACE_BYTES];
+#endif
+
+#if defined(HCT_PLACEMENT_MRAM)
+/* MRAM blobs stage here, in SSRAM. */
+__attribute__((aligned(16), section(".sram_bss"))) static uint8_t g_hct_mram_stage[HCT_MRAM_POOL_BYTES];
 #endif
 
 static const hct_symbol_ref_t g_hct_symbol_refs[] = {
@@ -217,6 +223,9 @@ int main(void)
                             g_hct_workspace,
                             (uint32_t)sizeof(g_hct_workspace),
                             &boot);
+#if defined(HCT_PLACEMENT_MRAM)
+    hct_server_session_set_stage(&g_hct_session, g_hct_mram_stage, (uint32_t)sizeof(g_hct_mram_stage));
+#endif
     g_hct_last_target_info_status = HCTP_STATUS_OK;
     g_hct_last_catalog_status = HCTP_STATUS_OK;
     hct_flush_outbound(&g_hct_session, transport);

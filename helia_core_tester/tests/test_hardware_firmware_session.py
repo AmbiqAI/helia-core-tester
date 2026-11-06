@@ -210,6 +210,8 @@ def test_c_mram_placement(tmp_path: Path) -> None:
         length, alignment = staged_extent(role, length, alignment, "mram")
         used = -(-used // alignment) * alignment + length
     assert f"workspace={used}" in result.stdout
+    # Weights, bias: stage rows, not workspace.
+    assert "stage=32" in result.stdout
     assert "placed reused" in result.stdout
     assert "rows skipped" in result.stdout
     assert "pool limits refused" in result.stdout

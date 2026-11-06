@@ -143,8 +143,8 @@ def staged_extent(role: str, byte_length: int, alignment: int, placement: str) -
     alignment = max(alignment, 1)
     if placement not in MRAM_PLACEMENTS or role not in MRAM_ROLES:
         return byte_length, alignment
-    padded = -(-byte_length // MRAM_ROW_BYTES) * MRAM_ROW_BYTES
-    return padded, max(alignment, MRAM_ROW_BYTES)
+    # MRAM blobs stage in SSRAM.
+    return 0, 1
 
 
 class ArenaTracker:

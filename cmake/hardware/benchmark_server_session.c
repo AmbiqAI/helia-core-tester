@@ -651,6 +651,12 @@ static void reset_case_buffers(hct_server_session_t *session)
     session->output_stream_checksum = 0u;
     session->output_stream_active = 0u;
     session->mram_cursor = 0u;
+    /* Zero row padding, as the workspace. */
+    if (session->stage != NULL && session->stage_used <= session->stage_bytes)
+    {
+        memset(session->stage, 0, session->stage_used);
+    }
+    session->stage_used = 0u;
     session->mram_case_bytes = 0u;
     session->derived_bytes = 0u;
     session->derived_source = NULL;
@@ -769,6 +775,20 @@ static hctp_status_t allocate_blob(hct_server_session_t *session, hct_server_blo
     if (staged && length < blob->byte_length)
     {
         return HCTP_STATUS_INVALID_ARGUMENT;
+    }
+    if (staged && session->stage != NULL)
+    {
+        /* MRAM blobs skip the workspace. */
+        /* The stage holds a full pool. */
+        if (!hct_checked_aligned_range(session->stage_used, alignment, length, session->stage_bytes, &aligned, &end))
+        {
+            return HCTP_STATUS_NO_SPACE;
+        }
+        blob->arena_offset = aligned;
+        blob->bytes_received = 0u;
+        blob->staged = 1u;
+        session->stage_used = end;
+        return HCTP_STATUS_OK;
     }
     if (!hct_checked_aligned_range(session->workspace_used_bytes,
                                alignment,
@@ -1463,8 +1483,7 @@ static hctp_status_t program_into_pool(hct_server_session_t *session,
 /* Program the staged copy into MRAM; allocate_blob padded the stage to rows. */
 static hctp_status_t place_in_mram(hct_server_session_t *session, hct_server_blob_t *blob)
 {
-    return program_into_pool(session, &session->workspace[blob->arena_offset], blob->byte_length, blob->crc32, true,
-                             &blob->placed);
+    return program_into_pool(session, blob_ptr(session, blob), blob->byte_length, blob->crc32, true, &blob->placed);
 }
 
 /* Build the derived operand with one untimed adapter call and program it after the
@@ -1601,7 +1620,10 @@ static hctp_status_t handle_blob_chunk(hct_server_session_t *session, const uint
     if (chunk_offset != blob->bytes_received) return HCTP_STATUS_INVALID_ARGUMENT;
     if (!cursor_require(&cursor, chunk_length)) return HCTP_STATUS_TRUNCATED_FRAME;
     if ((uint64_t)chunk_offset + chunk_length > blob->byte_length) return HCTP_STATUS_INVALID_ARGUMENT;
-    if ((uint64_t)blob->arena_offset + chunk_offset + chunk_length > session->workspace_bytes) return HCTP_STATUS_INVALID_ARGUMENT;
+    if ((uint64_t)blob->arena_offset + chunk_offset + chunk_length > (blob->staged ? session->stage_bytes : session->workspace_bytes))
+    {
+        return HCTP_STATUS_INVALID_ARGUMENT;
+    }
     if ((blob->alignment > 1u) && ((chunk_offset % blob->alignment) != 0u)) return HCTP_STATUS_INVALID_ARGUMENT;
 
     memcpy(blob_ptr(session, blob) + chunk_offset, payload + cursor.offset, chunk_length);
@@ -1896,6 +1918,12 @@ void hct_server_session_init(hct_server_session_t *session,
                                 sizeof(session->outbox),
                                 &frame_length);
     session->outbox_length = frame_length;
+}
+
+void hct_server_session_set_stage(hct_server_session_t *session, void *stage, uint32_t stage_bytes)
+{
+    session->stage = (uint8_t *)stage;
+    session->stage_bytes = (stage != NULL) ? stage_bytes : 0u;
 }
 
 hctp_status_t hct_server_session_accept_frame(hct_server_session_t *session,
