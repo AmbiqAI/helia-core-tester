@@ -26,6 +26,8 @@ LEG_TEXT = {
     "sram": ("weights in MRAM and activations and scratch in SRAM, both behind the data cache, "
              "cold before each call. Most deployments keep activations here: a loop order that "
              "re-reads an activation after the cache has evicted it pays a refill each time."),
+    "ssram": ("weights in shared SRAM behind the data cache, cold before each call; activations "
+              "in DTCM. hpx keeps a model's flatbuffer here, so this matches its layer cycles."),
 }
 TOOLCHAIN_TEXT = {"gcc": " Built with gcc.", "atfe": " Built with ATfE clang."}
 # Spaced, lowercase op names.

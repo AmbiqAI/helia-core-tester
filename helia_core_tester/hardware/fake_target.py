@@ -41,6 +41,7 @@ from .wire import (
     CAP_RTT_TRANSPORT,
     CAP_WEIGHTS_MRAM,
     CAP_ACTIVATIONS_SRAM,
+    CAP_WEIGHTS_SSRAM,
     BlobDescriptor,
     CaseComplete,
     CaseMeta,
@@ -348,6 +349,8 @@ class FakeTargetTransport:
             flags |= CAP_WEIGHTS_MRAM
         if self._placement == "sram":
             flags |= CAP_ACTIVATIONS_SRAM
+        if self._placement == "ssram":
+            flags = (flags & ~CAP_WEIGHTS_MRAM) | CAP_WEIGHTS_SSRAM
         if self.blob_store is not None:
             flags |= CAP_BLOB_STORE
         info = TargetInfo(

@@ -215,7 +215,12 @@ and helia-aot do once TCM fills. Before every timed call it also cleans and evic
 case's used workspace from the D-cache, so a loop order that re-reads an activation
 after the cache has evicted it pays the refill. The extra cost shows only once the
 working set (weights plus activations plus scratch) outgrows the D-cache; below that,
-each line misses once whatever the loop order. Give each placement its own `--build-dir`. The
+each line misses once whatever the loop order. `ssram` (Apollo510, Apollo330P) keeps
+weights and bias in the shared-SRAM stage instead of programming MRAM: they are
+cleaned once, then evicted from the D-cache before every timed call, and
+activations stay in DTCM. That is hpx's layout for a model whose flatbuffer
+sits in SRAM, so `ssram` layer cycles match hpx at the same clock.
+Give each placement its own `--build-dir`. The
 bundle records it in `session_manifest.json` `target.placement`. `hardware run`
 skips a case whose workspace the placement cannot hold (the DTLN LSTM cases
 under `tcm`) and names the bytes it needs.
@@ -522,7 +527,7 @@ Start from `assets/campaigns/conv-s8.example.yaml`, `conv-s16.example.yaml`, `dw
 name: conv-s8                  # lowercase, digits, dashes
 board: apollo510_evb           # tester board id
 bench_id: apollo510_evb        # bench-agent board id (default: board)
-legs: [tcm, mram]              # default: both when the board has MRAM; add sram to time activations in SRAM
+legs: [tcm, mram]              # default: both when the board has MRAM; sram: activations in SRAM; ssram: weights in SRAM
 toolchains: [gcc]              # or [gcc, atfe]; atfe needs ATFE_ROOT
 target:
   op: Convolve                 # `hardware run --op`

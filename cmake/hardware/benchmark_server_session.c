@@ -770,7 +770,13 @@ static hctp_status_t allocate_blob(hct_server_session_t *session, hct_server_blo
     uint32_t aligned;
     uint32_t end;
     const bool staged = blob_in_mram(blob);
-    const uint32_t alignment = (staged && blob->alignment < HCT_MRAM_ROW_BYTES) ? HCT_MRAM_ROW_BYTES : blob->alignment;
+#if defined(HCT_WEIGHTS_SSRAM)
+    /* Blobs read in place: start on lines. */
+    const uint32_t row = HCT_MRAM_LINE_BYTES;
+#else
+    const uint32_t row = HCT_MRAM_ROW_BYTES;
+#endif
+    const uint32_t alignment = (staged && blob->alignment < row) ? row : blob->alignment;
     const uint32_t length = staged ? ((blob->byte_length + HCT_MRAM_ROW_BYTES - 1u) & ~(HCT_MRAM_ROW_BYTES - 1u)) : blob->byte_length;
     if (staged && length < blob->byte_length)
     {
@@ -1379,6 +1385,7 @@ static hctp_status_t handle_case_meta(hct_server_session_t *session, const uint8
 
 volatile uint32_t hct_mram_rows_programmed;
 
+#if !defined(HCT_WEIGHTS_SSRAM)
 /* Row differs in its blob bytes. */
 static bool row_differs(const uint8_t *staged, uintptr_t address, uint32_t offset, uint32_t byte_length)
 {
@@ -1421,6 +1428,50 @@ static uint32_t mram_start_offset(uint32_t crc32, uint32_t case_bytes)
     return (crc32 % window) & ~(HCT_MRAM_LINE_BYTES - 1u);
 }
 
+#endif
+
+#if defined(HCT_WEIGHTS_SSRAM)
+/* Keep bytes in the SSRAM stage, cold. */
+static hctp_status_t keep_in_stage(hct_server_session_t *session,
+                                   const uint8_t *data,
+                                   uint32_t byte_length,
+                                   const uint8_t **placed)
+{
+    const uint32_t length = (byte_length + HCT_MRAM_LINE_BYTES - 1u) & ~(HCT_MRAM_LINE_BYTES - 1u);
+    uint8_t *kept = (uint8_t *)data;
+    if (length == 0u)
+    {
+        return HCTP_STATUS_OK;
+    }
+    if (session->stage == NULL || length < byte_length || hct_window.cold_count >= HCT_SERVER_MAX_BLOBS)
+    {
+        return HCTP_STATUS_INVALID_ARGUMENT;
+    }
+    if (data < session->stage || data >= session->stage + session->stage_bytes)
+    {
+        /* Derived operands copy in after blobs. */
+        uint32_t offset;
+        uint32_t end;
+        if (!hct_checked_aligned_range(session->stage_used, HCT_MRAM_LINE_BYTES, length, session->stage_bytes,
+                                       &offset, &end))
+        {
+            return HCTP_STATUS_NO_SPACE;
+        }
+        kept = &session->stage[offset];
+        memcpy(kept, data, byte_length);
+        memset(kept + byte_length, 0, length - byte_length);
+        session->stage_used = end;
+    }
+    /* Write back once; timed calls only evict. */
+    SCB_CleanInvalidateDCache_by_Addr((volatile void *)kept, (int32_t)length);
+    *placed = kept;
+    hct_window.cold_addr[hct_window.cold_count] = kept;
+    hct_window.cold_bytes[hct_window.cold_count] = (int32_t)length;
+    hct_window.cold_count += 1u;
+    return HCTP_STATUS_OK;
+}
+#endif
+
 /* Program byte_length bytes at the case cursor and register them as cold.
  * `staged` holds whole rows when `padded` is set; otherwise the last partial row
  * goes through a zero-filled copy so nothing past byte_length is read. */
@@ -1431,6 +1482,11 @@ static hctp_status_t program_into_pool(hct_server_session_t *session,
                                        bool padded,
                                        const uint8_t **placed)
 {
+#if defined(HCT_WEIGHTS_SSRAM)
+    (void)crc32;
+    (void)padded;
+    return keep_in_stage(session, staged, byte_length, placed);
+#else
     const uintptr_t base = hct_mram_pool_base();
     const uint32_t length = (byte_length + HCT_MRAM_ROW_BYTES - 1u) & ~(HCT_MRAM_ROW_BYTES - 1u);
     const uint32_t whole = padded ? length : (byte_length & ~(HCT_MRAM_ROW_BYTES - 1u));
@@ -1478,6 +1534,7 @@ static hctp_status_t program_into_pool(hct_server_session_t *session,
     hct_window.cold_bytes[hct_window.cold_count] = (int32_t)length;
     hct_window.cold_count += 1u;
     return HCTP_STATUS_OK;
+#endif
 }
 
 /* Program the staged copy into MRAM; allocate_blob padded the stage to rows. */

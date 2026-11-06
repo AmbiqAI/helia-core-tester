@@ -299,7 +299,11 @@ def test_placement_rides_a_capability_bit() -> None:
     mram = wire.decode_target_info(wire.encode_target_info(_target_info(capability_flags=tcm.capability_flags | wire.CAP_WEIGHTS_MRAM)))
     sram = wire.decode_target_info(wire.encode_target_info(
         _target_info(capability_flags=tcm.capability_flags | wire.CAP_WEIGHTS_MRAM | wire.CAP_ACTIVATIONS_SRAM)))
-    assert (tcm.placement, mram.placement, sram.placement) == ("tcm", "mram", "sram")
+    ssram = wire.decode_target_info(wire.encode_target_info(
+        _target_info(capability_flags=tcm.capability_flags | wire.CAP_WEIGHTS_SSRAM)))
+    assert (tcm.placement, mram.placement, sram.placement, ssram.placement) == ("tcm", "mram", "sram", "ssram")
+    record = wire.placement_record(ssram)
+    assert (record["weights"], record["weights_cache"], record["activations"]) == ("ssram", "cold", "dtcm")
     assert wire.placement_record(tcm) == {
         "name": "tcm", "weights": "dtcm", "activations": "dtcm", "dcache": "on", "weights_cache": "uncached",
         "activations_cache": "uncached",
