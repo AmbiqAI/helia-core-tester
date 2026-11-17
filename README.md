@@ -316,7 +316,7 @@ cmake, ninja, the neuralspotx version, the J-Link library) as
 informational checks; missing hardware tools do not fail doctor.
 
 `.github/workflows/hardware-nightly.yml` runs `hardware run --suite both` over
-the full catalog every night at 05:00 UTC on the lab runners, one job per board
+the full catalog every night at 06:00 UTC on the lab runners, one job per board
 (default `apollo510_evb`, `apollo330mP_evb`, `apollo3p_evb`; `--pmu-counters all`
 on PMU boards), and uploads each board's result bundle with the `--json`
 document as `hardware-nightly-run.json` (schemas and version policy:
