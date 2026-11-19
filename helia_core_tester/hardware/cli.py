@@ -307,7 +307,7 @@ def explain(
     op: Optional[list[str]] = typer.Option(
         None, "--op", help="conv, depthwise or fc; else a case or symbol substring (repeatable)."
     ),
-    all_cases: bool = typer.Option(False, "--all", help="Include cases without MAC counts."),
+    all_cases: bool = typer.Option(False, "--all", help="Include cases without MAC or softmax op counts."),
     as_json: bool = typer.Option(False, "--json", help="Print one JSON document."),
 ) -> None:
     """Explain PMU counters per case: peak, stalls, hints."""

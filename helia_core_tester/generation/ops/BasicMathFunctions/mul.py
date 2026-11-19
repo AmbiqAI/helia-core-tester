@@ -5,7 +5,24 @@ Multiply (elementwise) operation implementation for Helia-Core Tester.
 from typing import Dict, Any
 import numpy as np
 from pathlib import Path
-from helia_core_tester.generation.ops._shared.binary_basic_math_base import BinaryBasicMathBase 
+from helia_core_tester.generation.ops._shared.binary_basic_math_base import (
+    BinaryBasicMathBase,
+    resolve_quant_preset,
+)
+
+# `distinct` gives each operand its own scale and zero point (#349), so a kernel that
+# swaps the two input offsets changes the output. The output scale keeps the
+# effective scale s1*s2/so off a power of two and the saturated share near the
+# shared preset's.
+MUL_QUANT_PRESETS = {
+    "distinct": {
+        "S8": {
+            "input_1_quant": ([1.0 / 64.0], [-23]),
+            "input_2_quant": ([3.0 / 64.0], [17]),
+            "output_quant": ([0.005], [7]),
+        },
+    },
+}
 
 
 class OpMul(BinaryBasicMathBase):
@@ -16,6 +33,12 @@ class OpMul(BinaryBasicMathBase):
     SIGN_SPAN_OPERANDS = ("input_1", "input_2")
     # Keeps about a fifth saturated.
     S8_REACH = 48
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._preset_quant = resolve_quant_preset(
+            "Mul", MUL_QUANT_PRESETS, self.desc.get("quant_preset"), self.tensor_dtype("input")
+        )
     
     def needs_keras_model(self) -> bool:
         return False
@@ -45,6 +68,7 @@ class OpMul(BinaryBasicMathBase):
             input_1_shape=input_1_shape,
             input_2_shape=input_2_shape,
             dtype=dtype,
+            **self._preset_quant,
         )
         self._write_tflite_bytes(out_path, model_bytes)
 

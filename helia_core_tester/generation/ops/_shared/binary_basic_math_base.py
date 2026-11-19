@@ -1,11 +1,46 @@
 """Shared helpers for binary basic-math operators."""
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
 from helia_core_tester.generation.kernel_dispatch import check_entry_fault, resolve_direct_entry
 from helia_core_tester.generation.ops._shared.base import OperationBase
+
+TensorQuant = Tuple[Sequence[float], Sequence[int]]
+QuantPresets = Mapping[str, Mapping[str, Mapping[str, TensorQuant]]]
+
+# Every tensor takes the builder's default quantization.
+SHARED_QUANT_PRESET = "shared"
+_PRESET_TENSORS = ("input_1_quant", "input_2_quant", "output_quant")
+
+
+def resolve_quant_preset(
+    operator: str,
+    presets: QuantPresets,
+    quant_preset: Any,
+    activation_dtype: str,
+) -> Dict[str, TensorQuant]:
+    """Per-tensor quantization for `quant_preset`; empty for the shared default.
+
+    An unknown preset, or a preset that has no quantization for this activation
+    dtype (float cases included), is a descriptor error.
+    """
+    if quant_preset is None or quant_preset == SHARED_QUANT_PRESET:
+        return {}
+    if not isinstance(quant_preset, str) or quant_preset not in presets:
+        known = sorted({SHARED_QUANT_PRESET, *presets})
+        raise ValueError(f"{operator} has no quant_preset {quant_preset!r}; known: {known}")
+    by_dtype = presets[quant_preset]
+    if activation_dtype not in by_dtype:
+        raise ValueError(
+            f"{operator} quant_preset {quant_preset!r} has no {activation_dtype} quantization; "
+            f"it applies to {sorted(by_dtype)}"
+        )
+    tensors = by_dtype[activation_dtype]
+    if set(tensors) != set(_PRESET_TENSORS):
+        raise ValueError(f"{operator} quant_preset {quant_preset!r} must define {list(_PRESET_TENSORS)}")
+    return dict(tensors)
 
 
 class BinaryBasicMathBase(OperationBase):

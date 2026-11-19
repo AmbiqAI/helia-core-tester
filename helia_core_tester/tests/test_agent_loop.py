@@ -92,6 +92,11 @@ def test_config_missing_key() -> None:
         parse_campaign(data, Path("/cfg"))
 
 
+def test_config_softmax_s8_hidden() -> None:
+    c = _campaign(op="Softmax", hidden_shapes=6)
+    assert (c.op, c.dtype, c.hidden_shapes) == ("Softmax", "S8", 6)
+
+
 def test_config_dw_s16_hidden() -> None:
     c = _campaign(dtype="S16", hidden_shapes=6)
     assert (c.op, c.dtype, c.hidden_shapes) == ("DepthwiseConv", "S16", 6)
@@ -163,6 +168,12 @@ def test_leg_view_compact() -> None:
     assert "extra" not in view and view["families"] == {"depthwise": {
         "cases": 12, "geomean_speedup": 1.1, "regression": None, "untouched_cases": None, "untouched_geomean": None}}
     assert "hints" not in ledger.leg_view(verdict, hints=False)
+
+
+def test_leg_view_cycles_per_op() -> None:
+    case = {**_case("t1", True, 100, 1.1), "cycles_per_mac_candidate": None, "cycles_per_op_candidate": 7.5}
+    view = ledger.leg_view({"verdict": "pass", "stage": "score", "cases": [case]}, hints=False)
+    assert dict(zip(ledger.CASE_COLUMNS, view["cases"][0]))["cycles_per_unit"] == 7.5
 
 
 def test_ledger_keeps_tolerance_fraction() -> None:
@@ -544,6 +555,14 @@ def test_prompt_transpose_conv() -> None:
     text = render_prompt(_campaign(op="TransposeConv", dtype="S16", legs=["tcm"]), rows, PATHS)
     assert "s16 transpose convolution faster" in text and "`arm_transpose_conv_s16`: 1 case" in text
     assert "depthwise" not in text.lower()
+
+
+def test_prompt_softmax_per_op() -> None:
+    rows = [{"case_id": "a", "timed_symbol": "arm_softmax_s8", "inner_symbol": "", "cycles_per_mac": "",
+             "cycles_per_op": "780.0"}]
+    text = render_prompt(_campaign(op="Softmax", legs=["tcm"]), rows, PATHS)
+    assert "s8 softmax faster" in text and "median 780.0 cycles/op" in text and "ceiling 4.0" in text
+    assert "cycles per op" in text and "cycles/MAC" not in text
 
 
 # --- selftest and status ----------------------------------------------------------------

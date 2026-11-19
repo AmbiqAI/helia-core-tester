@@ -1172,6 +1172,9 @@ def build_mul_op(
     input_1_shape: Iterable[int],
     input_2_shape: Iterable[int],
     dtype: str = "int8",
+    input_1_quant: Optional[Tuple[Sequence[float], Sequence[int]]] = None,
+    input_2_quant: Optional[Tuple[Sequence[float], Sequence[int]]] = None,
+    output_quant: Optional[Tuple[Sequence[float], Sequence[int]]] = None,
 ) -> bytes:
     if not LITERT_AVAILABLE:
         raise ImportError("ai_edge_litert is not available. Install it with: pip install ai-edge-litert")
@@ -1185,6 +1188,9 @@ def build_mul_op(
     if len(input_1_shape) < 1 or len(input_2_shape) < 1:
         raise ValueError("Mul expects non-empty input shapes.")
 
+    def _quant(explicit):
+        return explicit if explicit is not None else _default_quant(tensor_type)
+
     output_shape = _broadcast_shape(input_1_shape, input_2_shape)
 
     builder = LiteRtSingleOpBuilder(op_name="MUL")
@@ -1195,7 +1201,7 @@ def build_mul_op(
             shape=input_1_shape,
             tensor_type=tensor_type,
             is_input=True,
-            quantization=_default_quant(tensor_type),
+            quantization=_quant(input_1_quant),
         )
     )
 
@@ -1205,7 +1211,7 @@ def build_mul_op(
             shape=input_2_shape,
             tensor_type=tensor_type,
             is_input=True,
-            quantization=_default_quant(tensor_type),
+            quantization=_quant(input_2_quant),
         )
     )
 
@@ -1215,7 +1221,7 @@ def build_mul_op(
             shape=output_shape,
             tensor_type=tensor_type,
             is_output=True,
-            quantization=_default_quant(tensor_type),
+            quantization=_quant(output_quant),
         )
     )
 

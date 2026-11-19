@@ -53,7 +53,7 @@ def test_every_float_route_entry_has_a_case_that_runs_it() -> None:
         if d.get("expected_status", "ARM_CMSIS_NN_SUCCESS") == "ARM_CMSIS_NN_SUCCESS"
     }
 
-    assert len(_ROUTE_ENTRIES) == 46
+    assert len(_ROUTE_ENTRIES) == 48
     assert set(_ROUTE_ENTRIES) <= succeeding
 
 

@@ -7,7 +7,8 @@ from typing import Dict, Any, Tuple
 import numpy as np
 import tensorflow as tf
 from pathlib import Path
-from helia_core_tester.generation.ops._shared.base import OperationBase  
+from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.ops._shared.quant_knobs import value_range
 
 
 class OpSoftmax(OperationBase):
@@ -31,6 +32,31 @@ class OpSoftmax(OperationBase):
         """Convert Keras model to TFLite with quantization."""
         super().convert_to_tflite(model, out_path, rep_seed)
     
+    def _representative_dataset_gen(self):
+        """Pin both ends of calibration_range."""
+        if "calibration_range" not in self.desc:
+            yield from super()._representative_dataset_gen()
+            return
+        for value in value_range(self.desc, "calibration_range", ()):
+            yield [np.full(self.desc["input_shape"], value, dtype=np.float32)]
+
+    def _shape_rows(self, data: np.ndarray) -> np.ndarray:
+        """Apply the descriptor's input_pattern."""
+        pattern = self.desc.get("input_pattern")
+        if not pattern:
+            return data
+        rows = data.reshape(-1, data.shape[-1]).copy()
+        if pattern == "equal":
+            rows[:] = rows[:, :1]
+            return rows.reshape(data.shape)
+        # One max per row, others below.
+        rows = rows // 2 - 64 if pattern == "peak" else np.minimum(rows, 126)
+        last = rows.shape[1] - 1
+        cols = {"max_first": 0, "max_last": last}.get(pattern)
+        for row in rows:
+            row[self.rng.integers(0, last + 1) if cols is None else cols] = 127
+        return rows.reshape(data.shape)
+
     def _select_cmsis_softmax_kernel(self) -> Dict[str, str]:
         """
         Select appropriate CMSIS-NN kernel function for Softmax operation.
@@ -393,6 +419,7 @@ class OpSoftmax(OperationBase):
                 np_in_dtype = np.int8
                 qmin, qmax = -128, 127
                 input_q = self.rng.integers(qmin, qmax + 1, size=input_shape, dtype=np_in_dtype)
+                input_q = self._shape_rows(input_q)
             elif kernel_info["input_c_type"] == "int16_t":
                 np_in_dtype = np.int16
                 qmin, qmax = -32768, 32767

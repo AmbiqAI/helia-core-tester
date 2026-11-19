@@ -127,9 +127,10 @@ hint: {call_style: per_tensor}
 # exactly; a NaN becomes the default NaN on the MVE vector conversion and keeps its sign and payload,
 # made quiet, on the scalar conversion and the no-FPU integer widening. Every case ends on NaNs, so the
 # MVE predicated tail and the FPU single-half tail meet the rule too. Each case carries both
-# expectations and compares bits against the one its build compiled. The FP16-tagged cases run on
-# the f16 legs; the U16-tagged ones (the same bit patterns as storage) on the f32 legs, cortex-m0's
-# integer widening and cortex-m4's FPU among them.
+# expectations and compares bits against the one its build compiled; a library that defines
+# ARM_NN_HAS_DEQUANTIZE_F16_NAN_PAYLOAD (ns-cmsis-nn#871) gives the scalar rule on the MVE path too.
+# The FP16-tagged cases run on the f16 legs; the U16-tagged ones (the same bit patterns as storage)
+# on the f32 legs, cortex-m0's integer widening and cortex-m4's FPU among them.
 # A signalling NaN, a negative quiet NaN, a payload NaN and +Inf in one four-half MVE block, then a
 # three-half tail of NaNs.
 operator: Dequantize

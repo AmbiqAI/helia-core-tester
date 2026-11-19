@@ -929,6 +929,9 @@ arm_cmsis_nn_status hct_run_kernel_once(hct_server_session_t *session)
         case HCT_KERNEL_ID_ABS_S16:
         case HCT_KERNEL_ID_ABS_F32:
         case HCT_KERNEL_ID_ABS_F16:
+        /* Host tests: stands in for a kernel that takes weights and bias (the MRAM and
+         * store harnesses); only its S8 input_0 is read, through abs. */
+        case HCT_KERNEL_ID_CONVOLVE_S8:
             status = hct_run_abs_once(session);
             break;
         default:
@@ -1196,6 +1199,7 @@ static hctp_status_t handle_case_meta(hct_server_session_t *session, const uint8
     hct_cursor_t cursor;
     uint8_t scalar_count;
     uint16_t blob_index;
+    uint16_t prior;
     /* Must be large enough for the longest string this handler reads via
      * cursor_text(): the case_id (up to HCT_SERVER_MAX_CASE_ID, e.g. the 79-char
      * FullyConnected per-channel descriptor names), not just the short
@@ -1278,6 +1282,19 @@ static hctp_status_t handle_case_meta(hct_server_session_t *session, const uint8
         if (blob->role == HCT_BLOB_ROLE_UNKNOWN || blob->dtype == HCT_DTYPE_UNKNOWN || blob->alignment == 0u)
         {
             return HCTP_STATUS_INVALID_ARGUMENT;
+        }
+        /* Adapters cast blob pointers by kernel id, so the declared dtype must be one the
+         * kernel accepts, and each role may appear once (lookups take the first match). */
+        if (!hct_kernel_blob_accepts(session->expected_kernel_id, blob->role, blob->dtype))
+        {
+            return HCTP_STATUS_INVALID_ARGUMENT;
+        }
+        for (prior = 0u; prior < blob_index; ++prior)
+        {
+            if (session->blobs[prior].role == blob->role)
+            {
+                return HCTP_STATUS_INVALID_ARGUMENT;
+            }
         }
         status = allocate_blob(session, blob);
         if (status != HCTP_STATUS_OK) return status;

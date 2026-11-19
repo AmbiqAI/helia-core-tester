@@ -5,8 +5,25 @@ Add operation implementation.
 from typing import Dict, Any
 import numpy as np
 from pathlib import Path
-from helia_core_tester.generation.ops._shared.binary_basic_math_base import BinaryBasicMathBase
+from helia_core_tester.generation.ops._shared.binary_basic_math_base import (
+    BinaryBasicMathBase,
+    resolve_quant_preset,
+)
 from helia_core_tester.generation.utils.litert_builder import build_binary_broadcast_op
+
+# `distinct` gives each operand its own scale and zero point (#349): the offsets
+# differ in sign and size, and the scale ratio makes input1/input2 differ in both
+# multiplier and shift, so a kernel that swaps one operand's parameters for the
+# other's changes the output.
+ADD_QUANT_PRESETS = {
+    "distinct": {
+        "S8": {
+            "input_1_quant": ([1.0 / 64.0], [-23]),
+            "input_2_quant": ([3.0 / 64.0], [17]),
+            "output_quant": ([5.0 / 64.0], [7]),
+        },
+    },
+}
 
 
 def build_add_op(
@@ -14,6 +31,9 @@ def build_add_op(
     input_1_shape,
     input_2_shape,
     dtype: str = "int8",
+    input_1_quant=None,
+    input_2_quant=None,
+    output_quant=None,
 ) -> bytes:
     from ai_edge_litert import schema_py_generated as litert
 
@@ -24,6 +44,9 @@ def build_add_op(
         input_1_shape=input_1_shape,
         input_2_shape=input_2_shape,
         dtype=dtype,
+        input_1_quant=input_1_quant,
+        input_2_quant=input_2_quant,
+        output_quant=output_quant,
         options=options,
         options_type=litert.BuiltinOptions.AddOptions,
     )
@@ -35,7 +58,13 @@ class OpAdd(BinaryBasicMathBase):
     """
 
     SIGN_SPAN_OPERANDS = ("input_1", "input_2")
-    
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._preset_quant = resolve_quant_preset(
+            "Add", ADD_QUANT_PRESETS, self.desc.get("quant_preset"), self.tensor_dtype("input")
+        )
+
     def needs_keras_model(self) -> bool:
         return False
 
@@ -62,6 +91,7 @@ class OpAdd(BinaryBasicMathBase):
             input_1_shape=input_1_shape,
             input_2_shape=input_2_shape,
             dtype=dtype,
+            **self._preset_quant,
         )
         self._write_tflite_bytes(out_path, model_bytes)
 
@@ -219,32 +249,26 @@ class OpAdd(BinaryBasicMathBase):
                 steerable=("input_1", "input_2"),
             )
 
-            if input1_shape == input2_shape:
-                interpreter = self.load_litert_interpreter(str(tflite_path))
-                input_details = interpreter.get_input_details()
-                output_details = interpreter.get_output_details()
-                interpreter.set_tensor(input_details[0]['index'], input1_q)
-                interpreter.set_tensor(input_details[1]['index'], input2_q)
-                interpreter.invoke()
-                output_data = np.array(interpreter.get_tensor(output_details[0]['index']))
-            else:
-                output_data = self._simulate_add_quantized(
-                    input1_q,
-                    input2_q,
-                    input1_offset=-int(input1_zp),
-                    input2_offset=-int(input2_zp),
-                    input1_mult=int(mult1),
-                    input1_shift=int(shift1),
-                    input2_mult=int(mult2),
-                    input2_shift=int(shift2),
-                    left_shift=int(left_shift),
-                    out_offset=int(output_zp),
-                    out_mult=int(output_mult),
-                    out_shift=int(output_shift),
-                    out_activation_min=int(activation_min),
-                    out_activation_max=int(activation_max),
-                    out_dtype=np_in_dtype,
-                )
+            # Every integer golden comes from the CMSIS-NN fixed-point simulation, as
+            # in Mul: the interpreter's default resolver may run XNNPACK, whose
+            # requantization can differ by one LSB (#220).
+            output_data = self._simulate_add_quantized(
+                input1_q,
+                input2_q,
+                input1_offset=-int(input1_zp),
+                input2_offset=-int(input2_zp),
+                input1_mult=int(mult1),
+                input1_shift=int(shift1),
+                input2_mult=int(mult2),
+                input2_shift=int(shift2),
+                left_shift=int(left_shift),
+                out_offset=int(output_zp),
+                out_mult=int(output_mult),
+                out_shift=int(output_shift),
+                out_activation_min=int(activation_min),
+                out_activation_max=int(activation_max),
+                out_dtype=np_in_dtype,
+            )
         
         # Format arrays
         input1_array_str = builder.format_array_as_c_literal(input1_q)

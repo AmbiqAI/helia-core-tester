@@ -1,10 +1,11 @@
-"""Seeded held-out conv shapes."""
+"""Seeded held-out shapes."""
 
 from __future__ import annotations
 
 import hashlib
 import hmac
 import json
+import math
 import os
 import re
 import shutil
@@ -67,6 +68,8 @@ class Generator:
     # Per-index targets; overrides route cycling.
     plan: Optional[Callable[[int], list[str]]] = None
     suite: str = "int"
+    # Draws whole cases; no layer.
+    layerless: bool = False
 
 
 @dataclass
@@ -496,6 +499,92 @@ def _float_knobs(rng: np.random.Generator, layer: Layer) -> dict[str, Any]:
     return knobs
 
 
+SOFTMAX_ROUTE = "arm_softmax_s8"
+# Elements per case: two 4096 rows.
+SOFTMAX_MAX = 8192
+# Row patterns softmax.py applies.
+SOFTMAX_PATTERNS = ("equal", "max_first", "max_last", "peak")
+
+
+def _sm_size(rng: np.random.Generator, lo: int, hi: int) -> int:
+    """Log-spread size; mostly off the 4 grid."""
+    top = int(round(2 ** float(rng.uniform(math.log2(lo), math.log2(hi)))))
+    return _channels(rng, lo, max(lo, top))
+
+
+def _sm_knobs(rng: np.random.Generator, low: float, high: float, pattern: Optional[str] = None) -> dict[str, Any]:
+    """Steps per e-fold in [low, high]; sets the scale."""
+    # Reduce sensitivity to libm last-bit drift in serialized calibration spans.
+    span = round(255.0 / math.exp(float(rng.uniform(math.log(low), math.log(high)))), 9)
+    lo = -span * float(rng.uniform(0.0, 1.0))
+    knobs: dict[str, Any] = {"calibration_range": [lo, lo + span]}
+    if pattern:
+        knobs["input_pattern"] = pattern
+    return knobs
+
+
+def _sm_mixed(rng: np.random.Generator) -> tuple[int, int, dict]:
+    """The normal mix; goldens keep a spread."""
+    rows, size = _sm_size(rng, 1, 64), _sm_size(rng, 2, 1024)
+    # Under 32 elements flatten by chance.
+    rows = max(rows, -(-32 // size))
+    pattern = str(rng.choice(SOFTMAX_PATTERNS[1:3])) if rng.random() < 0.2 else None
+    # Measured bounds for a non-flat golden.
+    return rows, size, _sm_knobs(rng, 9 + size / 100, min(2000.0, 25000 / size), pattern)
+
+
+def _sm_diff_min(rng: np.random.Generator) -> tuple[int, int, dict]:
+    """Coarse scale: most diffs below diff_min."""
+    pattern = "peak" if rng.random() < 0.5 else None
+    return _sm_size(rng, 1, 16), _sm_size(rng, 4, 512), _sm_knobs(rng, 0.1, 1.5, pattern)
+
+
+def _sm_pattern(rng: np.random.Generator) -> tuple[int, int, dict]:
+    """Equal rows, edge maxima or one peak."""
+    pattern = str(rng.choice(SOFTMAX_PATTERNS))
+    return _sm_size(rng, 1, 32), _sm_size(rng, 2, 1024), _sm_knobs(rng, 0.5, 3000.0, pattern)
+
+
+def _sm_long(rng: np.random.Generator) -> tuple[int, int, dict]:
+    """One or two rows of 3072+."""
+    # Equal or peak rows lose the sum.
+    pattern = str(rng.choice(SOFTMAX_PATTERNS[1:3])) if rng.random() < 0.3 else None
+    return int(rng.integers(1, 3)), _channels(rng, 3072, 4096), _sm_knobs(rng, 0.5, 300.0, pattern)
+
+
+def _sm_short(rng: np.random.Generator) -> tuple[int, int, dict]:
+    """Rows of 1-3, or vectors plus a tail."""
+    tail = int(rng.choice([1, 2, 3, 5, 6, 7, 9, 10, 11, 13, 14, 15]))
+    size = int(rng.integers(1, 4)) if rng.random() < 0.5 else 16 * int(rng.integers(0, 5)) + tail
+    return _sm_size(rng, 1, 64), size, _sm_knobs(rng, 0.5, 3000.0)
+
+
+# Softmax edge categories, highest priority first.
+SOFTMAX_DRAWS: dict[str, Callable[[np.random.Generator], tuple[int, int, dict]]] = {
+    "diff_min": _sm_diff_min, "pattern": _sm_pattern, "long_row": _sm_long, "short_row": _sm_short,
+}
+SOFTMAX_EDGES = tuple(SOFTMAX_DRAWS)
+
+
+def _sm_draw(rng: np.random.Generator, target: str) -> dict[str, Any]:
+    """An s8 softmax case body."""
+    for _ in range(MAX_TRIES):
+        rows, size, knobs = SOFTMAX_DRAWS.get(target, _sm_mixed)(rng)
+        if rows * size <= SOFTMAX_MAX:
+            break
+    else:
+        raise RuntimeError(f"No Softmax S8 shape for {target}")
+    case = {
+        "activation_dtype": "S8", "weight_dtype": "S8", "activation": "NONE",
+        "hint": {"call_style": "per_tensor"}, "input_shape": [1, rows, size],
+        "expected_route": SOFTMAX_ROUTE, **knobs,
+    }
+    if target in SOFTMAX_DRAWS:
+        # Saturated or flat by design.
+        case["degenerate_golden_reason"] = f"softmax {target} edge"
+    return case
+
+
 def _conv_routes(mve: bool) -> list[str]:
     return [r for r in CONV_ROUTES if mve or r not in MVE_CONV_ROUTES]
 
@@ -522,6 +611,108 @@ def _tcf_gen(dtype: str, stream: int) -> Generator:
     )
 
 
+# Float activation entries, called directly.
+ACT_ROUTES = {"FP32": "arm_nn_activation_f32", "FP16": "arm_nn_activation_f16"}
+ACT_MAX_LEN = 6144
+# Smallest |x| where sigmoid rounds to 1.
+SIG_ROUNDS = {"FP32": 17.4, "FP16": 8.4}
+# Largest magnitude drawn; FP16 stays in range.
+ACT_MAX_ABS = {"FP32": 1e5, "FP16": 6e4}
+# Inputs whose sigmoid falls in subnormals.
+SIG_SUBNORMAL = {"FP32": (-103.5, -87.4), "FP16": (-16.6, -9.71)}
+# Log10 of the near-zero |x| bounds.
+SIG_TINY = {"FP32": (-44.0, -4.0), "FP16": (-7.0, -3.0)}
+
+
+def _act_len(rng: np.random.Generator, lo: int, hi: int) -> int:
+    """Log-uniform length in [lo, hi]."""
+    return min(int(np.exp(rng.uniform(np.log(lo), np.log(hi + 1)))), hi)
+
+
+def _sig_mixed(rng: np.random.Generator, dtype: str) -> tuple[int, dict]:
+    """Ordinary data, unit to saturating scale."""
+    high = float(10 ** rng.uniform(-0.5, 1.5))
+    # Off-centre data skews to one side.
+    low = -high * float(rng.uniform(0.0, 1.0)) if rng.random() < 0.3 else -high
+    return _act_len(rng, 1, 4096), {"input_min": low, "input_max": high}
+
+
+def _sig_saturate(rng: np.random.Generator, dtype: str) -> tuple[int, dict]:
+    """|x| far past rounding to 0 or 1."""
+    high = float(10 ** rng.uniform(np.log10(4 * SIG_ROUNDS[dtype]), np.log10(ACT_MAX_ABS[dtype])))
+    return _act_len(rng, 8, 1024), {"input_min": -high, "input_max": high}
+
+
+def _sig_knee(rng: np.random.Generator, dtype: str) -> tuple[int, dict]:
+    """One side, just short of rounding."""
+    low, high = (SIG_ROUNDS[dtype] * float(rng.uniform(*span)) for span in ((0.3, 0.5), (1.0, 1.5)))
+    knobs = {"input_min": low, "input_max": high} if rng.random() < 0.5 else {"input_min": -high, "input_max": -low}
+    return _act_len(rng, 8, 1024), knobs
+
+
+def _sig_nonfinite(rng: np.random.Generator, dtype: str) -> tuple[int, dict]:
+    """Inf and -Inf at random lanes."""
+    # NaN is outside the kernel contract.
+    length, knobs = _sig_mixed(rng, dtype)
+    tokens = [str(t) for t in rng.permutation(["inf", "-inf"])[: int(rng.integers(1, 3))]]
+    length = max(length, 2)
+    positions = [int(p) for p in rng.choice(length, size=len(tokens), replace=False)]
+    return length, {**knobs, "input_mode": "nonfinite_sweep", "nonfinite_tokens": tokens,
+                    "nonfinite_positions": positions, "nonfinite_policy": "strict"}
+
+
+def _sig_tail(rng: np.random.Generator, dtype: str) -> tuple[int, dict]:
+    """Length past the last full vector."""
+    lanes = TCF_LANES[dtype]
+    length = lanes * int(rng.integers(0, 64)) + int(rng.integers(1, lanes))
+    return length, _sig_mixed(rng, dtype)[1]
+
+
+def _sig_underflow(rng: np.random.Generator, dtype: str) -> tuple[int, dict]:
+    """Outputs at or below the subnormals."""
+    low, high = SIG_SUBNORMAL[dtype]
+    return _act_len(rng, 8, 1024), {"input_min": low - float(rng.uniform(0, 4)),
+                                    "input_max": high + float(rng.uniform(0, 2))}
+
+
+def _sig_near_zero(rng: np.random.Generator, dtype: str) -> tuple[int, dict]:
+    """Tiny |x|, subnormals included."""
+    high = float(10 ** rng.uniform(*SIG_TINY[dtype]))
+    return _act_len(rng, 8, 1024), {"input_min": -high, "input_max": high}
+
+
+def _sig_long(rng: np.random.Generator, dtype: str) -> tuple[int, dict]:
+    """Several thousand elements."""
+    return _act_len(rng, 2048, ACT_MAX_LEN), _sig_mixed(rng, dtype)[1]
+
+
+# Sigmoid edge categories, highest priority first.
+SIG_DRAWS: dict[str, Callable[[np.random.Generator, str], tuple[int, dict]]] = {
+    "saturate": _sig_saturate, "knee": _sig_knee, "nonfinite": _sig_nonfinite, "odd_tail": _sig_tail,
+    "underflow": _sig_underflow, "near_zero": _sig_near_zero, "long": _sig_long,
+}
+SIG_EDGES = tuple(SIG_DRAWS)
+
+
+def _sig_draw(dtype: str) -> Callable[[np.random.Generator, str], dict]:
+    """A float sigmoid case body."""
+    def draw(rng: np.random.Generator, target: str) -> dict:
+        length, knobs = SIG_DRAWS.get(target, _sig_mixed)(rng, dtype)
+        return {"suite": "float", "activation_dtype": dtype, "tensor_dtypes": {"input": dtype, "output": dtype},
+                "input_shape": [1, length], "activation_type": "ARM_NN_FLT_ACT_SIGMOID", "act_param": 0.0, **knobs,
+                "expected_route": ACT_ROUTES[dtype]}
+    return draw
+
+
+def _sig_gen(dtype: str, stream: int) -> Generator:
+    """Float sigmoid generator."""
+    route = ACT_ROUTES[dtype]
+    return Generator(
+        f"sig{dtype[2:]}", "ActivationFunctions/nn_activation_float.yaml", stream, lambda mve: [route],
+        _sig_draw(dtype), lambda n: _edge_plan(n, route, SIG_EDGES), "float", layerless=True,
+    )
+
+
 # Register new random-shape ops here.
 GENERATORS: dict[tuple[str, str], Generator] = {
     ("Convolve", "S8"): Generator("conv", "ConvolutionFunctions/convolve.yaml", 0, _conv_routes, _conv_layer),
@@ -532,6 +723,12 @@ GENERATORS: dict[tuple[str, str], Generator] = {
     ),
     ("TransposeConv", "FP32"): _tcf_gen("FP32", 4),
     ("TransposeConv", "FP16"): _tcf_gen("FP16", 5),
+    ("NNActivationFloat", "FP32"): _sig_gen("FP32", 6),
+    ("NNActivationFloat", "FP16"): _sig_gen("FP16", 7),
+    ("Softmax", "S8"): Generator(
+        "sm8", "SoftmaxFunctions/softmax.yaml", 8, lambda mve: [SOFTMAX_ROUTE], _sm_draw,
+        lambda n: _edge_plan(n, SOFTMAX_ROUTE, SOFTMAX_EDGES), layerless=True,
+    ),
 }
 # (op, dtype) keys, in draw order.
 OPS = tuple(GENERATORS)
@@ -746,13 +943,20 @@ def sample_op(key: tuple[str, str], n: int, seed: int, cpu: str, workspace: int)
     """N descriptors for one generator, cycling routes."""
     mve = get_cpu_profile(cpu).has_mve
     gen, (op, dtype) = GENERATORS[key], key
-    routes, draw = gen.routes(mve), gen.draw
-    targets = gen.plan(n) if gen.plan else routes
     # One stream per op keeps ops independent.
     rng = np.random.default_rng([seed, gen.stream])
+    routes, draw = gen.routes(mve), gen.draw
+    targets = gen.plan(n) if gen.plan else routes
     cases = []
     for index in range(n):
         target = targets[index % len(targets)]
+        name = f"rs{seed}_{gen.tag}_{index:03d}"
+        if gen.layerless:
+            case = {"operator": op, "name": name, **draw(rng, target), "shape_seed": seed}
+            if target not in routes:
+                case["edge"] = target
+            cases.append(case)
+            continue
         for _ in range(MAX_TRIES):
             layer = draw(rng, target)
             oh, ow = layer.out_hw()
@@ -766,7 +970,6 @@ def sample_op(key: tuple[str, str], n: int, seed: int, cpu: str, workspace: int)
                 break
         else:
             raise RuntimeError(f"No {op} {dtype} shape for route {target}")
-        name = f"rs{seed}_{gen.tag}_{index:03d}"
         knobs = layer.knobs or (_float_knobs(rng, layer) if gen.suite == "float" else _quant(rng, op, layer, dtype))
         case = _descriptor(op, dtype, name, layer, knobs, seed, route)
         if target not in routes:
