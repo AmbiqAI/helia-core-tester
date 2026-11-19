@@ -67,7 +67,8 @@ KERNEL_ALIGN_BYTES = 64
 
 # tcm: all operands in DTCM. mram: weights, bias in MRAM.
 # sram: as mram, with the workspace in SRAM.
-PLACEMENTS = ("tcm", "mram", "sram")
+# ssram: weights stay in SSRAM, not MRAM.
+PLACEMENTS = ("tcm", "mram", "sram", "ssram")
 
 # Options the last successful build used.
 OPTIONS_FILE = ".hct-options.json"

@@ -478,6 +478,12 @@ def test_sram_placement_keeps_mram_weights(tmp_path: Path) -> None:
     assert "    HCT_PLACEMENT_MRAM\n" in sram and "    HCT_ACTIVATIONS_SRAM\n" in sram
 
 
+def test_ssram_placement_keeps_weights_in_sram(tmp_path: Path) -> None:
+    ssram = _render(tmp_path / "ssram", placement="ssram").cmakelists
+    assert "    HCT_PLACEMENT_MRAM\n" in ssram and "    HCT_WEIGHTS_SSRAM\n" in ssram
+    assert "HCT_ACTIVATIONS_SRAM" not in ssram
+
+
 def test_board_blob_store_defines_its_size(tmp_path: Path) -> None:
     assert "    HCT_BLOB_STORE_BYTES=2097152u\n" in _render(tmp_path / "on").cmakelists
     off = nsx_app.render_app(dataclasses.replace(BOARD, blob_store_bytes=0), nsx_app.AppOptions(), tmp_path / "off" / "app")

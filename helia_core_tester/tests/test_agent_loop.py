@@ -102,6 +102,14 @@ def test_config_dw_s16_hidden() -> None:
     assert (c.op, c.dtype, c.hidden_shapes) == ("DepthwiseConv", "S16", 6)
 
 
+def test_config_ssram_leg() -> None:
+    from helia_core_tester.agent_loop.prompt import LEG_TEXT
+
+    c = _campaign(op="LSTMUnidirectional", dtype="S8", legs=["ssram"], toolchains=["gcc", "atfe"])
+    assert c.legs == ("ssram",) and c.leg_names == ("ssram", "ssram-atfe")
+    assert "shared SRAM" in LEG_TEXT["ssram"]
+
+
 def test_config_tc16_hidden() -> None:
     c = _campaign(op="TransposeConv", dtype="S16", hidden_shapes=6, legs=["tcm"])
     assert (c.op, c.dtype, c.hidden_shapes, c.legs) == ("TransposeConv", "S16", 6, ("tcm",))

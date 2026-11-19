@@ -42,6 +42,8 @@ CAP_WEIGHTS_MRAM = 1 << 7
 CAP_BLOB_STORE = 1 << 8
 # Workspace (activations, scratch) in cached SRAM.
 CAP_ACTIVATIONS_SRAM = 1 << 9
+# Weights and bias stay in cached SSRAM.
+CAP_WEIGHTS_SSRAM = 1 << 10
 
 CATALOG_HASH_SIZE = 32
 BLOB_MAX_RANK = 6
@@ -99,6 +101,8 @@ class TargetInfo:
 
     @property
     def placement(self) -> str:
+        if self.capability_flags & CAP_WEIGHTS_SSRAM:
+            return "ssram"
         if self.capability_flags & CAP_ACTIVATIONS_SRAM:
             return "sram"
         return "mram" if self.capability_flags & CAP_WEIGHTS_MRAM else "tcm"
@@ -157,7 +161,7 @@ def placement_record(info: TargetInfo | None) -> dict:
     workspace = "sram" if m4 or sram else "dtcm"
     return {
         "name": info.placement,
-        "weights": "mram" if mram else workspace,
+        "weights": "ssram" if info.placement == "ssram" else "mram" if mram else workspace,
         "activations": workspace,
         # Cortex-M4 has no D-cache; TCM bypasses it.
         "dcache": "none" if m4 else "on",
