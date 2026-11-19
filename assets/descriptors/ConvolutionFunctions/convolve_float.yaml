@@ -198,7 +198,7 @@ use_bias: true
 operator: Convolve
 name: convolve_float_group_small_kernel_f16
 suite: float
-required_kernel_symbols: [arm_convolve_f16_group_ch_mult_1]
+required_kernel_symbols: [arm_convolve_f16_group_ch_mult_1, arm_convolve_f16_fast_small_kernel]
 activation_dtype: FP16
 weight_dtype: FP16
 tensor_dtypes:

@@ -207,6 +207,8 @@ def test_grouped_fp16_descriptors_require_grouped_core_support():
     assert grouped
     for desc in grouped:
         assert "arm_convolve_f16_group_ch_mult_1" in _required_kernel_symbols(desc), desc["name"]
+    small_kernel = _descriptor("convolve_float_group_small_kernel_f16")
+    assert "arm_convolve_f16_fast_small_kernel" in _required_kernel_symbols(small_kernel)
 
 
 @pytest.mark.parametrize("fault", ["packed_grouped", "output_group_mismatch"])
