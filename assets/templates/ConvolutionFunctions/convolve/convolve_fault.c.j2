@@ -57,12 +57,16 @@ static int32_t run_convolve(void)
     filter_dims.h = INT32_MAX;
     filter_dims.w = 2;
 {% elif fault == "oversized_patch" %}
-    filter_dims.h = INT32_MAX;
+    /* The spatial area fits; multiplying by the per-group channel count exceeds INT32_MAX. */
+    filter_dims.h = INT32_MAX / filter_dims.c + 1;
     filter_dims.w = 1;
 {% endif %}
     cmsis_nn_dims output_dims = {{ name }}_output_dims;
 {% if fault == "output_group_mismatch" %}
     output_dims.c = {{ output_dims.c - 1 }};
+    filter_dims.n = output_dims.c;
+{% elif fault == "negative_batch" %}
+    output_dims.n = input_dims.n;
 {% elif fault == "batch_mismatch" %}
     output_dims.n = {{ output_dims.n + 1 }};
 {% elif fault == "zero_output_batch" %}

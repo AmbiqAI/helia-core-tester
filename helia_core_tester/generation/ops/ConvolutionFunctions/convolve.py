@@ -108,6 +108,13 @@ class OpConvolve(OperationBase):
                 "arm_convolve_f16",
                 "arm_convolve_wrapper_f16",
             }:
+                if (
+                    kind in ("packed_grouped", "output_group_mismatch")
+                    and context["input_dims"]["c"] == context["filter_dims"]["c"]
+                ):
+                    raise self.fault_unreachable(kind, "needs at least two groups")
+                if kind in ("channel_group_mismatch", "oversized_patch") and context["filter_dims"]["c"] < 2:
+                    raise self.fault_unreachable(kind, "needs at least two filter channels per group")
                 return
             if (
                 kind in ("null_ctx_buf", "null_weight_sum_ctx", "zero_stride")

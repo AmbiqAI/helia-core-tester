@@ -167,13 +167,13 @@ def test_in_gate_entry_case_expects_a_decline_on_an_autovectorize_build(
     ("name", "mutation"),
     [
         ("convolve_fault_channel_group_mismatch_f16", "input_dims.c = 9"),
-        ("convolve_fault_output_group_mismatch_f16", "output_dims.c = 7"),
-        ("convolve_fault_negative_batch_f16", "input_dims.n = -1"),
+        ("convolve_fault_output_group_mismatch_f16", "output_dims.c = 7;\n    filter_dims.n = output_dims.c;"),
+        ("convolve_fault_negative_batch_f16", "output_dims.n = input_dims.n"),
         ("convolve_fault_batch_mismatch_f16", "output_dims.n = 2"),
         ("convolve_fault_packed_grouped_f16", "ARM_NN_WEIGHT_FORMAT_NT_N_PACKED"),
         ("convolve_fault_zero_output_batch_f16", "output_dims.n = 0"),
         ("convolve_fault_oversized_kernel_area_f16", "filter_dims.w = 2"),
-        ("convolve_fault_oversized_patch_f16", "filter_dims.w = 1"),
+        ("convolve_fault_oversized_patch_f16", "filter_dims.h = INT32_MAX / filter_dims.c + 1"),
     ],
 )
 def test_grouped_f16_contract_faults_render_the_requested_mutation(
@@ -199,3 +199,17 @@ def test_float_grouped_faults_reject_integer_kernels(dtype, fault):
     with pytest.raises(ValueError, match="no such grouped-float guard"):
         op._check_fault_reachable(fault, {"kernel_fn": "arm_convolve_wrapper_" + dtype.lower(),
                                          "float_kernel": False})
+
+
+def test_grouped_fp16_descriptors_require_grouped_core_support():
+    grouped = [d for d in load_all_descriptors(str(_PROJECT_ROOT / "assets" / "descriptors"))
+               if d["operator"] == "Convolve" and d.get("activation_dtype") == "FP16" and d.get("groups", 1) > 1]
+    assert grouped
+    for desc in grouped:
+        assert "arm_convolve_f16_group_ch_mult_1" in _required_kernel_symbols(desc), desc["name"]
+
+
+@pytest.mark.parametrize("fault", ["packed_grouped", "output_group_mismatch"])
+def test_group_only_fault_declines_ungrouped_input(fault, tmp_path):
+    with pytest.raises(ValueError, match="needs at least two groups"):
+        _source(f"convolve_fault_{fault}_f16", tmp_path, groups=1)

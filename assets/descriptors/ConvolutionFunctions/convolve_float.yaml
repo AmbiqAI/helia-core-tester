@@ -144,6 +144,7 @@ use_bias: true
 operator: Convolve
 name: convolve_float_group4_f16
 suite: float
+required_kernel_symbols: [arm_convolve_f16_group_ch_mult_1]
 activation_dtype: FP16
 weight_dtype: FP16
 tensor_dtypes:
@@ -161,6 +162,7 @@ use_bias: true
 operator: Convolve
 name: convolve_float_group_depthwise_f16
 suite: float
+required_kernel_symbols: [arm_convolve_f16_group_ch_mult_1]
 activation_dtype: FP16
 weight_dtype: FP16
 tensor_dtypes:
@@ -178,6 +180,7 @@ use_bias: true
 operator: Convolve
 name: convolve_float_group_depthwise_valid_f16
 suite: float
+required_kernel_symbols: [arm_convolve_f16_group_ch_mult_1]
 activation_dtype: FP16
 weight_dtype: FP16
 tensor_dtypes:
@@ -195,6 +198,7 @@ use_bias: true
 operator: Convolve
 name: convolve_float_group_small_kernel_f16
 suite: float
+required_kernel_symbols: [arm_convolve_f16_group_ch_mult_1]
 activation_dtype: FP16
 weight_dtype: FP16
 tensor_dtypes:
@@ -212,6 +216,7 @@ use_bias: false
 operator: Convolve
 name: convolve_fault_channel_group_mismatch_f16
 suite: float
+required_kernel_symbols: [arm_convolve_f16_group_ch_mult_1]
 activation_dtype: FP16
 weight_dtype: FP16
 tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
@@ -227,6 +232,7 @@ expected_status: ARM_CMSIS_NN_ARG_ERROR
 operator: Convolve
 name: convolve_fault_output_group_mismatch_f16
 suite: float
+required_kernel_symbols: [arm_convolve_f16_group_ch_mult_1]
 activation_dtype: FP16
 weight_dtype: FP16
 tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
@@ -242,6 +248,7 @@ expected_status: ARM_CMSIS_NN_ARG_ERROR
 operator: Convolve
 name: convolve_fault_negative_batch_f16
 suite: float
+required_kernel_symbols: [arm_convolve_f16_group_ch_mult_1]
 activation_dtype: FP16
 weight_dtype: FP16
 tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
@@ -257,6 +264,7 @@ expected_status: ARM_CMSIS_NN_ARG_ERROR
 operator: Convolve
 name: convolve_fault_batch_mismatch_f16
 suite: float
+required_kernel_symbols: [arm_convolve_f16_group_ch_mult_1]
 activation_dtype: FP16
 weight_dtype: FP16
 tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
@@ -272,6 +280,7 @@ expected_status: ARM_CMSIS_NN_ARG_ERROR
 operator: Convolve
 name: convolve_fault_packed_grouped_f16
 suite: float
+required_kernel_symbols: [arm_convolve_f16_group_ch_mult_1]
 activation_dtype: FP16
 weight_dtype: FP16
 tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
@@ -287,6 +296,7 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: Convolve
 name: convolve_fault_zero_output_batch_f16
 suite: float
+required_kernel_symbols: [arm_convolve_f16_group_ch_mult_1]
 activation_dtype: FP16
 weight_dtype: FP16
 tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
@@ -302,6 +312,7 @@ expected_status: ARM_CMSIS_NN_ARG_ERROR
 operator: Convolve
 name: convolve_fault_oversized_kernel_area_f16
 suite: float
+required_kernel_symbols: [arm_convolve_f16_group_ch_mult_1]
 activation_dtype: FP16
 weight_dtype: FP16
 tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
@@ -317,6 +328,7 @@ expected_status: ARM_CMSIS_NN_ARG_ERROR
 operator: Convolve
 name: convolve_fault_oversized_patch_f16
 suite: float
+required_kernel_symbols: [arm_convolve_f16_group_ch_mult_1]
 activation_dtype: FP16
 weight_dtype: FP16
 tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
