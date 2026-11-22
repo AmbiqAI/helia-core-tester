@@ -1,7 +1,7 @@
 """SquaredDifference operation implementation."""
 
 from pathlib import Path
-from helia_core_tester.generation.ops._shared.binary_basic_math_base import BinaryBasicMathBase
+from helia_core_tester.generation.ops._shared.binary_basic_math_base import BinaryBasicMathBase, broadcast_cmsis_dims
 from helia_core_tester.generation.utils.litert_builder import build_binary_broadcast_op
 from typing import Any, Dict, Sequence, Tuple
 import numpy as np
@@ -210,7 +210,7 @@ class OpSquaredDifference(BinaryBasicMathBase):
                     f"Descriptor {self.desc.get('name')!r}: SquaredDifference float kernels take "
                     f"one storage dtype, got input {activation_dtype} and output {output_dtype}"
                 )
-            broadcast = tuple(self.desc["input_1_shape"]) != tuple(self.desc["input_2_shape"])
+            broadcast = self._float_broadcast_call(auto_on_shape_mismatch=True)
             suffix = "f16" if activation_dtype == "FP16" else "f32"
             c_type = self.tensor_c_type("input", default=activation_dtype)
             return {
@@ -329,15 +329,18 @@ class OpSquaredDifference(BinaryBasicMathBase):
     ) -> None:
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
-        broadcast = input1_shape != input2_shape
-        if broadcast != kernel_info["broadcast"]:
-            raise ValueError(f"{name}: descriptor and LiteRT disagree on squared-difference broadcasting")
-        if np.broadcast_shapes(input1_shape, input2_shape) != output_shape:
-            raise ValueError(f"{name}: output shape {output_shape} differs from the broadcast result")
+        broadcast = kernel_info["broadcast"]
         builder = TemplateContextBuilder()
-        input1_dims = builder.nhwc_to_cmsis_dims(input1_shape)
-        input2_dims = builder.nhwc_to_cmsis_dims(input2_shape)
-        output_dims = builder.nhwc_to_cmsis_dims(output_shape)
+        if broadcast:
+            input1_dims, input2_dims, output_dims = broadcast_cmsis_dims(
+                "SquaredDifference", input1_shape, input2_shape, output_shape
+            )
+        else:
+            if input1_shape != input2_shape or input1_shape != output_shape:
+                raise ValueError(f"{name}: flat squared difference requires equal input and output shapes")
+            input1_dims = builder.nhwc_to_cmsis_dims(input1_shape)
+            input2_dims = builder.nhwc_to_cmsis_dims(input2_shape)
+            output_dims = builder.nhwc_to_cmsis_dims(output_shape)
 
         input1_q, input2_q = self._float_operands(input1_shape, input2_shape)
         reference = self._float_reference(input1_q.dtype)

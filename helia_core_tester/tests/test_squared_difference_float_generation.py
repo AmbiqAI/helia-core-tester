@@ -389,6 +389,9 @@ def test_broadcast_descriptors_call_exact_symbol(desc: dict, tmp_path: Path, mon
         assert "input1_arg = NULL" in c_text
         return
     assert all(f"&{name}_{key}_dims" in c_text for key in ("input1", "input2", "output"))
+    for field, shape in (("input1", desc["input_1_shape"]), ("input2", desc["input_2_shape"])):
+        dims = h_text.split(f"{name}_{field}_dims = {{", 1)[1].split("};", 1)[0]
+        assert [int(v) for v in re.findall(r"\.[nhwc] = (\d+)", dims)] == [1] * (4 - len(shape)) + shape
     half = desc["tensor_dtypes"]["input"] == "FP16"
     assert ("uint16_t actual" if half else "uint32_t actual") in c_text
     assert len(_bits(h_text, name)) == np.prod(np.broadcast_shapes(desc["input_1_shape"], desc["input_2_shape"]))
