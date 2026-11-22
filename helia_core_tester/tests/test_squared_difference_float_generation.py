@@ -170,6 +170,7 @@ def test_fp16_selects_the_flat_float_kernel() -> None:
         "input_c_type": "float16_t",
         "output_c_type": "float16_t",
         "float_kernel": True,
+        "broadcast": False,
     }
 
 
@@ -183,12 +184,9 @@ def test_mixed_input_output_dtypes_are_rejected() -> None:
         op._select_cmsis_squared_difference_kernel()
 
 
-def test_fp32_is_rejected_because_no_f32_kernel_exists() -> None:
-    # ns-cmsis-nn#490 declares the f16 kernel only; advertising an f32 symbol
-    # would emit a call that cannot link.
+def test_fp32_selects_the_flat_float_kernel() -> None:
     op = OpSquaredDifference(_float_desc("k32", dtype="FP32"), seed=1, target_cpu=CPU)
-    with pytest.raises(NotImplementedError, match="no arm_elementwise_squared_difference_f32"):
-        op._select_cmsis_squared_difference_kernel()
+    assert op._select_cmsis_squared_difference_kernel()["kernel_fn"] == "arm_elementwise_squared_difference_f32"
 
 
 def test_int_kernel_selection_is_unchanged() -> None:
@@ -379,10 +377,21 @@ def test_pinned_right_operand_alone_leaves_the_left_drawn(tmp_path: Path, monkey
     assert "(float16_t)0.5f, (float16_t)0.5f, (float16_t)0.5f" not in left
 
 
-def test_mismatched_shapes_are_rejected_for_the_flat_float_kernel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    desc = _float_desc("bcast", shape=(1, 2, 3, 4), shape_2=(1, 1, 1, 4))
-    with pytest.raises(NotImplementedError, match="no broadcast entry point"):
-        _generate(desc, tmp_path, monkeypatch)
+@pytest.mark.parametrize("desc", load_descriptor(str(DESCRIPTOR_PATH.with_name("squared_difference_broadcast_float.yaml"))),
+                         ids=lambda desc: desc["name"])
+def test_broadcast_descriptors_call_exact_symbol(desc: dict, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    name = desc["name"]
+    c_text, h_text, _ = _generate(desc, tmp_path, monkeypatch)
+    symbol, = desc["required_kernel_symbols"]
+    assert f"{symbol}(" in c_text
+    if desc.get("fault"):
+        assert "HELIA_GUARD_CHECK_UNTOUCHED" in c_text
+        assert "input1_arg = NULL" in c_text
+        return
+    assert all(f"&{name}_{key}_dims" in c_text for key in ("input1", "input2", "output"))
+    half = desc["tensor_dtypes"]["input"] == "FP16"
+    assert ("uint16_t actual" if half else "uint32_t actual") in c_text
+    assert len(_bits(h_text, name)) == np.prod(np.broadcast_shapes(desc["input_1_shape"], desc["input_2_shape"]))
 
 
 @pytest.mark.parametrize(("name", "token_lanes"), NONFINITE_CASES)
