@@ -189,6 +189,22 @@ def test_fp32_selects_the_flat_float_kernel() -> None:
     assert op._select_cmsis_squared_difference_kernel()["kernel_fn"] == "arm_elementwise_squared_difference_f32"
 
 
+def test_fp32_broadcast_emits_separately_rounded_golden_bits(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    desc = _float_desc(
+        "rounded_rows_f32", dtype="FP32", shape=(1, 1, 2, 2), shape_2=(1, 1, 2, 1),
+        hint={"extras": {"bit_exact": True, "input_1_values": [1.0, -1.0, 2.0**-64, 0.0],
+                         "input_2_values": [-2.0**-24, 0.0]}},
+    )
+    # 1 + 2^-24 ties to 1 in binary32 before squaring. Squaring the exact sum first
+    # would give 0x3f800001. The third lane squares to 2^-128, a subnormal.
+    expected = [0x3F800000, 0x3F7FFFFE, 0x00200000, 0x00000000]
+    operands = [np.array(desc["hint"]["extras"][key], dtype=np.float32).reshape(desc[shape_key])
+                for key, shape_key in (("input_1_values", "input_1_shape"), ("input_2_values", "input_2_shape"))]
+    assert OpSquaredDifference._float_reference(np.float32)(operands).view(np.uint32).ravel().tolist() == expected
+    _, header, _ = _generate(desc, tmp_path, monkeypatch)
+    assert _bits(header, desc["name"]) == expected
+
+
 def test_int_kernel_selection_is_unchanged() -> None:
     desc = {"operator": "SquaredDifference", "name": "i", "activation_dtype": "S8", "weight_dtype": "S8",
             "input_1_shape": [1, 2, 2, 3], "input_2_shape": [1, 2, 2, 3]}
