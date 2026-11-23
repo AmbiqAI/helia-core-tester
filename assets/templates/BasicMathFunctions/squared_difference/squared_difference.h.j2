@@ -43,7 +43,7 @@ static const {{ output_dtype }} {{ name }}_expected_output[] = {
 {% if bit_exact %}
 
 // Expected output storage bits (bit-exact case: signed zero is asserted)
-static const uint16_t {{ name }}_expected_bits[] = {
+static const {{ 'uint16_t' if output_dtype == 'float16_t' else 'uint32_t' }} {{ name }}_expected_bits[] = {
 {{ expected_bits_array }}
 };
 {% endif %}
