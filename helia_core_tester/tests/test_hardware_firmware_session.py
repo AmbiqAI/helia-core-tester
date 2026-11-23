@@ -219,6 +219,15 @@ def test_c_mram_placement(tmp_path: Path) -> None:
     assert "derived placed" in result.stdout
 
 
+@pytest.mark.parametrize("store", [[], ["-DHCT_BLOB_STORE_BYTES=16384u"]], ids=["plain", "store"])
+def test_c_ssram_placement(tmp_path: Path, store: list[str]) -> None:
+    binary = _build_mram_harness(tmp_path, "-DHCT_PLACEMENT_MRAM", "-DHCT_WEIGHTS_SSRAM", *store)
+    result = subprocess.run([str(binary)], capture_output=True, text=True)
+    assert result.returncode == 0, f"harness exit {result.returncode}: {result.stdout.strip().splitlines()[-1:]}"
+    # Weights stay in the stage, never MRAM.
+    assert "ssram placed" in result.stdout
+
+
 def test_c_sram_placement(tmp_path: Path) -> None:
     binary = _build_mram_harness(tmp_path, "-DHCT_PLACEMENT_MRAM", "-DHCT_ACTIVATIONS_SRAM")
     result = subprocess.run([str(binary)], capture_output=True, text=True)
