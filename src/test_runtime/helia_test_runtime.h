@@ -586,4 +586,8 @@ void helia_guard_check_untouched(const char *label, const void *body, size_t bod
 #define HELIA_VALIDATE_OUTPUTS(mode, actual, expected, size, tolerance, atol, rtol, max_reports, failures) \
     HELIA_VALIDATE_OUTPUTS_##mode((actual), (expected), (size), (tolerance), (atol), (rtol), (max_reports), (failures))
 
+#ifdef HCT_RECORD
+#include "hct_record.h"
+#endif
+
 #endif /* HELIA_TEST_RUNTIME_H */
