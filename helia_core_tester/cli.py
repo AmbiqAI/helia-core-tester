@@ -18,7 +18,7 @@ from helia_core_tester.core.discovery import ensure_arm_toolchain_on_path
 from helia_core_tester.core.logging import setup_logger
 from helia_core_tester.core.path_layout import artifacts_root
 from helia_core_tester.core.pipeline import FullTestPipeline
-from helia_core_tester.core.steps import BuildStep, CleanStep, GenerateStep, HostCheckStep, RunStep
+from helia_core_tester.core.steps import BuildStep, CleanStep, GenerateStep, HostCheckStep, RecordStep, RunStep
 from helia_core_tester.reporting.coverage_merge import run_coverage_merge
 from helia_core_tester.contract.cli import contract_app
 from helia_core_tester.hardware.cli import boards as boards_command
@@ -261,6 +261,33 @@ def host_check(
         _print_plan_item(HostCheckStep(config).plan())
         sys.exit(0)
     run_step_exit(HostCheckStep(config), config, "", failure_prefix="Host check failed")
+
+
+@app.command(name="record")
+def record(
+    cpu: str = typer.Option("cortex-m0", help="Target CPU(s) whose generated trees to record, comma-separated"),
+    suite: str = typer.Option("both", "--suite", help="Test suite selection: int, float, or both"),
+    jobs: Optional[int] = typer.Option(None, help="Parallel compile/run jobs"),
+    verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help="Verbosity level (0-3)"),
+    plan: bool = typer.Option(False, "--plan", help="Print execution plan and exit"),
+    project_root: Optional[Path] = typer.Option(None, "--repo-root", help="Repository root directory"),
+    cmsis_nn_root: Optional[Path] = typer.Option(None, "--cmsis-nn-root", help="ns-cmsis-nn checkout with a host reference build (default: CMSIS_NN_ROOT, else the enclosing checkout)"),
+):
+    """Record every generated case on the host against the library's host reference build and
+    compare each output with the case's golden (golden parity, written to record_parity.json)."""
+    config = get_config(
+        cpu=cpu,
+        verbosity=verbosity,
+        plan=plan,
+        project_root=project_root,
+        jobs=jobs,
+        suite=suite,
+        cmsis_nn_root=cmsis_nn_root,
+    )
+    if config.plan:
+        _print_plan_item(RecordStep(config).plan())
+        sys.exit(0)
+    run_step_exit(RecordStep(config), config, "", failure_prefix="Record failed")
 
 
 @app.command()

@@ -19,6 +19,7 @@ uv run helia_core_tester --help
 - `uv run helia_core_tester clean-all`
 - `uv run helia_core_tester doctor`
 - `uv run helia_core_tester host-check` (see [Host check](#host-check))
+- `uv run helia_core_tester record` (see [Record mode](#record-mode))
 - `uv run helia_core_tester coverage-merge`
 - `uv run helia_core_tester contract inventory` (see [Kernel contracts](#kernel-contracts-iteration-1))
 - `uv run helia_core_tester boards` / `probes list` / `probes match`
@@ -1169,6 +1170,34 @@ uv run helia_core_tester full --cpu cortex-m55 --skip-host-check         # bypas
   keyed by the checkout's `Include/` and `Source/` (commit when clean, content when dirty), the
   mode, flags and compiler identity.
 - The report is `artifacts/reports/generation/int/<cpu>/host_check.json`.
+
+## Record mode
+
+`record` compiles every generated case (int and float) with `HCT_RECORD` against the checkout's
+host reference build, runs it, and compares what the library produced with the golden the case
+was generated with. It is the golden-parity check for moving goldens from hct's C reference to
+each library's own scalar build; nothing is rewritten yet.
+
+```bash
+uv run helia_core_tester record --cpu cortex-m0 --suite both --cmsis-nn-root <ns-cmsis-nn>
+```
+
+- In record mode the runtime's array validators (`src/test_runtime/hct_record.h`) write the output,
+  the compiled-in golden, the case's tolerance and any non-finite mask to a capture file instead
+  of comparing; status checks record the returned and expected status. The format is specified in
+  `helia_core_tester/record/capture.py` (magic `HCTR`, versioned, CRC32) and read fail-closed.
+- Each case gets one outcome: `identical`, `within_tolerance` (passes the case's own check but is
+  not bit-identical), `mismatch`, or a reason it was not compared: `not_recordable` (validated per
+  element, e.g. `HELIA_VALIDATE_FLOAT_BITS`), `refused_f16_host`, `not_applicable`, or a failure
+  (`status_mismatch`, `harness_failed`, `crashed`, `record_error`, `capture_error`,
+  `compile_failed`, `timeout`, `no_records`).
+- Only a host reference build supplies recorded values: a checkout without one is refused, not
+  scanned. f16 is recorded only where the build's `float16_t` is `_Float16` (Linux x86-64; on a Mac,
+  `docker run --platform linux/amd64`); with `__fp16` those cases are `refused_f16_host`.
+- The step fails unless every blocking case is `identical`; advisory cases (generated for a
+  capability the host build lacks, as in host-check) are reported but do not fail it.
+- The report is `artifacts/reports/generation/<suite>/<cpu>/record_parity.json`, with totals and
+  per-family counts.
 
 ## Mutation scoring
 

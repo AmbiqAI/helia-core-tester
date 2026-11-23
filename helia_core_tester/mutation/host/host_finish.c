@@ -11,7 +11,14 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+#ifdef HCT_RECORD
+#include "test_runtime/hct_record.h"
+#endif
+
 void helia_test_finish(int32_t failures)
 {
+#ifdef HCT_RECORD
+    hct_record_finish();
+#endif
     exit(failures == 0 ? 0 : 1);
 }

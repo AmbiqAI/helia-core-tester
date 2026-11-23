@@ -25,7 +25,7 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence
+from typing import Dict, Iterable, List, Optional, Sequence
 
 from helia_core_tester.utils.host_compiler import find_host_cc
 
@@ -88,6 +88,8 @@ class CaseResult:
     passed: bool
     detail: str = ""
     kind: str = KIND_CASE_FAIL
+    exit_code: Optional[int] = None
+    stderr: str = ""
 
     @property
     def killed(self) -> bool:
@@ -245,11 +247,16 @@ def build_and_run_case(
     mode: str = "dsp",
     kernel_flags: Optional[Sequence[str]] = None,
     link_inputs: Optional[Sequence[str]] = None,
+    extra_cflags: Sequence[str] = (),
+    extra_sources: Sequence[Path] = (),
+    run_env: Optional[Dict[str, str]] = None,
 ) -> CaseResult:
     """Compile one generated case against the kernel library and execute it.
 
     With a host reference build, `kernel_flags` replaces the mode's flags and
-    `link_inputs` replaces `<lib> -lm`; both come from its manifest."""
+    `link_inputs` replaces `<lib> -lm`; both come from its manifest. Record mode
+    adds its define (`extra_cflags`), the capture writer (`extra_sources`) and the
+    capture path (`run_env`)."""
     cc = _resolve_cc(cc)
     flags = [*HOST_REFERENCE_CASE_CFLAGS, *kernel_flags] if kernel_flags is not None else _base_cflags(tree_root, mode)
     link = list(link_inputs) if link_inputs is not None else [str(lib), "-lm"]
@@ -262,6 +269,7 @@ def build_and_run_case(
     cmd = [
         cc,
         *flags,
+        *extra_cflags,
         *host_sizer_defines(sources),
         "-I",
         str(tester_root / "src"),
@@ -272,6 +280,7 @@ def build_and_run_case(
         *[str(s) for s in sources],
         str(runtime_obj),
         str(HOST_FINISH),
+        *[str(s) for s in extra_sources],
         *link,
         "-o",
         str(binary),
@@ -280,13 +289,22 @@ def build_and_run_case(
     if proc.returncode != 0:
         return CaseResult(name, family, False, f"compile failed:\n{proc.stderr[-2000:]}", kind=KIND_COMPILE_FAILED)
     try:
-        run_proc = _run([str(binary)], timeout=timeout_s)
+        run_proc = _run([str(binary)], timeout=timeout_s, env=run_env)
     except subprocess.TimeoutExpired:
         return CaseResult(name, family, False, f"timeout after {timeout_s}s", kind=KIND_TIMEOUT)
     if run_proc.returncode != 0:
         tail = (run_proc.stdout or "").strip().splitlines()
-        return CaseResult(name, family, False, tail[-1] if tail else f"exit {run_proc.returncode}", kind=KIND_CASE_FAIL)
-    return CaseResult(name, family, True, kind=KIND_PASS)
+        detail = tail[-1] if tail else f"exit {run_proc.returncode}"
+        return CaseResult(
+            name,
+            family,
+            False,
+            detail,
+            kind=KIND_CASE_FAIL,
+            exit_code=run_proc.returncode,
+            stderr=(run_proc.stderr or "")[-2000:],
+        )
+    return CaseResult(name, family, True, kind=KIND_PASS, exit_code=0)
 
 
 def run_all_cases(
