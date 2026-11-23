@@ -1155,9 +1155,19 @@ uv run helia_core_tester full --cpu cortex-m55 --skip-host-check         # bypas
   not run; a case the generator specialised for the target CPU (an `entry:` or `fault:` case, or
   FullyConnected s8 folding its bias into the MVE-only kernel sums) still runs, but its failure is
   *advisory* (reported, not blocking); everything else blocks. The report lists all three.
-- The kernel library (every int and f32 source of the checkout; f16 stays FVP-only) and the test
-  runtime are cached in `artifacts/host_kernels/<key>/`, keyed by the checkout's `Include/` and
-  `Source/` (commit when clean, content when dirty), the mode, flags and compiler identity.
+- `m0` kernels come from the checkout's own host reference build when it offers one
+  (`NS_CMSIS_NN_HOST_REFERENCE=ON`: the library's CMake, every float width, `-O2
+  -ffp-contract=off -fno-fast-math`, no DSP/MVE path). hct configures and builds it with the
+  host compiler and compiles each case with the definitions and include dirs its manifest
+  (`ns_cmsis_nn_host_reference.json`, schema `hct/host-reference/1`) lists; a bad or missing
+  manifest fails the check. Builds are cached in `artifacts/host_kernels/host_reference/<key>/`,
+  keyed by the checkout's `CMakeLists.txt`, `cmake/`, `Include/` and `Source/` content, the
+  compiler and the CMake version. A checkout without the option falls back to hct's scan of
+  its int and f32 sources (f16 excluded); the step warns and the report's `provider` is
+  `source-scan` instead of `host-reference`. `dsp` always uses the scan.
+- The scanned kernel library and the test runtime are cached in `artifacts/host_kernels/<key>/`,
+  keyed by the checkout's `Include/` and `Source/` (commit when clean, content when dirty), the
+  mode, flags and compiler identity.
 - The report is `artifacts/reports/generation/int/<cpu>/host_check.json`.
 
 ## Mutation scoring
