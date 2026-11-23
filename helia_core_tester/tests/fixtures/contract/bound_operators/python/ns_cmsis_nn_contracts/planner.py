@@ -374,7 +374,8 @@ class Planner:
                               ch_mult: int = 1, stride=(1, 1), padding=(0, 0), dilation=(1, 1)) -> Plan:
         """The path arm_depthwise_conv_s8_opt() runs for a call whose ctx->size is ``ctx_size`` and whose ctx->buf and
         weight_sum_ctx->buf are set (dw_opt_s8:planar or dw_opt_s8:channelwise). stride, padding and dilation are
-        (h, w). A call the entry rejects, such as a non-zero ctx_size below the channelwise scratch, is refused."""
+        (h, w). A call the entry rejects, such as a non-zero ctx_size below the channelwise scratch, is refused, as is
+        N != 1 on a DSP or MVE target, where the channelwise kernel computes only the first batch."""
         params = _dw_params(ch_mult, stride, padding, dilation)
         plan = _Plan()
         status = self._lib.arm_nn_plan_depthwise_conv_s8_opt(
@@ -451,14 +452,15 @@ class Planner:
         mult, shift = _int32_array(multipliers, "multipliers"), _int32_array(shifts, "shifts")
         plan = _Plan()
         status = self._lib.arm_nn_plan_fully_connected_per_channel_packed_s8(
-            self._target(target), _FcParams(0, filter_offset, 0, _Activation(-128, 127)),
+            self._target(target), _FcParams(0, _int32(filter_offset, "filter_offset"), 0, _Activation(-128, 127)),
             _PerChannelQuant(mult, shift), dims, plan)
         return self._result(status, plan, "arm_fully_connected_per_channel_packed_s8", None)
 
     def pool_s8(self, target: Target, *, max_pool: bool, input_dims, kernel_hw, output_dims, stride=(1, 1),
                 padding=(0, 0)) -> Plan:
         """kernel_hw, stride and padding are (h, w)."""
-        params = _PoolParams(_Tile(stride[1], stride[0]), _Tile(padding[1], padding[0]), _Activation(-128, 127))
+        (sh, sw), (ph, pw) = _pair(stride, "stride"), _pair(padding, "padding")
+        params = _PoolParams(_Tile(sw, sh), _Tile(pw, ph), _Activation(-128, 127))
         plan = _Plan()
         status = self._lib.arm_nn_plan_pool_s8(
             self._target(target), int(max_pool), params, _dims(input_dims, "input_dims"),
@@ -468,6 +470,8 @@ class Planner:
     def vector_sum_s8(self, data, *, cols: int, rows: int, lhs_offset: int, rhs_offset: int,
                       bias: Optional[Sequence[int]] = None) -> list[int]:
         """arm_vector_sum_s8: per row, bias + lhs_offset * sum(data + rhs_offset) (the library's own code)."""
+        cols, rows = _int32(cols, "cols"), _int32(rows, "rows")
+        lhs_offset, rhs_offset = _int32(lhs_offset, "lhs_offset"), _int32(rhs_offset, "rhs_offset")
         if cols < 1 or rows < 1:
             raise ValueError(f"cols and rows must be positive, got {cols} and {rows}")
         matrix, length = _int8_array(data, "data")
