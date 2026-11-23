@@ -241,7 +241,7 @@ def test_grouped_fp32_wrapper_scratch_and_empty_contracts(tmp_path):
     assert f"HELIA_GUARD_ARM({name}_buffer, true" in source
     assert "HELIA_GUARD_STAMP_SLACK(" not in source
     assert f'HELIA_GUARD_CHECK_UNTOUCHED({name}_buffer, "Convolve scratch", failures)' in source
-    empty = _source("convolve_grouped_empty_output_width_f32", tmp_path)
+    empty = _source("convolve_grouped_fault_empty_output_width_f32", tmp_path)
     assert "output_dims.w = 0;" in empty
     assert "ARM_CMSIS_NN_SUCCESS" in empty and "HELIA_GUARD_CHECK_UNTOUCHED(" in empty
 

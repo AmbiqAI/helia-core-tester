@@ -161,7 +161,7 @@ groups: 5
 use_bias: true
 ---
 operator: Convolve
-name: convolve_grouped_channel_group_mismatch_f32
+name: convolve_grouped_fault_channel_group_mismatch_f32
 suite: float
 required_kernel_symbols: [ARM_NN_HAS_GROUPED_CONV_F32]
 activation_dtype: FP32
@@ -178,7 +178,7 @@ fault: channel_group_mismatch
 expected_status: ARM_CMSIS_NN_ARG_ERROR
 ---
 operator: Convolve
-name: convolve_grouped_output_group_mismatch_f32
+name: convolve_grouped_fault_output_group_mismatch_f32
 suite: float
 required_kernel_symbols: [ARM_NN_HAS_GROUPED_CONV_F32]
 activation_dtype: FP32
@@ -195,7 +195,7 @@ fault: output_group_mismatch
 expected_status: ARM_CMSIS_NN_ARG_ERROR
 ---
 operator: Convolve
-name: convolve_grouped_packed_grouped_f32
+name: convolve_grouped_fault_packed_grouped_f32
 suite: float
 required_kernel_symbols: [ARM_NN_HAS_GROUPED_CONV_F32]
 activation_dtype: FP32
@@ -212,7 +212,7 @@ fault: packed_grouped
 expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 ---
 operator: Convolve
-name: convolve_grouped_empty_output_width_f32
+name: convolve_grouped_fault_empty_output_width_f32
 suite: float
 required_kernel_symbols: [ARM_NN_HAS_GROUPED_CONV_F32]
 activation_dtype: FP32
@@ -229,7 +229,7 @@ fault: empty_output_width
 expected_status: ARM_CMSIS_NN_SUCCESS
 ---
 operator: Convolve
-name: convolve_grouped_oversized_patch_f32
+name: convolve_grouped_fault_oversized_patch_f32
 suite: float
 required_kernel_symbols: [ARM_NN_HAS_GROUPED_CONV_F32]
 activation_dtype: FP32
