@@ -19,7 +19,7 @@ from helia_core_tester.reporting.models import TestResult, TestStatus
 from helia_core_tester.reporting.parser import TestResultParser
 
 from .coverage import CoverageContext, process_coverage_output
-from .env import REPO_ROOT
+from .env import REPO_ROOT, fvp_process_env
 
 
 _TERMINAL_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
@@ -175,7 +175,7 @@ def run_fvp_process(
         proc = subprocess.Popen(
             cmd,
             cwd=str(REPO_ROOT),
-            env=env,
+            env=fvp_process_env(env),
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
