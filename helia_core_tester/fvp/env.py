@@ -78,6 +78,32 @@ def call_setup_dependencies(downloads_dir: Path) -> None:
         raise FvpScriptError(f"Dependency setup failed (rc={rc})")
 
 
+GLIBC_TUNABLES = "GLIBC_TUNABLES"
+EXECSTACK_TUNABLE = "glibc.rtld.execstack"
+# glibc 2.41 stopped letting dlopen() make the stack executable, which the
+# Corstone-300 FVP's libarmctmodel.so asks for ("cannot enable executable stack as
+# shared object requires"); from 2.42 the value 2 allows it again (ubuntu-26.04
+# runners ship 2.43). 2.41 itself has no workaround; older glibc ignores the tunable.
+EXECSTACK_ALLOW = "2"
+
+
+def fvp_process_env(env: dict, system: Optional[str] = None) -> dict:
+    """A copy of `env` for launching the FVP, with the execstack tunable added on Linux.
+
+    A value the caller already set for the tunable is kept, so it can still be
+    overridden; other tunables in GLIBC_TUNABLES are preserved.
+    """
+    out = dict(env)
+    if (system or platform.system()) != "Linux":
+        return out
+    current = out.get(GLIBC_TUNABLES, "")
+    entries = [entry for entry in current.split(":") if entry]
+    if any(entry.split("=", 1)[0] == EXECSTACK_TUNABLE for entry in entries):
+        return out
+    out[GLIBC_TUNABLES] = ":".join(entries + [f"{EXECSTACK_TUNABLE}={EXECSTACK_ALLOW}"])
+    return out
+
+
 def prepend_path(path: Path, env: dict) -> None:
     env["PATH"] = str(path) + os.pathsep + env.get("PATH", "")
 
