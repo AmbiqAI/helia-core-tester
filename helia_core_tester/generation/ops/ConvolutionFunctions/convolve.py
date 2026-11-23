@@ -35,6 +35,7 @@ class OpConvolve(OperationBase):
         "batch_mismatch",
         "packed_grouped",
         "zero_output_batch",
+        "empty_output_width",
         "oversized_kernel_area",
         "oversized_patch",
         "null_input",
@@ -94,19 +95,22 @@ class OpConvolve(OperationBase):
         if kind in self.S16_GROUP_FAULTS and kernel_fn != "arm_convolve_wrapper_s16":
             raise self.fault_unreachable(kind, f"{kernel_fn} is not covered by the s16 whole-group rule")
         if context["float_kernel"]:
-            grouped_f16_faults = {
+            grouped_float_faults = {
                 "channel_group_mismatch",
                 "output_group_mismatch",
                 "negative_batch",
                 "batch_mismatch",
                 "packed_grouped",
                 "zero_output_batch",
+                "empty_output_width",
                 "oversized_kernel_area",
                 "oversized_patch",
             }
-            if kind in grouped_f16_faults and kernel_fn in {
+            if kind in grouped_float_faults and kernel_fn in {
                 "arm_convolve_f16",
                 "arm_convolve_wrapper_f16",
+                "arm_convolve_f32",
+                "arm_convolve_wrapper_f32",
             }:
                 if (
                     kind in ("packed_grouped", "output_group_mismatch")
@@ -118,7 +122,7 @@ class OpConvolve(OperationBase):
                 return
             if (
                 kind in ("null_ctx_buf", "null_weight_sum_ctx", "zero_stride")
-                or kind in grouped_f16_faults
+                or kind in grouped_float_faults
             ):
                 raise self.fault_unreachable(kind, f"{kernel_fn} has no such guard")
             if kind == "invalid_layout" and not context["kernel_needs_layout"]:
@@ -127,7 +131,7 @@ class OpConvolve(OperationBase):
                 )
             return
         if kind in ("output_group_mismatch", "negative_batch", "batch_mismatch",
-                    "packed_grouped", "zero_output_batch", "oversized_kernel_area", "oversized_patch"):
+                    "packed_grouped", "zero_output_batch", "empty_output_width", "oversized_kernel_area", "oversized_patch"):
             raise self.fault_unreachable(kind, f"{kernel_fn} has no such grouped-float guard")
         if kind in ("null_input", "null_output", "invalid_layout"):
             raise self.fault_unreachable(
@@ -817,6 +821,12 @@ class OpConvolve(OperationBase):
             output_data = clamp_golden(self.desc, output_data)
 
         # Bias handling (S16 wrapper expects int64 bias)
+        grouped_f32 = float_kernel and kernel_info["input_c_type"] == "float" and groups > 1
+        if grouped_f32 and not self.desc.get("use_bias", True):
+            # LiteRT may supply a zero bias tensor for a bias-free model. Exercise the optional C argument.
+            if biases is not None and np.any(biases):
+                raise ValueError(f"{name}: bias-free grouped convolution carries a nonzero model bias")
+            biases = None
         has_biases = biases is not None and getattr(biases, "size", 0) > 0
         bias_dtype = kernel_info["bias_c_type"]
         if has_biases and self.desc.get("bias_dtype") is not None and biases.dtype != np.dtype(bias_dtype[:-2]):
@@ -902,6 +912,7 @@ class OpConvolve(OperationBase):
             'buffer_size_needs_layout': bool(kernel_info.get("buffer_size_needs_layout", False)),
             'call_style': kernel_info.get("call_style", "baseline"),
             'buffer_size_max': buffer_size_max,
+            'grouped_f32': grouped_f32,
             'float_kernel': float_kernel,
             'weight_format_macro': weight_format_macro,
             'conv_params_type': (

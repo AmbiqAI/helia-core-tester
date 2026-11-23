@@ -69,6 +69,8 @@ static int32_t run_convolve(void)
     output_dims.n = input_dims.n;
 {% elif fault == "batch_mismatch" %}
     output_dims.n = {{ output_dims.n + 1 }};
+{% elif fault == "empty_output_width" %}
+    output_dims.w = 0;
 {% elif fault == "zero_output_batch" %}
     output_dims.n = 0;
 {% endif %}
@@ -184,7 +186,7 @@ int32_t {{ name }}_test_case_run(void)
 {% endif %}    int32_t status = run_convolve();
     int failures = 0;
 {% if fault != "null_output" %}    HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("Convolution") }} output", failures);
-{% if expected_status != "ARM_CMSIS_NN_SUCCESS" %}    HELIA_GUARD_CHECK_UNTOUCHED({{ name }}_output, "{{ validation_label | default("Convolution") }} output", failures);
+{% if expected_status != "ARM_CMSIS_NN_SUCCESS" or fault == "empty_output_width" %}    HELIA_GUARD_CHECK_UNTOUCHED({{ name }}_output, "{{ validation_label | default("Convolution") }} output", failures);
 {% endif %}{% endif %}{% if fault != "null_ctx_buf" %}    HELIA_GUARD_CHECK({{ name }}_buffer, "{{ validation_label | default("Convolution") }} buffer", failures);
 {% endif %}{% if kernel_fn == 'arm_convolve_wrapper_s8' and fault != "null_weight_sum_ctx" %}    HELIA_GUARD_CHECK({{ name }}_weight_sum_buffer, "{{ validation_label | default("Convolution") }} weight sum buffer", failures);
 {% endif %}    HELIA_VALIDATE_EXPECTED_STATUS(

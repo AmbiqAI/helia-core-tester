@@ -12,6 +12,7 @@ from helia_core_tester.generation.kernel_dispatch import (
     DIRECT_ENTRIES,
     resolve_direct_entry,
 )
+from helia_core_tester.generation.utils.temp_sizer_probe import missing_header_symbols
 from helia_core_tester.generation.test_ops import (
     _required_kernel_symbols,
     generate_test,
@@ -215,3 +216,39 @@ def test_grouped_fp16_descriptors_require_grouped_core_support():
 def test_group_only_fault_declines_ungrouped_input(fault, tmp_path):
     with pytest.raises(ValueError, match="needs at least two groups"):
         _source(f"convolve_fault_{fault}_f16", tmp_path, groups=1)
+
+
+def test_grouped_fp32_requires_enabled_public_feature(tmp_path):
+    flag = "ARM_NN_HAS_GROUPED_CONV_F32"
+    grouped = [d for d in load_all_descriptors(str(_PROJECT_ROOT / "assets" / "descriptors"))
+               if d["operator"] == "Convolve" and d.get("activation_dtype") == "FP32" and d.get("groups", 1) > 1]
+    assert grouped
+    assert all(flag in _required_kernel_symbols(d) for d in grouped)
+    header = tmp_path / "Include" / "arm_nnfunctions.h"
+    header.parent.mkdir()
+    for contents in (f"/* #define {flag} 1 */", f"#define {flag} 0", f"#define {flag}_EXTRA 1"):
+        header.write_text(contents)
+        assert missing_header_symbols([flag], tmp_path) == [flag]
+    header.write_text(f"#define {flag} 1 /* supported */\n")
+    assert missing_header_symbols([flag], tmp_path) == []
+
+
+def test_grouped_fp32_wrapper_scratch_and_empty_contracts(tmp_path):
+    name = "convolve_grouped_wrapper_dilated_f32"
+    source = _source(name, tmp_path)
+    assert f"{name}_ctx.size = sizeof({name}_buffer);" in source
+    assert 'HELIA_VALIDATE_SIZER_FITS("arm_convolve_wrapper_f32_get_buffer_size", required_buffer_size, 0)' in source
+    assert f"HELIA_GUARD_ARM({name}_buffer, true" in source
+    assert "HELIA_GUARD_STAMP_SLACK(" not in source
+    assert f'HELIA_GUARD_CHECK_UNTOUCHED({name}_buffer, "Convolve scratch", failures)' in source
+    empty = _source("convolve_grouped_fault_empty_output_width_f32", tmp_path)
+    assert "output_dims.w = 0;" in empty
+    assert "ARM_CMSIS_NN_SUCCESS" in empty and "HELIA_GUARD_CHECK_UNTOUCHED(" in empty
+
+
+def test_grouped_fp32_direct_passes_null_bias_pair(tmp_path):
+    name = "convolve_grouped_direct_channel_tail_f32"
+    source = _source(name, tmp_path)
+    call = re.search(r"return arm_convolve_direct_nhwc_ohwi_f32\((.*?)\);", source, re.S)
+    assert call
+    assert re.search(rf"{name}_weights,\s*NULL,\s*NULL,\s*&{name}_output_dims,", call.group(1))

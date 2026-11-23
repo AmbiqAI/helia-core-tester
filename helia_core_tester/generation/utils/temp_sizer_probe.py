@@ -90,14 +90,21 @@ def _strip_comments(text: str) -> str:
 
 
 def _symbol_declared(symbol: str, text: str) -> bool:
-    """True iff ``symbol`` appears in declaration shape -- the symbol
+    """Check an enabled ARM_NN_HAS_* feature flag or a function declaration.
+    A function appears in declaration shape -- the symbol
     followed (modulo whitespace) by an opening parenthesis, at a word
     boundary -- in the comment-stripped header text. Comment stripping
     closes the code-form-mention false positive twice flagged in review;
     the remaining residual (a function-like ``#define symbol(x)``) would
     still fail loudly at link time.
     """
-    return re.search(rf"\b{re.escape(symbol)}\s*\(", _strip_comments(text)) is not None
+    text = _strip_comments(text)
+    # Existing APIs can gain a new contract without introducing a public function.
+    # The core advertises those features with object-like ARM_NN_HAS_* flags set to 1.
+    if symbol.startswith("ARM_NN_HAS_"):
+        pattern = rf"^[ \t]*#[ \t]*define[ \t]+{re.escape(symbol)}[ \t]+1[ \t]*$"
+        return re.search(pattern, text, re.MULTILINE) is not None
+    return re.search(rf"\b{re.escape(symbol)}\s*\(", text) is not None
 
 
 def _public_header_corpus(cmsis_nn_root: Optional[Path]) -> Optional[str]:
