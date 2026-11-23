@@ -116,6 +116,136 @@ padding: VALID
 use_bias: true
 ---
 operator: Convolve
+name: convolve_grouped_wrapper_dilated_f32
+suite: float
+required_kernel_symbols: [ARM_NN_HAS_GROUPED_CONV_F32]
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes: {input: FP32, output: FP32, weights: FP32, bias: FP32}
+input_shape: [2, 7, 8, 10]
+filter_shape: [3, 2, 10, 6]
+strides: [1, 1]
+padding: SAME
+groups: 2
+dilation: [2, 1]
+use_bias: true
+hint: {kernel_variant: wrapper}
+---
+operator: Convolve
+name: convolve_grouped_direct_channel_tail_f32
+suite: float
+required_kernel_symbols: [ARM_NN_HAS_GROUPED_CONV_F32]
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes: {input: FP32, output: FP32, weights: FP32, bias: FP32}
+input_shape: [1, 5, 7, 15]
+filter_shape: [2, 3, 15, 9]
+strides: [2, 1]
+padding: SAME
+groups: 3
+use_bias: false
+entry: arm_convolve_direct_nhwc_ohwi_f32
+---
+operator: Convolve
+name: convolve_grouped_depthwise_f32
+suite: float
+required_kernel_symbols: [ARM_NN_HAS_GROUPED_CONV_F32]
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes: {input: FP32, output: FP32, weights: FP32, bias: FP32}
+input_shape: [1, 4, 6, 5]
+filter_shape: [3, 2, 5, 10]
+strides: [1, 1]
+padding: VALID
+groups: 5
+use_bias: true
+---
+operator: Convolve
+name: convolve_grouped_channel_group_mismatch_f32
+suite: float
+required_kernel_symbols: [ARM_NN_HAS_GROUPED_CONV_F32]
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes: {input: FP32, output: FP32, weights: FP32, bias: FP32}
+input_shape: [1, 3, 3, 8]
+filter_shape: [1, 1, 8, 8]
+strides: [1, 1]
+padding: VALID
+groups: 2
+use_bias: true
+hint: {kernel_variant: wrapper}
+fault: channel_group_mismatch
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: Convolve
+name: convolve_grouped_output_group_mismatch_f32
+suite: float
+required_kernel_symbols: [ARM_NN_HAS_GROUPED_CONV_F32]
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes: {input: FP32, output: FP32, weights: FP32, bias: FP32}
+input_shape: [1, 3, 3, 8]
+filter_shape: [1, 1, 8, 8]
+strides: [1, 1]
+padding: VALID
+groups: 2
+use_bias: true
+hint: {kernel_variant: wrapper}
+fault: output_group_mismatch
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: Convolve
+name: convolve_grouped_packed_grouped_f32
+suite: float
+required_kernel_symbols: [ARM_NN_HAS_GROUPED_CONV_F32]
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes: {input: FP32, output: FP32, weights: FP32, bias: FP32}
+input_shape: [1, 3, 3, 8]
+filter_shape: [1, 1, 8, 8]
+strides: [1, 1]
+padding: VALID
+groups: 2
+use_bias: true
+hint: {kernel_variant: wrapper}
+fault: packed_grouped
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_grouped_empty_output_width_f32
+suite: float
+required_kernel_symbols: [ARM_NN_HAS_GROUPED_CONV_F32]
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes: {input: FP32, output: FP32, weights: FP32, bias: FP32}
+input_shape: [1, 3, 3, 8]
+filter_shape: [1, 1, 8, 8]
+strides: [1, 1]
+padding: VALID
+groups: 2
+use_bias: true
+hint: {kernel_variant: wrapper}
+fault: empty_output_width
+expected_status: ARM_CMSIS_NN_SUCCESS
+---
+operator: Convolve
+name: convolve_grouped_oversized_patch_f32
+suite: float
+required_kernel_symbols: [ARM_NN_HAS_GROUPED_CONV_F32]
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes: {input: FP32, output: FP32, weights: FP32, bias: FP32}
+input_shape: [1, 3, 3, 8]
+filter_shape: [1, 1, 8, 8]
+strides: [1, 1]
+padding: VALID
+groups: 2
+use_bias: true
+hint: {kernel_variant: wrapper}
+fault: oversized_patch
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: Convolve
 name: convolve_float_default_f16
 suite: float
 activation_dtype: FP16

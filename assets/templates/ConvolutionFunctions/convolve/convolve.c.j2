@@ -83,10 +83,12 @@ static const cmsis_nn_bias_data {{ name }}_bias_data = {
     {% if conv_s8_weight_sum %}
     HELIA_GUARD_ARM({{ name }}_weight_sum_buffer, true /* fully recomputed below: poison-safe */);
     {% endif %}
+    {% if not grouped_f32 %}
     HELIA_GUARD_STAMP_SLACK({{ name }}_buffer, 0u);
     // The slack is stamped as wholly unused here so that an early return from the
     // capacity check below leaves every canary in a checked state; it is re-stamped
     // with the real size once the context is populated (#68).
+    {% endif %}
 
 
     // The sizer's answer is checked before it becomes a context size (#133). A negative
@@ -94,12 +96,18 @@ static const cmsis_nn_bias_data {{ name }}_bias_data = {
     // above this case's static means our generation-time bound and the shipped kernel
     // disagree. They are separate failures because they have separate owners.
     HELIA_VALIDATE_SIZER("{{ kernel_get_buffer_size_fn }}", required_buffer_size);
-    HELIA_VALIDATE_SIZER_FITS("{{ kernel_get_buffer_size_fn }}", required_buffer_size, {{ name|upper }}_BUFFER_SIZE_MAX);
+    HELIA_VALIDATE_SIZER_FITS("{{ kernel_get_buffer_size_fn }}", required_buffer_size, {% if grouped_f32 %}0{% else %}{{ name|upper }}_BUFFER_SIZE_MAX{% endif %});
 
     // Initialize context buffer
+{% if grouped_f32 %}
+    // Grouped convolution needs no scratch. Also exercise a wrapper caller offering its arena.
+    {{ name }}_ctx.buf = {% if kernel_fn == 'arm_convolve_wrapper_f32' %}{{ name }}_buffer{% else %}NULL{% endif %};
+    {{ name }}_ctx.size = {% if kernel_fn == 'arm_convolve_wrapper_f32' %}sizeof({{ name }}_buffer){% else %}0{% endif %};
+{% else %}
     {{ name }}_ctx.buf = {{ name }}_buffer;
     {{ name }}_ctx.size = required_buffer_size;
     HELIA_GUARD_STAMP_SLACK({{ name }}_buffer, {{ name }}_ctx.buf == {{ name }}_buffer ? (size_t){{ name }}_ctx.size : 0u);
+{% endif %}
 
     {% if conv_s8_weight_sum %}
     // Initialize weight sum context and buffer
@@ -331,7 +339,11 @@ int32_t {{ name }}_test_case_run(void)
     int32_t status = {{ name }}_run({{ name }}_input, {{ name }}_output);
     int failures = 0;
     HELIA_GUARD_CHECK({{ name }}_buffer, "{{ validation_label | default("Convolution") }} scratch", failures);
+    {% if grouped_f32 %}
+    HELIA_GUARD_CHECK_UNTOUCHED({{ name }}_buffer, "{{ validation_label | default("Convolution") }} scratch", failures);
+    {% else %}
     HELIA_GUARD_CHECK_SLACK({{ name }}_buffer, "{{ validation_label | default("Convolution") }} scratch slack", {{ name }}_ctx.buf == {{ name }}_buffer ? (size_t){{ name }}_ctx.size : 0u, failures);
+    {% endif %}
     {% if conv_s8_weight_sum %}
     HELIA_GUARD_CHECK({{ name }}_weight_sum_buffer, "{{ validation_label | default("Convolution") }} weight_sum", failures);
     {% endif %}

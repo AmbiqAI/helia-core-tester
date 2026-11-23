@@ -156,7 +156,7 @@ def _required_capabilities(desc: Dict[str, Any]) -> list[str]:
 
 
 def _required_kernel_symbols(desc: Dict[str, Any]) -> list[str]:
-    """Public ns-cmsis-nn kernel symbols a descriptor's generated test calls.
+    """Public ns-cmsis-nn functions and ARM_NN_HAS_* feature flags a descriptor needs.
 
     Descriptors listing ``required_kernel_symbols`` are generated only when
     every symbol is declared in the target ns-cmsis-nn checkout's public
