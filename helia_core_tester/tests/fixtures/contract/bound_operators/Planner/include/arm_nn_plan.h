@@ -64,8 +64,9 @@ typedef enum
     ARM_NN_PLAN_E_SHAPE = 3,      /**< a dimension is not positive, or the dims and params disagree */
     ARM_NN_PLAN_E_RANGE = 4,      /**< a tensor or buffer size does not fit int32_t, or a given buffer size is negative
                                        or one the call rejects */
-    ARM_NN_PLAN_E_UNSUPPORTED = 5 /**< the entry declines this layer or target (ARM_CMSIS_NN_NO_IMPL_ERROR), or the
-                                       planner does not evaluate the size query named */
+    ARM_NN_PLAN_E_UNSUPPORTED = 5 /**< the entry declines this layer or target (ARM_CMSIS_NN_NO_IMPL_ERROR) or does
+                                       not compute all of it there, or the planner does not evaluate the size query
+                                       named */
 } arm_nn_plan_status;
 
 /** What the ctx argument of the planned call holds. */
@@ -112,7 +113,9 @@ int32_t arm_nn_plan_toolchain_built(void);
  * @brief Plan arm_depthwise_conv_wrapper_s8().
  *
  * Dims: input [N, H, W, C_IN], filter [1, H, W, C_OUT], output [N, H, W, C_OUT] with C_OUT = C_IN * ch_mult.
- * ctx is scratch sized as arm_depthwise_conv_wrapper_s8_get_buffer_size() for the target.
+ * ctx is scratch sized as arm_depthwise_conv_wrapper_s8_get_buffer_size() for the target. A layer the selected
+ * kernel rejects on the target (ARM_CMSIS_NN_ARG_ERROR: the generic kernel's uint16_t values and int16_t tap index,
+ * the DSP channelwise kernel's uint16_t channel and tap counts) is ARM_NN_PLAN_E_RANGE.
  */
 arm_nn_plan_status arm_nn_plan_depthwise_conv_wrapper_s8(const arm_nn_plan_target *target,
                                                          const cmsis_nn_dw_conv_params *dw_conv_params,
@@ -127,8 +130,10 @@ arm_nn_plan_status arm_nn_plan_depthwise_conv_wrapper_s8(const arm_nn_plan_targe
  * Dims: input [N, H, W, C], filter [1, H, W, C], output [N, H, W, C]; ch_mult must be 1, dilation.h 1 and dilation.w
  * positive, as the entry requires on every build. ctx_size is the ctx->size of a call whose ctx->buf and
  * weight_sum_ctx->buf are set: the planar path needs its plane to fit it, and the channelwise path rejects a
- * non-zero ctx_size below its scratch (ARM_NN_PLAN_E_RANGE). The plan's ctx_bytes is
- * arm_depthwise_conv_s8_opt_get_buffer_size() for the target.
+ * non-zero ctx_size below its scratch, and a layer past its kernel's limits on the target (ARM_NN_PLAN_E_RANGE). The
+ * planar path takes N == 1 only, and the DSP and MVE channelwise kernels compute only the first batch, so N != 1 on
+ * those targets is ARM_NN_PLAN_E_UNSUPPORTED; a scalar target runs arm_depthwise_conv_s8(), which takes any N. The
+ * plan's ctx_bytes is arm_depthwise_conv_s8_opt_get_buffer_size() for the target.
  */
 arm_nn_plan_status arm_nn_plan_depthwise_conv_s8_opt(const arm_nn_plan_target *target,
                                                      const cmsis_nn_dw_conv_params *dw_conv_params,
@@ -169,7 +174,8 @@ arm_nn_plan_fully_connected_per_channel_packed_s8(const arm_nn_plan_target *targ
  * @brief Plan arm_avgpool_s8() (and arm_max_pool_s8() when max is 1).
  *
  * Dims: input [N, H, W, C], filter [-, H, W, -], output [N, H, W, C]. avgpool scratch is sized as
- * arm_avgpool_s8_get_buffer_size() for the target; max pooling reads no ctx.
+ * arm_avgpool_s8_get_buffer_size() for the target; max pooling reads no ctx. Every pooling window must overlap the
+ * input and its bounds fit int32_t, as both kernels require (ARM_NN_PLAN_E_SHAPE).
  */
 arm_nn_plan_status arm_nn_plan_pool_s8(const arm_nn_plan_target *target,
                                        int32_t max,
