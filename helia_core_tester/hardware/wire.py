@@ -23,6 +23,7 @@ from typing import Sequence
 from .hctp import ByteReader, ByteWriter
 from .measurement import CounterPass, RawCounterValue, RawSample
 from .pmu_catalog import CounterDescriptor, counter_by_event_id, counter_name_for_event_id
+from .transfer import MRAM_PLACEMENTS
 
 # TARGET_INFO capability_flags bits -- must match the HCT_CAP_* enum in
 # cmake/hardware/benchmark_server_catalog.h.
@@ -39,6 +40,8 @@ CAP_PMU_ARMV8M = 1 << 6
 CAP_WEIGHTS_MRAM = 1 << 7
 # Board caches blobs by CASE_META key.
 CAP_BLOB_STORE = 1 << 8
+# Workspace (activations, scratch) in cached SRAM.
+CAP_ACTIVATIONS_SRAM = 1 << 9
 
 CATALOG_HASH_SIZE = 32
 BLOB_MAX_RANK = 6
@@ -96,6 +99,8 @@ class TargetInfo:
 
     @property
     def placement(self) -> str:
+        if self.capability_flags & CAP_ACTIVATIONS_SRAM:
+            return "sram"
         return "mram" if self.capability_flags & CAP_WEIGHTS_MRAM else "tcm"
 
     @property
@@ -143,11 +148,13 @@ def boot_record(info: TargetInfo | None) -> dict:
 def placement_record(info: TargetInfo | None) -> dict:
     """Operand memory and cache policy."""
     if info is None:
-        return {"name": None, "weights": None, "activations": None, "dcache": None, "weights_cache": None}
-    mram = info.placement == "mram"
+        return {"name": None, "weights": None, "activations": None, "dcache": None, "weights_cache": None,
+                "activations_cache": None}
+    mram = info.placement in MRAM_PLACEMENTS
+    sram = info.placement == "sram"
     m4 = info.target_cpu == "cortex-m4"
     # M4 static BSS lands in SRAM.
-    workspace = "sram" if m4 else "dtcm"
+    workspace = "sram" if m4 or sram else "dtcm"
     return {
         "name": info.placement,
         "weights": "mram" if mram else workspace,
@@ -155,6 +162,7 @@ def placement_record(info: TargetInfo | None) -> dict:
         # Cortex-M4 has no D-cache; TCM bypasses it.
         "dcache": "none" if m4 else "on",
         "weights_cache": "cold" if mram else "uncached",
+        "activations_cache": "cold" if sram else "uncached",
     }
 
 

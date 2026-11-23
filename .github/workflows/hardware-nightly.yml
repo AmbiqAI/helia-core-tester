@@ -4,8 +4,8 @@ name: Hardware Nightly
 
 on:
   schedule:
-    # Clears hpx's 09:00 UTC nightly.
-    - cron: "0 5 * * *"
+    # After lab upgrade, before hpx Zoo.
+    - cron: "0 6 * * *"
   workflow_dispatch:
     inputs:
       boards:

@@ -542,7 +542,7 @@ def test_eval_never_exits_without_a_verdict(tmp_path, kernels, monkeypatch) -> N
     assert result.exit_code == 5 and verdict["verdict"] == "error" and verdict["stage"] == "eval"
 
 
-@pytest.mark.parametrize(("board", "placement"), [("apollo510_evb", "sram"), ("apollo3p_evb", "mram")])
+@pytest.mark.parametrize(("board", "placement"), [("apollo510_evb", "psram"), ("apollo3p_evb", "mram"), ("apollo3p_evb", "sram")])
 def test_baseline_refuses_bad_placement_before_mkdir(tmp_path, kernels, board, placement) -> None:
     out = tmp_path / "new"
     result = runner.invoke(app, ["candidate", "baseline", "--kernels", str(kernels), "--board", board,

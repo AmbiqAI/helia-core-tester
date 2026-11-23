@@ -110,11 +110,7 @@ class OpTransposeConv(OperationBase):
             'name': 'transpose_conv'
         }
     
-        weights_init = kernel_init(self.desc, 123)
-        if self.desc.get('positive_weights'):
-            # Same bound, one sign.
-            weights_init = lambda shape, dtype=None, _init=weights_init: tf.abs(_init(shape, dtype))
-        transpose_conv_kwargs['kernel_initializer'] = weights_init
+        transpose_conv_kwargs['kernel_initializer'] = kernel_init(self.desc, 123)
         
         if transpose_conv_kwargs['use_bias']:
             bias_lo, bias_hi = value_range(self.desc, 'bias_range', (-0.5, 0.5))

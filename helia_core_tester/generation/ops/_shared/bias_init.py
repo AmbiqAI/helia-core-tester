@@ -250,20 +250,21 @@ def patch_requant(tflite_path: str, desc: Dict[str, Any], seed: int) -> None:
     from helia_core_tester.generation.utils.litert_utils import get_tensor_data_from_litert, load_litert_model
 
     model, subgraph = load_litert_model(str(tflite_path))
-    ops = [op for op in subgraph.operators
-           if model.operatorCodes[op.opcodeIndex].builtinCode == litert.BuiltinOperator.TRANSPOSE_CONV]
+    # Input slots: data, weights, bias.
+    slots = {litert.BuiltinOperator.TRANSPOSE_CONV: (2, 1, 3), litert.BuiltinOperator.CONV_2D: (0, 1, 2)}
+    ops = [op for op in subgraph.operators if model.operatorCodes[op.opcodeIndex].builtinCode in slots]
     if len(ops) != 1:
-        raise ValueError(f"expected one TRANSPOSE_CONV, found {len(ops)}")
+        raise ValueError(f"expected one conv, found {len(ops)}")
     op = ops[0]
-    # Inputs: output shape, weights, data, bias.
-    weights, data = subgraph.tensors[int(op.inputs[1])], subgraph.tensors[int(op.inputs[2])]
+    data_at, weights_at, bias_at = slots[model.operatorCodes[op.opcodeIndex].builtinCode]
+    weights, data = subgraph.tensors[int(op.inputs[weights_at])], subgraph.tensors[int(op.inputs[data_at])]
     out = subgraph.tensors[int(op.outputs[0])]
     in_scale = float(data.quantization.scale[0])
     weight_scales = np.asarray(weights.quantization.scale, dtype=np.float64)
     if desc.get('wide_bias'):
-        if len(op.inputs) < 4 or int(op.inputs[3]) < 0:
+        if len(op.inputs) <= bias_at or int(op.inputs[bias_at]) < 0:
             raise ValueError("wide_bias needs a bias input")
-        bias = subgraph.tensors[int(op.inputs[3])]
+        bias = subgraph.tensors[int(op.inputs[bias_at])]
         lo, hi = (float(v) for v in desc['wide_bias'])
         values = np.round(np.asarray(SignedMagnitudeUniform(lo, hi, seed)((weight_scales.size,)),
                                      dtype=np.float64)).astype(np.int64)

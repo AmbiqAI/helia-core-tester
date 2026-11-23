@@ -69,11 +69,19 @@ arm_cmsis_nn_status arm_vector_sum_s8(int32_t *sum, const int32_t cols, const in
     return ARM_CMSIS_NN_SUCCESS;
 }
 
+static const void *seen_hidden;
+static int8_t seen_hidden_0;
+static int16_t seen_cell_0;
+
 arm_cmsis_nn_status arm_lstm_unidirectional_s8(const int8_t *input, int8_t *output, const cmsis_nn_lstm_params *params,
                                                cmsis_nn_lstm_context *buffers)
 {
-    (void)input; (void)output; (void)params; (void)buffers;
+    (void)input; (void)output; (void)params;
     ++kernel_calls;
+    /* Record the start state seen. */
+    seen_hidden = buffers->hidden_state;
+    seen_hidden_0 = (buffers->hidden_state != NULL) ? ((const int8_t *)buffers->hidden_state)[0] : 0;
+    seen_cell_0 = ((const int16_t *)buffers->cell_state)[0];
     return ARM_CMSIS_NN_SUCCESS;
 }
 
@@ -159,6 +167,30 @@ static arm_cmsis_nn_status run_lstm(int32_t time_steps, uint32_t input_bytes)
     return run_lstm_once(&session);
 }
 
+/* Start state: 4 hidden, 4 cell. */
+static arm_cmsis_nn_status run_lstm_state(uint32_t hidden_bytes, uint32_t cell_bytes)
+{
+    static const int8_t hidden[4] = {-7, 1, 2, 3};
+    static const int16_t cell[4] = {-300, 4, 5, 6};
+    hct_server_session_t session;
+    reset(&session, HCT_KERNEL_ID_LSTM_UNIDIRECTIONAL_S8);
+    memset(meta, 0, sizeof(meta));
+    meta[1] = 1;
+    meta[2] = 1;
+    meta[3] = 4;
+    meta[4] = 4;
+    add_blob(&session, HCT_BLOB_ROLE_INPUT_0, HCT_DTYPE_S8, 4u, 1u, 1u, 4u, operand);
+    add_blob(&session, HCT_BLOB_ROLE_WEIGHTS, HCT_DTYPE_S8, 128u, 1u, 1u, 128u, operand);
+    add_blob(&session, HCT_BLOB_ROLE_BIAS, HCT_DTYPE_S32, 16u, 1u, 1u, 64u, operand);
+    add_blob(&session, HCT_BLOB_ROLE_META_0, HCT_DTYPE_S32, 31u, 1u, 1u, 31u * 4u, meta);
+    if (hidden_bytes > 0u)
+    {
+        add_blob(&session, HCT_BLOB_ROLE_INPUT_1, HCT_DTYPE_S8, hidden_bytes, 1u, 1u, hidden_bytes, hidden);
+    }
+    add_blob(&session, HCT_BLOB_ROLE_INPUT_2, HCT_DTYPE_S16, cell_bytes / 2u, 1u, 1u, cell_bytes, cell);
+    return run_lstm_once(&session);
+}
+
 #define EXPECT(code, cond)                                     \
     do                                                         \
     {                                                          \
@@ -173,7 +205,13 @@ int main(void)
 {
     /* Valid shapes reach the kernel. */
     EXPECT(1, run_svdf(4u, 3u, 12u, 4u) == ARM_CMSIS_NN_SUCCESS && kernel_calls == 1 && sum_bytes == 16);
-    EXPECT(2, run_lstm(2, 8u) == ARM_CMSIS_NN_SUCCESS && kernel_calls == 1);
+    EXPECT(2, run_lstm(2, 8u) == ARM_CMSIS_NN_SUCCESS && kernel_calls == 1 && seen_hidden == NULL && seen_cell_0 == 0);
+    /* State blobs reach the kernel as copies. */
+    EXPECT(6, run_lstm_state(4u, 8u) == ARM_CMSIS_NN_SUCCESS && seen_hidden != NULL && seen_hidden_0 == -7 &&
+                  seen_cell_0 == -300);
+    /* Cell alone, or short state: refused. */
+    EXPECT(7, run_lstm_state(0u, 8u) == ARM_CMSIS_NN_ARG_ERROR && kernel_calls == 0);
+    EXPECT(8, run_lstm_state(4u, 6u) == ARM_CMSIS_NN_ARG_ERROR && kernel_calls == 0);
     /* Kernel reads 4 x 32 time weights. */
     EXPECT(3, run_svdf(1u, 32u, 32u, 4u) == ARM_CMSIS_NN_ARG_ERROR && kernel_calls == 0);
     /* Feature width must match input. */

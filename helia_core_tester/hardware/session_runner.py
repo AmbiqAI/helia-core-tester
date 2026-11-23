@@ -405,6 +405,7 @@ def build_generated_test_case_bundles(
     board_id: str | None = None,
     select: CaseSelection | None = None,
     tests_root: Path | None = None,
+    fit: tuple[str, int] | None = None,
 ) -> tuple[list[CaseBundle], list[tuple[GeneratedTestCase, str]]]:
     """Discover generated (`helia_core_tester generate`) kernel tests and bridge the
     ones with real hardware benchmark firmware dispatch support into CaseBundles.
@@ -428,6 +429,7 @@ def build_generated_test_case_bundles(
     `board_id` keys staged cases per board, so boards run concurrently.
     `select` narrows by op, dtype or case id.
     `tests_root` reads and stages cases under another root.
+    `fit` is (placement, workspace bytes): larger cases skip.
 
     Returns (bridged_case_bundles, [(skipped_test, reason), ...]).
     """
@@ -450,11 +452,17 @@ def build_generated_test_case_bundles(
                     skipped.append((test, f"{NO_ADAPTER}: {fam} has no firmware adapter"))
                     continue
                 try:
-                    bundles.append(build_case_bundle_from_generated_test(
+                    bundle = build_case_bundle_from_generated_test(
                         project_root, test, output_root=tests_root, require_fvp_pass=require_fvp_pass,
-                        fvp_gate=fvp_gate))
+                        fvp_gate=fvp_gate)
                 except UnsupportedGeneratedTestError as exc:
                     skipped.append((test, str(exc)))
+                    continue
+                need = bundle.workspace_bytes_for(fit[0]) if fit else 0
+                if fit and need > fit[1]:
+                    skipped.append((test, f"needs {need} workspace bytes under {fit[0]}; try mram"))
+                    continue
+                bundles.append(bundle)
     return bundles, skipped
 
 

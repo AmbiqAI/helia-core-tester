@@ -191,7 +191,7 @@ def test_tc16_out_hw_follows_keras() -> None:
 
 @pytest.mark.parametrize(("n", "edges"), [(1, 1), (3, 2), (6, 4), (12, 8), (13, 8), (14, 9), (24, 9), (30, 10)])
 def test_edge_share(n: int, edges: int) -> None:
-    plan = rs._tc16_plan(n)
+    plan = rs._tc16_plan(n, [rs.TC16_ROUTE])
     assert rs.tc16_edge_count(n) == edges and len(plan) == n
     # Priority order; mixed draws first.
     assert plan[n - edges:] == [rs.TC16_EDGES[i % len(rs.TC16_EDGES)] for i in range(edges)]

@@ -27,6 +27,8 @@ HARDWARE = PROJECT_ROOT / "cmake" / "hardware"
         ("bias", 0, "mram", 0),
         ("input_0", 100, "mram", 0),
         ("weights", 100, "tcm", 0),
+        ("weights", 13, "sram", 32),
+        ("input_0", 100, "sram", 0),
     ],
 )
 def test_mram_extent_mirrors_the_firmware(role: str, length: int, placement: str, expected: int) -> None:

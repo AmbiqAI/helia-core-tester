@@ -297,13 +297,22 @@ def test_case_meta_rejects_rank_above_the_wire_limit() -> None:
 def test_placement_rides_a_capability_bit() -> None:
     tcm = _target_info()
     mram = wire.decode_target_info(wire.encode_target_info(_target_info(capability_flags=tcm.capability_flags | wire.CAP_WEIGHTS_MRAM)))
-    assert (tcm.placement, mram.placement) == ("tcm", "mram")
+    sram = wire.decode_target_info(wire.encode_target_info(
+        _target_info(capability_flags=tcm.capability_flags | wire.CAP_WEIGHTS_MRAM | wire.CAP_ACTIVATIONS_SRAM)))
+    assert (tcm.placement, mram.placement, sram.placement) == ("tcm", "mram", "sram")
     assert wire.placement_record(tcm) == {
         "name": "tcm", "weights": "dtcm", "activations": "dtcm", "dcache": "on", "weights_cache": "uncached",
+        "activations_cache": "uncached",
     }
     assert wire.placement_record(mram)["weights"] == "mram"
     assert wire.placement_record(mram)["weights_cache"] == "cold"
+    assert wire.placement_record(mram)["activations"] == "dtcm"
+    assert wire.placement_record(sram) == {
+        "name": "sram", "weights": "mram", "activations": "sram", "dcache": "on", "weights_cache": "cold",
+        "activations_cache": "cold",
+    }
     assert wire.placement_record(_target_info(target_cpu="cortex-m4")) == {
         "name": "tcm", "weights": "sram", "activations": "sram", "dcache": "none", "weights_cache": "uncached",
+        "activations_cache": "uncached",
     }
     assert wire.placement_record(None)["name"] is None

@@ -24,11 +24,15 @@ typedef struct
     int corrupt_program;
     const volatile void *last_invalidate;
     int32_t last_invalidate_bytes;
+    uint32_t clean_invalidate_calls;
+    const volatile void *last_clean_invalidate;
+    int32_t last_clean_invalidate_bytes;
 } hct_mram_stub_t;
 
 extern hct_mram_stub_t hct_mram_stub;
 
 int am_hal_mram_main_program(uint32_t key, uint32_t *src, uint32_t *dst, uint32_t words);
 void SCB_InvalidateDCache_by_Addr(volatile void *addr, int32_t bytes);
+void SCB_CleanInvalidateDCache_by_Addr(volatile void *addr, int32_t bytes);
 
 #endif

@@ -1,7 +1,7 @@
 """SquaredDifference operation implementation."""
 
 from pathlib import Path
-from helia_core_tester.generation.ops._shared.binary_basic_math_base import BinaryBasicMathBase
+from helia_core_tester.generation.ops._shared.binary_basic_math_base import BinaryBasicMathBase, broadcast_cmsis_dims
 from helia_core_tester.generation.utils.litert_builder import build_binary_broadcast_op
 from typing import Any, Dict, Sequence, Tuple
 import numpy as np
@@ -9,10 +9,7 @@ import tensorflow as tf
 from tensorflow.keras import layers
 
 
-# Storage dtype -> kernel suffix of the flat float entry point. ns-cmsis-nn#490
-# provides the f16 kernel only; FP32 is rejected rather than advertised as a
-# symbol nothing declares.
-FLOAT_KERNEL_SUFFIX = {"FP16": "f16"}
+FLOAT_DTYPES = {"FP16": np.float16, "FP32": np.float32}
 
 # The s8 inputs carry a moderate asymmetric zero point rather than the -128 the
 # output legitimately uses (squared difference being non-negative). -128 would
@@ -153,14 +150,14 @@ class OpSquaredDifference(BinaryBasicMathBase):
             dtype = "int8"
         elif activation_dtype == "S16":
             dtype = "int16"
-        elif activation_dtype in FLOAT_KERNEL_SUFFIX:
+        elif activation_dtype in FLOAT_DTYPES:
             # Float tensors carry no quantization; the builder's default quant is
             # None for float tensor types.
             model_bytes = build_binary_broadcast_op(
                 op_name="SQUARED_DIFFERENCE",
                 input_1_shape=tuple(self.desc["input_1_shape"]),
                 input_2_shape=tuple(self.desc["input_2_shape"]),
-                dtype="float16",
+                dtype=self.tensor_litert_dtype("input", default=activation_dtype),
             )
             self._write_tflite_bytes(out_path, model_bytes)
             return
@@ -206,47 +203,42 @@ class OpSquaredDifference(BinaryBasicMathBase):
                 'output_c_type': 'int16_t',
                 'float_kernel': False,
             }
-        elif activation_dtype in FLOAT_KERNEL_SUFFIX:
-            # The float entry point is flat (no dims, no broadcast, no clamp):
-            # arm_elementwise_squared_difference_f16 (ns-cmsis-nn#490). It reads
-            # and writes the same storage format, so the output dtype must agree.
+        elif activation_dtype in FLOAT_DTYPES:
             output_dtype = self.tensor_dtype("output", default=activation_dtype)
             if output_dtype != activation_dtype:
                 raise ValueError(
                     f"Descriptor {self.desc.get('name')!r}: SquaredDifference float kernels take "
                     f"one storage dtype, got input {activation_dtype} and output {output_dtype}"
                 )
+            broadcast = self._float_broadcast_call(auto_on_shape_mismatch=True)
+            suffix = "f16" if activation_dtype == "FP16" else "f32"
+            c_type = self.tensor_c_type("input", default=activation_dtype)
             return {
-                'kernel_fn': f"arm_elementwise_squared_difference_{FLOAT_KERNEL_SUFFIX[activation_dtype]}",
-                'input_c_type': 'float16_t',
-                'output_c_type': 'float16_t',
+                'kernel_fn': f"arm_elementwise_squared_difference_{'broadcast_' if broadcast else ''}{suffix}",
+                'input_c_type': c_type,
+                'output_c_type': c_type,
                 'float_kernel': True,
+                'broadcast': broadcast,
             }
-        elif activation_dtype == 'FP32':
-            raise NotImplementedError(
-                "SquaredDifference FP32: ns-cmsis-nn declares no arm_elementwise_squared_difference_f32 "
-                "(ns-cmsis-nn#490 adds the f16 kernel only)"
-            )
         else:
             raise NotImplementedError(f"Unsupported SquaredDifference dtype: {activation_dtype}")
 
     def _check_fault_reachable(self, kind: str, kernel_info: Dict[str, Any]) -> None:
         """Reject fault kinds the selected kernel does not diagnose.
 
-        The fault template drives the flat float entry point, whose guard is the
-        one `if` in the kernel: any NULL pointer or a block_size below 1 returns
-        ARM_CMSIS_NN_ARG_ERROR. The int dims-taking kernels have their own guard
-        shape (dims pointers and broadcast validity) and no block_size, and the
-        int elementwise kernels have no guard at all, so neither is wired here.
+        Both float APIs diagnose null data pointers. Only the flat API accepts a block
+        size. The integer signatures use a different calling convention.
         """
+        if kernel_info.get("broadcast") and kind in {"zero_block", "negative_block"}:
+            raise self.fault_unreachable(kind, "broadcast squared difference takes shapes and has no block size")
         if not kernel_info["float_kernel"]:
             raise self.fault_unreachable(
                 kind, f"{kernel_info['kernel_fn']} is not covered by the float fault template"
             )
 
     @staticmethod
-    def _float_reference() -> Any:
-        """Return the IEEE-754 binary16 model of the flat float kernel.
+    def _float_reference(dtype=np.float16) -> Any:
+        """Return the per-operation rounded reference for the selected storage type.
 
         Both kernel legs compute `(a - b)` and then `d * d` on halves with one
         rounding per operation (MVE vsubq/vmulq; the scalar leg on `_Float16`).
@@ -257,6 +249,10 @@ class OpSquaredDifference(BinaryBasicMathBase):
         """
 
         def reference(operands: Sequence[np.ndarray]) -> np.ndarray:
+            if dtype == np.float32:
+                with np.errstate(over="ignore", invalid="ignore"):
+                    diff = np.subtract(operands[0], operands[1], dtype=np.float32)
+                    return np.square(diff, dtype=np.float32)
             a = np.asarray(operands[0], dtype=np.float64)
             b = np.asarray(operands[1], dtype=np.float64)
             # Overflow to Inf on narrowing is the IEEE result being modelled.
@@ -286,6 +282,7 @@ class OpSquaredDifference(BinaryBasicMathBase):
                 "input_mode 'nonfinite_sweep'; the sweep overwrites the left operand, so "
                 "pin the tokens in the values instead of combining the two"
             )
+        dtype = FLOAT_DTYPES[self.tensor_dtype("input", default="FP16")]
         operands = [drawn_1, drawn_2]
         for index, (key, shape) in enumerate(pinned.items()):
             if key not in extras:
@@ -298,17 +295,17 @@ class OpSquaredDifference(BinaryBasicMathBase):
                     f"expected {expected} to match shape {list(shape)}"
                 )
             with np.errstate(over="ignore"):
-                pinned_values = values.astype(np.float16)
+                pinned_values = values.astype(dtype)
             widened = pinned_values.astype(np.float64)
             finite = np.isfinite(values)
             if not np.array_equal(widened[finite], values[finite]):
                 raise ValueError(
                     f"Descriptor {self.desc.get('name')!r}: {key} holds values that are not "
-                    "exactly representable in float16; write the rounded value so the emitted "
+                    f"exactly representable in {np.dtype(dtype).name}; write the rounded value so the emitted "
                     "operand is the one the golden was computed from"
                 )
             operands[index] = pinned_values.reshape(shape)
-        return operands[0].astype(np.float16), operands[1].astype(np.float16)
+        return operands[0].astype(dtype), operands[1].astype(dtype)
 
     def _bit_exact(self) -> bool:
         """`hint.extras.bit_exact: true` validates the output bit for bit.
@@ -332,19 +329,21 @@ class OpSquaredDifference(BinaryBasicMathBase):
     ) -> None:
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
-        if input1_shape != input2_shape:
-            raise NotImplementedError(
-                f"Descriptor {self.desc.get('name')!r}: {kernel_info['kernel_fn']} is a flat "
-                f"kernel with no broadcast entry point; input_1_shape {list(input1_shape)} and "
-                f"input_2_shape {list(input2_shape)} must match"
-            )
+        broadcast = kernel_info["broadcast"]
         builder = TemplateContextBuilder()
-        input1_dims = builder.nhwc_to_cmsis_dims(input1_shape)
-        input2_dims = builder.nhwc_to_cmsis_dims(input2_shape)
-        output_dims = builder.nhwc_to_cmsis_dims(output_shape)
+        if broadcast:
+            input1_dims, input2_dims, output_dims = broadcast_cmsis_dims(
+                "SquaredDifference", input1_shape, input2_shape, output_shape
+            )
+        else:
+            if input1_shape != input2_shape or input1_shape != output_shape:
+                raise ValueError(f"{name}: flat squared difference requires equal input and output shapes")
+            input1_dims = builder.nhwc_to_cmsis_dims(input1_shape)
+            input2_dims = builder.nhwc_to_cmsis_dims(input2_shape)
+            output_dims = builder.nhwc_to_cmsis_dims(output_shape)
 
         input1_q, input2_q = self._float_operands(input1_shape, input2_shape)
-        reference = self._float_reference()
+        reference = self._float_reference(input1_q.dtype)
         output_data = reference([input1_q, input2_q])
         bit_exact = self._bit_exact()
         if bit_exact and self.input_mode() == "nonfinite_sweep":
@@ -352,7 +351,6 @@ class OpSquaredDifference(BinaryBasicMathBase):
                 f"Descriptor {self.desc.get('name')!r} combines bit_exact with a non-finite "
                 "sweep; the sweep's golden is policy-compared, not bit-compared"
             )
-        expected_bits = output_data.reshape(-1).view(np.uint16)
         output_data, nonfinite_context = self.apply_nonfinite_policy(
             output_data, reference=reference, inputs=[input1_q, input2_q]
         )
@@ -373,8 +371,10 @@ class OpSquaredDifference(BinaryBasicMathBase):
             'float_kernel': True,
             'validation_mode': 'float',
             'bit_exact': bit_exact,
+            'broadcast': broadcast,
         }
         if bit_exact:
+            expected_bits = output_data.reshape(-1).view(np.uint16 if input1_q.dtype == np.float16 else np.uint32)
             context['expected_bits_array'] = builder.format_array_as_c_literal(expected_bits)
         context.update(nonfinite_context)
 

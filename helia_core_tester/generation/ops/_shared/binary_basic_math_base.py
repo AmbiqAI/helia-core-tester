@@ -6,6 +6,7 @@ import numpy as np
 
 from helia_core_tester.generation.kernel_dispatch import check_entry_fault, resolve_direct_entry
 from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
 TensorQuant = Tuple[Sequence[float], Sequence[int]]
 QuantPresets = Mapping[str, Mapping[str, Mapping[str, TensorQuant]]]
@@ -41,6 +42,47 @@ def resolve_quant_preset(
     if set(tensors) != set(_PRESET_TENSORS):
         raise ValueError(f"{operator} quant_preset {quant_preset!r} must define {list(_PRESET_TENSORS)}")
     return dict(tensors)
+
+
+_CMSIS_DIMS_RANK = 4
+
+
+def broadcast_cmsis_dims(
+    operator: str,
+    input1_shape: Sequence[int],
+    input2_shape: Sequence[int],
+    output_shape: Sequence[int],
+) -> Tuple[Dict[str, int], Dict[str, int], Dict[str, int]]:
+    """cmsis_nn_dims for a broadcasting binary op, each shape right-aligned to NHWC.
+
+    The kernels broadcast dim by dim, so a lower-rank operand must be padded with
+    leading ones (NumPy/TFLite rules); nhwc_to_cmsis_dims alone reads rank 2 as HW.
+    Shapes outside rank 1..4, non-positive extents, or an output that is not the
+    broadcast of the inputs are descriptor errors.
+    """
+    shapes = {"input_1": input1_shape, "input_2": input2_shape, "output": output_shape}
+    padded = {}
+    for role, shape in shapes.items():
+        if shape is None:
+            raise ValueError(f"{operator} {role} has no shape")
+        dims = tuple(shape)
+        if not 1 <= len(dims) <= _CMSIS_DIMS_RANK or any(
+            isinstance(d, bool) or not isinstance(d, (int, np.integer)) or d < 1 for d in dims
+        ):
+            raise ValueError(f"{operator} {role} shape {list(dims)} must be positive extents of rank 1 through 4")
+        padded[role] = (1,) * (_CMSIS_DIMS_RANK - len(dims)) + tuple(int(d) for d in dims)
+    try:
+        expected = np.broadcast_shapes(tuple(input1_shape), tuple(input2_shape))
+    except ValueError as exc:
+        raise ValueError(
+            f"{operator} inputs {list(input1_shape)} and {list(input2_shape)} do not broadcast"
+        ) from exc
+    if tuple(expected) != tuple(int(d) for d in output_shape):
+        raise ValueError(
+            f"{operator} output shape {list(output_shape)} is not the broadcast {list(expected)} of its inputs"
+        )
+    to_dims = TemplateContextBuilder.nhwc_to_cmsis_dims
+    return to_dims(padded["input_1"]), to_dims(padded["input_2"]), to_dims(padded["output"])
 
 
 class BinaryBasicMathBase(OperationBase):

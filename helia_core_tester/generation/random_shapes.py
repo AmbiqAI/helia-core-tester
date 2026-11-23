@@ -24,7 +24,9 @@ from helia_core_tester.hardware.generated_test_bridge import (
     _depthwise_s8_scratch_bytes,
     _with_weight_sums,
 )
-from helia_core_tester.hardware.wrapper_route import FAST_S16_TAPS, conv_route, dw_route, dw_s16_route
+from helia_core_tester.hardware.wrapper_route import (
+    CHANNELWISE, FAST_S16_TAPS, PLANAR, conv_route, conv_s16_route, dw_route, dw_s16_route, opt_variant,
+)
 from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
 # Per-case cap; keeps a 50-case stream short.
@@ -42,6 +44,8 @@ CONV_ROUTES = (
 # One input channel runs as conv.
 DW_AS_CONV = "as_conv"
 DW16_ROUTES = ("arm_depthwise_conv_fast_s16", "arm_depthwise_conv_s16")
+# MVE callees of the s16 conv wrapper.
+CONV16_ROUTES = ("arm_convolve_s16", "arm_convolve_1x1_s16_ns_np_nd", "arm_convolve_s16_fast_small_kernel")
 # Direct entry; no wrapper.
 TC16_ROUTE = "arm_transpose_conv_s16"
 TC16_SYMBOLS = [TC16_ROUTE, "arm_transpose_conv_s16_get_buffer_size"]
@@ -65,11 +69,13 @@ class Generator:
     stream: int
     routes: Callable[[bool], list[str]]
     draw: Callable
-    # Per-index targets; overrides route cycling.
-    plan: Optional[Callable[[int], list[str]]] = None
+    # Per-index targets from (n, routes).
+    plan: Optional[Callable[[int, list[str]], list[str]]] = None
     suite: str = "int"
     # Draws whole cases; no layer.
     layerless: bool = False
+    # Edge draws ordered by seed.
+    edges: tuple[str, ...] = ()
 
 
 @dataclass
@@ -218,6 +224,37 @@ def _off_fast_path(rng: np.random.Generator, layer: Layer) -> Layer:
     return _maybe_dilate(rng, layer)
 
 
+def _tcn_variant(layer: Layer) -> str:
+    """The MVE opt algorithm for a layer."""
+    i, f = (1, layer.h, layer.w, layer.cin), (1, layer.kh, layer.kw, layer.cout)
+    o, stride, dil = (1, *layer.out_hw(), layer.cout), (layer.sh, layer.sw), (layer.dh, layer.dw)
+    return opt_variant(i, f, o, stride, layer.pads(), dil, layer.mult, True)
+
+
+def _dw_tcn(rng: np.random.Generator, variant: str) -> Layer:
+    """A dilated 1D TCN layer for one variant."""
+    lo, hi = (8, 40) if variant == PLANAR else (24, 96)
+    for _ in range(MAX_TRIES):
+        k, d = int(rng.choice([3, 5, 7, 7, 9])), int(rng.choice([1, 2, 4, 8, 16]))
+        w = 240 if rng.random() < 0.5 else int(rng.integers(64, 321))
+        cin = _channels(rng, lo, hi)
+        pad = "SAME" if rng.random() < 0.8 else "VALID"
+        layer = Layer(1, w, cin, cin, 1, k, dw=d, padding=pad)
+        if min(layer.out_hw()) >= 1 and _tcn_variant(layer) == variant:
+            return layer
+    raise RuntimeError(f"No TCN shape for {variant}")
+
+
+# TCN edges: sleepkit and heartkit layers.
+DW_DRAWS = {"tcn_planar": lambda rng: _dw_tcn(rng, PLANAR), "tcn_channelwise": lambda rng: _dw_tcn(rng, CHANNELWISE)}
+DW_EDGES = tuple(DW_DRAWS)
+
+
+def _dw_draw(rng: np.random.Generator, target: str) -> Layer:
+    edge = DW_DRAWS.get(target)
+    return edge(rng) if edge else _dw_layer(rng, target)
+
+
 def _dw16_layer(rng: np.random.Generator, route: str) -> Layer:
     """An s16 depthwise layer aimed at one route."""
     pad = _padding(rng)
@@ -263,14 +300,14 @@ def tc16_edge_count(n: int) -> int:
     return edge_count(n, len(TC16_EDGES))
 
 
-def _edge_plan(n: int, route: str, edges: tuple[str, ...]) -> list[str]:
-    """Mixed draws, then edge categories."""
+def _edge_plan(n: int, routes: list[str], edges: tuple[str, ...]) -> list[str]:
+    """Route cycling, then edge categories."""
     count = edge_count(n, len(edges))
-    return [route] * (n - count) + [edges[i % len(edges)] for i in range(count)]
+    return [routes[i % len(routes)] for i in range(n - count)] + [edges[i % len(edges)] for i in range(count)]
 
 
-def _tc16_plan(n: int) -> list[str]:
-    return _edge_plan(n, TC16_ROUTE, TC16_EDGES)
+def _tc16_plan(n: int, routes: list[str]) -> list[str]:
+    return _edge_plan(n, routes, TC16_EDGES)
 
 
 def _glorot_limit(layer: Layer) -> float:
@@ -392,6 +429,171 @@ def _tc16_mixed(rng: np.random.Generator) -> Layer:
     kh, kw = int(rng.integers(1, 9)), int(rng.integers(1, 9))
     sh, sw = int(rng.integers(1, 5)), int(rng.integers(1, 5))
     return Layer(_size(rng, 1, 16), _size(rng, 1, 16), cin, cout, kh, kw, sh, sw, padding=pad, transpose=True)
+
+
+def _conv16_layer(rng: np.random.Generator, route: str) -> Layer:
+    """An s16 conv layer aimed at one route."""
+    pad = _padding(rng)
+    if route == "arm_convolve_1x1_s16_ns_np_nd":
+        cin, cout = _channels(rng, 1, 96), _channels(rng, 1, 128)
+        if rng.random() < 0.5:
+            # 1D rows, as in heartkit.
+            return Layer(1, _size(rng, 8, 256), cin, cout, 1, 1, padding=pad)
+        return Layer(_size(rng, 1, 16), _size(rng, 1, 16), cin, cout, 1, 1, padding=pad)
+    if route == "arm_convolve_s16_fast_small_kernel":
+        # Under 9 taps, no padding.
+        cin = int(rng.integers(1, 5))
+        kw = int(rng.integers(1, 8 // cin + 1))
+        kh = int(rng.integers(1, 8 // (kw * cin) + 1))
+        layer = Layer(_size(rng, 2, 24), _size(rng, 4, 32), cin, _channels(rng, 1, 48), kh, kw, *_stride(rng))
+        return _maybe_dilate(rng, layer, 0.2)
+    cin, cout = _channels(rng, 1, 64), _channels(rng, 1, 64)
+    if rng.random() < 0.3:
+        # 1D kernel along W.
+        kw, sw = int(rng.choice([3, 5, 7, 9])), int(rng.integers(1, 3))
+        return Layer(1, _size(rng, 16, 256), cin, cout, 1, kw, 1, sw, padding=pad)
+    kh, kw = _kernel(rng)
+    layer = Layer(_size(rng, 2, 24), _size(rng, 2, 24), cin, cout, kh, kw, *_stride(rng), padding=pad)
+    return _maybe_dilate(rng, layer, 0.3)
+
+
+def _conv16_mixed(rng: np.random.Generator) -> Layer:
+    """Any route; the edge sets one knob."""
+    route = str(rng.choice(CONV16_ROUTES))
+    return _conv16_layer(rng, route)
+
+
+def _conv16_requant(rng: np.random.Generator) -> Layer:
+    """Large multipliers: one LSB flips outputs."""
+    layer = Layer(_size(rng, 1, 6), _size(rng, 4, 24), _odd_channels(rng, 1, 15), int(rng.integers(1, 9)),
+                  int(rng.integers(1, 5)), int(rng.integers(1, 5)), int(rng.integers(1, 3)), int(rng.integers(1, 3)),
+                  padding=_padding(rng))
+    scale = float(rng.uniform(0.5, 2.0))
+    taps = layer.cin * layer.kh * layer.kw
+    # Accumulators near 6000 output steps.
+    amplitude = float(max(np.sqrt(3.0) * 6000.0 / (scale * 73.0 * np.sqrt(taps)), 2.0)) / 32767.0
+    calib = float(rng.uniform(2.0, 16.0))
+    # Bias near 3000 output steps.
+    bias = 3000.0 / scale * (calib / 32767.0) * (_glorot_limit(layer) / 127.0)
+    layer.knobs = {"activation": "NONE", "use_bias": True, "calibration_range": [-calib, calib],
+                   "input_range": [-calib * amplitude, calib * amplitude], "bias_range": [-2 * bias, 2 * bias],
+                   "min_effective_scale": scale}
+    return layer
+
+
+def _conv16_int64(rng: np.random.Generator) -> Layer:
+    """Bias and accumulators beyond int32."""
+    kh, kw = int(rng.integers(6, 9)), int(rng.integers(6, 9))
+    # Inputs cover the kernel: full-tap outputs.
+    h, w = kh + int(rng.integers(0, 3)), kw + int(rng.integers(0, 3))
+    layer = Layer(h, w, _odd_channels(rng, 45, 63), int(rng.integers(2, 6)), kh, kw, padding="VALID")
+    # Positive data: ~2e6 per tap, 1600+ taps.
+    layer.knobs = {"activation": "NONE", "use_bias": True, "calibration_range": [0.0, 1.0],
+                   "input_range": [0.85, 1.0], "positive_weights": True,
+                   "wide_bias": [2.0**31, float(2 ** int(rng.integers(32, 37)))]}
+    return layer
+
+
+def _conv16_clamp(rng: np.random.Generator) -> Layer:
+    """Clamps hit on both sides."""
+    layer = _conv16_mixed(rng)
+    calib = float(rng.uniform(1.0, 32.0))
+    layer.knobs = {"activation": "NONE", "use_bias": bool(rng.random() < 0.7),
+                   "calibration_range": [-calib, calib], "input_range": [-calib, calib],
+                   "activation_min": -int(rng.integers(500, 5000)), "activation_max": int(rng.integers(500, 5000))}
+    return layer
+
+
+# Heartkit widths and channel counts.
+HEARTKIT_W = (13, 25, 50, 100, 200, 256, 400, 800)
+HEARTKIT_C = (1, 4, 6, 8, 12, 16, 18, 24, 32, 48, 64, 72, 128)
+
+
+def _conv16_heartkit(rng: np.random.Generator) -> Layer:
+    """Heartkit 1D rows: 1x1, 1x7, 1x9 stride 2."""
+    kw = int(rng.choice([1, 1, 7, 9]))
+    sw = 2 if kw == 9 else 1
+    cin, cout = (int(rng.choice(HEARTKIT_C)) for _ in range(2))
+    if rng.random() < 0.3:
+        # Off-grid channels near the model's.
+        cin, cout = cin + int(rng.integers(-1, 2)) or 1, cout + int(rng.integers(-1, 2)) or 1
+    return Layer(1, int(rng.choice(HEARTKIT_W)), cin, cout, 1, kw, 1, sw, padding="SAME")
+
+
+def _conv16_cin1(rng: np.random.Generator) -> Layer:
+    """One to three input channels."""
+    cin, cout = int(rng.choice([1, 1, 2, 3])), _odd_channels(rng, 2, 33)
+    if rng.random() < 0.5:
+        kw, sw = int(rng.integers(1, 10)), int(rng.integers(1, 3))
+        return Layer(1, _size(rng, 16, 400), cin, cout, 1, kw, 1, sw, padding=_padding(rng))
+    kh, kw = _kernel(rng)
+    return Layer(_size(rng, 2, 24), _size(rng, 2, 24), cin, cout, kh, kw, *_stride(rng), padding=_padding(rng))
+
+
+def _conv16_tail(rng: np.random.Generator) -> Layer:
+    """Cout past the last 4 or 8 lanes."""
+    layer = _conv16_mixed(rng)
+    lanes = int(rng.choice([4, 8]))
+    layer.cout = lanes * int(rng.integers(0, 6)) + int(rng.integers(1, lanes))
+    layer.cin = _odd_channels(rng, 1, 47)
+    return layer
+
+
+def _conv16_stride(rng: np.random.Generator) -> Layer:
+    """Strides 2-4, some beyond the kernel."""
+    sh, sw = int(rng.integers(1, 5)), int(rng.integers(2, 5))
+    kh, kw = int(rng.integers(1, sh + 2)), int(rng.integers(1, sw + 2))
+    return Layer(_size(rng, 2, 24), _size(rng, 4, 48), _odd_channels(rng, 1, 32), _odd_channels(rng, 1, 32),
+                 kh, kw, sh, sw, padding=_padding(rng))
+
+
+def _conv16_pad(rng: np.random.Generator) -> Layer:
+    """SAME odd pads, or VALID one-output rows."""
+    cin, cout = _odd_channels(rng, 1, 32), _odd_channels(rng, 1, 32)
+    kh, kw = int(rng.integers(1, 6)), int(rng.integers(2, 8))
+    if rng.random() < 0.5:
+        # Even kernels pad unevenly.
+        kh, kw = kh + (kh % 2), kw + (kw % 2)
+        return Layer(_size(rng, 1, 12), _size(rng, 2, 24), cin, cout, kh, kw, *_stride(rng), padding="SAME")
+    # Input matches the kernel: one output.
+    return Layer(kh, kw + int(rng.integers(0, 2)), cin, cout, kh, kw, padding="VALID")
+
+
+def _conv16_large_k(rng: np.random.Generator) -> Layer:
+    """Long dot products, few pixels."""
+    kh, kw = int(rng.integers(3, 8)), int(rng.integers(3, 8))
+    cin = int(rng.integers(600, 2000)) // (kh * kw) + 1
+    return Layer(kh + int(rng.integers(0, 3)), kw + int(rng.integers(0, 4)), cin, _odd_channels(rng, 1, 24),
+                 kh, kw, padding=_padding(rng))
+
+
+def _conv16_pixel(rng: np.random.Generator) -> Layer:
+    """One-pixel input, as in squeeze-excite."""
+    k = int(rng.choice([1, 1, 3]))
+    return Layer(1, 1, _channels(rng, 2, 96), _channels(rng, 2, 96), k, k, padding="SAME")
+
+
+# Edge categories; requant always runs. No
+# batch2: the conv bridge runs one image.
+CONV16_DRAWS: dict[str, Callable[[np.random.Generator], Layer]] = {
+    "requant": _conv16_requant, "int64": _conv16_int64, "clamp": _conv16_clamp,
+    "heartkit": _conv16_heartkit, "cin1": _conv16_cin1, "tail": _conv16_tail, "stride": _conv16_stride,
+    "pad": _conv16_pad, "large_k": _conv16_large_k, "pixel": _conv16_pixel,
+}
+CONV16_EDGES = tuple(CONV16_DRAWS)
+
+
+def _conv16_draw(rng: np.random.Generator, target: str) -> Layer:
+    edge = CONV16_DRAWS.get(target)
+    return edge(rng) if edge else _conv16_layer(rng, target)
+
+
+def _seeded_plan(n: int, routes: list[str], edges: tuple[str, ...], rng: np.random.Generator) -> list[str]:
+    """Routes, then a third edges, seed-ordered."""
+    count = -(-n // 3)
+    # The first edge leads; the rest shuffle.
+    order = [edges[0], *(edges[1 + int(i)] for i in rng.permutation(len(edges) - 1))]
+    return [routes[i % len(routes)] for i in range(n - count)] + [order[i % len(order)] for i in range(count)]
 
 
 def _tcf_rms(layer: Layer, data: float) -> float:
@@ -585,6 +787,180 @@ def _sm_draw(rng: np.random.Generator, target: str) -> dict[str, Any]:
     return case
 
 
+LSTM_ROUTE = "arm_lstm_unidirectional_s8"
+# Room under the smallest TCM workspace.
+LSTM_MAX_BYTES = 96 * 1024
+# DTLN layers: (input size, quant).
+LSTM_DTLN = (
+    (257, {"input_scale": 0.0686, "input_zero_point": -128, "output_scale": 0.00765, "output_zero_point": 0,
+           "cell_scale_power": -11, "weight_std": 5.0, "input_range": [-128, -104]}),
+    (128, {"input_scale": 0.00765, "input_zero_point": 0, "output_scale": 0.00736, "output_zero_point": -4,
+           "cell_scale_power": -12, "weight_std": 14.0, "input_range": [-64, 64]}),
+)
+
+
+def lstm_bytes(b: int, t: int, i: int, h: int) -> int:
+    """Firmware workspace bytes, TCM placement."""
+    state = _align_up(2 * b * h, 16)
+    # Blobs, sums, temps, cell, output.
+    used = b * t * i + 4 * h * (i + h) + 16 * h + 124
+    return _align_up(used, 16) + _align_up(32 * h, 16) + 3 * state + b * t * h + 64
+
+
+def _log_uniform(rng: np.random.Generator, lo: float, hi: float) -> float:
+    return float(np.exp(rng.uniform(np.log(lo), np.log(hi))))
+
+
+def _lstm_knobs(rng: np.random.Generator) -> dict[str, Any]:
+    """Model-style quant: scales, offsets, biases."""
+    roll = rng.random()
+    in_zp = -128 if roll < 0.3 else 0 if roll < 0.6 else int(rng.integers(-128, 128))
+    low = int(rng.integers(-128, 0)) if rng.random() < 0.5 else -128
+    spread = [float(rng.uniform(0.2, 1.5)) for _ in range(3)]
+    return {
+        "input_scale": _log_uniform(rng, 0.003, 0.1), "input_zero_point": in_zp,
+        "output_scale": _log_uniform(rng, 2.0**-9, 2.0**-6.5), "output_zero_point": int(rng.integers(-8, 9)),
+        "cell_scale_power": int(rng.integers(-15, -10)),
+        "cell_clip": 0.0 if rng.random() < 0.4 else float(rng.uniform(1.0, 10.0)),
+        "weight_scales": [_log_uniform(rng, 0.005, 0.05) for _ in range(8)],
+        "weight_std": float(rng.uniform(4.0, 20.0)),
+        # Forget bias leans positive, as Keras.
+        "bias_ranges": [[-spread[0], spread[0]], [float(rng.uniform(0.0, 0.8)), float(rng.uniform(1.0, 2.0))],
+                        [-spread[1], spread[1]], [-spread[2], spread[2]]],
+        "input_range": [low, int(rng.integers(low + 32, 128))],
+    }
+
+
+def _lstm_mixed(rng: np.random.Generator) -> tuple[tuple[int, ...], dict]:
+    """The normal mix."""
+    roll = rng.random()
+    b = 1 if roll < 0.6 else 2 if roll < 0.85 else 3
+    return (b, _size(rng, 1, 12), _channels(rng, 1, 96), _channels(rng, 1, 64)), _lstm_knobs(rng)
+
+
+def _lstm_dtln(rng: np.random.Generator) -> tuple[tuple[int, ...], dict]:
+    """DTLN-like: one step, wide input."""
+    size, base = LSTM_DTLN[int(rng.integers(0, 2))]
+    knobs = {**_lstm_knobs(rng), **base, "cell_clip": 10.0}
+    # Jitter the model scales.
+    for key in ("input_scale", "output_scale"):
+        knobs[key] *= float(rng.uniform(0.8, 1.25))
+    i = min(size, int(rng.integers(96, 258)))
+    t = 1 if rng.random() < 0.7 else 2
+    h = next(h for h in range(int(rng.integers(64, 129)), 0, -1) if lstm_bytes(1, t, i, h) <= LSTM_MAX_BYTES)
+    return (1, t, i, h), {**knobs, "time_major": False}
+
+
+def _lstm_tails(rng: np.random.Generator) -> tuple[tuple[int, ...], dict]:
+    """Units and input past full vectors."""
+    (b, t, _, _), knobs = _lstm_mixed(rng)
+    return (b, t, _lstm_tail(rng), _lstm_tail(rng)), knobs
+
+
+def _lstm_tail(rng: np.random.Generator) -> int:
+    """Size not a multiple of 4."""
+    return 16 * int(rng.integers(0, 4)) + int(rng.choice([1, 2, 3, 5, 6, 7, 9, 10, 11, 13, 14, 15]))
+
+
+def _lstm_input1(rng: np.random.Generator) -> tuple[tuple[int, ...], dict]:
+    """One input feature."""
+    (b, _, _, h), knobs = _lstm_mixed(rng)
+    return (b, _size(rng, 2, 16), 1, h), knobs
+
+
+def _lstm_step1(rng: np.random.Generator) -> tuple[tuple[int, ...], dict]:
+    """One step: no recurrent product."""
+    (_, _, i, h), knobs = _lstm_mixed(rng)
+    return (int(rng.integers(1, 4)), 1, i, h), knobs
+
+
+def _lstm_batch2(rng: np.random.Generator) -> tuple[tuple[int, ...], dict]:
+    """Two sequences per call."""
+    (_, _, i, h), knobs = _lstm_mixed(rng)
+    return (2, int(rng.integers(2, 9)), i, h), knobs
+
+
+def _lstm_requant(rng: np.random.Generator) -> tuple[tuple[int, ...], dict]:
+    """Large gate scales: one LSB moves outputs."""
+    (b, t, i, h), knobs = _lstm_mixed(rng)
+    knobs.update({
+        "input_scale": _log_uniform(rng, 0.03, 0.1), "weight_scales": [_log_uniform(rng, 0.02, 0.06) for _ in range(8)],
+        "weight_std": float(rng.uniform(1.0, 3.0)), "output_scale": _log_uniform(rng, 2.0**-11, 2.0**-9),
+        "cell_scale_power": int(rng.integers(-15, -13)), "cell_clip": 0.0, "input_range": [-24, 24],
+        "bias_ranges": [[-0.5, 0.5], [0.0, 1.0], [-0.5, 0.5], [-0.5, 0.5]],
+    })
+    return (b, max(t, 4), i, max(h, 8)), knobs
+
+
+def _lstm_clip(rng: np.random.Generator) -> tuple[tuple[int, ...], dict]:
+    """Cell state pinned at the clip."""
+    (b, t, i, h), knobs = _lstm_mixed(rng)
+    power = int(rng.integers(-15, -10))
+    # 10-90 % of the cell range.
+    clip = 2.0 ** (power + 15) * float(rng.uniform(0.1, 0.9))
+    knobs.update({"cell_scale_power": power, "cell_clip": clip,
+                  "bias_ranges": [[0.5, 2.0], [1.0, 3.0], [-2.0, 2.0], [-1.5, 1.5]]})
+    return (b, max(t, 4), i, max(h, 8)), knobs
+
+
+def _lstm_extreme(rng: np.random.Generator) -> tuple[tuple[int, ...], dict]:
+    """Scales and offsets at the limits."""
+    shape, knobs = _lstm_mixed(rng)
+    big = rng.random() < 0.5
+    in_scale = _log_uniform(rng, 0.3, 2.0) if big else _log_uniform(rng, 1e-4, 1e-3)
+    # Gate scale under 41: no int32 wrap.
+    top = min(0.2, 0.01 / in_scale)
+    knobs.update({
+        "input_scale": in_scale, "input_zero_point": int(rng.choice([-128, 127])),
+        "output_scale": 2.0 ** float(rng.uniform(-15, -12)) if big else 2.0 ** float(rng.uniform(-4, -1)),
+        "output_zero_point": int(rng.choice([-128, -100, 100, 127])),
+        "weight_scales": [_log_uniform(rng, 1e-4, top) for _ in range(8)],
+    })
+    return shape, knobs
+
+
+def _six_digits(value: Any) -> Any:
+    """Floats to 6 digits; libm drift stays hidden."""
+    if isinstance(value, float):
+        return float(f"{value:.6g}")
+    if isinstance(value, dict):
+        return {k: _six_digits(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_six_digits(v) for v in value]
+    return value
+
+
+# LSTM edge categories, highest priority first.
+LSTM_DRAWS: dict[str, Callable[[np.random.Generator], tuple[tuple[int, ...], dict]]] = {
+    "dtln": _lstm_dtln, "requant": _lstm_requant, "clip": _lstm_clip, "tails": _lstm_tails,
+    "input1": _lstm_input1, "step1": _lstm_step1, "batch2": _lstm_batch2, "extreme": _lstm_extreme,
+}
+LSTM_EDGES = tuple(LSTM_DRAWS)
+
+
+def _lstm_draw(rng: np.random.Generator, target: str) -> dict[str, Any]:
+    """An s8 LSTM case body."""
+    for _ in range(MAX_TRIES):
+        (b, t, i, h), knobs = LSTM_DRAWS.get(target, _lstm_mixed)(rng)
+        if lstm_bytes(b, t, i, h) <= LSTM_MAX_BYTES and b * t * 4 * h * (i + h) <= MAX_MACS:
+            break
+    else:
+        raise RuntimeError(f"No LSTM S8 shape for {target}")
+    time_major = bool(knobs.pop("time_major", rng.random() < 0.5))
+    # helia-rt keeps state; DTLN always.
+    stateful = target == "dtln" or bool(rng.random() < 0.5)
+    knobs = _six_digits(knobs)
+    case = {
+        "activation_dtype": "S8", "weight_dtype": "S8", "activation": "NONE", "batch_size": b, "time_steps": t,
+        "feature_size": i, "units": h, "time_major": time_major, "stateful": stateful, "input_shape": [b, t, i],
+        "hint": {"call_style": "per_tensor", "force_cmsis": True}, "lstm_quant": knobs, "expected_route": LSTM_ROUTE,
+    }
+    if target == "extreme":
+        # Extreme offsets may saturate.
+        case["degenerate_golden_reason"] = "lstm extreme edge"
+    return case
+
+
 def _conv_routes(mve: bool) -> list[str]:
     return [r for r in CONV_ROUTES if mve or r not in MVE_CONV_ROUTES]
 
@@ -598,6 +974,10 @@ def _dw16_routes(mve: bool) -> list[str]:
     return list(DW16_ROUTES)
 
 
+def _conv16_routes(mve: bool) -> list[str]:
+    return list(CONV16_ROUTES) if mve else [CONV16_ROUTES[0]]
+
+
 def _tc16_routes(mve: bool) -> list[str]:
     return [TC16_ROUTE]
 
@@ -607,7 +987,7 @@ def _tcf_gen(dtype: str, stream: int) -> Generator:
     route = TCF_ROUTES[dtype]
     return Generator(
         f"tcf{dtype[2:]}", "ConvolutionFunctions/transpose_conv_float.yaml", stream, lambda mve: [route],
-        _tcf_draw(dtype), lambda n: _edge_plan(n, route, TCF_EDGES), "float",
+        _tcf_draw(dtype), lambda n, routes: _edge_plan(n, routes, TCF_EDGES), "float",
     )
 
 
@@ -709,14 +1089,17 @@ def _sig_gen(dtype: str, stream: int) -> Generator:
     route = ACT_ROUTES[dtype]
     return Generator(
         f"sig{dtype[2:]}", "ActivationFunctions/nn_activation_float.yaml", stream, lambda mve: [route],
-        _sig_draw(dtype), lambda n: _edge_plan(n, route, SIG_EDGES), "float", layerless=True,
+        _sig_draw(dtype), lambda n, routes: _edge_plan(n, routes, SIG_EDGES), "float", layerless=True,
     )
 
 
 # Register new random-shape ops here.
 GENERATORS: dict[tuple[str, str], Generator] = {
     ("Convolve", "S8"): Generator("conv", "ConvolutionFunctions/convolve.yaml", 0, _conv_routes, _conv_layer),
-    ("DepthwiseConv", "S8"): Generator("dw", "ConvolutionFunctions/depthwise_conv.yaml", 1, _dw_routes, _dw_layer),
+    ("DepthwiseConv", "S8"): Generator(
+        "dw", "ConvolutionFunctions/depthwise_conv.yaml", 1, _dw_routes, _dw_draw,
+        lambda n, routes: _edge_plan(n, routes, DW_EDGES),
+    ),
     ("DepthwiseConv", "S16"): Generator("dw16", "ConvolutionFunctions/depthwise_conv.yaml", 2, _dw16_routes, _dw16_layer),
     ("TransposeConv", "S16"): Generator(
         "tc16", "ConvolutionFunctions/transpose_conv.yaml", 3, _tc16_routes, _tc16_layer, _tc16_plan,
@@ -727,7 +1110,14 @@ GENERATORS: dict[tuple[str, str], Generator] = {
     ("NNActivationFloat", "FP16"): _sig_gen("FP16", 7),
     ("Softmax", "S8"): Generator(
         "sm8", "SoftmaxFunctions/softmax.yaml", 8, lambda mve: [SOFTMAX_ROUTE], _sm_draw,
-        lambda n: _edge_plan(n, SOFTMAX_ROUTE, SOFTMAX_EDGES), layerless=True,
+        lambda n, routes: _edge_plan(n, routes, SOFTMAX_EDGES), layerless=True,
+    ),
+    ("Convolve", "S16"): Generator(
+        "conv16", "ConvolutionFunctions/convolve.yaml", 9, _conv16_routes, _conv16_draw, edges=CONV16_EDGES,
+    ),
+    ("LSTMUnidirectional", "S8"): Generator(
+        "lstm8", "LSTMFunctions/lstm_unidirectional.yaml", 10, lambda mve: [LSTM_ROUTE], _lstm_draw,
+        lambda n, routes: _edge_plan(n, routes, LSTM_EDGES), layerless=True,
     ),
 }
 # (op, dtype) keys, in draw order.
@@ -786,7 +1176,8 @@ def layer_route(op: str, layer: Layer, mve: bool, dtype: str = "S8") -> str:
     i, o = (1, layer.h, layer.w, layer.cin), (1, oh, ow, layer.cout)
     stride, dil, pad = (layer.sh, layer.sw), (layer.dh, layer.dw), layer.pads()
     if op == "Convolve":
-        return conv_route(i, (layer.cout, layer.kh, layer.kw, layer.cin), o, stride, pad, dil, mve)
+        route = conv_s16_route if dtype == "S16" else conv_route
+        return route(i, (layer.cout, layer.kh, layer.kw, layer.cin), o, stride, pad, dil, mve)
     if dtype == "S16":
         return dw_s16_route(i, (1, layer.kh, layer.kw, layer.cout), o, stride, pad, dil, layer.mult)
     return dw_route(i, (1, layer.kh, layer.kw, layer.cout), o, stride, pad, dil, layer.mult, mve)
@@ -803,8 +1194,9 @@ def footprint(op: str, layer: Layer, dtype: str = "S8") -> int:
     item, bias = (2, 8) if dtype == "S16" else (1, 4)
     if op == "Convolve":
         fdims = {"h": layer.kh, "w": layer.kw, "c": layer.cin, "n": layer.cout}
-        scratch = TemplateContextBuilder.calculate_buffer_size_max(idims, fdims, odims, output_dtype="S8")
-        scratch = _with_weight_sums(scratch, layer.cout)
+        scratch = TemplateContextBuilder.calculate_buffer_size_max(idims, fdims, odims, output_dtype=dtype)
+        # S8 bridges also place weight sums.
+        scratch = scratch if dtype == "S16" else _with_weight_sums(scratch, layer.cout)
         weights = layer.kh * layer.kw * layer.cin * layer.cout
     elif op == "TransposeConv":
         fdims = {"h": layer.kh, "w": layer.kw, "c": layer.cin, "n": layer.cout}
@@ -946,7 +1338,10 @@ def sample_op(key: tuple[str, str], n: int, seed: int, cpu: str, workspace: int)
     # One stream per op keeps ops independent.
     rng = np.random.default_rng([seed, gen.stream])
     routes, draw = gen.routes(mve), gen.draw
-    targets = gen.plan(n) if gen.plan else routes
+    targets = gen.plan(n, routes) if gen.plan else routes
+    if gen.edges:
+        # Own stream: shape draws stay put.
+        targets = _seeded_plan(n, routes, gen.edges, np.random.default_rng([seed, gen.stream, 1]))
     cases = []
     for index in range(n):
         target = targets[index % len(targets)]
@@ -963,9 +1358,9 @@ def sample_op(key: tuple[str, str], n: int, seed: int, cpu: str, workspace: int)
             if oh < 1 or ow < 1:
                 continue
             route = layer_route(op, layer, mve, dtype)
-            # Planned edges keep the op's one route.
+            # Edges take any of the op's routes.
             hit = route == target or (target == DW_AS_CONV and route in CONV_ROUTES) or (
-                gen.plan is not None and route in routes)
+                target not in routes and route in routes)
             if hit and layer_macs(op, layer) <= MAX_MACS and footprint(op, layer, dtype) <= workspace:
                 break
         else:

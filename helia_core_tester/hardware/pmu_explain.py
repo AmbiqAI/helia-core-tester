@@ -219,6 +219,9 @@ def _rule_memory_bound(e: Explanation) -> Optional[Finding]:
     if e.placement == "mram" and m["refill_kb"]:
         return Finding("memory_bound", be, f"MRAM-bound: {be:.0%} backend stall, {m['refill_kb']:.0f} KB refilled",
                        "Prefetch weights or stage them in TCM")
+    if e.placement == "sram" and m["refill_kb"]:
+        return Finding("memory_bound", be, f"Cache-bound: {be:.0%} backend stall, {m['refill_kb']:.0f} KB refilled",
+                       "Reuse each activation line before it is evicted; prefetch weights")
     # Backend stall alone is not memory.
     if m["refill_kb"] or (m["mve_stall_mem"] or 0) >= MEM_STALL:
         return Finding("memory_bound", be, f"Memory-bound: {be:.0%} of cycles in backend stall",

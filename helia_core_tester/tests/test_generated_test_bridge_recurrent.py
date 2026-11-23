@@ -154,6 +154,28 @@ def test_lstm_packs_gates_in_input_forget_cell_output_order(tmp_path: Path) -> N
     assert case_work(load_case_bundle(bundle.manifest_path))["macs"] == 1 * 2 * 4 * 2 * (3 + 2)
 
 
+def test_lstm_name_as_dataset(tmp_path: Path) -> None:
+    # Hidden draws carry no dataset.
+    descriptor = {"operator": "LSTMUnidirectional", "name": "h0123456789ab", "activation_dtype": "S8"}
+    case = _case(tmp_path, "LSTMFunctions", descriptor, _lstm_header("h0123456789ab", batch=2, steps=1, inputs=3, hidden=2))
+    bundle = build_case_bundle_from_generated_test(PROJECT_ROOT, case, output_root=tmp_path / "out", require_fvp_pass=False)
+    assert np.fromfile(_blob(bundle, "meta_0").path, dtype=np.int32).tolist()[:5] == [0, 2, 1, 3, 2]
+
+
+def test_lstm_start_state_blobs(tmp_path: Path) -> None:
+    descriptor = {"operator": "LSTMUnidirectional", "name": "lstm_state_s8", "activation_dtype": "S8", "dataset": "lstm_x"}
+    header = _lstm_header("lstm_x", batch=2, steps=1, inputs=3, hidden=2)
+    header += _array("int8_t", "lstm_x_hidden_state", [1, -2, 3, -4]) + _array("int16_t", "lstm_x_cell_state", [500, -6, 7, -800])
+    case = _case(tmp_path, "LSTMFunctions", descriptor, header)
+    bundle = build_case_bundle_from_generated_test(PROJECT_ROOT, case, output_root=tmp_path / "out", require_fvp_pass=False)
+    assert np.fromfile(_blob(bundle, "input_1").path, dtype=np.int8).tolist() == [1, -2, 3, -4]
+    assert np.fromfile(_blob(bundle, "input_2").path, dtype=np.int16).tolist() == [500, -6, 7, -800]
+    # One state blob alone is refused.
+    case = _case(tmp_path / "half", "LSTMFunctions", descriptor, header.split("static const int16_t lstm_x_cell")[0])
+    with pytest.raises(UnsupportedGeneratedTestError, match="LSTM tensor sizes"):
+        build_case_bundle_from_generated_test(PROJECT_ROOT, case, output_root=tmp_path / "out2", require_fvp_pass=False)
+
+
 def test_lstm_s16_is_skipped(tmp_path: Path) -> None:
     descriptor = {"operator": "LSTMUnidirectional", "name": "lstm_synthetic_s16", "activation_dtype": "S16", "dataset": "lstm_x"}
     case = _case(tmp_path, "LSTMFunctions", descriptor, "")

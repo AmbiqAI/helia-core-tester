@@ -433,11 +433,12 @@ def test_case_one_byte_over_advertised_workspace_fails_before_plan(tmp_path: Pat
     assert "TX:SESSION_PLAN" not in session._trace
 
 
-def test_mram_workspace_padding(tmp_path: Path) -> None:
-    # Firmware pads MRAM weights/bias to 16-byte rows.
+def test_mram_blobs_skip_workspace(tmp_path: Path) -> None:
+    # Weights and bias stage in SSRAM.
     bundle = load_case_bundle(build_convolve_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path).manifest_path)
     required = bundle.workspace_bytes_for("mram")
-    assert required > bundle.workspace_bytes_required
+    weights = sum(blob.byte_length for blob in bundle.streamable_blobs if blob.role in ("weights", "bias"))
+    assert required <= bundle.workspace_bytes_required - weights
 
     session = HostSession(FakeTargetTransport(runtime_arena_capacity=required - 1, placement="mram"))
     with pytest.raises(RuntimeError, match=rf"requires {required} workspace bytes"):

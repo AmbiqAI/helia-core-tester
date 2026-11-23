@@ -422,6 +422,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         descriptor_relpaths=(
             "BasicMathFunctions/squared_difference.yaml",
             "BasicMathFunctions/squared_difference_float.yaml",
+            "BasicMathFunctions/squared_difference_broadcast_float.yaml",
         ),
         template_relpath="BasicMathFunctions/squared_difference",
     ),

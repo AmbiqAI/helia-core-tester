@@ -1,4 +1,4 @@
-/* Host harness for MRAM weights placement. */
+/* Host harness for MRAM weights and SRAM activations placement. */
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -40,6 +40,8 @@ static uint8_t big_workspace[600u * 1024u];
 static uint8_t big_weights[BIG_WEIGHTS];
 #define POOL_BIAS_BYTES (352u * 1024u)
 static uint8_t big_bias[POOL_BIAS_BYTES];
+/* Weights stage here, as on the board. */
+static uint8_t stage[HCT_MRAM_POOL_BYTES];
 #endif
 static uint8_t frame[2048];
 static uint8_t payload[1024];
@@ -139,6 +141,9 @@ static int open_session(hct_server_session_t *s, uint8_t *ws, uint32_t ws_bytes,
     size_t at = 0u;
     next_sequence = 0u;
     hct_server_session_init(s, 0xC0DE1234u, 256u, ws, ws_bytes, &boot);
+#if defined(HCT_PLACEMENT_MRAM)
+    hct_server_session_set_stage(s, stage, sizeof(stage));
+#endif
     if (drain(s) != HCTP_MSG_TARGET_INFO) return 1;
     if (send(s, HCTP_MSG_TARGET_INFO_ACK, 0u) != HCTP_STATUS_OK) return 2;
     if (drain(s) != HCTP_MSG_KERNEL_CATALOG) return 3;
@@ -286,6 +291,7 @@ static int test_place_and_reuse(uintptr_t base)
     if (send_meta(&s, "mram_a", kCase, 3u) != HCTP_STATUS_OK) return 110;
     /* Weights and bias pad to 16-byte rows. */
     printf("workspace=%u\n", (unsigned)s.workspace_used_bytes);
+    printf("stage=%u\n", (unsigned)s.stage_used);
     hct_mram_stub.corrupt_program = 1;
     if (probe_stream(&s, HCTP_STATUS_PAYLOAD_CRC_MISMATCH) != 0) return 111;
     hct_mram_stub.fail_program = 1;
@@ -430,7 +436,8 @@ static int ranges_overlap(const hct_server_blob_t *a, const hct_server_blob_t *b
 static hctp_status_t pool_case(hct_server_session_t *s, const char *case_id, const blob_spec_t *blobs, uint16_t count)
 {
     hctp_status_t status;
-    if (open_session(s, big_workspace, sizeof(big_workspace), case_id) != 0) return HCTP_STATUS_TRUNCATED_FRAME;
+    /* 32 KiB workspace: weights stage elsewhere. */
+    if (open_session(s, workspace, sizeof(workspace), case_id) != 0) return HCTP_STATUS_TRUNCATED_FRAME;
     status = send_meta(s, case_id, blobs, count);
     return status != HCTP_STATUS_OK ? status : stream(s, blobs);
 }
@@ -594,6 +601,37 @@ static int test_derived(uintptr_t base)
 
 #endif
 
+#if defined(HCT_ACTIVATIONS_SRAM)
+/* Each timed call cleans and evicts the used workspace once. */
+static int test_cold_workspace(void)
+{
+    static hct_server_session_t s;
+    uint32_t cleans;
+    uint32_t invalidations;
+    uint32_t used;
+    int status = open_session(&s, workspace, sizeof(workspace), "sram_a");
+    if (status != 0) return 1000 + status;
+    if (send_meta(&s, "sram_a", kCase, 3u) != HCTP_STATUS_OK) return 1010;
+    if (stream(&s, kCase) != HCTP_STATUS_OK) return 1011;
+    /* finish_case resets it; input twins can add more. */
+    used = s.workspace_used_bytes;
+    cleans = hct_mram_stub.clean_invalidate_calls;
+    invalidations = hct_mram_stub.invalidate_calls;
+    status = run_case(&s);
+    if (status != 0) return 1020 + status;
+    cleans = hct_mram_stub.clean_invalidate_calls - cleans;
+    invalidations = hct_mram_stub.invalidate_calls - invalidations;
+    /* Two MRAM ranges per call, one workspace range. */
+    if (cleans == 0u || invalidations != 2u * cleans) return 1030;
+    if (hct_mram_stub.last_clean_invalidate != (const volatile void *)workspace) return 1031;
+    if (used == 0u || hct_mram_stub.last_clean_invalidate_bytes < (int32_t)used ||
+        hct_mram_stub.last_clean_invalidate_bytes > (int32_t)sizeof(workspace)) return 1032;
+    if (drain(&s) != HCTP_MSG_SESSION_COMPLETE) return 1033;
+    printf("workspace cold\n");
+    return 0;
+}
+#endif
+
 #if HCT_BLOB_STORE_BYTES > 0
 static const uint64_t kKeys[3] = {0x1111111111111111ull, 0x2222222222222222ull, 0x3333333333333333ull};
 
@@ -620,7 +658,7 @@ static int store_case(const char *case_id, const uint64_t *keys, const blob_spec
     for (uint16_t index = 0u; index < 3u; ++index)
     {
         const hct_server_blob_t *blob = &s.blobs[index];
-        if (memcmp(blob->placed != NULL ? blob->placed : &s.workspace[blob->arena_offset], blobs[index].data, blobs[index].length) != 0) return 4;
+        if (memcmp(blob_ptr(&s, blob), blobs[index].data, blobs[index].length) != 0) return 4;
     }
     status = run_case(&s);
     if (status != 0) return 10 + status;
@@ -747,6 +785,14 @@ int main(void)
         if (status == 0) status = test_pool_fit(base);
         if (status == 0) status = test_derived(base);
     }
+#endif
+#if defined(HCT_ACTIVATIONS_SRAM)
+    if (status == 0) status = (hct_benchmark_server_capability_flags() & HCT_CAP_ACTIVATIONS_SRAM) == 0u ? 11 : 0;
+    if (status == 0) status = test_cold_workspace();
+#else
+    /* Activations stay in TCM: nothing to clean. */
+    if (status == 0) status = hct_mram_stub.clean_invalidate_calls != 0u ? 12 : 0;
+    if (status == 0) status = (hct_benchmark_server_capability_flags() & HCT_CAP_ACTIVATIONS_SRAM) != 0u ? 13 : 0;
 #endif
 #if HCT_BLOB_STORE_BYTES > 0
     if (status == 0) status = test_store();

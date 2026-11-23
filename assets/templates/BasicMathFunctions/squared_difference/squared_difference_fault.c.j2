@@ -19,6 +19,10 @@ static int32_t run_squared_difference(void)
     const {{ input_dtype }} *input1_arg = {% if fault == "null_input_1" %}NULL{% else %}{{ name }}_input1{% endif %};
     const {{ input_dtype }} *input2_arg = {% if fault == "null_input_2" %}NULL{% else %}{{ name }}_input2{% endif %};
     {{ output_dtype }} *output_arg = {% if fault == "null_output" %}NULL{% else %}{{ name }}_output{% endif %};
+{% if broadcast %}
+    return {{ kernel_fn }}(input1_arg, &{{ name }}_input1_dims, input2_arg, &{{ name }}_input2_dims,
+                           output_arg, &{{ name }}_output_dims);
+{% else %}
 {% if fault == "zero_block" %}
     const int32_t block_size = 0;
 {% elif fault == "negative_block" %}
@@ -28,6 +32,7 @@ static int32_t run_squared_difference(void)
 {% endif %}
 
     return {{ kernel_fn }}(input1_arg, input2_arg, output_arg, block_size);
+{% endif %}
 }
 
 int32_t {{ name }}_test_case_run(void)

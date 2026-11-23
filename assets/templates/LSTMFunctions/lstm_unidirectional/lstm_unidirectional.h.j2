@@ -78,6 +78,15 @@ static const {{ bias_dtype }} {{ data_prefix }}cell_gate_bias[] = {
 static const {{ bias_dtype }} {{ data_prefix }}output_gate_bias[] = {
 {{ output_gate_bias_array }}
 };
+{% if hidden_state_array is defined %}
+
+static const {{ output_dtype }} {{ data_prefix }}hidden_state[] = {
+{{ hidden_state_array }}
+};
+static const int16_t {{ data_prefix }}cell_state[] = {
+{{ cell_state_array }}
+};
+{% endif %}
 
 static const {{ output_dtype }} {{ data_prefix }}output[] = {
 {{ output_array }}

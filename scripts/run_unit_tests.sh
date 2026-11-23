@@ -40,6 +40,11 @@ if ! command -v uv >/dev/null 2>&1; then
     exit 1
 fi
 
+if ! "${SCRIPT_DIR}/check_uv_version.sh" "${REPO_ROOT}/pyproject.toml"; then
+    echo -e "${RED}Error: uv is too old for this repository.${NC}"
+    exit 1
+fi
+
 if [[ ! -x ".venv/bin/python" ]] && [[ ! -x ".venv/bin/python.exe" ]]; then
     echo "No valid .venv found, creating one with dev dependencies..."
     uv venv --clear

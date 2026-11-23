@@ -1343,7 +1343,8 @@ kernels:
     operator: LSTMUnidirectional
     dtype: S8
     cmsis_function: arm_lstm_unidirectional_s8
-    blobs: {input_0: S8, weights: S8, bias: S32, meta_0: S32}
+    # input_1/input_2: optional hidden and cell state.
+    blobs: {input_0: S8, weights: S8, bias: S32, meta_0: S32, input_1: S8, input_2: S16}
 
   # Direct kernel; no s16 wrapper exists.
   - kernel_id: 186

@@ -1,0 +1,34 @@
+# Campaign for `helia_core_tester agent-loop init`.
+name: lstm-s8
+board: apollo510_evb
+# bench-agent board id; defaults to board.
+bench_id: apollo510_evb
+# DTLN weights exceed TCM: MRAM only.
+legs: [mram]
+toolchains: [gcc, atfe]
+target:
+  op: LSTMUnidirectional
+  dtype: S8
+  # Optional: only these case ids.
+  case_ids:
+    - lstm_unidirectional_dtln_l0_s8
+    - lstm_unidirectional_dtln_l1_s8
+    - lstm_unidirectional_dtln_l0_t4_s8
+    - lstm_unidirectional_dtln_l1_t4_s8
+kernels:
+  repo: ~/ns-cmsis-nn
+  ref: v7.47.0
+# LSTM weighs 0.02: about 0.5 % gain.
+min_score: 0.0001
+# Charged board evals for the agent.
+evals: 12
+# Last evals cut code size; 0: none.
+# size_evals: 4
+# Claude --max-budget-usd.
+cost_usd: 25
+model: claude-opus-5-5
+# Random s8 LSTM shapes, 0 for none.
+hidden_shapes: 12
+repeats: 3
+# Outside the workspace; init makes it 0700.
+secrets_dir: ~/hct-secrets/lstm-s8

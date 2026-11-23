@@ -5375,6 +5375,10 @@ static arm_cmsis_nn_status run_lstm_once(hct_server_session_t *session)
     hct_server_blob_t *input = find_blob_by_role(session, HCT_BLOB_ROLE_INPUT_0);
     hct_server_blob_t *weights = find_blob_by_role(session, HCT_BLOB_ROLE_WEIGHTS);
     hct_server_blob_t *bias = find_blob_by_role(session, HCT_BLOB_ROLE_BIAS);
+    /* Optional start state: stateful call. */
+    hct_server_blob_t *hidden_init = find_blob_by_role(session, HCT_BLOB_ROLE_INPUT_1);
+    hct_server_blob_t *cell_init = find_blob_by_role(session, HCT_BLOB_ROLE_INPUT_2);
+    cmsis_nn_context hidden_state = {NULL, 0};
     cmsis_nn_lstm_gate *gates[4];
     cmsis_nn_lstm_params params;
     cmsis_nn_lstm_context buffers;
@@ -5391,7 +5395,8 @@ static arm_cmsis_nn_status run_lstm_once(hct_server_session_t *session)
     uint32_t used = 0u;
     uint32_t bytes;
 
-    if (input == NULL || weights == NULL || bias == NULL || !meta_ints(session, 31u, &meta))
+    if (input == NULL || weights == NULL || bias == NULL || !meta_ints(session, 31u, &meta) ||
+        (hidden_init == NULL) != (cell_init == NULL))
     {
         return ARM_CMSIS_NN_ARG_ERROR;
     }
@@ -5439,6 +5444,12 @@ static arm_cmsis_nn_status run_lstm_once(hct_server_session_t *session)
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
+        if (cell_init != NULL &&
+            (cell_init->byte_length != state_bytes || hidden_init->byte_length != state_bytes / 2u ||
+             !take_scratch(session, &used, (int32_t)(state_bytes / 2u), &hidden_state)))
+        {
+            return ARM_CMSIS_NN_ARG_ERROR;
+        }
     }
 
     /* Blobs hold input, forget, cell, output. */
@@ -5469,12 +5480,20 @@ static arm_cmsis_nn_status run_lstm_once(hct_server_session_t *session)
         gates[gate]->activation_type = (gate == 2) ? ARM_TANH : ARM_SIGMOID;
     }
 
-    /* Each call starts from zero cell state. */
-    memset(cell.buf, 0, (size_t)cell.size);
+    /* Each call starts from the same state. */
+    if (cell_init != NULL)
+    {
+        memcpy(cell.buf, blob_ptr(session, cell_init), cell_init->byte_length);
+        memcpy(hidden_state.buf, blob_ptr(session, hidden_init), hidden_init->byte_length);
+    }
+    else
+    {
+        memset(cell.buf, 0, (size_t)cell.size);
+    }
     buffers.temp1 = temp1.buf;
     buffers.temp2 = temp2.buf;
     buffers.cell_state = cell.buf;
-    buffers.hidden_state = NULL;
+    buffers.hidden_state = hidden_state.buf;
     return arm_lstm_unidirectional_s8((const int8_t *)blob_ptr(session, input),
                                       (int8_t *)hct_output_ptr(session),
                                       &params,

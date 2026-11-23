@@ -43,9 +43,9 @@ leg (a few minutes in total):
 {%- endfor %}
 {%- if legs|length > 1 %}
 Once a leg fails, or stops before scoring, later legs are skipped.
-{%- if gates_mram %}
-An mram leg runs only after the tcm leg on its compiler passes.
-{%- endif %}
+{%- for earlier, later in gates %}
+An {{ later }} leg runs only after the {{ earlier }} leg on its compiler passes.
+{%- endfor %}
 {%- endif %}
 {%- if toolchains %}
 Each placement runs once per compiler: {{ toolchains|join(" and ") }} (atfe is Arm

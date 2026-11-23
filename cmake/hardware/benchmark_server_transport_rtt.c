@@ -20,6 +20,9 @@ static void hct_rtt_cache_clean(void)
 #endif
 }
 
+/* Drops dirty lines without writing them back. On sram the workspace is
+ * cached, so a message that writes it must queue a reply: the reply's clean
+ * saves the data before the next read. Also gives each run an empty cache. */
 static void hct_rtt_cache_invalidate(void)
 {
 #if defined(NSX_SOC_CORE_M55)

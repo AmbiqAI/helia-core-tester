@@ -136,3 +136,133 @@ hint:
   extras:
     input_zero_point: -9
     output_zero_point: 6
+---
+# DTLN layer 0.
+operator: LSTMUnidirectional
+name: lstm_unidirectional_dtln_l0_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+batch_size: 1
+time_steps: 1
+feature_size: 257
+units: 128
+time_major: false
+# helia-rt passes the state tensors.
+stateful: true
+input_shape:
+- 1
+- 1
+- 257
+hint:
+  call_style: per_tensor
+  force_cmsis: true
+lstm_quant:
+  input_scale: 0.06857891380786896
+  input_zero_point: -128
+  output_scale: 0.007654283195734024
+  output_zero_point: 0
+  cell_scale_power: -11
+  cell_clip: 10.0
+  weight_scales: [0.024260779842734337, 0.02362534962594509, 0.02938021719455719, 0.025173552334308624, 0.021458154544234276, 0.028415052220225334, 0.025650307536125183, 0.02510405331850052]
+  # Unsaturated golden; random weights.
+  weight_std: 5.0
+  input_range: [-128, -104]
+  bias_ranges: [[-1.08, 1.24], [0.64, 1.62], [-0.99, 0.93], [-0.81, 1.28]]
+---
+# DTLN layer 1.
+operator: LSTMUnidirectional
+name: lstm_unidirectional_dtln_l1_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+batch_size: 1
+time_steps: 1
+feature_size: 128
+units: 128
+time_major: false
+# helia-rt passes the state tensors.
+stateful: true
+input_shape:
+- 1
+- 1
+- 128
+hint:
+  call_style: per_tensor
+  force_cmsis: true
+lstm_quant:
+  input_scale: 0.007654283195734024
+  input_zero_point: 0
+  output_scale: 0.00736330496147275
+  output_zero_point: -4
+  cell_scale_power: -12
+  cell_clip: 10.0
+  weight_scales: [0.019837403669953346, 0.023726655170321465, 0.023504147306084633, 0.04377298057079315, 0.016680922359228134, 0.02456698752939701, 0.016399702057242393, 0.029992129653692245]
+  weight_std: 14.0
+  input_range: [-64, 64]
+  bias_ranges: [[-0.86, 0.93], [0.29, 1.55], [-0.94, 0.79], [-0.73, 0.72]]
+---
+# DTLN layer 0, 4 steps: recurrent path.
+operator: LSTMUnidirectional
+name: lstm_unidirectional_dtln_l0_t4_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+batch_size: 1
+time_steps: 4
+feature_size: 257
+units: 128
+time_major: false
+# helia-rt passes the state tensors.
+stateful: true
+input_shape:
+- 1
+- 4
+- 257
+hint:
+  call_style: per_tensor
+  force_cmsis: true
+lstm_quant:
+  input_scale: 0.06857891380786896
+  input_zero_point: -128
+  output_scale: 0.007654283195734024
+  output_zero_point: 0
+  cell_scale_power: -11
+  cell_clip: 10.0
+  weight_scales: [0.024260779842734337, 0.02362534962594509, 0.02938021719455719, 0.025173552334308624, 0.021458154544234276, 0.028415052220225334, 0.025650307536125183, 0.02510405331850052]
+  # Unsaturated golden; random weights.
+  weight_std: 5.0
+  input_range: [-128, -104]
+  bias_ranges: [[-1.08, 1.24], [0.64, 1.62], [-0.99, 0.93], [-0.81, 1.28]]
+---
+# DTLN layer 1, 4 steps: recurrent path.
+operator: LSTMUnidirectional
+name: lstm_unidirectional_dtln_l1_t4_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+batch_size: 1
+time_steps: 4
+feature_size: 128
+units: 128
+time_major: false
+# helia-rt passes the state tensors.
+stateful: true
+input_shape:
+- 1
+- 4
+- 128
+hint:
+  call_style: per_tensor
+  force_cmsis: true
+lstm_quant:
+  input_scale: 0.007654283195734024
+  input_zero_point: 0
+  output_scale: 0.00736330496147275
+  output_zero_point: -4
+  cell_scale_power: -12
+  cell_clip: 10.0
+  weight_scales: [0.019837403669953346, 0.023726655170321465, 0.023504147306084633, 0.04377298057079315, 0.016680922359228134, 0.02456698752939701, 0.016399702057242393, 0.029992129653692245]
+  weight_std: 14.0
+  input_range: [-64, 64]
+  bias_ranges: [[-0.86, 0.93], [0.29, 1.55], [-0.94, 0.79], [-0.73, 0.72]]

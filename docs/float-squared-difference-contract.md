@@ -1,9 +1,13 @@
 # Float squared difference: what the tester asserts
 
-Kernel: `arm_elementwise_squared_difference_f16` (AmbiqAI/ns-cmsis-nn#490),
-declared in `Include/arm_nnfunctions_flt.h`. There is no f32 kernel; an FP32
-descriptor is rejected at kernel selection. Descriptors:
-`assets/descriptors/BasicMathFunctions/squared_difference_float.yaml`.
+Equal input shapes select the flat FP16 or FP32 entry. Unequal shapes select
+`arm_elementwise_squared_difference_broadcast_f16` or `_f32` from
+[CORE #915](https://github.com/AmbiqAI/ns-cmsis-nn/pull/915). Each broadcast
+descriptor requires its exact symbol, so older CORE checkouts skip these cases.
+The row-mean, scalar-left and mixed-axis cases compare storage bits. FP32
+goldens round subtraction and multiplication separately in binary32.
+
+The original flat FP16 suite is described below.
 
 ## The kernel
 

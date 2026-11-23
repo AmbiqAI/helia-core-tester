@@ -469,7 +469,13 @@ def test_synced_modules_cmake_is_left_alone(tmp_path: Path) -> None:
 
 def test_mram_placement_defines_the_switch(tmp_path: Path) -> None:
     assert "HCT_PLACEMENT_MRAM" not in _render(tmp_path / "tcm").cmakelists
-    assert "    HCT_PLACEMENT_MRAM\n" in _render(tmp_path / "mram", placement="mram").cmakelists
+    mram = _render(tmp_path / "mram", placement="mram").cmakelists
+    assert "    HCT_PLACEMENT_MRAM\n" in mram and "HCT_ACTIVATIONS_SRAM" not in mram
+
+
+def test_sram_placement_keeps_mram_weights(tmp_path: Path) -> None:
+    sram = _render(tmp_path / "sram", placement="sram").cmakelists
+    assert "    HCT_PLACEMENT_MRAM\n" in sram and "    HCT_ACTIVATIONS_SRAM\n" in sram
 
 
 def test_board_blob_store_defines_its_size(tmp_path: Path) -> None:
@@ -479,10 +485,11 @@ def test_board_blob_store_defines_its_size(tmp_path: Path) -> None:
 
 
 def test_mram_placement_needs_cached_mram(tmp_path: Path) -> None:
-    with pytest.raises(nsx_app.AppRenderError, match="no cached MRAM"):
-        nsx_app.render_app(resolve_board("apollo3p_evb"), nsx_app.AppOptions(placement="mram"), tmp_path / "app")
+    for placement in ("mram", "sram"):
+        with pytest.raises(nsx_app.AppRenderError, match="no cached MRAM"):
+            nsx_app.render_app(resolve_board("apollo3p_evb"), nsx_app.AppOptions(placement=placement), tmp_path / placement)
     with pytest.raises(ValueError, match="placement"):
-        nsx_app.AppOptions(placement="sram")
+        nsx_app.AppOptions(placement="psram")
     assert [board.id for board in load_board_table() if board.has_mram] == ["apollo510_evb", "apollo330mP_evb"]
 
 
@@ -491,7 +498,7 @@ def test_placement_is_a_saved_option(tmp_path: Path) -> None:
     assert nsx_app.AppOptions.from_json(options.to_json()) == options
     assert "placement tcm -> mram" in options.changes_from(nsx_app.AppOptions(cmsis_nn_ref="v9"))
     with pytest.raises(TypeError, match="placement"):
-        nsx_app.AppOptions.from_json('{"placement": "sram"}')
+        nsx_app.AppOptions.from_json('{"placement": "psram"}')
     # Records without the field built tcm.
     assert nsx_app.AppOptions.from_json('{"cmsis_nn_ref": "v9"}').placement == "tcm"
     app_dir = tmp_path / "app"

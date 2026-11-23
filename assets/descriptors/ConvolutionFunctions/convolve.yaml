@@ -3654,6 +3654,393 @@ strides: [1, 1]
 padding: SAME
 use_bias: true
 ---
+# heartkit-seg and heartkit-arr a16w8 CONV_2D layers, one each,
+# named by model op index. All SAME, per-channel, int64 bias.
+# Squeeze-excite layers run on one pixel;
+# narrow inputs keep RELU6 off its rails.
+operator: Convolve
+name: convolve_heartkit_seg_l03_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: RELU6
+hint:
+  call_style: per_tensor
+input_shape: [1, 1, 256, 1]
+filter_shape: [1, 1, 1, 16]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+---
+operator: Convolve
+name: convolve_heartkit_seg_l06_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: RELU6
+hint:
+  call_style: per_tensor
+input_shape: [1, 1, 1, 16]
+filter_shape: [1, 1, 16, 8]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+calibration_range: [-4.0, 4.0]
+input_range: [-4.0, 4.0]
+---
+operator: Convolve
+name: convolve_heartkit_seg_l07_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: RELU6
+hint:
+  call_style: per_tensor
+input_shape: [1, 1, 1, 8]
+filter_shape: [1, 1, 8, 16]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+calibration_range: [-4.0, 4.0]
+input_range: [-4.0, 4.0]
+---
+operator: Convolve
+name: convolve_heartkit_seg_l10_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: RELU6
+hint:
+  call_style: per_tensor
+input_shape: [1, 1, 256, 16]
+filter_shape: [1, 1, 16, 24]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+---
+operator: Convolve
+name: convolve_heartkit_seg_l13_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: RELU6
+hint:
+  call_style: per_tensor
+input_shape: [1, 1, 1, 24]
+filter_shape: [1, 1, 24, 12]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+calibration_range: [-4.0, 4.0]
+input_range: [-4.0, 4.0]
+---
+operator: Convolve
+name: convolve_heartkit_seg_l14_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: RELU6
+hint:
+  call_style: per_tensor
+input_shape: [1, 1, 1, 12]
+filter_shape: [1, 1, 12, 24]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+calibration_range: [-4.0, 4.0]
+input_range: [-4.0, 4.0]
+---
+operator: Convolve
+name: convolve_heartkit_seg_l17_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: RELU6
+hint:
+  call_style: per_tensor
+input_shape: [1, 1, 256, 24]
+filter_shape: [1, 1, 24, 32]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+---
+operator: Convolve
+name: convolve_heartkit_seg_l20_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: RELU6
+hint:
+  call_style: per_tensor
+input_shape: [1, 1, 1, 32]
+filter_shape: [1, 1, 32, 16]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+calibration_range: [-4.0, 4.0]
+input_range: [-4.0, 4.0]
+---
+operator: Convolve
+name: convolve_heartkit_seg_l21_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: RELU6
+hint:
+  call_style: per_tensor
+input_shape: [1, 1, 1, 16]
+filter_shape: [1, 1, 16, 32]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+calibration_range: [-4.0, 4.0]
+input_range: [-4.0, 4.0]
+---
+operator: Convolve
+name: convolve_heartkit_seg_l24_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: RELU6
+hint:
+  call_style: per_tensor
+input_shape: [1, 1, 256, 32]
+filter_shape: [1, 1, 32, 48]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+---
+operator: Convolve
+name: convolve_heartkit_seg_l25_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [1, 1, 256, 48]
+filter_shape: [1, 7, 48, 4]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+---
+operator: Convolve
+name: convolve_heartkit_arr_l01_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: RELU6
+hint:
+  call_style: per_tensor
+input_shape: [1, 1, 800, 1]
+filter_shape: [1, 9, 1, 16]
+strides: [1, 2]
+padding: SAME
+use_bias: true
+---
+operator: Convolve
+name: convolve_heartkit_arr_l05_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: RELU6
+hint:
+  call_style: per_tensor
+input_shape: [1, 1, 1, 16]
+filter_shape: [1, 1, 16, 4]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+calibration_range: [-4.0, 4.0]
+input_range: [-4.0, 4.0]
+---
+operator: Convolve
+name: convolve_heartkit_arr_l06_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: RELU6
+hint:
+  call_style: per_tensor
+input_shape: [1, 1, 1, 4]
+filter_shape: [1, 1, 4, 16]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+calibration_range: [-4.0, 4.0]
+input_range: [-4.0, 4.0]
+---
+operator: Convolve
+name: convolve_heartkit_arr_l09_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [1, 1, 200, 16]
+filter_shape: [1, 1, 16, 24]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+---
+operator: Convolve
+name: convolve_heartkit_arr_l13_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: RELU6
+hint:
+  call_style: per_tensor
+input_shape: [1, 1, 1, 24]
+filter_shape: [1, 1, 24, 6]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+calibration_range: [-4.0, 4.0]
+input_range: [-4.0, 4.0]
+---
+operator: Convolve
+name: convolve_heartkit_arr_l14_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: RELU6
+hint:
+  call_style: per_tensor
+input_shape: [1, 1, 1, 6]
+filter_shape: [1, 1, 6, 24]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+calibration_range: [-4.0, 4.0]
+input_range: [-4.0, 4.0]
+---
+operator: Convolve
+name: convolve_heartkit_arr_l17_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [1, 1, 100, 24]
+filter_shape: [1, 1, 24, 32]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+---
+operator: Convolve
+name: convolve_heartkit_arr_l21_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: RELU6
+hint:
+  call_style: per_tensor
+input_shape: [1, 1, 1, 32]
+filter_shape: [1, 1, 32, 8]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+calibration_range: [-4.0, 4.0]
+input_range: [-4.0, 4.0]
+---
+operator: Convolve
+name: convolve_heartkit_arr_l22_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: RELU6
+hint:
+  call_style: per_tensor
+input_shape: [1, 1, 1, 8]
+filter_shape: [1, 1, 8, 32]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+calibration_range: [-4.0, 4.0]
+input_range: [-4.0, 4.0]
+---
+operator: Convolve
+name: convolve_heartkit_arr_l25_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [1, 1, 50, 32]
+filter_shape: [1, 1, 32, 64]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+---
+operator: Convolve
+name: convolve_heartkit_arr_l29_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: RELU6
+hint:
+  call_style: per_tensor
+input_shape: [1, 1, 1, 64]
+filter_shape: [1, 1, 64, 16]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+calibration_range: [-4.0, 4.0]
+input_range: [-4.0, 4.0]
+---
+operator: Convolve
+name: convolve_heartkit_arr_l30_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: RELU6
+hint:
+  call_style: per_tensor
+input_shape: [1, 1, 1, 16]
+filter_shape: [1, 1, 16, 64]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+calibration_range: [-4.0, 4.0]
+input_range: [-4.0, 4.0]
+---
+operator: Convolve
+name: convolve_heartkit_arr_l33_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [1, 1, 25, 64]
+filter_shape: [1, 1, 64, 72]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+---
+operator: Convolve
+name: convolve_heartkit_arr_l37_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: RELU6
+hint:
+  call_style: per_tensor
+input_shape: [1, 1, 1, 72]
+filter_shape: [1, 1, 72, 18]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+calibration_range: [-4.0, 4.0]
+input_range: [-4.0, 4.0]
+---
+operator: Convolve
+name: convolve_heartkit_arr_l38_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: RELU6
+hint:
+  call_style: per_tensor
+input_shape: [1, 1, 1, 18]
+filter_shape: [1, 1, 18, 72]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+calibration_range: [-4.0, 4.0]
+input_range: [-4.0, 4.0]
+---
+operator: Convolve
+name: convolve_heartkit_arr_l41_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [1, 1, 13, 72]
+filter_shape: [1, 1, 72, 128]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+---
 # int32-bias S16 cases. The default S16 corpus passes an int64 bias, which never
 # reaches the int32-only MVE paths below. bias_dtype S32 converts the golden with
 # an int32 bias as well, so both sides requantize the same int32 accumulator.

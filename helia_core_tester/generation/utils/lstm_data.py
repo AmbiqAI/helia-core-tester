@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any, Dict, Optional
 import math
 import os
 import subprocess
@@ -662,3 +662,230 @@ def build_lstm_context(
         "mult_shift": mult_shift,
         "tensors": data.tensors,
     }
+
+
+# Explicit-quant s8 cases.
+# TFLite gate order, input then recurrent.
+LSTM_GATES = ("input", "forget", "cell", "output")
+# Gate pre-activations are Q3.12.
+_GATE_SCALE = 2.0**-12
+# TFLM sigmoid_table_uint16, 256 entries.
+_SIGMOID_LUT = np.array([
+    32768, 33451, 34133, 34813, 35493, 36169, 36843, 37513, 38180, 38841, 39498, 40149, 40794, 41432, 42064, 42688,
+    43304, 43912, 44511, 45102, 45683, 46255, 46817, 47369, 47911, 48443, 48964, 49475, 49975, 50464, 50942, 51409,
+    51865, 52311, 52745, 53169, 53581, 53983, 54374, 54755, 55125, 55485, 55834, 56174, 56503, 56823, 57133, 57433,
+    57724, 58007, 58280, 58544, 58800, 59048, 59288, 59519, 59743, 59959, 60168, 60370, 60565, 60753, 60935, 61110,
+    61279, 61441, 61599, 61750, 61896, 62036, 62172, 62302, 62428, 62549, 62666, 62778, 62886, 62990, 63090, 63186,
+    63279, 63368, 63454, 63536, 63615, 63691, 63765, 63835, 63903, 63968, 64030, 64090, 64148, 64204, 64257, 64308,
+    64357, 64405, 64450, 64494, 64536, 64576, 64614, 64652, 64687, 64721, 64754, 64786, 64816, 64845, 64873, 64900,
+    64926, 64950, 64974, 64997, 65019, 65039, 65060, 65079, 65097, 65115, 65132, 65149, 65164, 65179, 65194, 65208,
+    65221, 65234, 65246, 65258, 65269, 65280, 65291, 65301, 65310, 65319, 65328, 65337, 65345, 65352, 65360, 65367,
+    65374, 65381, 65387, 65393, 65399, 65404, 65410, 65415, 65420, 65425, 65429, 65433, 65438, 65442, 65445, 65449,
+    65453, 65456, 65459, 65462, 65465, 65468, 65471, 65474, 65476, 65479, 65481, 65483, 65485, 65488, 65489, 65491,
+    65493, 65495, 65497, 65498, 65500, 65501, 65503, 65504, 65505, 65507, 65508, 65509, 65510, 65511, 65512, 65513,
+    65514, 65515, 65516, 65517, 65517, 65518, 65519, 65520, 65520, 65521, 65522, 65522, 65523, 65523, 65524, 65524,
+    65525, 65525, 65526, 65526, 65526, 65527, 65527, 65528, 65528, 65528, 65529, 65529, 65529, 65529, 65530, 65530,
+    65530, 65530, 65531, 65531, 65531, 65531, 65531, 65532, 65532, 65532, 65532, 65532, 65532, 65533, 65533, 65533,
+    65533, 65533, 65533, 65533, 65533, 65534, 65534, 65534, 65534, 65534, 65534, 65534, 65534, 65534, 65534, 65535,
+], dtype=np.int64)
+
+
+@dataclass(frozen=True)
+class LstmQuant:
+    """Model-style s8 LSTM quant knobs."""
+
+    input_scale: float
+    input_zero_point: int
+    output_scale: float
+    output_zero_point: int
+    cell_scale_power: int
+    # Real-valued; 0 means no clip.
+    cell_clip: float
+    # Input i, f, c, o; then recurrent.
+    weight_scales: tuple[float, ...]
+    # Int8 weight spread before clipping.
+    weight_std: float
+    # Real bias range per gate.
+    bias_ranges: tuple[tuple[float, float], ...]
+    input_range: tuple[int, int]
+
+    @classmethod
+    def from_desc(cls, raw: Dict[str, Any]) -> "LstmQuant":
+        scales = tuple(float(v) for v in raw["weight_scales"])
+        biases = tuple((float(lo), float(hi)) for lo, hi in raw["bias_ranges"])
+        if len(scales) != 8 or len(biases) != 4:
+            raise ValueError("lstm_quant needs 8 weight scales, 4 bias ranges")
+        lo, hi = (int(v) for v in raw.get("input_range", (-128, 127)))
+        return cls(
+            float(raw["input_scale"]), int(raw["input_zero_point"]), float(raw["output_scale"]),
+            int(raw["output_zero_point"]), int(raw["cell_scale_power"]), float(raw.get("cell_clip", 0.0)),
+            scales, float(raw.get("weight_std", 14.0)), biases, (lo, hi),
+        )
+
+
+def _draw_weights(rng: np.random.Generator, shape: tuple[int, int], std: float) -> np.ndarray:
+    """Symmetric int8 weights; one hits 127."""
+    w = np.clip(np.round(rng.normal(0.0, std, size=shape)), -127, 127).astype(np.int8)
+    # Symmetric quant maps |max| to 127.
+    w.flat[int(rng.integers(0, w.size))] = 127 if rng.random() < 0.5 else -127
+    return w
+
+
+def quantized_clip(quant: LstmQuant) -> int:
+    """Kernel cell clip; 32767 means none."""
+    if quant.cell_clip <= 0.0:
+        return 32767
+    # TFLM: double division, int16 cast.
+    value = quant.cell_clip / float(np.float32(2.0**quant.cell_scale_power))
+    return int(min(max(value, -32768.0), 32767.0))
+
+
+def effective_scales(quant: LstmQuant) -> Dict[str, float]:
+    """TFLM's effective scales, by multiplier key."""
+    f32, scales = np.float32, {}
+    for k, gate in enumerate(LSTM_GATES):
+        # float32 product, then double.
+        scales[f"{gate}_gate_input"] = float(f32(quant.weight_scales[k]) * f32(quant.input_scale)) / _GATE_SCALE
+        scales[f"{gate}_gate_hidden"] = float(f32(quant.weight_scales[4 + k]) * f32(quant.output_scale)) / _GATE_SCALE
+    scales["forget_to_cell"] = 2.0**-15
+    scales["input_to_cell"] = 2.0 ** (-30 - quant.cell_scale_power)
+    scales["output"] = 2.0**-30 / float(f32(quant.output_scale))
+    return scales
+
+
+def _requantize(x: np.ndarray, multiplier: int, shift: int) -> np.ndarray:
+    """TFLM double-rounding MultiplyByQuantizedMultiplier."""
+    x = np.asarray(x, dtype=np.int64) * (1 << max(shift, 0))
+    product = x * multiplier
+    nudge = np.where(product >= 0, 1 << 30, 1 - (1 << 30))
+    total = product + nudge
+    # C division truncates toward zero.
+    high = np.where(total >= 0, total >> 31, -((-total) >> 31))
+    right = max(-shift, 0)
+    mask = (1 << right) - 1
+    threshold = (mask >> 1) + (high < 0)
+    return (high >> right) + ((high & mask) > threshold)
+
+
+def _sigmoid_q15(x: np.ndarray) -> np.ndarray:
+    """TFLM int16 Logistic on Q3.12."""
+    value = np.asarray(x, dtype=np.int64) * 3
+    magnitude = np.abs(value)
+    index = np.minimum(magnitude >> 9, 254)
+    low, high = _SIGMOID_LUT[index], _SIGMOID_LUT[index + 1]
+    result = np.where(magnitude >> 9 >= 255, 0x7FFF << 10, (low << 9) + (magnitude & 0x1FF) * (high - low))
+    result = np.where(value >= 0, result + (1 << 9), (1 << 25) - result + (1 << 9) - 1)
+    return (result >> 10).astype(np.int16)
+
+
+def _tanh_q15(x: np.ndarray, power: int) -> np.ndarray:
+    """TFLM int16 Tanh; power is the input scale."""
+    shift = 12 + power
+    multiplier, shift = (3 << shift, 0) if shift >= 0 else (3, -shift)
+    rounding = 1 << (shift - 1) if shift > 0 else 0
+    value = (np.asarray(x, dtype=np.int64) * multiplier + rounding) >> shift
+    magnitude = np.abs(value)
+    index = np.minimum(magnitude >> 8, 254)
+    low, high = _SIGMOID_LUT[index], _SIGMOID_LUT[index + 1]
+    result = np.where(magnitude >> 8 >= 255, 0xFFFF << 8, (low << 8) + (magnitude & 0xFF) * (high - low))
+    result = np.where(value >= 0, result - (1 << 23) + (1 << 7), -result + (1 << 23) + (1 << 7) - 1)
+    return (result >> 8).astype(np.int16)
+
+
+def _sat16(x: np.ndarray) -> np.ndarray:
+    return np.clip(x, -32768, 32767)
+
+
+def tflm_lstm_s8(
+    inputs: np.ndarray, weights: list[np.ndarray], biases: list[np.ndarray], quant: LstmQuant,
+    mult_shift: Dict[str, tuple[int, int]], time_major: bool, state: Optional[tuple[np.ndarray, np.ndarray]] = None,
+) -> np.ndarray:
+    """helia-rt's integer LSTM reference, in numpy.
+
+    TFLite's gemmlowp sigmoid is an LSB off.
+    """
+    seq = inputs.astype(np.int64) if time_major else np.swapaxes(inputs.astype(np.int64), 0, 1)
+    steps, batch, _ = seq.shape
+    hidden_size = weights[0].shape[0]
+    hidden = np.full((batch, hidden_size), quant.output_zero_point, dtype=np.int64)
+    cell = np.zeros((batch, hidden_size), dtype=np.int64)
+    if state is not None:
+        hidden, cell = (np.asarray(v, dtype=np.int64).reshape(batch, hidden_size) for v in state)
+    clip = quantized_clip(quant)
+    out = np.zeros((steps, batch, hidden_size), dtype=np.int64)
+
+    def gate(k: int, x: np.ndarray) -> np.ndarray:
+        name = LSTM_GATES[k]
+        fc_in = (x - quant.input_zero_point) @ weights[k].astype(np.int64).T + biases[k]
+        fc_rec = (hidden - quant.output_zero_point) @ weights[4 + k].astype(np.int64).T
+        total = _sat16(_sat16(_requantize(fc_in, *mult_shift[f"{name}_gate_input"]))
+                       + _sat16(_requantize(fc_rec, *mult_shift[f"{name}_gate_hidden"])))
+        return _tanh_q15(total, -12) if name == "cell" else _sigmoid_q15(total)
+
+    for t in range(steps):
+        x = seq[t]
+        forget, input_gate, cell_gate = gate(1, x), gate(0, x), gate(2, x)
+        cell = _sat16(_requantize(forget.astype(np.int64) * cell, *mult_shift["forget_to_cell"]))
+        update = _sat16(_requantize(input_gate.astype(np.int64) * cell_gate, *mult_shift["input_to_cell"]))
+        # The kernel always clamps.
+        cell = np.clip(cell + update, -clip, clip)
+        output_gate = gate(3, x)
+        squashed = _tanh_q15(cell, quant.cell_scale_power).astype(np.int64)
+        level = _requantize(squashed * output_gate, *mult_shift["output"]) + quant.output_zero_point
+        hidden = np.clip(level, -128, 127)
+        out[t] = hidden
+    out = out if time_major else np.swapaxes(out, 0, 1)
+    return out.reshape(-1).astype(np.int8)
+
+
+def explicit_lstm_s8(
+    *,
+    rng: np.random.Generator,
+    batch_size: int,
+    time_steps: int,
+    input_size: int,
+    hidden_size: int,
+    time_major: bool,
+    quant: LstmQuant,
+    stateful: bool = False,
+) -> LstmGeneratedData:
+    """Random model-style s8 LSTM; TFLM golden.
+
+    Stateful cases start from random state.
+    """
+    shapes = _get_shapes(batch_size, time_steps, input_size, hidden_size, time_major)
+    weights = [_draw_weights(rng, (hidden_size, input_size), quant.weight_std) for _ in LSTM_GATES]
+    weights += [_draw_weights(rng, (hidden_size, hidden_size), quant.weight_std) for _ in LSTM_GATES]
+    biases = []
+    for k, (lo, hi) in enumerate(quant.bias_ranges):
+        scale = float(np.float32(quant.input_scale) * np.float32(quant.weight_scales[k]))
+        real = rng.uniform(lo, hi, size=hidden_size)
+        biases.append(np.clip(np.round(real / scale), -(2**31), 2**31 - 1).astype(np.int32))
+    lo, hi = quant.input_range
+    inputs = rng.integers(lo, hi + 1, size=shapes["input_tensor"], dtype=np.int8)
+    scales = effective_scales(quant)
+    mult_shift = {key: calculate_multiplier_shift(value) for key, value in scales.items()}
+    state = None
+    if stateful:
+        # Cell within half the clip.
+        bound = quantized_clip(quant) // 2
+        state = (rng.integers(-128, 128, size=(batch_size, hidden_size), dtype=np.int8),
+                 rng.integers(-bound, bound + 1, size=(batch_size, hidden_size)).astype(np.int16))
+
+    tensors: Dict[str, np.ndarray] = {
+        "input_tensor": inputs, "output": tflm_lstm_s8(inputs, weights, biases, quant, mult_shift, time_major, state),
+    }
+    if state is not None:
+        tensors["hidden_state"], tensors["cell_state"] = (v.flatten() for v in state)
+    for k, gate in enumerate(LSTM_GATES):
+        tensors[f"{gate}_gate_input_weights"] = weights[k].flatten()
+        tensors[f"{gate}_gate_hidden_weights"] = weights[4 + k].flatten()
+        tensors[f"{gate}_gate_bias"] = biases[k]
+    params = {
+        # Kernel takes the negated zero point.
+        "input_zero_point": -quant.input_zero_point,
+        "output_zero_point": quant.output_zero_point,
+        "cell_scale_power": quant.cell_scale_power,
+        "cell_clip": quantized_clip(quant),
+    }
+    return LstmGeneratedData(params=params, tensors=tensors, scales={}, effective_scales=scales)

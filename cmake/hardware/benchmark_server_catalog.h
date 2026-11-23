@@ -37,7 +37,9 @@ enum
     /* Weights and bias live in MRAM. */
     HCT_CAP_WEIGHTS_MRAM = (1u << 7),
     /* CASE_META store keys skip known blobs. */
-    HCT_CAP_BLOB_STORE = (1u << 8)
+    HCT_CAP_BLOB_STORE = (1u << 8),
+    /* Workspace (activations, scratch) in cached SRAM. */
+    HCT_CAP_ACTIVATIONS_SRAM = (1u << 9)
 };
 
 const hct_kernel_catalog_entry_t *hct_benchmark_server_catalog(size_t *count);

@@ -23,7 +23,9 @@ SEEDS = (0, 1, 7, 12345)
 CONV, DW, DW16, TC16 = ("Convolve", "S8"), ("DepthwiseConv", "S8"), ("DepthwiseConv", "S16"), ("TransposeConv", "S16")
 TCF32, TCF16 = ("TransposeConv", "FP32"), ("TransposeConv", "FP16")
 SM8 = ("Softmax", "S8")
+CONV16 = ("Convolve", "S16")
 SIG32, SIG16 = ("NNActivationFloat", "FP32"), ("NNActivationFloat", "FP16")
+LSTM8 = ("LSTMUnidirectional", "S8")
 
 
 def _layer(case: dict) -> rs.Layer:
@@ -36,7 +38,7 @@ def _layer(case: dict) -> rs.Layer:
         return rs.Layer(h, w, c, cout, kh, kw, *case["strides"], padding=case["padding"], transpose=True, n=n)
     return rs.Layer(
         case["input_shape"][1], case["input_shape"][2], cin, cin * last if dw else last, kh, kw,
-        *case["strides"], *case["dilation"], padding=case["padding"], mult=last if dw else 1,
+        *case["strides"], *case["dilation"], padding=case["padding"], mult=last if dw else 1, n=case["input_shape"][0],
     )
 
 
@@ -47,30 +49,32 @@ def test_same_seed_same_cases() -> None:
 
 def test_ops_draw_independently() -> None:
     both = rs.sample_cases(10, 3)
-    assert [c for c in both if c["operator"] == "Convolve"] == rs.sample_cases(10, 3, ops=(CONV,))
-    for key in (DW16, TC16):
+    for key in (CONV, DW16, TC16, CONV16):
         assert [c for c in both if (c["operator"], c["activation_dtype"]) == key] == rs.sample_cases(10, 3, ops=(key,))
 
 
 @pytest.mark.parametrize(("op", "dtype", "picked"), [
-    (None, None, (CONV, DW, DW16, TC16, TCF32, TCF16, SIG32, SIG16, SM8)),
+    (None, None, (CONV, DW, DW16, TC16, TCF32, TCF16, SIG32, SIG16, SM8, CONV16, LSTM8)),
+    ("LSTMUnidirectional", "S8", (LSTM8,)),
+    ("lstm_unidirectional", None, (LSTM8,)),
     ("Softmax", "S8", (SM8,)),
     ("softmax", None, (SM8,)),
     ("TransposeConv", "S16", (TC16,)),
     ("transpose_conv", None, (TC16,)),
-    ("Convolve", None, (CONV,)),
+    ("Convolve", None, (CONV, CONV16)),
+    ("Convolve", "S16", (CONV16,)),
     ("DepthwiseConv", "s8", (DW,)),
     ("DepthwiseConv", "S16", (DW16,)),
     ("depthwise_conv", None, (DW, DW16)),
-    (None, "S8", (CONV, DW, SM8)),
-    (None, "s16", (DW16, TC16)),
+    (None, "S8", (CONV, DW, SM8, LSTM8)),
+    (None, "s16", (DW16, TC16, CONV16)),
 ])
 def test_select_ops_matches_filters(op, dtype, picked) -> None:
     assert rs.select_ops(op, dtype) == picked
 
 
 @pytest.mark.parametrize(("op", "dtype"), [
-    ("FullyConnected", None), ("Convolve", "S16"), (None, "S4"), ("rs", None), ("DepthwiseConv", "S4"),
+    ("FullyConnected", None), ("Convolve", "S4"), (None, "S4"), ("rs", None), ("DepthwiseConv", "S4"),
     ("TransposeConv", "S8"), ("Softmax", "S16"),
     # A typo fails even beside a match.
     ("Convolve,Pad", "S8"),
@@ -78,7 +82,7 @@ def test_select_ops_matches_filters(op, dtype, picked) -> None:
     ("rs7_conv", None),
 ])
 def test_select_ops_refuses_unknown(op, dtype) -> None:
-    with pytest.raises(ValueError, match="NNActivationFloat FP32, NNActivationFloat FP16, Softmax S8$"):
+    with pytest.raises(ValueError, match="Softmax S8, Convolve S16, LSTMUnidirectional S8$"):
         rs.select_ops(op, dtype)
 
 
@@ -185,6 +189,48 @@ def test_s16_edges_covered() -> None:
         if "activation_max" in case:
             assert -32768 <= case["activation_min"] < case["activation_max"] <= 32767
     assert any(case.get("activation_min", 0) < -128 for case in cases)
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_conv16_routes_and_plan(seed: int) -> None:
+    cases = rs.sample_cases(12, seed, ops=(CONV16,))
+    edges = [c.get("edge") for c in cases]
+    # A third are edges; requant leads.
+    assert edges[:8] == [None] * 8 and edges[8] == "requant" and len(set(edges[8:])) == 4
+    assert set(edges[9:]) <= set(rs.CONV16_EDGES[1:])
+    assert [c["expected_route"] for c in cases[:8]] == [rs.CONV16_ROUTES[i % 3] for i in range(8)]
+    assert all(c["name"].startswith(f"rs{seed}_conv16_") for c in cases)
+    plain = rs.sample_cases(12, seed, "cortex-m4", (CONV16,))
+    assert rs.route_counts(plain) == {"Convolve": {"arm_convolve_s16": 12}}
+
+
+def test_conv16_edges_vary_by_seed() -> None:
+    plans = {tuple(c.get("edge") for c in rs.sample_cases(6, seed, ops=(CONV16,))) for seed in range(100)}
+    assert len(plans) > 5
+    assert {edge for plan in plans for edge in plan} == {None, *rs.CONV16_EDGES}
+
+
+def test_conv16_edge_shapes() -> None:
+    cases = rs.sample_cases(30, 11, ops=(CONV16,))
+    by_edge = {c["edge"]: c for c in cases if c.get("edge")}
+    assert set(by_edge) == set(rs.CONV16_EDGES)
+    layers = {edge: _layer(case) for edge, case in by_edge.items()}
+    assert by_edge["requant"]["min_effective_scale"] and by_edge["requant"]["bias_range"]
+    assert by_edge["int64"]["wide_bias"][0] >= 2**31 and by_edge["int64"]["positive_weights"]
+    assert by_edge["int64"]["padding"] == "VALID"
+    assert layers["heartkit"].h == 1 and layers["heartkit"].padding == "SAME"
+    assert layers["cin1"].cin <= 3 and layers["tail"].cout % 4
+    assert layers["pixel"].h == layers["pixel"].w == 1
+    assert layers["large_k"].cin * layers["large_k"].kh * layers["large_k"].kw >= 600
+    assert max(by_edge["stride"]["strides"]) >= 2
+    clamp = by_edge["clamp"]
+    assert clamp["activation_min"] < 0 < clamp["activation_max"]
+    # Int16 fused activations floor at zero.
+    for case in cases:
+        if case["activation"] != "NONE":
+            assert case["activation_min"] >= 0
+    routes = rs.route_counts(cases)["Convolve"]
+    assert set(routes) == set(rs.CONV16_ROUTES)
 
 
 @pytest.mark.parametrize("cpu", ["cortex-m55", "cortex-m4"])
@@ -307,17 +353,85 @@ def test_streams_and_tags_unique() -> None:
 
 
 @pytest.mark.parametrize(("cpu", "digest"), [
-    ("cortex-m55", "0e7ab2bbc4ec98883baf528c60ff3f236e7b3c4920c281b11e70e671e3a7c721"),
-    ("cortex-m4", "ae31993618c4838acbcd2d8a02d22cf9a3378c4206fe49e8d1ce250c25817cb0"),
+    ("cortex-m55", "77c022d33d75a242a2d591600344a641f054e11f94a63dd6bc72b0a707e32921"),
+    ("cortex-m4", "2ef77095218dc8beb52499011a46d376bd2b2504fa0438792c514b72327543ee"),
 ])
 def test_s8_hidden_sets_unchanged(cpu: str, digest: str) -> None:
     import hashlib
 
     import yaml
 
-    # Digests pinned before s16 joined.
-    cases = rs.hidden_cases(8, SECRET.encode(), cpu, (CONV, DW))
+    # Non-edge draws, pinned before TCN edges.
+    cases = [c for c in rs.hidden_cases(8, SECRET.encode(), cpu, (CONV, DW)) if c.get("edge") not in rs.DW_EDGES]
     assert hashlib.sha256(yaml.safe_dump_all(cases, sort_keys=False).encode()).hexdigest() == digest
+
+
+@pytest.mark.parametrize("cpu", ["cortex-m55", "cortex-m4"])
+def test_other_hidden_sets_unchanged(cpu: str) -> None:
+    import hashlib
+
+    import yaml
+
+    # Every pre-LSTM generator, pinned on main.
+    digest = {"cortex-m55": "1dfbc7edcb2e8bdf3ef28e0d30afc9858eb7da80caf110c09d2235a6fe7ff2ee",
+              "cortex-m4": "7bd185071727a76ce0535350dcffed57aba86eae9ad1d0c935a3c3ed05e649f7"}[cpu]
+    keys = tuple(key for key in rs.OPS if key != LSTM8)
+    cases = rs.hidden_cases(8, b"hct-digest-check-secret-0123456789", cpu, keys)
+    assert hashlib.sha256(yaml.safe_dump_all(cases, sort_keys=False).encode()).hexdigest() == digest
+
+
+@pytest.mark.parametrize("cpu", ["cortex-m55", "cortex-m4"])
+@pytest.mark.parametrize("seed", SEEDS)
+def test_lstm_cases_fit(cpu: str, seed: int) -> None:
+    cases = rs.sample_cases(12, seed, cpu, (LSTM8,))
+    assert rs.route_counts(cases) == {"LSTMUnidirectional": {rs.LSTM_ROUTE: 12}}
+    count = rs.edge_count(12, len(rs.LSTM_EDGES))
+    assert count == 8 and [c.get("edge") for c in cases] == [None] * 4 + list(rs.LSTM_EDGES)
+    for case in cases:
+        b, t, i, h = (case[k] for k in ("batch_size", "time_steps", "feature_size", "units"))
+        assert case["input_shape"] == [b, t, i] and min(b, t, i, h) >= 1
+        assert rs.lstm_bytes(b, t, i, h) <= rs.LSTM_MAX_BYTES < rs.min_workspace(cpu)
+        assert b * t * 4 * h * (i + h) <= rs.MAX_MACS
+        assert case["name"].startswith(f"rs{seed}_lstm8_") and case["shape_seed"] == seed
+        # No dataset: names would leak seeds.
+        assert "dataset" not in case and case["hint"]["force_cmsis"]
+        quant = case["lstm_quant"]
+        assert len(quant["weight_scales"]) == 8 and len(quant["bias_ranges"]) == 4
+        assert -128 <= quant["input_range"][0] < quant["input_range"][1] <= 127
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_lstm_edges(seed: int) -> None:
+    from helia_core_tester.generation.utils.lstm_data import LstmQuant, effective_scales, quantized_clip
+
+    cases = {c["edge"]: c for c in rs.sample_cases(12, seed, ops=(LSTM8,)) if "edge" in c}
+    shape = {edge: tuple(c[k] for k in ("batch_size", "time_steps", "feature_size", "units")) for edge, c in cases.items()}
+    assert shape["dtln"][0] == 1 and shape["dtln"][1] <= 2 and shape["dtln"][2] >= 96
+    assert not cases["dtln"]["time_major"] and cases["dtln"]["lstm_quant"]["cell_clip"] == 10.0
+    assert shape["tails"][2] % 4 and shape["tails"][3] % 4
+    assert shape["input1"][2] == 1 and shape["step1"][1] == 1 and shape["batch2"][0] == 2
+    # Each accumulator LSB moves a gate.
+    gates = effective_scales(LstmQuant.from_desc(cases["requant"]["lstm_quant"]))
+    assert min(gates[f"{g}_gate_input"] for g in ("input", "forget", "cell", "output")) >= 1.0
+    assert 0 < quantized_clip(LstmQuant.from_desc(cases["clip"]["lstm_quant"])) < 32767
+    assert cases["extreme"]["lstm_quant"]["input_zero_point"] in (-128, 127)
+
+
+def test_lstm_edges_vary() -> None:
+    draws = [[c for c in rs.sample_cases(12, seed, ops=(LSTM8,)) if "edge" in c] for seed in SEEDS]
+    assert len({str(d) for d in draws}) == len(SEEDS)
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_dw_tcn_edges(seed: int) -> None:
+    cases = rs.sample_cases(12, seed, ops=(DW,))
+    count = rs.edge_count(12, len(rs.DW_EDGES))
+    assert [c.get("edge") for c in cases] == [None] * (12 - count) + [rs.DW_EDGES[i % 2] for i in range(count)]
+    for case in cases[12 - count:]:
+        layer = _layer(case)
+        assert (layer.h, layer.kh, layer.mult, layer.sh, layer.sw) == (1, 1, 1, 1, 1)
+        assert case["expected_route"] == "arm_depthwise_conv_s8_opt"
+        assert rs._tcn_variant(layer) == {"tcn_planar": rs.PLANAR, "tcn_channelwise": rs.CHANNELWISE}[case["edge"]]
 
 
 @pytest.mark.parametrize("cpu", ["cortex-m55", "cortex-m4"])

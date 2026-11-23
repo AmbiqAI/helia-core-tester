@@ -12,7 +12,7 @@ import pytest
 
 from helia_core_tester.hardware.wrapper_route import (
     CHANNELWISE, CONV_SOURCE, DW_OPT, PLANAR, conv_route, conv_s4_route, conv_s16_route, dw_opt_variant, dw_route,
-    dw_s4_route, dw_s16_route, inner_symbol, inner_variant, opt_scratch_size, planar_bytes, tree_gate,
+    dw_s4_route, dw_s16_route, inner_symbol, inner_variant, opt_scratch_size, opt_variant, planar_bytes, tree_gate,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -84,8 +84,7 @@ def _expected(row: tuple, mve: bool, gate_1xn: bool = True) -> str:
     route = dw_route(i, f, o, stride, pad, dil, ch_mult, mve, gate_1xn)
     if route != DW_OPT:
         return route
-    ctx_size = opt_scratch_size(i, f, o, stride, pad, dil, mve)
-    return f"{route}+{dw_opt_variant(i, f, o, stride, pad, dil, ch_mult, mve, ctx_size)}"
+    return f"{route}+{opt_variant(i, f, o, stride, pad, dil, ch_mult, mve)}"
 
 
 @pytest.mark.parametrize("mve", [False, True], ids=["plain", "mve"])

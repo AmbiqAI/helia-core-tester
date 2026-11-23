@@ -1147,3 +1147,19 @@ def test_status_compare_has_no_output_diff() -> None:
 
     result = compare_status(-1, {"mode": "exact_status", "expected_status": 0})
     assert (result.passed, result.mismatch_count, result.diff_count) == (False, 1, None)
+
+
+def test_too_big_cases_skip(tmp_path: Path, monkeypatch) -> None:
+    from helia_core_tester.hardware import session_runner
+
+    test = SimpleNamespace(name="lstm_big_s8", family="LSTMFunctions")
+    bundle = SimpleNamespace(workspace_bytes_for=lambda placement: {"tcm": 205056, "mram": 4096}[placement])
+    monkeypatch.setattr(session_runner, "bridged_families", lambda: ["LSTMFunctions"])
+    monkeypatch.setattr(session_runner, "discover_generated_tests", lambda *a, **k: [test])
+    monkeypatch.setattr(session_runner, "replace", lambda t, **k: t)
+    monkeypatch.setattr(session_runner, "build_case_bundle_from_generated_test", lambda *a, **k: bundle)
+    run = lambda fit: session_runner.build_generated_test_case_bundles(tmp_path, family="LSTMFunctions", fit=fit)  # noqa: E731
+    # DTLN weights fit only off TCM.
+    assert run(("tcm", 112640)) == ([], [(test, "needs 205056 workspace bytes under tcm; try mram")])
+    assert run(("mram", 112640)) == ([bundle], [])
+    assert run(None) == ([bundle], [])

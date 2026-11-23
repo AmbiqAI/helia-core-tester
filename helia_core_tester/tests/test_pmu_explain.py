@@ -73,11 +73,12 @@ def test_near_peak():
     assert "80% of peak" in result.findings[0].diagnosis
 
 
-def test_memory_bound_tcm_and_mram():
+def test_memory_bound_tcm_mram_and_sram():
     row = _row(INST_RETIRED=1000, STALL_BACKEND=3000, L1D_CACHE_REFILL=2560)
     assert _rules(row)[0] == "memory_bound"
     assert "Memory-bound" in explain_case(row, cpu=M55, placement="tcm").diagnosis
     assert explain_case(row, cpu=M55, placement="mram").diagnosis.startswith("MRAM-bound")
+    assert explain_case(row, cpu=M55, placement="sram").diagnosis.startswith("Cache-bound")
 
 
 def test_backend_stall_without_memory_signal():
