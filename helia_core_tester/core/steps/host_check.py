@@ -68,7 +68,11 @@ class HostCheckStep(StepBase):
         return self.config.generation_report_dir_for(cpu, suite="int") / REPORT_NAME
 
     def _do_execute(self) -> StepResult:
-        from helia_core_tester.generation.reference.host_kernels import HostCheckError, run_host_check
+        from helia_core_tester.generation.reference.host_kernels import (
+            PROVIDER_HOST_REFERENCE,
+            HostCheckError,
+            run_host_check,
+        )
         from helia_core_tester.utils.host_compiler import HostCompilerMissing
 
         targets = self._targets()
@@ -97,10 +101,15 @@ class HostCheckStep(StepBase):
                     all_not_applicable = report.total == 0 and bool(report.not_applicable) and not report.failures
                     level = self.logger.info if (report.ok or all_not_applicable) else self.logger.error
                     level(
-                        f"host-check {cpu} [{mode}]: {report.passed}/{report.total} passed, "
+                        f"host-check {cpu} [{mode}, {report.provider}]: {report.passed}/{report.total} passed, "
                         f"{len(report.failures)} failed, {len(report.advisory)} advisory "
                         f"(cpu-specific, not blocking), {len(report.not_applicable)} not applicable"
                     )
+                    if mode == "m0" and report.provider != PROVIDER_HOST_REFERENCE:
+                        self.logger.warning(
+                            f"host-check {cpu} [m0]: {tree} has no host reference build "
+                            "(NS_CMSIS_NN_HOST_REFERENCE); its integer sources were scanned and compiled by hct instead"
+                        )
                     for advisory in report.advisory[:_LOGGED_FAILURES]:
                         self.logger.warning(
                             f"  advisory {advisory['family']}/{advisory['name']}: {advisory['headline']} "

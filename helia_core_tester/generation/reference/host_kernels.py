@@ -6,6 +6,11 @@ generated harness compiles and runs natively against it, validating its golden
 exactly as it does on the FVP. "m0" is the default; "dsp" additionally checks
 the Armv7E-M routes through the mutation harness's dsp_shim.h.
 
+In "m0" mode the kernels come from the tree's own host reference build
+(core/host_reference.py: its CMake with NS_CMSIS_NN_HOST_REFERENCE=ON, every
+float width) when the tree offers one; an older tree falls back to hct's scan of
+its integer sources, and the report's `provider` says which was used.
+
 The kernel library and the test runtime are cached under
 artifacts/host_kernels/<key>/, keyed by the checkout's kernel sources, the build
 mode and flags, and the compiler identity; built under a lock and published by
@@ -21,8 +26,9 @@ import shutil
 import tempfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
+from helia_core_tester.core import host_reference
 from helia_core_tester.mutation import host_build
 from helia_core_tester.utils.file_lock import exclusive_lock
 from helia_core_tester.utils.host_compiler import compiler_identity, find_host_cc
@@ -39,6 +45,12 @@ _KERNEL_SUBTREES = ("Include", "Source")
 # CPU with more (cortex-m55's mve) may encode choices the host build cannot honour.
 HOST_MODE_CAPABILITIES = {"m0": frozenset(), "dsp": frozenset({"dsp"})}
 _KERNEL_CAPABILITIES = frozenset({"dsp", "mve"})
+
+# Where the m0 kernels come from: the tree's own host reference build (its CMake,
+# every float width), or, for a tree that predates it, hct's scan of the integer
+# sources. The fallback is reported, never silent.
+PROVIDER_HOST_REFERENCE = "host-reference"
+PROVIDER_SOURCE_SCAN = "source-scan"
 
 STATUS_BLOCKING = "blocking"
 STATUS_ADVISORY = "cpu_specific"
@@ -57,6 +69,10 @@ class HostKernelLibrary:
     runtime_obj: Path
     key: str
     compiler: str
+    provider: str = PROVIDER_SOURCE_SCAN
+    kernel_flags: Optional[Tuple[str, ...]] = None
+    link_inputs: Optional[Tuple[str, ...]] = None
+    float16_type: str = ""
 
 
 @dataclass
@@ -68,6 +84,8 @@ class HostCheckReport:
     library_key: str
     compiler: str
     seed: Optional[int]
+    provider: str = PROVIDER_SOURCE_SCAN
+    float16_type: str = ""
     total: int = 0
     passed: int = 0
     failures: List[Dict[str, str]] = field(default_factory=list)
@@ -147,9 +165,11 @@ def ensure_host_kernels(
     tree = Path(tree).resolve()
     if not (tree / "Include").is_dir() or not (tree / "Source").is_dir():
         raise HostCheckError(f"{tree} is not an ns-cmsis-nn checkout (needs Include/ and Source/)")
+    root = Path(cache_root) if cache_root is not None else default_cache_root()
+    if mode == "m0" and host_reference.supports(tree):
+        return _ensure_from_host_reference(tree, root, cc=cc, jobs=jobs)
     cc = cc or find_host_cc()
     key = host_kernels_key(tree, mode, cc)
-    root = Path(cache_root) if cache_root is not None else default_cache_root()
     final = root / key
     lib_name = f"libnn_{mode}.a"
     runtime_name = "helia_test_runtime_host.o"
@@ -199,6 +219,68 @@ def ensure_host_kernels(
                     indent=2,
                 )
                 + "\n",
+                encoding="utf-8",
+            )
+            if final.exists():
+                shutil.rmtree(final)
+            os.replace(staging, final)
+        finally:
+            if staging.exists():
+                shutil.rmtree(staging, ignore_errors=True)
+    return result()
+
+
+def _ensure_from_host_reference(tree: Path, root: Path, cc: Optional[str], jobs: Optional[int]) -> HostKernelLibrary:
+    """The m0 kernels from the tree's own host reference build, plus the test runtime
+    compiled against that build's definitions."""
+    try:
+        ref = host_reference.ensure_host_reference(tree, cache_root=root / "host_reference", cc=cc, jobs=jobs)
+    except host_reference.HostReferenceError as exc:
+        raise HostCheckError(f"host reference build failed: {exc}") from exc
+    compiler = str(ref.compiler)
+    kernel_flags = tuple(ref.compile_flags())
+    payload = {
+        "schema": _CACHE_SCHEMA,
+        "provider": PROVIDER_HOST_REFERENCE,
+        "host_reference": ref.key,
+        "kernel_flags": [f for f in kernel_flags if not f.startswith("/")],
+        "compiler": compiler_identity(compiler),
+        "runtime": {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in _runtime_inputs(tester_root())},
+    }
+    key = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
+    final = root / key
+    runtime_name = "helia_test_runtime_host.o"
+
+    def result() -> HostKernelLibrary:
+        return HostKernelLibrary(
+            "m0",
+            tree,
+            ref.archive,
+            final / runtime_name,
+            key,
+            compiler,
+            provider=PROVIDER_HOST_REFERENCE,
+            kernel_flags=kernel_flags,
+            link_inputs=tuple(ref.link_inputs()),
+            float16_type=ref.float16_type,
+        )
+
+    if (final / runtime_name).is_file():
+        return result()
+    root.mkdir(parents=True, exist_ok=True)
+    with exclusive_lock(root / f".{key}.lock"):
+        if (final / runtime_name).is_file():
+            return result()
+        staging = Path(tempfile.mkdtemp(prefix=f".{key}.", dir=root))
+        try:
+            try:
+                runtime = host_build.build_runtime_obj(tester_root(), tree, staging, cc=compiler, kernel_flags=kernel_flags)
+            except host_build.HostBuildError as exc:
+                raise HostCheckError(f"host test runtime build failed: {exc}") from exc
+            if runtime.name != runtime_name:
+                runtime.rename(staging / runtime_name)
+            (staging / "flags.json").write_text(
+                json.dumps({**payload, "host_reference_manifest": str(ref.manifest_path), "tree": str(tree)}, indent=2) + "\n",
                 encoding="utf-8",
             )
             if final.exists():
@@ -368,6 +450,8 @@ def run_host_check(
         library_key=library.key,
         compiler=f"{library.compiler} ({compiler_identity(library.compiler)})",
         seed=seed,
+        provider=library.provider,
+        float16_type=library.float16_type,
     )
     report.not_applicable = [
         {"family": case.parent.name, "name": case.name, "reason": cls.reason}
@@ -390,6 +474,8 @@ def run_host_check(
             jobs=jobs or os.cpu_count() or 4,
             mode=mode,
             timeout_s=timeout_s,
+            kernel_flags=library.kernel_flags,
+            link_inputs=library.link_inputs,
         )
     finally:
         if own_work:

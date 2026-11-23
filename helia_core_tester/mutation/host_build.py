@@ -58,6 +58,8 @@ _EXCLUDED_NAME_PARTS = ("f16", "fp16", "f32", "_flt")
 # arm_quantize_f32_s8, and plain-C f32 compiles everywhere. f16 stays out until
 # the host _Float16 story is settled.
 HOST_CHECK_EXCLUDED_NAME_PARTS = ("f16", "fp16")
+# Case compile flags on top of a host reference's own definitions and include dirs.
+HOST_REFERENCE_CASE_CFLAGS = ("-O1", "-g", "-fno-strict-aliasing", "-ffp-contract=off")
 
 # Host DSP kernels need the DSP size.
 _MVE_SIZER = re.compile(r"\b(arm_\w+_get_buffer_size)_mve\b")
@@ -181,10 +183,22 @@ def build_kernel_lib(
     return lib
 
 
-def build_runtime_obj(tester_root: Path, tree_root: Path, out_dir: Path, cc: Optional[str] = None) -> Path:
+def build_runtime_obj(
+    tester_root: Path,
+    tree_root: Path,
+    out_dir: Path,
+    cc: Optional[str] = None,
+    kernel_flags: Optional[Sequence[str]] = None,
+) -> Path:
     """Compile the shared test runtime once, with helia_test_finish renamed away
-    so the exiting host implementation in host_finish.c takes its place."""
+    so the exiting host implementation in host_finish.c takes its place.
+
+    `kernel_flags` (a host reference's definitions and include dirs) replaces the
+    tree's bare Include dir when the kernels come from a host reference build."""
     cc = _resolve_cc(cc)
+    # helia_test_runtime.h pulls in arm_nnfunctions.h (for ARM_CMSIS_NN_SUCCESS),
+    # so it needs the kernel headers too.
+    kernel = list(kernel_flags) if kernel_flags is not None else ["-I", str(tree_root / "Include")]
     src = tester_root / "src" / "test_runtime" / "helia_test_runtime.c"
     obj = out_dir / "helia_test_runtime_host.o"
     proc = _run(
@@ -195,10 +209,7 @@ def build_runtime_obj(tester_root: Path, tree_root: Path, out_dir: Path, cc: Opt
             "-Dhelia_test_finish=helia_test_finish_fvp_unused",
             "-I",
             str(tester_root / "src"),
-            # helia_test_runtime.h pulls in arm_nnfunctions.h (for
-            # ARM_CMSIS_NN_SUCCESS), so it needs the kernel tree's Include dir too.
-            "-I",
-            str(tree_root / "Include"),
+            *kernel,
             str(src),
             "-o",
             str(obj),
@@ -232,9 +243,16 @@ def build_and_run_case(
     cc: Optional[str] = None,
     timeout_s: int = 60,
     mode: str = "dsp",
+    kernel_flags: Optional[Sequence[str]] = None,
+    link_inputs: Optional[Sequence[str]] = None,
 ) -> CaseResult:
-    """Compile one generated case against the kernel library and execute it."""
+    """Compile one generated case against the kernel library and execute it.
+
+    With a host reference build, `kernel_flags` replaces the mode's flags and
+    `link_inputs` replaces `<lib> -lm`; both come from its manifest."""
     cc = _resolve_cc(cc)
+    flags = [*HOST_REFERENCE_CASE_CFLAGS, *kernel_flags] if kernel_flags is not None else _base_cflags(tree_root, mode)
+    link = list(link_inputs) if link_inputs is not None else [str(lib), "-lm"]
     name = case_dir.name
     family = case_dir.parent.name
     sources = sorted(case_dir.glob("*.c"))
@@ -243,7 +261,7 @@ def build_and_run_case(
     binary = bin_dir / name
     cmd = [
         cc,
-        *_base_cflags(tree_root, mode),
+        *flags,
         *host_sizer_defines(sources),
         "-I",
         str(tester_root / "src"),
@@ -254,8 +272,7 @@ def build_and_run_case(
         *[str(s) for s in sources],
         str(runtime_obj),
         str(HOST_FINISH),
-        str(lib),
-        "-lm",
+        *link,
         "-o",
         str(binary),
     ]
@@ -283,13 +300,25 @@ def run_all_cases(
     jobs: int = 8,
     mode: str = "dsp",
     timeout_s: int = 60,
+    kernel_flags: Optional[Sequence[str]] = None,
+    link_inputs: Optional[Sequence[str]] = None,
 ) -> List[CaseResult]:
     cc = _resolve_cc(cc)
     bin_dir.mkdir(parents=True, exist_ok=True)
 
     def one(case_dir: Path) -> CaseResult:
         return build_and_run_case(
-            case_dir, tree_root, lib, runtime_obj, tester_root, bin_dir, cc=cc, timeout_s=timeout_s, mode=mode
+            case_dir,
+            tree_root,
+            lib,
+            runtime_obj,
+            tester_root,
+            bin_dir,
+            cc=cc,
+            timeout_s=timeout_s,
+            mode=mode,
+            kernel_flags=kernel_flags,
+            link_inputs=link_inputs,
         )
 
     with ThreadPoolExecutor(max_workers=jobs) as pool:
