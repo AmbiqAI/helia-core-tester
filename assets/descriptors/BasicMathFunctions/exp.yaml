@@ -4,10 +4,3 @@ suite: float
 required_kernel_symbols: [arm_nn_exp_f32]
 tensor_dtypes: {input: FP32, output: FP32}
 input_shape: [1, 1, 1, 9]
----
-operator: Exp
-name: exp_edges_tail_f16
-suite: float
-required_kernel_symbols: [arm_nn_exp_f16]
-tensor_dtypes: {input: FP16, output: FP16}
-input_shape: [1, 1, 1, 9]

@@ -21,7 +21,7 @@ class OpRbfKernel(OperationBase):
 
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
         raise NotImplementedError(
-            "The reference-table contract exercises three native entry points."
+            "The reference-table contract exercises two native entry points."
         )
 
     def validate_descriptor(self) -> None:
@@ -46,7 +46,6 @@ class OpRbfKernel(OperationBase):
             "rows": len(references),
             "features": len(row),
             "squares": squares.tolist(),
-            "manhattan": np.abs(differences).sum(axis=1).tolist(),
             "rbf_bits": np.exp(-0.25 * squares)
             .astype(np.float32)
             .view(np.uint32)

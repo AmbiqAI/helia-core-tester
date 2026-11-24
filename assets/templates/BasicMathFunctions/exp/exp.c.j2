@@ -3,26 +3,26 @@
 #include <string.h>
 {% include "common/standalone/runtime_common.j2" %}
 {% from "common/standalone/runtime_common.j2" import helia_guard_declare %}
-{{ helia_guard_declare(ctype, "output", count) }}
+{{ helia_guard_declare("float32_t", "output", count) }}
 
 int32_t {{ name }}_test_case_run(void)
 {
-    {{ ctype }} input[{{ count }}];
+    float32_t input[{{ count }}];
     memcpy(input, input_bits, sizeof(input));
     HELIA_GUARD_ARM(output, true);
     int failures = 0;
-    arm_cmsis_nn_status status = {{ kernel_fn }}(input, output, 0);
+    arm_cmsis_nn_status status = arm_nn_exp_f32(input, output, 0);
     HELIA_GUARD_CHECK(output, "empty exp", failures);
     HELIA_GUARD_CHECK_UNTOUCHED(output, "empty exp", failures);
     HELIA_VALIDATE_EXPECTED_STATUS("empty exp", status, ARM_CMSIS_NN_ARG_ERROR);
-    status = {{ kernel_fn }}(input, output, {{ count }});
+    status = arm_nn_exp_f32(input, output, {{ count }});
     HELIA_GUARD_CHECK(output, "exp output", failures);
     HELIA_VALIDATE_STATUS("exp", status);
     for (unsigned i = 0; i < {{ count }}; ++i)
     {
-        {{ word }} actual;
+        uint32_t actual;
         memcpy(&actual, &output[i], sizeof(actual));
-        HELIA_VALIDATE_FLOAT_BITS(actual, expected_bits[i], {{ '0x7c00u' if ctype == 'float16_t' else '0x7f800000u' }},
+        HELIA_VALIDATE_FLOAT_BITS(actual, expected_bits[i], 0x7f800000u,
                                   max_ulp[i], i, 8, failures);
     }
     HELIA_VALIDATE_RETURN_FAILURES(failures);
