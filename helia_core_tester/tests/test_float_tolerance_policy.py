@@ -157,6 +157,74 @@ def test_comparison_context_without_a_tightening():
     assert kf.comparison_context(_op("bounded"), np.float16, 1e-3) == kf.bounded_context(np.float16, 1e-3)
 
 
+def _recorded(numerics="bounded", golden="record", desc=None):
+    op = _op(numerics, desc=desc)
+    op.golden = golden
+    return op
+
+
+@pytest.mark.parametrize("extra", [(1e-3, 0.0), (2.5e-4, 1e-4), (0.0, 3e-5)])
+def test_a_recorded_golden_doubles_the_derived_bound(extra):
+    assert kf.comparison_context(_recorded(), np.float16, *extra) == kf.bounded_context(
+        np.float16, 2 * extra[0], 2 * extra[1])
+    assert kf.comparison_context(_recorded(golden="hct_ref"), np.float16, *extra) == kf.bounded_context(
+        np.float16, *extra)
+
+
+def test_a_recorded_golden_without_a_derived_bound_keeps_the_defaults():
+    assert kf.comparison_context(_recorded(), np.float32) == kf.tolerance_context(np.float32)
+
+
+def test_a_descriptor_tightening_still_wins_for_a_recorded_golden():
+    ctx = kf.comparison_context(_recorded(desc={"comparison": {"atol": 2e-6, "rtol": 0.0}}), np.float32, 3e-5)
+    assert (ctx["validation_atol"], ctx["validation_rtol"], ctx["kernel_faithful"]) == (2e-6, 0.0, False)
+
+
+def test_a_recorded_golden_on_the_shipped_numerics_is_refused():
+    with pytest.raises(ValueError, match="not kernel-faithful"):
+        kf.comparison_context(_recorded("shipped"), np.float16, 1e-3)
+
+
+@pytest.mark.parametrize("golden", ["", "RECORD", "fvp", None])
+def test_an_unknown_golden_source_is_refused(golden):
+    with pytest.raises(ValueError, match="golden must be one of"):
+        kf.comparison_context(_recorded(golden=golden), np.float16, 1e-3)
+
+
+def test_a_bound_that_overflows_when_doubled_is_refused():
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        kf.comparison_context(_recorded(), np.float16, 1e308 * 10)
+
+
+def test_recording_generates_with_bounded_numerics():
+    from helia_core_tester.core.steps.generate import kernel_numerics
+
+    def config(**kw):
+        base = dict(optimization="-Ofast", coverage=False, golden="hct_ref")
+        return SimpleNamespace(**{**base, **kw})
+
+    assert kernel_numerics(config()) == "shipped"
+    assert kernel_numerics(config(golden="record")) == "bounded"
+    assert kernel_numerics(config(optimization="-O0")) == "bounded"
+    assert kernel_numerics(config(coverage=True, golden="record")) == "bounded"
+
+
+@pytest.mark.parametrize("numerics, golden, match", [("shipped", "record", "kernel_numerics 'bounded'"),
+                                                     ("bounded", "fvp", "golden must be")])
+def test_generate_test_refuses_a_recorded_golden_off_bounded_numerics(tmp_path, numerics, golden, match):
+    from helia_core_tester.generation.test_ops import generate_test
+
+    with pytest.raises(ValueError, match=match):
+        generate_test({"name": "x", "operator": next(iter(_op_names()))}, str(tmp_path),
+                      kernel_numerics=numerics, golden=golden)
+
+
+def _op_names():
+    from helia_core_tester.generation.test_ops import get_op_map
+
+    return get_op_map()
+
+
 @pytest.mark.parametrize("value,q16", [(0.0, 0), (1.3e-6, 1), (1e-5, 1), (1.0, 65536), (2.0 ** -16, 1),
                                        (2.0 ** -16 + 1e-12, 2), (1e-3, 66)])
 def test_q16_tolerance_never_encodes_tighter_than_asked(value, q16):

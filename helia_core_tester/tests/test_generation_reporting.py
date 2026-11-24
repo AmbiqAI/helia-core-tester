@@ -332,3 +332,27 @@ def test_forced_run_wipes_only_without_keep(tmp_path: Path, keep: bool) -> None:
     conftest.pytest_configure(SimpleNamespace(getoption=options.get))
 
     assert other.is_dir() is keep
+
+
+@pytest.mark.parametrize("golden, numerics, passed", [("record", "bounded", {"golden": "record"}),
+                                                      ("hct_ref", "shipped", {})])
+def test_the_golden_source_reaches_case_generation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                   golden: str, numerics: str, passed: dict) -> None:
+    generated_tests_dir = tmp_path / "artifacts" / "generated_tests" / "int" / "cortex-m4"
+    base = {"operator": "FullyConnected", "activation_dtype": "S8", "weight_dtype": "S8",
+            "_family": "FullyConnectedFunctions", "_parity_kind": "cmsis"}
+    monkeypatch.setattr(generation_module, "find_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(generation_module, "find_descriptors_dir", lambda: tmp_path)
+    monkeypatch.setattr(generation_module, "load_all_descriptors", lambda _path: [{"name": "fc_case", **base}])
+    seen = []
+
+    def _fake_generate_test(desc, out_dir, **kwargs):
+        seen.append({k: kwargs[k] for k in ("golden", "kernel_numerics") if k in kwargs})
+        test_dir = Path(out_dir) / desc["_family"] / desc["name"]
+        test_dir.mkdir(parents=True, exist_ok=True)
+        (test_dir / "CMakeLists.txt").write_text("# fake\n")
+
+    monkeypatch.setattr(generation_module, "generate_test", _fake_generate_test)
+    generation_module.test_generation({**_filters(generated_tests_dir, cpu="cortex-m4"), "golden": golden,
+                                       "kernel_numerics": numerics})
+    assert seen == [{"kernel_numerics": numerics, **passed}]

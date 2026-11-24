@@ -373,6 +373,7 @@ def generate_test(
     generation_failures: Optional[List[Dict[str, Any]]] = None,
     run_seed: int = 0,
     kernel_numerics: str = "shipped",
+    golden: str = "hct_ref",
 ) -> None:
     """
     Generate one descriptor's test case.
@@ -396,6 +397,10 @@ def generate_test(
 
     if kernel_numerics not in ("shipped", "bounded"):
         raise ValueError(f"kernel_numerics must be 'shipped' or 'bounded', got {kernel_numerics!r}")
+    if golden not in ("hct_ref", "record"):
+        raise ValueError(f"golden must be 'hct_ref' or 'record', got {golden!r}")
+    if golden == "record" and kernel_numerics != "bounded":
+        raise ValueError("recorded goldens are generated with kernel_numerics 'bounded'")
     if seed is None:
         seed = default_seed_for_case(name, run_seed)
     try:
@@ -408,6 +413,7 @@ def generate_test(
     op = op_class(desc, seed, target_cpu=cpu)
     op.run_seed = int(run_seed)
     op.kernel_numerics = kernel_numerics
+    op.golden = golden
 
     try:
         op.validate_descriptor()
@@ -679,6 +685,7 @@ def test_generation(test_filters):
                         seed=drawn_seed,
                         cpu=target_cpu,
                         kernel_numerics=kernel_numerics,
+                        **({"golden": golden} if golden != "hct_ref" else {}),
                         generation_failures=generation_failures,
                         run_seed=run_seed,
                     )
