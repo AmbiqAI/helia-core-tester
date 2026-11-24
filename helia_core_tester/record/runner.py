@@ -65,6 +65,7 @@ class CaseRecord:
     tensors: List[Dict[str, object]] = field(default_factory=list)
     statuses: List[Dict[str, object]] = field(default_factory=list)
     unrecordable: List[str] = field(default_factory=list)
+    capture_path: Optional[str] = None
 
     def to_json(self) -> Dict[str, object]:
         return {
@@ -247,6 +248,8 @@ def run_record(
         )
         cls = classes[case_dir]
         record = CaseRecord(case_dir.parent.name, case_dir.name, str(case_dir), cls.status, RECORDED)
+        if not own_work:
+            record.capture_path = str(capture_path)
         return judge(record, result, capture_path, library.float16_type)
 
     from concurrent.futures import ThreadPoolExecutor

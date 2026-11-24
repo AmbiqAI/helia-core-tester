@@ -3,6 +3,7 @@ Test-case generation step.
 """
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -10,7 +11,7 @@ from typing import Optional
 from helia_core_tester.core.steps.base import StepBase, StepPlan, StepResult, StepStatus
 from helia_core_tester.core.errors import GenerationError
 from helia_core_tester.core.logging import get_logger
-from helia_core_tester.core.path_layout import generated_tests_dir, generated_tests_root
+from helia_core_tester.core.path_layout import generated_tests_dir, generated_tests_root, generation_report_dir
 from helia_core_tester.utils.command_runner import run_command
 
 SHIPPED_OPTIMIZATION = "-Ofast"
@@ -20,6 +21,15 @@ def kernel_numerics(config) -> str:
     """'shipped' when the kernels build as ns-cmsis-nn ships them, which kernel-faithful goldens model."""
     shipped = config.optimization == SHIPPED_OPTIMIZATION and not config.coverage
     return "shipped" if shipped else "bounded"
+
+
+def _freeze_errors() -> tuple[type[BaseException], ...]:
+    from helia_core_tester.generation.reference.host_kernels import HostCheckError
+    from helia_core_tester.record.freeze import FreezeError
+    from helia_core_tester.record.runner import RecordError
+    from helia_core_tester.utils.host_compiler import HostCompilerMissing
+
+    return (FreezeError, RecordError, HostCheckError, HostCompilerMissing)
 
 
 class GenerateStep(StepBase):
@@ -51,7 +61,50 @@ class GenerateStep(StepBase):
                 self._hidden_env()
             except (OSError, ValueError) as exc:
                 return str(exc)
+        if self.config.golden == "record":
+            tree = self._record_tree()
+            if tree is None or not (tree / "Source").is_dir():
+                return "--golden record needs an ns-cmsis-nn checkout (Include/ and Source/): set --cmsis-nn-root or CMSIS_NN_ROOT"
         return None
+
+    def _record_tree(self) -> Optional[Path]:
+        if self.config.cmsis_nn_root is not None:
+            return Path(self.config.cmsis_nn_root)
+        from helia_core_tester.generation.utils.temp_sizer_probe import resolve_cmsis_nn_root
+
+        return resolve_cmsis_nn_root()
+
+    def _freeze(self, cpu: str, suite: str) -> Path:
+        """Replace the goldens of one generated tree with the library's recorded outputs."""
+        from helia_core_tester.record import freeze, parity
+        from helia_core_tester.record.runner import run_record
+
+        cases_root = self._cpu_generated_tests_dir(cpu, suite=suite)
+        report_dir = (
+            self.config.generation_report_dir_for(cpu, suite=suite)
+            if self.config.hidden_dir is None
+            else generation_report_dir(self.config.hidden_dir, cpu, suite=suite)
+        )
+        tree = self._record_tree()
+        if tree is None:
+            raise freeze.FreezeError("--golden record needs an ns-cmsis-nn checkout")
+        work = report_dir / "golden_record_work"
+        try:
+            record = run_record([cases_root], tree, jobs=self.config.jobs, work_dir=work)
+            report = freeze.freeze_tree(record)
+        except Exception:
+            freeze.invalidate_unfrozen(cases_root)
+            raise
+        path = freeze.write_report(report, report_dir / freeze.REPORT_NAME)
+        shutil.rmtree(work, ignore_errors=True)
+        self.logger.info(f"golden freeze {cpu}/{suite} [{record.float16_type}]: {report.counts()} ({path})")
+        mismatched = [c for c in report.cases if c.verdict == parity.MISMATCH and c.source == freeze.SOURCE_RECORD]
+        if mismatched:
+            self.logger.warning(
+                f"  {len(mismatched)} frozen case(s) differed from hct_ref beyond tolerance: "
+                + ", ".join(f"{c.family}/{c.name}" for c in mismatched[:10])
+            )
+        return path
 
     def _cpu_generated_tests_dir(self, cpu: str, suite: str) -> Path:
         if self.config.hidden_dir is not None:
@@ -86,6 +139,8 @@ class GenerateStep(StepBase):
         cmd = ["pytest", "test_ops.py::test_generation", "-v"]
         cmd.extend(["--cpu", cpu])
         cmd.extend(["--kernel-numerics", kernel_numerics(self.config)])
+        if self.config.golden != "hct_ref":
+            cmd.extend(["--golden", self.config.golden])
         cmd.extend(["--suite", suite])
         if self.config.hidden_dir is None:
             cmd.extend(["--generated-tests-dir", str(self._cpu_generated_tests_dir(cpu, suite=suite))])
@@ -150,8 +205,12 @@ class GenerateStep(StepBase):
         subprocess_env = self._hidden_env() if self.config.hidden_dir is not None else None
         if self.config.cmsis_nn_root:
             subprocess_env = {**(subprocess_env or os.environ), "CMSIS_NN_ROOT": str(self.config.cmsis_nn_root)}
+        handled: tuple[type[BaseException], ...] = (subprocess.CalledProcessError, FileNotFoundError)
+        if self.config.golden == "record":
+            handled += _freeze_errors()
         try:
             commands = []
+            freeze_reports: dict[str, str] = {}
             generation_targets = self._targets()
             for cpu, suite, float_precision in generation_targets:
                 cmd = self._build_cmd(
@@ -169,6 +228,8 @@ class GenerateStep(StepBase):
                     verbosity=self.config.verbosity,
                     env=subprocess_env,
                 )
+                if self.config.golden == "record":
+                    freeze_reports[f"golden_freeze_{cpu}_{suite}"] = str(self._freeze(cpu, suite))
             if self.config.verbosity >= 1:
                 self.logger.info(
                     f"Test cases generated successfully for targets={len(generation_targets)} cpus={','.join(self.config.cpus)}"
@@ -178,10 +239,12 @@ class GenerateStep(StepBase):
                 status=StepStatus.SUCCESS,
                 message="Test cases generated successfully",
                 outputs={
-                    "generated_tests_root": str(self._output_root())
+                    "generated_tests_root": str(self._output_root()),
+                    **freeze_reports,
                 },
                 details={
                     "commands": commands,
+                    "golden": self.config.golden,
                     "filters": {
                         "op": self.config.op_filter,
                         "dtype": self.config.dtype_filter,
@@ -192,7 +255,7 @@ class GenerateStep(StepBase):
                     },
                 },
             )
-        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        except handled as e:
             error_msg = f"Failed to generate test cases: {e}"
             self.logger.error(error_msg)
             gen_error = GenerationError(error_msg)

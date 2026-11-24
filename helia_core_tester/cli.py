@@ -152,6 +152,7 @@ def generate(
     hidden_dir: Optional[Path] = typer.Option(None, "--hidden-dir", help="Write secret-seeded shapes here, outside the tree"),
     hidden_seed_file: Optional[Path] = typer.Option(None, "--hidden-seed-file", help="Secret seed file; else HCT_HIDDEN_SEED"),
     cmsis_nn_root: Optional[Path] = typer.Option(None, "--cmsis-nn-root", help="Override the ns-cmsis-nn checkout used for the CMake build (defaults to CMakeLists.txt's ../.. sibling checkout)"),
+    golden: str = typer.Option("hct_ref", "--golden", help="Golden source: hct_ref (hct's reference) or record (frozen from the library's host reference build after generation)"),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help="Verbosity level (0-3)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be done"),
     plan: bool = typer.Option(False, "--plan", help="Print execution plan and exit"),
@@ -177,6 +178,7 @@ def generate(
         hidden_dir=hidden_dir,
         hidden_seed_file=hidden_seed_file,
         cmsis_nn_root=cmsis_nn_root,
+        golden=golden,
     )
     if config.plan:
         _print_plan_item(GenerateStep(config).plan())
@@ -364,6 +366,7 @@ def full(
     skip_generation: bool = typer.Option(False, "--skip-generation", help="Skip test-case generation"),
     skip_host_check: bool = typer.Option(False, "--skip-host-check", help="Skip the host check of the generated int cases (runs after generation, before the FVP build, and blocks it on failure)"),
     host_kernels: str = typer.Option("m0", "--host-kernels", help="Host check kernel builds, comma-separated: m0 and/or dsp"),
+    golden: str = typer.Option("hct_ref", "--golden", help="Golden source: hct_ref (hct's reference) or record (frozen from the library's host reference build after generation)"),
     skip_build: bool = typer.Option(False, "--skip-build", help="Skip FVP build"),
     skip_run: bool = typer.Option(False, "--skip-run", help="Skip FVP test execution"),
     no_report: bool = typer.Option(False, "--no-report", help="Disable test reporting"),
@@ -405,6 +408,7 @@ def full(
         skip_generation=skip_generation,
         skip_host_check=skip_host_check,
         host_kernels=[m.strip() for m in host_kernels.split(",") if m.strip()],
+        golden=golden,
         skip_build=skip_build,
         skip_run=skip_run,
         enable_reporting=not no_report,

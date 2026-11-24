@@ -1176,7 +1176,7 @@ uv run helia_core_tester full --cpu cortex-m55 --skip-host-check         # bypas
 `record` compiles every generated case (int and float) with `HCT_RECORD` against the checkout's
 host reference build, runs it, and compares what the library produced with the golden the case
 was generated with. It is the golden-parity check for moving goldens from hct's C reference to
-each library's own scalar build; nothing is rewritten yet.
+each library's own scalar build; `record` itself rewrites nothing (see "Recorded goldens" below).
 
 ```bash
 uv run helia_core_tester record --cpu cortex-m0 --suite both --cmsis-nn-root <ns-cmsis-nn>
@@ -1198,6 +1198,30 @@ uv run helia_core_tester record --cpu cortex-m0 --suite both --cmsis-nn-root <ns
   capability the host build lacks, as in host-check) are reported but do not fail it.
 - The report is `artifacts/reports/generation/<suite>/<cpu>/record_parity.json`, with totals and
   per-family counts.
+
+### Recorded goldens
+
+`generate --golden record` (also on `full`, or `HELIA_CORE_TESTER_GOLDEN=record`) generates as usual,
+then records each generated tree and writes the library's outputs into the cases' golden arrays.
+The default, `--golden hct_ref`, keeps hct's goldens and leaves existing reuse stamps valid.
+
+```bash
+uv run helia_core_tester generate --cpu cortex-m0 --suite both --golden record --cmsis-nn-root <ns-cmsis-nn>
+```
+
+- Only blocking cases that recorded are frozen (`identical`, `within_tolerance` and `mismatch`;
+  a mismatch is frozen and logged). Advisory cases and cases record mode could not compare
+  (`not_recordable`, `refused_f16_host`) keep the generated golden. Any other outcome on a
+  blocking case fails generation before a file is written.
+- A golden must be defined exactly once in the case's `.c`/`.h` files, with an element type that
+  matches the recorded dtype and the recorded element count; only arrays whose bits change are
+  rewritten, with the generator's own literal format, and each rewrite must parse back to the
+  recorded values (a NaN keeps its sign, not its payload).
+- Each case gets `<name>.golden.json` saying where its goldens came from (`record` with a SHA-256
+  per golden, or `hct_ref` with the reason) and the library tree identity; its reuse stamp is
+  refreshed so the frozen case is reused. A freeze that fails part way drops the stamp of every
+  case without a sidecar, so the next run regenerates them.
+- The report is `artifacts/reports/generation/<suite>/<cpu>/golden_freeze.json`.
 
 ## Mutation scoring
 

@@ -34,6 +34,8 @@ def pytest_addoption(parser):
     parser.addoption("--kernel-numerics", action="store", default="shipped", choices=("shipped", "bounded"),
                     help="shipped: the kernels are built as shipped (-Ofast, no coverage) and float goldens "
                          "reproduce their arithmetic; bounded: any other build, exact goldens with derived bounds")
+    parser.addoption("--golden", action="store", default="hct_ref", choices=("hct_ref", "record"),
+                    help="Golden source the cases are stamped for: record goldens are frozen in after generation")
     parser.addoption("--generated-tests-dir", action="store", default=None,
                     help="Override generated tests output directory")
     parser.addoption("--suite", action="store", default="int",
@@ -154,6 +156,7 @@ def test_filters(request):
         'fresh_seed': request.config.getoption("--fresh-seed"),
         'cpu': request.config.getoption("--cpu"),
         'kernel_numerics': request.config.getoption("--kernel-numerics"),
+        'golden': request.config.getoption("--golden"),
         'suite': request.config.getoption("--suite"),
         'float_precision': request.config.getoption("--float-precision"),
         'generated_tests_dir': _generated_override(request.config),
