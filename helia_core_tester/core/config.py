@@ -36,6 +36,7 @@ FALSE_VALUES = {"0", "false", "no", "off"}
 VALID_SUITE_MODES = {"int", "float", "both"}
 VALID_FLOAT_PRECISION = {"f16", "f32", "both"}
 VALID_HOST_KERNELS = ("m0", "dsp")
+VALID_GOLDENS = ("hct_ref", "record")
 VALID_REPORT_FORMATS = ("json", "html", "md", "junit")
 
 
@@ -150,6 +151,9 @@ class Config:
     # before any FVP/board build; these pick the kernel builds it uses.
     skip_host_check: bool = False
     host_kernels: list[str] = field(default_factory=lambda: ["m0"])
+    # hct_ref: goldens from hct's reference; record: generated, then replaced by what the
+    # library's host reference build computes (record mode), frozen into the case.
+    golden: str = "hct_ref"
     skip_build: bool = False
     skip_run: bool = False
 
@@ -340,6 +344,7 @@ class Config:
             raise ValueError(f"verbosity must be between 0 and 3, got {self.verbosity}")
         self._validate_random_shapes()
         self._validate_host_kernels()
+        self._validate_golden()
         try:
             self.report_formats = parse_report_formats(self.report_formats)
         except ValueError as e:
@@ -370,6 +375,12 @@ class Config:
             )
         # Deduplicate, keeping the order given.
         self.host_kernels = list(dict.fromkeys(modes))
+
+    def _validate_golden(self) -> None:
+        golden = str(self.golden).strip().lower()
+        if golden not in VALID_GOLDENS:
+            raise ConfigurationError(f"golden must be one of {', '.join(VALID_GOLDENS)}, got {self.golden!r}")
+        self.golden = golden
 
     def _validate_random_shapes(self) -> None:
         # Any seed would be silently ignored.
@@ -663,6 +674,7 @@ class Config:
             "skip_generation": self.skip_generation,
             "skip_host_check": self.skip_host_check,
             "host_kernels": list(self.host_kernels),
+            "golden": self.golden,
             "skip_build": self.skip_build,
             "skip_run": self.skip_run,
             "enable_reporting": self.enable_reporting,

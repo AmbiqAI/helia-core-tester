@@ -520,6 +520,7 @@ def test_generation(test_filters):
     start_time = datetime.now(timezone.utc)
     target_cpu = normalize_cpu(test_filters.get('cpu') or "cortex-m55")
     kernel_numerics = test_filters.get("kernel_numerics") or "shipped"
+    golden = test_filters.get("golden") or "hct_ref"
     suite_mode = _suite_mode(test_filters)
         
     generated_override = test_filters.get("generated_tests_dir")
@@ -651,6 +652,7 @@ def test_generation(test_filters):
             seed=case_seed,
             version_hash=version_hash,
             kernel_numerics=kernel_numerics,
+            golden=golden,
         )
         # A fresh seed never matches a stamp: skip the hashing, the run redraws every case.
         if not force_generate and seed_chosen and case_reusable(test_dir, stamp):
