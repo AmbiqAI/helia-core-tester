@@ -1,0 +1,5 @@
+operator: TreeWalk
+name: tree_walk_two_stumps_f32
+suite: float
+required_kernel_symbols: [arm_nn_tree_walk_f32, arm_nn_tree_walk_values_f32, arm_nn_tree_walk_mean_argmax_f32]
+tensor_dtypes: {input: FP32, output: FP32}

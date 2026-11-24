@@ -1,0 +1,11 @@
+#pragma once
+#include "arm_nnfunctions.h"
+
+/* The two stumps share a threshold and route NaNs in opposite directions. */
+static const cmsis_nn_tree_node_f32 nodes[] = {
+    {.threshold = 0.0f, .feature = 0x8000, .left = -1, .right = -2},
+    {.threshold = 0.0f, .feature = 0, .left = -3, .right = -4}
+};
+static const uint32_t roots[] = {0, 1};
+static const float32_t leaf_values[] = {-4, 2, 3, 8};
+static const float32_t leaf_scores[] = {0, 4, 2, 2, 6, 0, 2, 2};

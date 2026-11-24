@@ -1,0 +1,47 @@
+#include "{{ name }}_rbf_kernel.h"
+#include <string.h>
+{% include "common/standalone/runtime_common.j2" %}
+{% from "common/standalone/runtime_common.j2" import helia_guard_declare %}
+{{ helia_guard_declare("float32_t", "output", rows) }}
+
+int32_t {{ name }}_test_case_run(void)
+{
+    int failures = 0;
+    HELIA_GUARD_ARM(output, true);
+    HELIA_VALIDATE_STATUS("squared distance", arm_nn_sq_l2_distance_f32(row, references, {{ rows }}, {{ features }}, output));
+    HELIA_GUARD_CHECK(output, "squared distance", failures);
+    if (memcmp(output, expected_squares, sizeof(output)))
+    {
+        puts("squared distances differ");
+        ++failures;
+    }
+
+    HELIA_GUARD_ARM(output, true);
+    HELIA_VALIDATE_STATUS("Manhattan distance", arm_nn_l1_distance_f32(row, references, {{ rows }}, {{ features }}, output));
+    HELIA_GUARD_CHECK(output, "Manhattan distance", failures);
+    if (memcmp(output, expected_l1, sizeof(output)))
+    {
+        puts("Manhattan distances differ");
+        ++failures;
+    }
+
+    HELIA_GUARD_ARM(output, true);
+    HELIA_VALIDATE_EXPECTED_STATUS("empty RBF", arm_nn_rbf_kernel_f32(row, references, 0, {{ features }}, -0.25f, output), ARM_CMSIS_NN_ARG_ERROR);
+    HELIA_GUARD_CHECK_UNTOUCHED(output, "empty RBF", failures);
+    HELIA_VALIDATE_STATUS("RBF", arm_nn_rbf_kernel_f32(row, references, {{ rows }}, {{ features }}, -0.25f, output));
+    HELIA_GUARD_CHECK(output, "RBF", failures);
+    for (unsigned i = 0; i < {{ rows }}; ++i)
+    {
+        uint32_t actual;
+        memcpy(&actual, &output[i], sizeof(actual));
+        const uint32_t expected = expected_rbf[i];
+        const uint32_t distance = actual > expected ? actual - expected : expected - actual;
+        if (distance > (expected_squares[i] == 0 ? 0u : 2u))
+        {
+            printf("RBF[%u] bits %lx expected %lx\n", i, (unsigned long)actual, (unsigned long)expected);
+            ++failures;
+        }
+    }
+    HELIA_VALIDATE_RETURN_FAILURES(failures);
+}
+{% include "common/standalone/main.j2" %}
