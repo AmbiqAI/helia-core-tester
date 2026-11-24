@@ -24,19 +24,20 @@ int32_t {{ name }}_test_case_run(void)
         HELIA_GUARD_ARM(values, true);
         HELIA_GUARD_ARM(scores, true);
         HELIA_GUARD_ARM(winner, true);
-        HELIA_VALIDATE_STATUS("leaf IDs", arm_nn_tree_walk_f32(&row, &table, ids));
-        HELIA_VALIDATE_STATUS("leaf values", arm_nn_tree_walk_values_f32(&row, &table, leaf_values, 4, values));
-        HELIA_VALIDATE_STATUS("mean scores", arm_nn_tree_walk_mean_argmax_f32(&row, &table, leaf_scores, 2, scores, winner));
+        const arm_cmsis_nn_status leaf_status = arm_nn_tree_walk_f32(&row, &table, ids);
         HELIA_GUARD_CHECK(ids, "leaf IDs", failures);
+        HELIA_VALIDATE_STATUS("leaf IDs", leaf_status);
+        HELIA_VALIDATE_OUTPUTS(EXACT_INT, ids, expected_ids[i], 2, 0, 0, 0, 8, failures);
+        const arm_cmsis_nn_status value_status = arm_nn_tree_walk_values_f32(&row, &table, leaf_values, 4, values);
         HELIA_GUARD_CHECK(values, "leaf values", failures);
+        HELIA_VALIDATE_STATUS("leaf values", value_status);
+        HELIA_VALIDATE_OUTPUTS(FLOAT, values, expected_values[i], 2, 0, 0, 0, 8, failures);
+        const arm_cmsis_nn_status mean_status = arm_nn_tree_walk_mean_argmax_f32(&row, &table, leaf_scores, 2, scores, winner);
         HELIA_GUARD_CHECK(scores, "mean scores", failures);
         HELIA_GUARD_CHECK(winner, "winner", failures);
-        if (memcmp(ids, expected_ids[i], sizeof(ids)) || memcmp(values, expected_values[i], sizeof(values))
-            || memcmp(scores, expected_scores[i], sizeof(scores)) || winner[0] != expected_winner[i])
-        {
-            printf("packed tree mismatch on row %u\n", i);
-            ++failures;
-        }
+        HELIA_VALIDATE_STATUS("mean scores", mean_status);
+        HELIA_VALIDATE_OUTPUTS(FLOAT, scores, expected_scores[i], 2, 0, 0, 0, 8, failures);
+        HELIA_VALIDATE_OUTPUTS(EXACT_INT, winner, expected_winner + i, 1, 0, 0, 0, 8, failures);
     }
     float32_t row = 0.0f;
     table.feature_count = 0;

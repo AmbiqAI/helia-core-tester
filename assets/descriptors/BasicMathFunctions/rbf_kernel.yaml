@@ -1,5 +1,5 @@
 operator: RbfKernel
-name: rbf_reference_tail_f32
+name: rbf_kernel_reference_tail_f32
 suite: float
 required_kernel_symbols: [arm_nn_rbf_kernel_f32, arm_nn_sq_l2_distance_f32, arm_nn_l1_distance_f32]
 tensor_dtypes: {input: FP32, output: FP32}

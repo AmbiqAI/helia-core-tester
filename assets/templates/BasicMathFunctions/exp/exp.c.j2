@@ -10,22 +10,20 @@ int32_t {{ name }}_test_case_run(void)
     {{ ctype }} input[{{ count }}];
     memcpy(input, input_bits, sizeof(input));
     HELIA_GUARD_ARM(output, true);
-    HELIA_VALIDATE_EXPECTED_STATUS("empty exp", {{ kernel_fn }}(input, output, 0), ARM_CMSIS_NN_ARG_ERROR);
     int failures = 0;
+    arm_cmsis_nn_status status = {{ kernel_fn }}(input, output, 0);
+    HELIA_GUARD_CHECK(output, "empty exp", failures);
     HELIA_GUARD_CHECK_UNTOUCHED(output, "empty exp", failures);
-    HELIA_VALIDATE_STATUS("exp", {{ kernel_fn }}(input, output, {{ count }}));
+    HELIA_VALIDATE_EXPECTED_STATUS("empty exp", status, ARM_CMSIS_NN_ARG_ERROR);
+    status = {{ kernel_fn }}(input, output, {{ count }});
     HELIA_GUARD_CHECK(output, "exp output", failures);
+    HELIA_VALIDATE_STATUS("exp", status);
     for (unsigned i = 0; i < {{ count }}; ++i)
     {
         {{ word }} actual;
         memcpy(&actual, &output[i], sizeof(actual));
-        const uint32_t expected = expected_bits[i];
-        const uint32_t distance = actual > expected ? actual - expected : expected - actual;
-        if (distance > max_ulp[i])
-        {
-            printf("exp[%u] bits %lx expected %lx\n", i, (unsigned long)actual, (unsigned long)expected);
-            ++failures;
-        }
+        HELIA_VALIDATE_FLOAT_BITS(actual, expected_bits[i], {{ '0x7c00u' if ctype == 'float16_t' else '0x7f800000u' }},
+                                  max_ulp[i], i, 8, failures);
     }
     HELIA_VALIDATE_RETURN_FAILURES(failures);
 }
