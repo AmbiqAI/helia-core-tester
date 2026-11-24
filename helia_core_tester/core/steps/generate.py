@@ -18,8 +18,10 @@ SHIPPED_OPTIMIZATION = "-Ofast"
 
 
 def kernel_numerics(config) -> str:
-    """'shipped' when the kernels build as ns-cmsis-nn ships them, which kernel-faithful goldens model."""
-    shipped = config.optimization == SHIPPED_OPTIMIZATION and not config.coverage
+    """'shipped' when the kernels build as ns-cmsis-nn ships them, which kernel-faithful goldens model.
+    Recorded goldens come from the library's host scalar build, not the target's route: always 'bounded'."""
+    recorded = getattr(config, "golden", "hct_ref") == "record"
+    shipped = config.optimization == SHIPPED_OPTIMIZATION and not config.coverage and not recorded
     return "shipped" if shipped else "bounded"
 
 

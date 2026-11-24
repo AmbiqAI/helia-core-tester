@@ -1209,6 +1209,10 @@ The default, `--golden hct_ref`, keeps hct's goldens and leaves existing reuse s
 uv run helia_core_tester generate --cpu cortex-m0 --suite both --golden record --cmsis-nn-root <ns-cmsis-nn>
 ```
 
+- Recorded goldens are generated with `bounded` kernel numerics: an exact golden whose comparison is
+  assert_close's defaults widened by the case's derived accumulation bound (`kernel_faithful.linear_bound`),
+  doubled, because the host scalar result and the target's route (Helium half precision on m55) each
+  lie within one bound of the exact result. A descriptor's tightened comparison still wins.
 - Only blocking cases that recorded are frozen (`identical`, `within_tolerance` and `mismatch`;
   a mismatch is frozen and logged). Advisory cases and cases record mode could not compare
   (`not_recordable`, `refused_f16_host`) keep the generated golden. Any other outcome on a

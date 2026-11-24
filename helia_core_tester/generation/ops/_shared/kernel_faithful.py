@@ -97,14 +97,31 @@ def descriptor_tightening(desc) -> Optional[Tuple[float, float]]:
     return float(stated["atol"]), float(stated.get("rtol", 0.0))
 
 
+GOLDEN_SOURCES = ("hct_ref", "record")
+
+
+def recorded_golden(op) -> bool:
+    """Whether the case's golden will be replaced by the library's host scalar output (--golden record)."""
+    golden = getattr(op, "golden", "hct_ref")
+    if golden not in GOLDEN_SOURCES:
+        raise ValueError(f"golden must be one of {', '.join(GOLDEN_SOURCES)}, got {golden!r}")
+    if golden == "record" and shipped(op):
+        raise ValueError("a recorded golden is not kernel-faithful: generate it with kernel_numerics 'bounded'")
+    return golden == "record"
+
+
 def comparison_context(op, dtype, atol_extra: float = 0.0, rtol_extra: float = 0.0) -> dict:
     """The comparison a float case emits. A descriptor's tightened comparison wins; otherwise an emulated golden
-    (no extra) is held to assert_close's defaults and an exact golden to those widened by its derived bound."""
+    (no extra) is held to assert_close's defaults and an exact golden to those widened by its derived bound.
+    A recorded golden is itself one evaluation order within that bound of the exact result, so the target's
+    route can sit up to twice the bound from it."""
     stated = descriptor_tightening(op.desc)
     if stated is not None:
         return {"validation_atol": stated[0], "validation_rtol": stated[1],
                 "kernel_faithful": shipped(op) and not (atol_extra or rtol_extra)}
     if atol_extra or rtol_extra:
+        if recorded_golden(op):
+            atol_extra, rtol_extra = 2.0 * atol_extra, 2.0 * rtol_extra
         return bounded_context(dtype, atol_extra, rtol_extra)
     return tolerance_context(dtype)
 
