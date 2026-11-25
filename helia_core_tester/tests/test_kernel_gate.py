@@ -13,8 +13,8 @@ from helia_core_tester.contract.ir import (
     FunctionDecl,
     ImplementationDecl,
     load_contract_set,
-    load_contracts_package,
 )
+from helia_core_tester.contract.planner import load_contracts_package
 from helia_core_tester.generation.kernel_gate import (
     BUILD_DECIDED_FEATURES,
     CPU_DECIDED_FEATURES,

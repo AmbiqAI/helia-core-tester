@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hct/kernel-contracts/1",
+  "title": "Kernel signature contracts: one record per public function of the library under test",
+  "type": "object",
+  "properties": {
+    "schema": {"enum": ["hct/kernel-contracts/1", "ns-cmsis-nn/kernel-contracts/1"]},
+    "library": {"$ref": "#/$defs/library"},
+    "functions": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/function"}}
+  },
+  "required": ["schema", "functions"],
+  "additionalProperties": false,
+  "if": {"properties": {"schema": {"const": "ns-cmsis-nn/kernel-contracts/1"}}},
+  "then": {"properties": {"library": false}},
+  "else": {"required": ["library"]},
+  "$defs": {
+    "library": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"},
+    "identifier": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "maxLength": 255},
+    "relpath": {
+      "type": "string", "minLength": 1, "maxLength": 1024,
+      "pattern": "^(?!/)(?!.*\\\\)(?!(?:.*/)?\\.\\.(?:/|$))[^\\x00]+$"
+    },
+    "c_type": {"type": "string", "minLength": 1, "maxLength": 512},
+    "function": {
+      "type": "object",
+      "properties": {
+        "name": {"$ref": "#/$defs/identifier"},
+        "header": {"$ref": "#/$defs/relpath"},
+        "line": {"type": "integer", "minimum": 1},
+        "guards": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "returns": {"$ref": "#/$defs/c_type"},
+        "params": {"type": "array", "items": {"$ref": "#/$defs/param"}}
+      },
+      "required": ["name", "header", "line", "guards", "returns", "params"],
+      "additionalProperties": false
+    },
+    "param": {
+      "type": "object",
+      "properties": {
+        "name": {"$ref": "#/$defs/identifier"},
+        "type": {"$ref": "#/$defs/c_type"},
+        "direction": {"enum": ["in", "out", "in,out"]},
+        "extent": {"type": "string", "pattern": "^(?:\\[[^\\]]*\\])*$"}
+      },
+      "required": ["name", "type", "direction"],
+      "additionalProperties": false
+    }
+  }
+}

@@ -15,6 +15,7 @@ import typer
 
 from helia_core_tester.core.config import DEFAULT_RUN_JOBS_CAP, DEFAULT_TIMEOUT_SECONDS, Config, parse_report_formats
 from helia_core_tester.core.discovery import ensure_arm_toolchain_on_path
+from helia_core_tester.core.library import LibraryProfileError
 from helia_core_tester.core.logging import setup_logger
 from helia_core_tester.core.path_layout import artifacts_root
 from helia_core_tester.core.pipeline import FullTestPipeline
@@ -118,7 +119,11 @@ def get_config(
             explicit.add(key)
 
     init_kwargs["_explicit_overrides"] = explicit
-    return Config(**init_kwargs)
+    try:
+        return Config(**init_kwargs)
+    except LibraryProfileError as e:
+        typer.echo(f"✗ {e}", err=True)
+        raise typer.Exit(code=2)
 
 
 def run_step_exit(step, config: Config, success_msg: str, failure_prefix: Optional[str] = None) -> None:
@@ -152,6 +157,7 @@ def generate(
     hidden_dir: Optional[Path] = typer.Option(None, "--hidden-dir", help="Write secret-seeded shapes here, outside the tree"),
     hidden_seed_file: Optional[Path] = typer.Option(None, "--hidden-seed-file", help="Secret seed file; else HCT_HIDDEN_SEED"),
     cmsis_nn_root: Optional[Path] = typer.Option(None, "--cmsis-nn-root", help="Override the ns-cmsis-nn checkout used for the CMake build (defaults to CMakeLists.txt's ../.. sibling checkout)"),
+    library: Optional[Path] = typer.Option(None, "--library", help="Directory with the library's hct-library.yaml; sets the checkout from its source_root (an ns-cmsis-nn checkout without one also works). Use it or --cmsis-nn-root, not both with different checkouts"),
     golden: str = typer.Option("hct_ref", "--golden", help="Golden source: hct_ref (hct's reference) or record (frozen from the library's host reference build after generation)"),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help="Verbosity level (0-3)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be done"),
@@ -178,6 +184,7 @@ def generate(
         hidden_dir=hidden_dir,
         hidden_seed_file=hidden_seed_file,
         cmsis_nn_root=cmsis_nn_root,
+        library=library,
         golden=golden,
     )
     if config.plan:
@@ -203,6 +210,7 @@ def build(
     suite: str = typer.Option("int", "--suite", help="Test suite selection: int, float, or both"),
     float_precision: str = typer.Option("both", "--float-precision", help="Float precision selection for float suite: f16, f32, or both"),
     cmsis_nn_root: Optional[Path] = typer.Option(None, "--cmsis-nn-root", help="Override the ns-cmsis-nn checkout used for the CMake build (defaults to CMakeLists.txt's ../.. sibling checkout)"),
+    library: Optional[Path] = typer.Option(None, "--library", help="Directory with the library's hct-library.yaml; sets the checkout from its source_root (an ns-cmsis-nn checkout without one also works). Use it or --cmsis-nn-root, not both with different checkouts"),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help="Verbosity level (0-3)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be done"),
     plan: bool = typer.Option(False, "--plan", help="Print execution plan and exit"),
@@ -224,6 +232,7 @@ def build(
         suite=suite,
         float_precision=float_precision,
         cmsis_nn_root=cmsis_nn_root,
+        library=library,
     )
     if config.plan:
         _print_plan_item(BuildStep(config).plan())
@@ -246,6 +255,7 @@ def host_check(
     plan: bool = typer.Option(False, "--plan", help="Print execution plan and exit"),
     project_root: Optional[Path] = typer.Option(None, "--repo-root", help="Repository root directory"),
     cmsis_nn_root: Optional[Path] = typer.Option(None, "--cmsis-nn-root", help="ns-cmsis-nn checkout whose kernels to check against (default: CMSIS_NN_ROOT, else the enclosing checkout)"),
+    library: Optional[Path] = typer.Option(None, "--library", help="Directory with the library's hct-library.yaml; sets the checkout from its source_root (an ns-cmsis-nn checkout without one also works). Use it or --cmsis-nn-root, not both with different checkouts"),
 ):
     """Compile and run every generated int case on the host against the ns-cmsis-nn kernels."""
     config = get_config(
@@ -258,6 +268,7 @@ def host_check(
         suite="int",
         host_kernels=[m.strip() for m in host_kernels.split(",") if m.strip()],
         cmsis_nn_root=cmsis_nn_root,
+        library=library,
     )
     if config.plan:
         _print_plan_item(HostCheckStep(config).plan())
@@ -274,6 +285,7 @@ def record(
     plan: bool = typer.Option(False, "--plan", help="Print execution plan and exit"),
     project_root: Optional[Path] = typer.Option(None, "--repo-root", help="Repository root directory"),
     cmsis_nn_root: Optional[Path] = typer.Option(None, "--cmsis-nn-root", help="ns-cmsis-nn checkout with a host reference build (default: CMSIS_NN_ROOT, else the enclosing checkout)"),
+    library: Optional[Path] = typer.Option(None, "--library", help="Directory with the library's hct-library.yaml; sets the checkout from its source_root (an ns-cmsis-nn checkout without one also works). Use it or --cmsis-nn-root, not both with different checkouts"),
 ):
     """Record every generated case on the host against the library's host reference build and
     compare each output with the case's golden (golden parity, written to record_parity.json)."""
@@ -285,6 +297,7 @@ def record(
         jobs=jobs,
         suite=suite,
         cmsis_nn_root=cmsis_nn_root,
+        library=library,
     )
     if config.plan:
         _print_plan_item(RecordStep(config).plan())
@@ -380,6 +393,7 @@ def full(
     plan: bool = typer.Option(False, "--plan", help="Print execution plan and exit"),
     project_root: Optional[Path] = typer.Option(None, "--repo-root", help="Repository root directory"),
     cmsis_nn_root: Optional[Path] = typer.Option(None, "--cmsis-nn-root", help="Override the ns-cmsis-nn checkout used for the CMake build (defaults to CMakeLists.txt's ../.. sibling checkout)"),
+    library: Optional[Path] = typer.Option(None, "--library", help="Directory with the library's hct-library.yaml; sets the checkout from its source_root (an ns-cmsis-nn checkout without one also works). Use it or --cmsis-nn-root, not both with different checkouts"),
 ):
     """Run the complete pipeline (generate -> build -> run)."""
     config = get_config(
@@ -414,6 +428,7 @@ def full(
         enable_reporting=not no_report,
         report_formats=report_formats,
         cmsis_nn_root=cmsis_nn_root,
+        library=library,
     )
 
     setup_logger(verbosity=config.verbosity)
@@ -494,9 +509,24 @@ def _tool_version(exe: str) -> str:
 @app.command()
 def doctor(
     project_root: Optional[Path] = typer.Option(None, "--repo-root", help="Repository root directory"),
+    library: Optional[Path] = typer.Option(None, "--library", help="Also check this library's hct-library.yaml (default: $HELIA_CORE_TESTER_LIBRARY, else library in helia_core_tester.toml)"),
 ):
     """Run preflight checks (verify tools, paths, permissions)."""
     typer.echo("Running preflight checks...")
+
+    from .core.config import configured_library
+    from .core.discovery import find_repo_root_or_cwd
+    from .core.errors import ConfigurationError
+    from .core.library import require_supported, resolve_library
+
+    try:
+        library_dir, source = configured_library(
+            Path(project_root).resolve() if project_root else find_repo_root_or_cwd(), library)
+        if library_dir is not None:
+            typer.echo(f"✓ Library (from {source}): {require_supported(resolve_library(library_dir)).describe()}")
+    except ConfigurationError as e:
+        typer.echo(f"✗ Library: {e}", err=True)
+        sys.exit(2)
 
     try:
         from .core.discovery import find_repo_root

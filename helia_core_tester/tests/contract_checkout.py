@@ -1,8 +1,9 @@
 """Temporary ns-cmsis-nn checkouts for tests that read a kernel contract.
 
-A checkout with a signature export needs the ns_cmsis_nn_contracts package that reads it
-(contract/ir.py); tests install the copy vendored in the fallback fixture, which
-test_contract_fallback keeps equal to the real checkout's.
+hct reads a signature export itself (contract/documents.py); a checkout needs the
+ns_cmsis_nn_contracts package only for its host planner (contract/planner.py). Tests install
+the copy vendored in the fallback fixture, which test_contract_fallback keeps equal to the real
+checkout's.
 """
 
 from __future__ import annotations

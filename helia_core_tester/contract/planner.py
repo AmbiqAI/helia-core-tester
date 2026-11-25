@@ -1,5 +1,8 @@
 """The host planner of the ns-cmsis-nn checkout the tester reads (ns_cmsis_nn_contracts.open_planner).
 
+The planner is the library's own code, so it is the one part of a contract-driven run that imports
+the library's Python; reading the contract documents does not (contract/ir.py).
+
 The planner is the library's own dispatch and sizing code built for the host from the checkout's
 `Planner/` sources, so a plan names the kernel a wrapper reaches and the bytes its context needs
 for a target build exactly as the target library computes them. The tester asks it instead of
@@ -12,10 +15,14 @@ answer over the builds of that CPU (`planned_ctx_bytes`).
 
 from __future__ import annotations
 
+import hashlib
+import importlib.util
+import sys
 from pathlib import Path
+from types import ModuleType
 from typing import Any, Callable, Optional
 
-from helia_core_tester.contract.ir import ContractError, load_contract_set, load_contracts_package
+from helia_core_tester.contract.ir import PACKAGE_RELPATH, ContractError, load_contract_set
 from helia_core_tester.core.cpu_targets import get_cpu_profile
 
 
@@ -32,6 +39,67 @@ class PlanRefusedError(ContractError):
 
 
 _PLANNERS: dict[str, Any] = {}
+_PACKAGES: dict[tuple, ModuleType] = {}
+_PACKAGE_API = ("ContractError", "PlannerError", "Target", "open_planner")
+
+
+def _package_files(package_dir: Path) -> list[Path]:
+    return sorted(package_dir.glob("*.py"))
+
+
+def _fingerprint(paths: list[Path]) -> Optional[tuple]:
+    entries = []
+    try:
+        for path in paths:
+            stat = path.stat()
+            entries.append((str(path), stat.st_size, stat.st_mtime_ns))
+    except OSError:
+        return None
+    return tuple(entries)
+
+
+def _forget_module(name: str) -> None:
+    for loaded in [key for key in sys.modules if key == name or key.startswith(name + ".")]:
+        del sys.modules[loaded]
+
+
+def load_contracts_package(cmsis_nn_root: Optional[Path]) -> Optional[ModuleType]:
+    """The checkout's own ``ns_cmsis_nn_contracts``, which builds its host planner, or None when the
+    checkout ships none.
+
+    Each checkout's package is imported under a private module name derived from its files,
+    so several checkouts (and an edited one) can be used in one process without one planner
+    standing in for another."""
+    if cmsis_nn_root is None:
+        return None
+    package_dir = Path(cmsis_nn_root) / PACKAGE_RELPATH
+    init = package_dir / "__init__.py"
+    if not init.is_file():
+        return None
+    key = _fingerprint(_package_files(package_dir))
+    if key is None:
+        raise PlannerUnavailable(f"{package_dir}: the planner's files cannot be read")
+    cached = _PACKAGES.get(key)
+    if cached is not None:
+        return cached
+    name = "_hct_ns_cmsis_nn_contracts_" + hashlib.sha256(repr(key).encode()).hexdigest()[:16]
+    spec = importlib.util.spec_from_file_location(name, init, submodule_search_locations=[str(package_dir)])
+    if spec is None or spec.loader is None:
+        raise PlannerUnavailable(f"{package_dir}: not importable as a package")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception as error:
+        _forget_module(name)
+        raise PlannerUnavailable(f"{package_dir}: cannot be imported ({type(error).__name__}: {error})") from None
+    missing = [attribute for attribute in _PACKAGE_API if not hasattr(module, attribute)]
+    if missing:
+        _forget_module(name)
+        raise PlannerUnavailable(f"{package_dir}: does not export {missing}; it has no host planner this "
+                                 "tester uses")
+    _PACKAGES[key] = module
+    return module
 
 
 def clear_planner_cache() -> None:
@@ -50,8 +118,10 @@ def load_planner(cmsis_nn_root: Optional[Path]):
     if key in _PLANNERS:
         return _PLANNERS[key]
     package = load_contracts_package(root)
-    if not hasattr(package, "open_planner"):
-        raise PlannerUnavailable(f"{root}: its ns_cmsis_nn_contracts has no open_planner")
+    if package is None:
+        raise PlannerUnavailable(f"{root}: has a kernel contract but no {PACKAGE_RELPATH}, so it has no host "
+                                 "planner; it needs an ns-cmsis-nn that ships ns_cmsis_nn_contracts "
+                                 "(AmbiqAI/ns-cmsis-nn#889 or later)")
     try:
         planner = package.open_planner(root, "gcc")
     except (package.PlannerError, package.ContractError, OSError, ValueError) as error:
