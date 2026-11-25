@@ -1,4 +1,4 @@
-"""Generate distances and radial basis function goldens for one reference matrix."""
+"""Generate radial basis function goldens for one reference matrix."""
 
 from pathlib import Path
 
@@ -21,7 +21,7 @@ class OpRbfKernel(OperationBase):
 
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
         raise NotImplementedError(
-            "The reference-table contract exercises two native entry points."
+            "The reference-table contract exercises one native entry point."
         )
 
     def validate_descriptor(self) -> None:

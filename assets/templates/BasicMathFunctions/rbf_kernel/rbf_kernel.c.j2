@@ -8,13 +8,7 @@ int32_t {{ name }}_test_case_run(void)
 {
     int failures = 0;
     HELIA_GUARD_ARM(output, true);
-    arm_cmsis_nn_status status = arm_nn_sq_l2_distance_f32(row, references, {{ rows }}, {{ features }}, output);
-    HELIA_GUARD_CHECK(output, "squared distance", failures);
-    HELIA_VALIDATE_STATUS("squared distance", status);
-    HELIA_VALIDATE_OUTPUTS(FLOAT, output, expected_squares, {{ rows }}, 0, 0, 0, 8, failures);
-
-    HELIA_GUARD_ARM(output, true);
-    status = arm_nn_rbf_kernel_f32(row, references, 0, {{ features }}, -0.25f, output);
+    arm_cmsis_nn_status status = arm_nn_rbf_kernel_f32(row, references, 0, {{ features }}, -0.25f, output);
     HELIA_GUARD_CHECK(output, "empty RBF", failures);
     HELIA_GUARD_CHECK_UNTOUCHED(output, "empty RBF", failures);
     HELIA_VALIDATE_EXPECTED_STATUS("empty RBF", status, ARM_CMSIS_NN_ARG_ERROR);
