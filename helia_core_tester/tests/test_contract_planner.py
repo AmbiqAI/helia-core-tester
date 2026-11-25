@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import dataclasses
+import json
+import os
 import shutil
+import sys
 from pathlib import Path
 
 import pytest
 
 from helia_core_tester.contract import planner
-from helia_core_tester.contract.planner import PlannerUnavailable, PlanRefusedError
+from helia_core_tester.contract import legacy_nn
+from helia_core_tester.contract.documents import _SCHEMA_DIR
+from helia_core_tester.contract.ir import PACKAGE_RELPATH
+from helia_core_tester.contract.planner import PlannerUnavailable, PlanRefusedError, load_contracts_package
 from helia_core_tester.tests.contract_fallback import FIXTURE_ROOT
 from helia_core_tester.tests.contract_required import P1E_CALLS, P1E_PLAN_FIELDS, P1dPlan, require_planner
 
@@ -248,3 +254,81 @@ def test_a_plan_without_a_route_name_is_unavailable_not_guessed(fixture_planner)
     direct = planner.plan("fully_connected_per_channel_packed_s8", package.Target("mve"), filter_dims=(16, 1, 1, 4),
                           filter_offset=0, multipliers=[1 << 30] * 4, shifts=[-1] * 4)
     assert direct.route is None and planner.route_name(direct) is None
+
+
+@pytest.fixture
+def copied_checkout(tmp_path: Path) -> Path:
+    root = tmp_path / "ns-cmsis-nn"
+    shutil.copytree(FIXTURE_ROOT, root, ignore=shutil.ignore_patterns("__pycache__"))
+    planner.clear_planner_cache()
+    return root
+
+
+def test_the_planner_package_is_the_checkouts_own(copied_checkout: Path) -> None:
+    package = load_contracts_package(copied_checkout)
+    assert Path(package.__file__).parent == copied_checkout / PACKAGE_RELPATH
+    assert load_contracts_package(copied_checkout) is package
+    assert load_contracts_package(None) is None
+
+
+def test_a_contract_without_the_package_has_no_planner(copied_checkout: Path) -> None:
+    shutil.rmtree(copied_checkout / "python")
+    assert load_contracts_package(copied_checkout) is None
+    with pytest.raises(PlannerUnavailable, match="no python/ns_cmsis_nn_contracts, so it has no host planner.*#889"):
+        planner.load_planner(copied_checkout)
+
+
+def test_a_package_that_cannot_be_imported_fails_closed(copied_checkout: Path) -> None:
+    (copied_checkout / PACKAGE_RELPATH / "__init__.py").write_text("def broken(:\n")
+    before = set(sys.modules)
+    with pytest.raises(PlannerUnavailable, match="cannot be imported \\(SyntaxError"):
+        planner.load_planner(copied_checkout)
+    assert not [name for name in set(sys.modules) - before if name.startswith("_hct_ns_cmsis_nn_contracts_")]
+
+
+def test_a_package_without_the_planner_api_fails_closed(copied_checkout: Path) -> None:
+    (copied_checkout / PACKAGE_RELPATH / "__init__.py").write_text("from .errors import ContractError\n")
+    with pytest.raises(PlannerUnavailable, match="does not export \\['PlannerError', 'Target', 'open_planner'\\]"):
+        planner.load_planner(copied_checkout)
+
+
+def test_each_checkout_plans_with_its_own_package(copied_checkout: Path, tmp_path: Path) -> None:
+    other = tmp_path / "other"
+    shutil.copytree(copied_checkout, other)
+    marker = other / PACKAGE_RELPATH / "__init__.py"
+    marker.write_text(marker.read_text() + "\nHCT_MARKER = 'other'\n")
+    mine, theirs = load_contracts_package(copied_checkout), load_contracts_package(other)
+    assert mine is not theirs and theirs.HCT_MARKER == "other" and not hasattr(mine, "HCT_MARKER")
+
+
+def test_an_edited_package_is_reimported(copied_checkout: Path) -> None:
+    load_contracts_package(copied_checkout)
+    init = copied_checkout / PACKAGE_RELPATH / "__init__.py"
+    init.write_text(init.read_text() + "\nHCT_MARKER = 1\n")
+    os.utime(init, ns=(init.stat().st_atime_ns, init.stat().st_mtime_ns + 1_000_000))
+    assert load_contracts_package(copied_checkout).HCT_MARKER == 1
+
+
+def test_hct_reads_the_same_vocabulary_as_ns_cmsis_nn() -> None:
+    """legacy_nn and the JSON schemas restate ns-cmsis-nn's closed sets; the fixture's reader
+    (kept equal to the real checkout's by test_contract_fallback) is the source they must match."""
+    package = load_contracts_package(FIXTURE_ROOT)
+    vocabulary, signatures = package.vocabulary, package.signatures
+    assert legacy_nn.FEATURES == vocabulary.FEATURES and legacy_nn.OPS == vocabulary.OPS
+    assert legacy_nn._SCALAR_TYPES == signatures._SCALAR_TYPES
+    assert legacy_nn._TYPEDEF_RE.pattern == signatures._TYPEDEF_RE.pattern
+    assert legacy_nn._PUBLIC_HEADER_RE.pattern == signatures._PUBLIC_HEADER_RE.pattern
+    manifest = json.loads((_SCHEMA_DIR / "kernel-implementations-1.json").read_text())["$defs"]
+    assert set(manifest["decline"]["properties"]["cause"]["enum"]) == vocabulary.DECLINE_CAUSES
+    assert set(manifest["buffer"]["properties"]["lifetime"]["enum"]) == vocabulary.LIFETIMES
+    assert set(manifest["numerics"]["properties"]["claim"]["enum"]) == vocabulary.CLAIMS
+    assert set(manifest["implementation"]["required"]) == vocabulary.EXPORT_RECORD_KEYS
+    assert set(manifest["buffer"]["required"]) == vocabulary.EXPORT_BUFFER_KEYS
+    assert set(manifest["step"]["required"]) == vocabulary.EXPORT_STEP_KEYS
+    assert set(manifest["route"]["required"]) == vocabulary.EXPORT_ROUTE_KEYS
+    assert set(manifest["eligibility"]["required"]) == vocabulary.EXPORT_ELIGIBILITY_KEYS
+    assert set(manifest["numerics"]["required"]) == vocabulary.EXPORT_NUMERICS_KEYS
+    envelope = json.loads((_SCHEMA_DIR / "kernel-implementations-1.json").read_text())
+    assert set(envelope["required"]) == vocabulary.EXPORT_ENVELOPE_KEYS
+    assert json.loads((_SCHEMA_DIR / "kernel-contracts-1.json").read_text())["$defs"]["param"]["properties"][
+        "direction"]["enum"] == sorted(signatures.DIRECTIONS, key=["in", "out", "in,out"].index)

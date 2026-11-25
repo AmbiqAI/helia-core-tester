@@ -11,6 +11,9 @@ Fields (schema ``hct/library-profile/1``):
 - ``library``: the library's id, lowercase (``ns-cmsis-nn``).
 - ``source_root``: the library checkout, relative to the profile's directory (default ``.``). The
   profile's directory must lie inside it: the pack belongs to the library it tests.
+- ``contracts``: ``signatures`` and, optionally, ``implementations``: the library's kernel contract
+  documents, relative to the profile's directory and inside ``source_root``. Without it, an
+  ns-cmsis-nn profile reads ``Tests/KernelContracts/`` of its checkout.
 
 An ns-cmsis-nn checkout without a profile still loads, as the built-in ``legacy`` ns-cmsis-nn profile,
 until ns-cmsis-nn ships its own.
@@ -36,6 +39,8 @@ SCHEMA_PATH = Path(__file__).with_name("schemas") / "library-profile-1.json"
 # Every library this hct can run; the engine is ns-cmsis-nn-only until the profile drives it.
 SUPPORTED_LIBRARIES = ("ns-cmsis-nn",)
 LEGACY_LIBRARY = "ns-cmsis-nn"
+LEGACY_SIGNATURES = Path("Tests") / "KernelContracts" / "kernel_contracts.json"
+LEGACY_IMPLEMENTATIONS = Path("Tests") / "KernelContracts" / "kernel_implementations.json"
 MAX_PROFILE_BYTES = 256 * 1024
 
 
@@ -51,6 +56,13 @@ class LibraryProfile:
     source_root: Path
     # The hct-library.yaml read, or None for the built-in legacy ns-cmsis-nn profile.
     profile_path: Optional[Path]
+    # The contract documents the profile names, or None when it names none.
+    signatures: Optional[Path] = None
+    implementations: Optional[Path] = None
+
+    @property
+    def names_contracts(self) -> bool:
+        return self.signatures is not None
 
     @property
     def legacy(self) -> bool:
@@ -136,15 +148,32 @@ def _source_root(path: Path, value: str) -> Path:
     return root
 
 
+def _contract_path(path: Path, root: Path, key: str, value: str) -> Path:
+    if os.path.isabs(value) or "\\" in value:
+        raise LibraryProfileError(f"{path}: contracts.{key} {value!r} must be a relative POSIX path")
+    try:
+        target = (path.parent.resolve() / value).resolve()
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise LibraryProfileError(f"{path}: contracts.{key} {value!r} cannot be resolved ({exc})") from None
+    if root not in target.parents:
+        raise LibraryProfileError(f"{path}: contracts.{key} {value!r} ({target}) is outside source_root {root}")
+    return target
+
+
 def load_profile(path: Path) -> LibraryProfile:
     """Load and check one hct-library.yaml."""
     path = Path(path)
     data = _read_profile(path)
     _validate(path, data)
+    root = _source_root(path, data.get("source_root", "."))
+    contracts = data.get("contracts") or {}
     return LibraryProfile(
         library=data["library"],
-        source_root=_source_root(path, data.get("source_root", ".")),
+        source_root=root,
         profile_path=path.resolve(),
+        signatures=_contract_path(path, root, "signatures", contracts["signatures"]) if contracts else None,
+        implementations=_contract_path(path, root, "implementations", contracts["implementations"])
+        if "implementations" in contracts else None,
     )
 
 
@@ -176,4 +205,13 @@ def require_supported(profile: LibraryProfile) -> LibraryProfile:
         raise LibraryProfileError(
             f"library {profile.library!r} ({profile.describe()}) is not supported by this hct; "
             f"it runs: {', '.join(SUPPORTED_LIBRARIES)}")
+    # Generation reads ns-cmsis-nn's contracts from their default places until the engine reads the
+    # profile's; a profile that names others would be silently ignored, so it is refused.
+    defaults = (profile.source_root / LEGACY_SIGNATURES, profile.source_root / LEGACY_IMPLEMENTATIONS)
+    if profile.names_contracts and (profile.signatures, profile.implementations) != defaults:
+        named = (f"{profile.signatures} and {profile.implementations}" if profile.implementations
+                 else f"{profile.signatures} and no implementation manifest")
+        raise LibraryProfileError(
+            f"{profile.profile_path}: contracts name {named}; this hct runs {profile.library} from "
+            f"{defaults[0]} and {defaults[1]} only (hct contract validate reads others)")
     return profile
