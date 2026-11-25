@@ -117,6 +117,10 @@ class RunStep(StepBase):
         try:
             runtime_env = self._ensure_runtime_env()
             commands = self._run_commands()
+            child_env = dict(runtime_env.child_env)
+            if getattr(self.config, "cmsis_nn_root", None):
+                # The runner names returned status codes from this library's profile.
+                child_env["CMSIS_NN_ROOT"] = str(self.config.cmsis_nn_root)
             for cmd in commands:
                 if self.config.verbosity >= 2:
                     self.logger.info(f"Running command: {' '.join(cmd)}")
@@ -129,7 +133,7 @@ class RunStep(StepBase):
                     check=True,
                     text=True,
                     bufsize=1,
-                    env=runtime_env.child_env,
+                    env=child_env,
                 )
             
             if self.config.verbosity >= 2:

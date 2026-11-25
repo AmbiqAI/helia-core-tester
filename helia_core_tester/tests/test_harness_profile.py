@@ -84,11 +84,17 @@ def test_dsp_block_parses() -> None:
     ({"includes": ["/usr/include/arm_math.h"]}, "not a relative header name"),
     ({"includes": ["arm_math.c"]}, "not a relative header name"),
     ({"includes": ['arm"math.h']}, "not a relative header name"),
+    ({"includes": ["arm_math.h\n"]}, "not a relative header name"),
+    ({"includes": ["arm..math.h"]}, "not a relative header name"),
+    ({"includes": ["dsp/..h"]}, "not a relative header name"),
     ({"header_includes": ["arm_math.h", "arm_math.h"]}, "lists a header twice"),
     ({"status__success": "ARM_MATH_OK"}, "not one of its codes"),
     ({"status__argument_error": "ARM_MATH_SUCCESS"}, "name the same code"),
     ({"status__not_implemented": "ARM_MATH_NOPE"}, "not one of its codes"),
     ({"status__type": "arm status"}, "not a C identifier"),
+    ({"status__type": "arm_status\n"}, "not a C identifier"),
+    ({"context": "lib_context\n"}, "not a C identifier"),
+    ({"alias_groups": {"input": ["pSrc", "pSrcA\n"]}}, "not a C identifier"),
     ({"status__type": None}, "not a C identifier"),
     ({"status__success": None}, "missing success"),
     ({"status__codes": {}}, "at least one"),
@@ -175,6 +181,7 @@ def test_profile_refuses_a_bad_block(tmp_path: Path, block: str, message: str) -
 def test_current_harness_follows_the_resolved_library(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import helia_core_tester.generation.utils.temp_sizer_probe as probe
 
+    monkeypatch.delenv("CMSIS_NN_ROOT", raising=False)
     monkeypatch.setattr(probe, "resolve_cmsis_nn_root", lambda: None)
     assert current_harness() == legacy_harness()
     _profile(tmp_path, "schema: hct/library-profile/1\nlibrary: cmsis-dsp\n")
@@ -278,3 +285,90 @@ def test_harness_renders_the_profile_names() -> None:
 def test_harness_refuses_a_context_the_profile_lacks() -> None:
     with pytest.raises(HarnessProfileError, match="context"):
         _render_convolve(_renamed_nn(context=None))
+
+
+DSP_PROFILE = (
+    "schema: hct/library-profile/1\nlibrary: cmsis-dsp\nharness:\n"
+    "  includes: [arm_math.h]\n  header_includes: [arm_math.h]\n"
+    "  status:\n    type: arm_status\n    success: ARM_MATH_SUCCESS\n    argument_error: ARM_MATH_ARGUMENT_ERROR\n"
+    "    codes: {ARM_MATH_SUCCESS: 0, ARM_MATH_ARGUMENT_ERROR: -1}\n"
+)
+
+
+def test_cmsis_nn_root_is_read_as_given_whatever_its_layout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A root without Include/ is not the ns-cmsis-nn layout, but its profile still decides."""
+    _profile(tmp_path, DSP_PROFILE)
+    monkeypatch.setenv("CMSIS_NN_ROOT", str(tmp_path))
+    assert current_harness().status.success == "ARM_MATH_SUCCESS"
+    monkeypatch.setenv("CMSIS_NN_ROOT", str(tmp_path / "missing"))
+    with pytest.raises(HarnessProfileError, match="is not a directory"):
+        current_harness()
+
+
+def test_host_builds_take_the_harness_of_the_tree_they_compile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Host check, record and mutation compile in hct's own process, where CMSIS_NN_ROOT need not be set."""
+    from helia_core_tester.mutation.host_build import library_header_flags
+
+    tree = tmp_path / "dsp"
+    tree.mkdir()
+    _profile(tree, DSP_PROFILE)
+    monkeypatch.delenv("CMSIS_NN_ROOT", raising=False)
+    monkeypatch.setenv(harness_mod.HEADER_ENV, str(tmp_path / "headers"))
+    flag, directory = library_header_flags(tree)
+    assert flag == "-I"
+    assert "#define HCT_STATUS_SUCCESS ARM_MATH_SUCCESS" in (Path(directory) / "hct_library.h").read_text()
+    _, nn = library_header_flags(tmp_path)
+    assert "ARM_CMSIS_NN_SUCCESS" in (Path(nn) / "hct_library.h").read_text()
+
+
+def test_host_runtime_cache_key_follows_the_tree_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from helia_core_tester.generation.reference import host_kernels
+
+    dsp, nn = tmp_path / "dsp", tmp_path / "nn"
+    for tree in (dsp, nn):
+        (tree / "Include").mkdir(parents=True)
+        (tree / "Source").mkdir()
+    _profile(dsp, DSP_PROFILE)
+    monkeypatch.setattr(host_kernels, "compiler_identity", lambda cc: {"cc": "fixed"})
+    assert host_kernels.host_kernels_key(dsp, "m0", "cc") != host_kernels.host_kernels_key(nn, "m0", "cc")
+
+
+def test_expected_status_is_checked_against_the_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+
+    from helia_core_tester.generation.ops._shared.base import OperationBase
+
+    dsp = parse_harness("cmsis-dsp", DSP)
+    monkeypatch.setattr(harness_mod, "current_harness", lambda: dsp)
+
+    def status(desc):
+        return OperationBase.expected_status(SimpleNamespace(desc=desc))
+
+    assert status({"name": "c"}) == "ARM_MATH_SUCCESS"
+    assert status({"name": "c", "expected_status": "ARM_MATH_LENGTH_ERROR"}) == "ARM_MATH_LENGTH_ERROR"
+    with pytest.raises(ValueError, match="known values are .*ARM_MATH_SIZE_MISMATCH"):
+        status({"name": "c", "expected_status": "ARM_CMSIS_NN_ARG_ERROR"})
+    with pytest.raises(ValueError, match="autovectorize_declines"):
+        status({"name": "c", "expected_status": "ARM_MATH_ARGUMENT_ERROR", "autovectorize_declines": True})
+
+
+def test_run_step_passes_the_configured_checkout_to_the_runner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The FVP runner names status codes from the profile, so it must see the checkout --library chose."""
+    import subprocess
+
+    from helia_core_tester.core.config import Config
+    from helia_core_tester.core.steps.run import RunStep
+    from helia_core_tester.tests.test_fvp_parallel_control import _make_config_root, _runtime_env
+
+    checkout = tmp_path / "ns"
+    (checkout / "Include").mkdir(parents=True)
+    (checkout / "Include" / "arm_nnfunctions.h").write_text("")
+    (checkout / "CMakeLists.txt").write_text("")
+    seen = []
+    monkeypatch.setattr("helia_core_tester.core.steps.run.subprocess.run",
+                        lambda cmd, cwd, check, text, bufsize, env=None: seen.append(env)
+                        or subprocess.CompletedProcess(cmd, 0))
+    root = _make_config_root(tmp_path / "tester")
+    cfg = Config(project_root=root, cmsis_nn_root=checkout, enable_reporting=False)
+    assert RunStep(cfg, runtime_env=_runtime_env(root))._do_execute().success
+    assert seen and all(env["CMSIS_NN_ROOT"] == str(checkout.resolve()) for env in seen)

@@ -31,8 +31,8 @@ from helia_core_tester.core.errors import ConfigurationError
 
 HEADER_NAME = "hct_library.h"
 HEADER_ENV = "HCT_LIBRARY_HEADER_DIR"
-_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_INCLUDE_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_+.-]*(/[A-Za-z0-9_][A-Za-z0-9_+.-]*)*\.h$")
+_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_INCLUDE_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_+.-]*(/[A-Za-z0-9_][A-Za-z0-9_+.-]*)*\.h")
 INT32_MIN, INT32_MAX = -(2**31), 2**31 - 1
 
 
@@ -82,7 +82,7 @@ class HarnessProfile:
 
 
 def _ident(where: str, value: Any) -> str:
-    if not isinstance(value, str) or not _IDENT_RE.match(value):
+    if not isinstance(value, str) or not _IDENT_RE.fullmatch(value):
         raise HarnessProfileError(f"{where}: {value!r} is not a C identifier")
     return value
 
@@ -91,7 +91,7 @@ def _includes(where: str, value: Any) -> tuple[str, ...]:
     if not isinstance(value, list) or not value:
         raise HarnessProfileError(f"{where}: needs a non-empty list of headers")
     for header in value:
-        if not isinstance(header, str) or not _INCLUDE_RE.match(header) or ".." in header.split("/"):
+        if not isinstance(header, str) or not _INCLUDE_RE.fullmatch(header) or ".." in header:
             raise HarnessProfileError(f"{where}: {header!r} is not a relative header name (name.h)")
     if len(set(value)) != len(value):
         raise HarnessProfileError(f"{where}: lists a header twice")
@@ -193,6 +193,11 @@ def harness_for(library: str, data: Any, where: str) -> Optional[HarnessProfile]
     return legacy_harness() if library == legacy_nn.LIBRARY else None
 
 
+def harness_of_root(root: Optional[Path]) -> HarnessProfile:
+    """The harness block of the library at `root` (its hct-library.yaml, else ns-cmsis-nn's)."""
+    return _harness_of_root(str(Path(root).expanduser().resolve()) if root is not None else None)
+
+
 @lru_cache(maxsize=8)
 def _harness_of_root(root: Optional[str]) -> HarnessProfile:
     from helia_core_tester.core.library import PROFILE_FILE, resolve_library
@@ -209,11 +214,17 @@ def _harness_of_root(root: Optional[str]) -> HarnessProfile:
 
 
 def current_harness() -> HarnessProfile:
-    """The harness block of the library generation resolves (ns-cmsis-nn's when none resolves)."""
+    """The harness block of the library generation runs against: CMSIS_NN_ROOT as given (any layout),
+    else the nested checkout generation resolves, else ns-cmsis-nn's. A step that knows its checkout
+    passes it to harness_of_root instead."""
+    env_root = os.environ.get("CMSIS_NN_ROOT", "").strip()
+    if env_root:
+        if not Path(env_root).is_dir():
+            raise HarnessProfileError(f"CMSIS_NN_ROOT={env_root} is not a directory")
+        return harness_of_root(Path(env_root))
     from helia_core_tester.generation.utils.temp_sizer_probe import resolve_cmsis_nn_root
 
-    root = resolve_cmsis_nn_root()
-    return _harness_of_root(str(root) if root is not None else None)
+    return harness_of_root(resolve_cmsis_nn_root())
 
 
 def render_header(harness: HarnessProfile) -> str:

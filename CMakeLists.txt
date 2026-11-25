@@ -190,29 +190,35 @@ set(LINK_FILE ${FVP_CORSTONE_300_PATH}/linker.ld)
 # Runtime/validation logic common to every generated test .c file, compiled
 # once here instead of being re-emitted by Jinja into each generated file.
 # hct_library.h (the library's headers and status macros) is written by `generate` from the profile.
-if(HELIA_BUILD_GENERATED_TESTS AND NOT EXISTS "${GENERATED_TESTS_DIR}/hct_library.h")
-  message(FATAL_ERROR "Missing ${GENERATED_TESTS_DIR}/hct_library.h. Run `uv run helia_core_tester generate` first.")
-endif()
-add_library(helia_test_runtime STATIC src/test_runtime/helia_test_runtime.c)
-target_include_directories(helia_test_runtime PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src" "${GENERATED_TESTS_DIR}")
-target_compile_definitions(helia_test_runtime PRIVATE USING_FVP_CORSTONE_300)
-target_link_libraries(helia_test_runtime PRIVATE cmsis-nn)
-# Generated sources that include the library's inline float16 conversion take the VCVT form its
-# assembler probe chose (ns-cmsis-nn#427), as its own unit tests do; a static library keeps the
-# verdict private.
-get_target_property(_nn_gas_defs cmsis-nn COMPILE_DEFINITIONS)
-if(_nn_gas_defs)
-  list(FILTER _nn_gas_defs INCLUDE REGEX "^ARM_NN_GAS_")
-  target_compile_definitions(helia_test_runtime PUBLIC ${_nn_gas_defs})
-endif()
-if(ENABLE_COVERAGE AND NOT ENABLE_COVERAGE_MVE_INT)
-  # This build gives ns-cmsis-nn's integer sources ARM_MATH_AUTOVECTORIZE, which compiles out their
-  # MVE integer paths; a harness whose entry lives only on those paths expects it to decline.
-  target_compile_definitions(helia_test_runtime PUBLIC HELIA_CMSIS_NN_INT_AUTOVECTORIZE)
-endif()
-if(ENABLE_COVERAGE AND NOT ENABLE_COVERAGE_MVE_FLOAT)
-  # The same for the float sources and their MVE float paths.
-  target_compile_definitions(helia_test_runtime PUBLIC HELIA_CMSIS_NN_FLOAT_AUTOVECTORIZE)
+# Without it the runtime cannot compile: generated tests refuse to configure, and a configure without
+# them leaves the runtime out.
+if(NOT EXISTS "${GENERATED_TESTS_DIR}/hct_library.h")
+  if(HELIA_BUILD_GENERATED_TESTS)
+    message(FATAL_ERROR "Missing ${GENERATED_TESTS_DIR}/hct_library.h. Run `uv run helia_core_tester generate` first.")
+  endif()
+  message(STATUS "No ${GENERATED_TESTS_DIR}/hct_library.h: helia_test_runtime is not configured")
+else()
+  add_library(helia_test_runtime STATIC src/test_runtime/helia_test_runtime.c)
+  target_include_directories(helia_test_runtime PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src" "${GENERATED_TESTS_DIR}")
+  target_compile_definitions(helia_test_runtime PRIVATE USING_FVP_CORSTONE_300)
+  target_link_libraries(helia_test_runtime PRIVATE cmsis-nn)
+  # Generated sources that include the library's inline float16 conversion take the VCVT form its
+  # assembler probe chose (ns-cmsis-nn#427), as its own unit tests do; a static library keeps the
+  # verdict private.
+  get_target_property(_nn_gas_defs cmsis-nn COMPILE_DEFINITIONS)
+  if(_nn_gas_defs)
+    list(FILTER _nn_gas_defs INCLUDE REGEX "^ARM_NN_GAS_")
+    target_compile_definitions(helia_test_runtime PUBLIC ${_nn_gas_defs})
+  endif()
+  if(ENABLE_COVERAGE AND NOT ENABLE_COVERAGE_MVE_INT)
+    # This build gives ns-cmsis-nn's integer sources ARM_MATH_AUTOVECTORIZE, which compiles out their
+    # MVE integer paths; a harness whose entry lives only on those paths expects it to decline.
+    target_compile_definitions(helia_test_runtime PUBLIC HELIA_CMSIS_NN_INT_AUTOVECTORIZE)
+  endif()
+  if(ENABLE_COVERAGE AND NOT ENABLE_COVERAGE_MVE_FLOAT)
+    # The same for the float sources and their MVE float paths.
+    target_compile_definitions(helia_test_runtime PUBLIC HELIA_CMSIS_NN_FLOAT_AUTOVECTORIZE)
+  endif()
 endif()
 
 # ---------- Helpers ----------

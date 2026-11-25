@@ -249,13 +249,6 @@ class OperationBase(ABC):
     # kinds its fault template can inject; an operator with no fault template
     # keeps the empty default and rejects `fault:` outright.
     FAULT_KINDS: Tuple[str, ...] = ()
-    EXPECTED_STATUS_VALUES: Tuple[str, ...] = (
-        "ARM_CMSIS_NN_SUCCESS",
-        "ARM_CMSIS_NN_ARG_ERROR",
-        "ARM_CMSIS_NN_NO_IMPL_ERROR",
-        "ARM_CMSIS_NN_FAILURE",
-    )
-
     def fault_kind(self) -> Optional[str]:
         """Return the validated `fault:` kind, or None when the descriptor has none."""
         requested = self.desc.get("fault")
@@ -274,14 +267,18 @@ class OperationBase(ABC):
         return kind
 
     def expected_status(self) -> str:
-        """Return the arm_cmsis_nn_status token the kernel call must return."""
-        status = str(self.desc.get("expected_status", "ARM_CMSIS_NN_SUCCESS")).strip()
-        if status not in self.EXPECTED_STATUS_VALUES:
+        """Return the status code (a name from the profile's harness status.codes) the kernel call must return."""
+        from helia_core_tester.core.harness import current_harness
+
+        codes = current_harness().status
+        status = str(self.desc.get("expected_status", codes.success)).strip()
+        known = [name for name, _ in codes.codes]
+        if status not in known:
             raise ValueError(
                 f"Unsupported expected_status {status!r} for descriptor {self.desc.get('name')!r}; "
-                f"known values are {list(self.EXPECTED_STATUS_VALUES)}"
+                f"known values are {known}"
             )
-        if status != "ARM_CMSIS_NN_SUCCESS" and self.desc.get("autovectorize_declines"):
+        if status != codes.success and self.desc.get("autovectorize_declines"):
             raise ValueError(
                 f"{self.desc.get('name')!r}: autovectorize_declines expects the full result where the entry runs; "
                 f"it cannot be combined with expected_status {status}"

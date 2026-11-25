@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence
 
-from helia_core_tester.core.harness import current_harness, header_dir
+from helia_core_tester.core.harness import current_harness, harness_of_root, header_dir
 from helia_core_tester.utils.host_compiler import find_host_cc
 
 _HOST_DIR = Path(__file__).resolve().parent / "host"
@@ -212,7 +212,7 @@ def build_runtime_obj(
             "-Dhelia_test_finish=helia_test_finish_fvp_unused",
             "-I",
             str(tester_root / "src"),
-            *library_header_flags(),
+            *library_header_flags(tree_root),
             *kernel,
             str(src),
             "-o",
@@ -224,9 +224,11 @@ def build_runtime_obj(
     return obj
 
 
-def library_header_flags() -> List[str]:
-    """`-I` for the hct_library.h of the library under test, which the runtime includes."""
-    return ["-I", str(header_dir(current_harness()))]
+def library_header_flags(tree_root: Optional[Path] = None) -> List[str]:
+    """`-I` for the hct_library.h of the library at `tree_root` (else the one generation resolves),
+    which the runtime includes."""
+    harness = harness_of_root(tree_root) if tree_root is not None else current_harness()
+    return ["-I", str(header_dir(harness))]
 
 
 def discover_cases(cases_roots: Iterable[Path]) -> List[Path]:
@@ -280,7 +282,7 @@ def build_and_run_case(
         *host_sizer_defines(sources),
         "-I",
         str(tester_root / "src"),
-        *library_header_flags(),
+        *library_header_flags(tree_root),
         "-I",
         str(case_dir),
         "-I",
