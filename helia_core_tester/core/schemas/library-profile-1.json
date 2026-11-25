@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hct/library-profile/1",
+  "title": "hct library profile (hct-library.yaml)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "library"],
+  "properties": {
+    "schema": {"const": "hct/library-profile/1"},
+    "library": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
+      "description": "The library's id."
+    },
+    "source_root": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "description": "The library checkout, relative to the profile's directory; default \".\"."
+    }
+  }
+}

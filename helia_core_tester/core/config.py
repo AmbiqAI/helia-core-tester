@@ -12,6 +12,7 @@ from typing import Any, Dict, Optional
 from helia_core_tester.core.cpu_targets import get_cpu_profile, parse_cpu_list
 from helia_core_tester.core.discovery import find_repo_root
 from helia_core_tester.core.errors import ConfigurationError, PathNotFoundError
+from helia_core_tester.core.library import LibraryProfile, LibraryProfileError, require_supported, resolve_library
 from helia_core_tester.core.path_layout import (
     VALID_TOOLCHAINS,
     artifacts_root,
@@ -86,6 +87,7 @@ PATH_KEYS = frozenset(
         "generated_tests_root",
         "reports_root",
         "cmsis_nn_root",
+        "library",
         "hidden_dir",
         "hidden_seed_file",
     }
@@ -108,6 +110,9 @@ class Config:
     generated_tests_root: Optional[Path] = None
     reports_root: Optional[Path] = None
     cmsis_nn_root: Optional[Path] = None
+    # The directory holding the library's hct-library.yaml (--library). It sets cmsis_nn_root to the
+    # profile's source_root; --cmsis-nn-root stays as the ns-cmsis-nn spelling of the same thing.
+    library: Optional[Path] = None
 
     cpu: str = "cortex-m55"
     cpus: list[str] = field(default_factory=list)
@@ -161,6 +166,7 @@ class Config:
     report_formats: list[str] = field(default_factory=lambda: ["json"])
 
     _explicit_overrides: set[str] = field(default_factory=set, repr=False, compare=False)
+    _library_profile: Optional[LibraryProfile] = field(default=None, init=False, repr=False, compare=False)
     _frozen: bool = field(default=False, init=False, repr=False, compare=False)
 
     def __setattr__(self, name: str, value: Any) -> None:
@@ -173,6 +179,7 @@ class Config:
         self._load_config_file_defaults()
         self._apply_env_overrides()
         self._resolve_paths()
+        self._resolve_library()
         self._validate_and_finalize()
         object.__setattr__(self, "_frozen", True)
 
@@ -221,7 +228,7 @@ class Config:
 
         explicit = set(self._explicit_overrides or set())
         for key, value in table.items():
-            if value is None or not hasattr(self, key):
+            if value is None or key.startswith("_") or not hasattr(self, key):
                 continue
             if key in explicit:
                 continue
@@ -256,6 +263,8 @@ class Config:
 
         if self.cmsis_nn_root is not None:
             self.cmsis_nn_root = Path(self.cmsis_nn_root).expanduser().resolve()
+        if self.library is not None:
+            self.library = Path(self.library).expanduser().resolve()
         if self.hidden_dir is not None:
             self.hidden_dir = Path(self.hidden_dir).resolve()
         if self.hidden_seed_file is not None:
@@ -304,7 +313,7 @@ class Config:
     def _apply_env_overrides(self) -> None:
         explicit = set(self._explicit_overrides or set())
         for key in self.__dataclass_fields__.keys():
-            if key in {"_explicit_overrides", "_frozen", "cpus", "suites", "config_file"}:
+            if key.startswith("_") or key in {"cpus", "suites", "config_file"}:
                 continue
             if key in explicit:
                 continue
@@ -317,6 +326,27 @@ class Config:
             except Exception as e:
                 raise ConfigurationError(f"Invalid env override {env_key}={raw!r}: {e}") from e
             setattr(self, key, parsed)
+
+    def _resolve_library(self) -> None:
+        """Load --library's profile and derive cmsis_nn_root from it; fail closed on any doubt."""
+        if self.library is None:
+            return
+        profile = require_supported(resolve_library(self.library))
+        if self.cmsis_nn_root is not None and self.cmsis_nn_root != profile.source_root:
+            raise LibraryProfileError(
+                f"{self._source_of('library', '--library')} names {profile.describe()}, but "
+                f"{self._source_of('cmsis_nn_root', '--cmsis-nn-root')} names {self.cmsis_nn_root}; "
+                "pass one of them")
+        self.cmsis_nn_root = profile.source_root
+        self._library_profile = profile
+
+    @property
+    def library_profile(self) -> Optional[LibraryProfile]:
+        """The library under test: --library's profile, else the profile (or legacy layout) of an
+        existing cmsis_nn_root, else None. Raises LibraryProfileError for a profile that is invalid."""
+        if self._library_profile is None and self.cmsis_nn_root is not None and Path(self.cmsis_nn_root).is_dir():
+            object.__setattr__(self, "_library_profile", require_supported(resolve_library(self.cmsis_nn_root)))
+        return self._library_profile
 
     def _validate_and_finalize(self) -> None:
         if not self.project_root.exists():
@@ -610,12 +640,17 @@ class Config:
         return None
 
     def _cmsis_nn_root_source(self) -> str:
+        if self.library is not None:
+            return self._source_of("library", "--library")
+        return self._source_of("cmsis_nn_root", "--cmsis-nn-root")
+
+    def _source_of(self, key: str, flag: str) -> str:
         # Mirrors __post_init__ precedence: explicit argument > env var > config file.
-        if "cmsis_nn_root" in (self._explicit_overrides or set()):
-            return "--cmsis-nn-root"
-        if os.environ.get(f"{ENV_PREFIX}CMSIS_NN_ROOT") is not None:
-            return f"{ENV_PREFIX}CMSIS_NN_ROOT"
-        return f"cmsis_nn_root in {self.config_file}" if self.config_file else "config"
+        if key in (self._explicit_overrides or set()):
+            return flag
+        if os.environ.get(f"{ENV_PREFIX}{key.upper()}") is not None:
+            return f"{ENV_PREFIX}{key.upper()}"
+        return f"{key} in {self.config_file}" if self.config_file else "config"
 
     def tests_report_dir_for(self, cpu: str, suite: Optional[str] = None) -> Path:
         suite_name = normalize_suite(suite or self.default_suite())
