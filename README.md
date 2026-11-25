@@ -732,6 +732,29 @@ HELIA_GCC_VERSION=15.2.rel1 uv run helia_core_tester full --cpu cortex-m55
 
 The FVP build compiles the ns-cmsis-nn checkout two levels up (`../..`, the nested layout) by default. `generate`, `build` and `full` take `--cmsis-nn-root <path>` to use another checkout; the environment form is `HELIA_CORE_TESTER_CMSIS_NN_ROOT` (also `cmsis_nn_root` in `helia_core_tester.toml`). A bare `CMSIS_NN_ROOT` environment variable does not reach the build. A path with no `CMakeLists.txt` fails before CMake runs.
 
+### Library under test (`--library`)
+
+`generate`, `build`, `host-check`, `record`, `full`, `contract inventory` and `doctor` take `--library <dir>`. `<dir>` holds the library's profile, `hct-library.yaml` (schema `hct/library-profile/1`, `helia_core_tester/core/schemas/library-profile-1.json`):
+
+```yaml
+schema: hct/library-profile/1
+library: ns-cmsis-nn      # the library's id
+source_root: ../..        # the checkout, relative to this file's directory (default .)
+```
+
+- **Where the build looks:** the profile sets the checkout the build uses to `source_root`.
+  - The environment form is `HELIA_CORE_TESTER_LIBRARY`, and `library` also works in `helia_core_tester.toml`.
+  - An ns-cmsis-nn checkout without a profile loads as a built-in legacy profile.
+  - `--cmsis-nn-root` still names the checkout directly.
+  - Giving both with different checkouts is an error, from whichever sources they came.
+- **Failures:** each of these is refused with the file and the field named, and the command exits 2:
+  - a profile that is not valid YAML;
+  - an unknown or duplicate field;
+  - a wrong schema;
+  - a `source_root` that is absolute, missing, or does not contain the profile;
+  - a library this hct cannot run yet. That is anything but `ns-cmsis-nn` for now.
+- **Checking a profile:** `doctor --library <dir>` checks a profile on its own.
+
 ## Canonical Artifacts
 
 Generated tests:

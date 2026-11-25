@@ -12,6 +12,7 @@ from typing import Any, Dict, Optional
 from helia_core_tester.core.cpu_targets import get_cpu_profile, parse_cpu_list
 from helia_core_tester.core.discovery import find_repo_root
 from helia_core_tester.core.errors import ConfigurationError, PathNotFoundError
+from helia_core_tester.core.library import LibraryProfile, LibraryProfileError, require_supported, resolve_library
 from helia_core_tester.core.path_layout import (
     VALID_TOOLCHAINS,
     artifacts_root,
@@ -86,10 +87,49 @@ PATH_KEYS = frozenset(
         "generated_tests_root",
         "reports_root",
         "cmsis_nn_root",
+        "library",
         "hidden_dir",
         "hidden_seed_file",
     }
 )
+
+
+def config_file_table(project_root: Path, config_file: Optional[Path] = None) -> tuple[Optional[Path], dict]:
+    """(config file, its [helia_core_tester] table): HELIA_CORE_TESTER_CONFIG, else `config_file`, else
+    <project_root>/helia_core_tester.toml. The table is empty when the file is absent or has none."""
+    env_path = os.environ.get("HELIA_CORE_TESTER_CONFIG")
+    if env_path:
+        config_file = Path(env_path).resolve()
+    elif config_file is None:
+        config_file = Path(project_root) / "helia_core_tester.toml"
+    if not config_file.exists():
+        return config_file, {}
+    try:
+        import tomllib
+
+        data = tomllib.loads(config_file.read_text())
+        table = data.get("helia_core_tester") or data.get("tool", {}).get("helia_core_tester", {})
+    except Exception as e:
+        raise ConfigurationError(f"Failed to read config file: {config_file}: {e}") from e
+    return config_file, table if isinstance(table, dict) else {}
+
+
+def configured_library(project_root: Path, cli_value: Optional[Path]) -> tuple[Optional[Path], str]:
+    """(library directory, where it came from) by Config's precedence: --library, then
+    HELIA_CORE_TESTER_LIBRARY, then `library` in the config file; (None, "") when none sets it.
+    For commands that do not build a Config."""
+    if cli_value is not None:
+        return Path(cli_value).expanduser().resolve(), "--library"
+    env_value = os.environ.get(f"{ENV_PREFIX}LIBRARY")
+    if env_value is not None:
+        return Path(env_value).expanduser().resolve(), f"{ENV_PREFIX}LIBRARY"
+    config_file, table = config_file_table(project_root)
+    value = table.get("library")
+    if value is None:
+        return None, ""
+    if not isinstance(value, str):
+        raise ConfigurationError(f"library in {config_file} must be a path string, got {value!r}")
+    return Path(value).expanduser().resolve(), f"library in {config_file}"
 
 
 def default_run_jobs() -> int:
@@ -108,6 +148,9 @@ class Config:
     generated_tests_root: Optional[Path] = None
     reports_root: Optional[Path] = None
     cmsis_nn_root: Optional[Path] = None
+    # The directory holding the library's hct-library.yaml (--library). It sets cmsis_nn_root to the
+    # profile's source_root; --cmsis-nn-root stays as the ns-cmsis-nn spelling of the same thing.
+    library: Optional[Path] = None
 
     cpu: str = "cortex-m55"
     cpus: list[str] = field(default_factory=list)
@@ -161,6 +204,7 @@ class Config:
     report_formats: list[str] = field(default_factory=lambda: ["json"])
 
     _explicit_overrides: set[str] = field(default_factory=set, repr=False, compare=False)
+    _library_profile: Optional[LibraryProfile] = field(default=None, init=False, repr=False, compare=False)
     _frozen: bool = field(default=False, init=False, repr=False, compare=False)
 
     def __setattr__(self, name: str, value: Any) -> None:
@@ -173,6 +217,7 @@ class Config:
         self._load_config_file_defaults()
         self._apply_env_overrides()
         self._resolve_paths()
+        self._resolve_library()
         self._validate_and_finalize()
         object.__setattr__(self, "_frozen", True)
 
@@ -200,29 +245,15 @@ class Config:
         return MISSING
 
     def _load_config_file_defaults(self) -> None:
-        env_path = os.environ.get("HELIA_CORE_TESTER_CONFIG")
-        if env_path:
-            self.config_file = Path(env_path).resolve()
-        elif self.config_file is None:
-            self.config_file = self.project_root / "helia_core_tester.toml"
-
-        if not self.config_file or not self.config_file.exists():
-            return
-
-        try:
-            import tomllib
-
-            data = tomllib.loads(self.config_file.read_text())
-            table = data.get("helia_core_tester") or data.get("tool", {}).get("helia_core_tester", {})
-            if not isinstance(table, dict):
-                return
-        except Exception as e:
-            raise ConfigurationError(f"Failed to read config file: {self.config_file}: {e}") from e
+        self.config_file, table = config_file_table(self.project_root, self.config_file)
 
         explicit = set(self._explicit_overrides or set())
+        settable = {f.name for f in fields(self) if f.init}
         for key, value in table.items():
-            if value is None or not hasattr(self, key):
+            if value is None or key.startswith("_") or key not in settable:
                 continue
+            if key in PATH_KEYS and not isinstance(value, (str, Path)):
+                raise ConfigurationError(f"{key} in {self.config_file} must be a path string, got {value!r}")
             if key in explicit:
                 continue
             default_value = self._field_default(key)
@@ -256,6 +287,8 @@ class Config:
 
         if self.cmsis_nn_root is not None:
             self.cmsis_nn_root = Path(self.cmsis_nn_root).expanduser().resolve()
+        if self.library is not None:
+            self.library = Path(self.library).expanduser().resolve()
         if self.hidden_dir is not None:
             self.hidden_dir = Path(self.hidden_dir).resolve()
         if self.hidden_seed_file is not None:
@@ -304,7 +337,7 @@ class Config:
     def _apply_env_overrides(self) -> None:
         explicit = set(self._explicit_overrides or set())
         for key in self.__dataclass_fields__.keys():
-            if key in {"_explicit_overrides", "_frozen", "cpus", "suites", "config_file"}:
+            if key.startswith("_") or key in {"cpus", "suites", "config_file"}:
                 continue
             if key in explicit:
                 continue
@@ -317,6 +350,27 @@ class Config:
             except Exception as e:
                 raise ConfigurationError(f"Invalid env override {env_key}={raw!r}: {e}") from e
             setattr(self, key, parsed)
+
+    def _resolve_library(self) -> None:
+        """Load --library's profile and derive cmsis_nn_root from it; fail closed on any doubt."""
+        if self.library is None:
+            return
+        profile = require_supported(resolve_library(self.library))
+        if self.cmsis_nn_root is not None and self.cmsis_nn_root != profile.source_root:
+            raise LibraryProfileError(
+                f"{self._source_of('library', '--library')} names {profile.describe()}, but "
+                f"{self._source_of('cmsis_nn_root', '--cmsis-nn-root')} names {self.cmsis_nn_root}; "
+                "pass one of them")
+        self.cmsis_nn_root = profile.source_root
+        self._library_profile = profile
+
+    @property
+    def library_profile(self) -> Optional[LibraryProfile]:
+        """The library under test: --library's profile, else the profile (or legacy layout) of an
+        existing cmsis_nn_root, else None. Raises LibraryProfileError for a profile that is invalid."""
+        if self._library_profile is None and self.cmsis_nn_root is not None and Path(self.cmsis_nn_root).is_dir():
+            object.__setattr__(self, "_library_profile", require_supported(resolve_library(self.cmsis_nn_root)))
+        return self._library_profile
 
     def _validate_and_finalize(self) -> None:
         if not self.project_root.exists():
@@ -610,12 +664,17 @@ class Config:
         return None
 
     def _cmsis_nn_root_source(self) -> str:
+        if self.library is not None:
+            return self._source_of("library", "--library")
+        return self._source_of("cmsis_nn_root", "--cmsis-nn-root")
+
+    def _source_of(self, key: str, flag: str) -> str:
         # Mirrors __post_init__ precedence: explicit argument > env var > config file.
-        if "cmsis_nn_root" in (self._explicit_overrides or set()):
-            return "--cmsis-nn-root"
-        if os.environ.get(f"{ENV_PREFIX}CMSIS_NN_ROOT") is not None:
-            return f"{ENV_PREFIX}CMSIS_NN_ROOT"
-        return f"cmsis_nn_root in {self.config_file}" if self.config_file else "config"
+        if key in (self._explicit_overrides or set()):
+            return flag
+        if os.environ.get(f"{ENV_PREFIX}{key.upper()}") is not None:
+            return f"{ENV_PREFIX}{key.upper()}"
+        return f"{key} in {self.config_file}" if self.config_file else "config"
 
     def tests_report_dir_for(self, cpu: str, suite: Optional[str] = None) -> Path:
         suite_name = normalize_suite(suite or self.default_suite())
