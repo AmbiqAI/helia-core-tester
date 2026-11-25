@@ -208,8 +208,10 @@ def require_supported(profile: LibraryProfile) -> LibraryProfile:
     # Generation reads ns-cmsis-nn's contracts from their default places until the engine reads the
     # profile's; a profile that names others would be silently ignored, so it is refused.
     defaults = (profile.source_root / LEGACY_SIGNATURES, profile.source_root / LEGACY_IMPLEMENTATIONS)
-    if profile.names_contracts and (profile.signatures, profile.implementations or defaults[1]) != defaults:
+    if profile.names_contracts and (profile.signatures, profile.implementations) != defaults:
+        named = (f"{profile.signatures} and {profile.implementations}" if profile.implementations
+                 else f"{profile.signatures} and no implementation manifest")
         raise LibraryProfileError(
-            f"{profile.profile_path}: contracts name {profile.signatures} and {profile.implementations}; this hct "
-            f"runs {profile.library} from {defaults[0]} and {defaults[1]} only (hct contract validate reads others)")
+            f"{profile.profile_path}: contracts name {named}; this hct runs {profile.library} from "
+            f"{defaults[0]} and {defaults[1]} only (hct contract validate reads others)")
     return profile

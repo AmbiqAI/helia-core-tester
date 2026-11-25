@@ -756,7 +756,7 @@ contracts:                # optional; ns-cmsis-nn defaults to Tests/KernelContra
   - a wrong schema;
   - a `source_root` that is absolute, missing, or does not contain the profile;
   - a `contracts` path that is absolute or outside `source_root`;
-  - a library this hct cannot run yet. That is anything but `ns-cmsis-nn` for now, and an ns-cmsis-nn profile whose `contracts` name other files than `Tests/KernelContracts/` (generation reads those).
+  - a library this hct cannot run yet. That is anything but `ns-cmsis-nn` for now, and an ns-cmsis-nn profile whose `contracts` name anything but both documents in `Tests/KernelContracts/`, leaving out the implementation manifest included (generation reads both).
 - **Checking a profile:** `doctor --library <dir>` checks a profile on its own, and `contract validate --library <dir>` checks the contract documents it names, for any library.
 
 ## Canonical Artifacts

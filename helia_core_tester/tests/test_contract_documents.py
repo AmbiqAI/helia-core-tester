@@ -267,12 +267,22 @@ def test_the_engine_refuses_ns_cmsis_nn_contracts_it_would_not_read(tmp_path: Pa
     (checkout / "CMakeLists.txt").write_text("")
     pack = checkout / "Tests" / "hct"
     pack.mkdir(parents=True)
-    (pack / "hct-library.yaml").write_text("schema: hct/library-profile/1\nlibrary: ns-cmsis-nn\nsource_root: ../..\n"
-                                           "contracts:\n  signatures: ../KernelContracts/kernel_contracts.json\n")
+    header = "schema: hct/library-profile/1\nlibrary: ns-cmsis-nn\nsource_root: ../..\ncontracts:\n"
+    defaults = ("  signatures: ../KernelContracts/kernel_contracts.json\n"
+                "  implementations: ../KernelContracts/kernel_implementations.json\n")
+    (pack / "hct-library.yaml").write_text(header + defaults)
     assert require_supported(load_profile(pack / "hct-library.yaml"))
-    (pack / "hct-library.yaml").write_text("schema: hct/library-profile/1\nlibrary: ns-cmsis-nn\nsource_root: ../..\n"
-                                           "contracts:\n  signatures: sigs.json\n")
+    (pack / "hct-library.yaml").write_text(header + "  signatures: sigs.json\n")
     with pytest.raises(LibraryProfileError, match="this hct runs ns-cmsis-nn from .*kernel_contracts.json"):
+        require_supported(load_profile(pack / "hct-library.yaml"))
+    # Generation would read the default manifest anyway, so leaving it out is refused too.
+    (pack / "hct-library.yaml").write_text(header + "  signatures: ../KernelContracts/kernel_contracts.json\n")
+    with pytest.raises(LibraryProfileError, match="kernel_contracts.json and no implementation manifest; this hct"):
+        require_supported(load_profile(pack / "hct-library.yaml"))
+    (pack / "hct-library.yaml").write_text(
+        header + defaults.replace("kernel_implementations.json", "other_implementations.json"))
+    (checkout / "Tests" / "KernelContracts" / "other_implementations.json").write_text("{}")
+    with pytest.raises(LibraryProfileError, match="other_implementations.json; this hct runs"):
         require_supported(load_profile(pack / "hct-library.yaml"))
 
 
