@@ -1,0 +1,7 @@
+#pragma once
+#include <stdint.h>
+
+static const uint32_t input_bits[] = { {{ inputs | join(', ') }} };
+static const uint32_t expected_bits[] = { {{ golden | join(', ') }} };
+/* exp(-1) and exp(+1) require approximation; the other expected encodings are exact. */
+static const uint8_t max_ulp[] = { {{ max_ulp | join(', ') }} };

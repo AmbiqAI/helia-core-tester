@@ -1,0 +1,6 @@
+operator: Exp
+name: exp_edges_tail_f32
+suite: float
+required_kernel_symbols: [arm_nn_exp_f32]
+tensor_dtypes: {input: FP32, output: FP32}
+input_shape: [1, 1, 1, 9]

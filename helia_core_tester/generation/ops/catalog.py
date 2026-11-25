@@ -155,6 +155,9 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         descriptor_relpaths=("BasicMathFunctions/mul.yaml", "BasicMathFunctions/mul_float.yaml"),
         template_relpath="BasicMathFunctions/mul",
     ),
+    "Exp": _spec("Exp", "BasicMathFunctions", "exp", "OpExp", "BasicMathFunctions/exp.yaml", "BasicMathFunctions/exp"),
+    "RbfKernel": _spec("RbfKernel", "BasicMathFunctions", "rbf_kernel", "OpRbfKernel", "BasicMathFunctions/rbf_kernel.yaml", "BasicMathFunctions/rbf_kernel"),
+    "TreeWalk": _spec("TreeWalk", "BasicMathFunctions", "tree_walk", "OpTreeWalk", "BasicMathFunctions/tree_walk.yaml", "BasicMathFunctions/tree_walk"),
     "Fill": _spec(
         "Fill",
         "BasicMathFunctions",
