@@ -251,6 +251,29 @@ def test_toml_cannot_set_private_fields(tmp_path) -> None:
     assert config.library_profile is None
 
 
+def test_toml_cannot_set_properties(tmp_path) -> None:
+    repo = _repo(tmp_path)
+    (repo / "helia_core_tester.toml").write_text('[helia_core_tester]\nlibrary_profile = "x"\n')
+    assert Config(project_root=repo, _explicit_overrides={"project_root"}).library_profile is None
+
+
+@pytest.mark.parametrize("key, value", [("library", "3"), ("library", "true"), ("cmsis_nn_root", "[1]"),
+                                        ("library", '{a = 1}')])
+def test_toml_path_of_the_wrong_type_is_refused(tmp_path, key, value) -> None:
+    repo = _repo(tmp_path)
+    (repo / "helia_core_tester.toml").write_text(f"[helia_core_tester]\n{key} = {value}\n")
+    with pytest.raises(ConfigurationError, match=f"{key} in .*helia_core_tester.toml must be a path string"):
+        Config(project_root=repo, _explicit_overrides={"project_root"})
+
+
+def test_cli_refuses_a_toml_library_of_the_wrong_type(tmp_path) -> None:
+    repo = _repo(tmp_path)
+    (repo / "helia_core_tester.toml").write_text("[helia_core_tester]\nlibrary = 3\n")
+    result = CliRunner().invoke(cli_module.app, ["generate", "--repo-root", str(repo), "--dry-run"])
+    assert isinstance(result.exception, ConfigurationError), result.exception
+    assert "library in" in str(result.exception) and "must be a path string" in str(result.exception)
+
+
 def test_same_checkout_twice_is_fine(tmp_path) -> None:
     checkout = _nn_checkout(tmp_path)
     config = _config(_repo(tmp_path), library=checkout, cmsis_nn_root=checkout)

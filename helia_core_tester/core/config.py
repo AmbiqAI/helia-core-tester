@@ -248,9 +248,12 @@ class Config:
         self.config_file, table = config_file_table(self.project_root, self.config_file)
 
         explicit = set(self._explicit_overrides or set())
+        settable = {f.name for f in fields(self) if f.init}
         for key, value in table.items():
-            if value is None or key.startswith("_") or not hasattr(self, key):
+            if value is None or key.startswith("_") or key not in settable:
                 continue
+            if key in PATH_KEYS and not isinstance(value, (str, Path)):
+                raise ConfigurationError(f"{key} in {self.config_file} must be a path string, got {value!r}")
             if key in explicit:
                 continue
             default_value = self._field_default(key)
