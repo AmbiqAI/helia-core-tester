@@ -189,8 +189,12 @@ set(LINK_FILE ${FVP_CORSTONE_300_PATH}/linker.ld)
 # ---------- Shared generated-test runtime ----------
 # Runtime/validation logic common to every generated test .c file, compiled
 # once here instead of being re-emitted by Jinja into each generated file.
+# hct_library.h (the library's headers and status macros) is written by `generate` from the profile.
+if(HELIA_BUILD_GENERATED_TESTS AND NOT EXISTS "${GENERATED_TESTS_DIR}/hct_library.h")
+  message(FATAL_ERROR "Missing ${GENERATED_TESTS_DIR}/hct_library.h. Run `uv run helia_core_tester generate` first.")
+endif()
 add_library(helia_test_runtime STATIC src/test_runtime/helia_test_runtime.c)
-target_include_directories(helia_test_runtime PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_include_directories(helia_test_runtime PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src" "${GENERATED_TESTS_DIR}")
 target_compile_definitions(helia_test_runtime PRIVATE USING_FVP_CORSTONE_300)
 target_link_libraries(helia_test_runtime PRIVATE cmsis-nn)
 # Generated sources that include the library's inline float16 conversion take the VCVT form its

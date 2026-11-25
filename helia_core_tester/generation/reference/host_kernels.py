@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from helia_core_tester.core import host_reference
+from helia_core_tester.core.harness import current_harness, header_digest
 from helia_core_tester.mutation import host_build
 from helia_core_tester.utils.file_lock import exclusive_lock
 from helia_core_tester.utils.host_compiler import compiler_identity, find_host_cc
@@ -139,6 +140,7 @@ def host_kernels_key(tree: Path, mode: str, compiler: str) -> str:
         "excluded": list(host_build.HOST_CHECK_EXCLUDED_NAME_PARTS),
         "compiler": compiler_identity(compiler),
         "runtime": {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in _runtime_inputs(root)},
+        "library_header": header_digest(current_harness()),
     }
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
 
@@ -246,6 +248,7 @@ def _ensure_from_host_reference(tree: Path, root: Path, cc: Optional[str], jobs:
         "kernel_flags": [f for f in kernel_flags if not f.startswith("/")],
         "compiler": compiler_identity(compiler),
         "runtime": {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in _runtime_inputs(tester_root())},
+        "library_header": header_digest(current_harness()),
     }
     key = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
     final = root / key

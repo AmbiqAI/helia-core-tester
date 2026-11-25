@@ -11,6 +11,7 @@ import pytest
 
 from helia_core_tester.core import host_reference as hr
 from helia_core_tester.generation.reference import host_kernels as hk
+from helia_core_tester.tests.library_stub import NN_STATUS_ENUM
 
 needs_cmake = pytest.mark.skipif(
     shutil.which("cmake") is None or shutil.which("cc") is None, reason="cmake and a host cc required"
@@ -52,7 +53,7 @@ def _fake_tree(tmp_path: Path, kernel: str = "int32_t hct_kernel(void) { return 
     (root / "Include").mkdir(parents=True)
     (root / "Include" / "arm_nnfunctions.h").write_text(
         "#ifndef ARM_NNFUNCTIONS_H\n#define ARM_NNFUNCTIONS_H\n"
-        "typedef enum { ARM_CMSIS_NN_SUCCESS = 0 } arm_cmsis_nn_status;\n#endif\n"
+        + NN_STATUS_ENUM + "#endif\n"
     )
     basic = root / "Source" / "BasicMathFunctions"
     basic.mkdir(parents=True)

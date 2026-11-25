@@ -121,7 +121,7 @@ void hct_record_finish(void);
         int helia_expected_status = (int)(expected_status); \
         hct_record_status((label), helia_status, helia_expected_status); \
         if (helia_status != helia_expected_status) { \
-            if (helia_expected_status == (int)ARM_CMSIS_NN_SUCCESS) { \
+            if (helia_expected_status == (int)HCT_STATUS_SUCCESS) { \
                 return helia_test_status_failure((label), helia_status); \
             } \
             return helia_test_expected_status_failure((label), helia_status, helia_expected_status); \

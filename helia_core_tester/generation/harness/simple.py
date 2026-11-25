@@ -6,11 +6,12 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Optional, Sequence, Tuple
 
+from helia_core_tester.core.harness import current_harness
 from helia_core_tester.generation.harness.model import ArgumentPool, ArrayLiteral, Declaration, HarnessInput
 
 
 def dims_declaration(name: str, dims: Mapping[str, Any], comment: str = "") -> Declaration:
-    return Declaration(name, "cmsis_nn_dims", {k: dims[k] for k in ("n", "h", "w", "c")}, comment=comment)
+    return Declaration(name, current_harness().require("dims"), {k: dims[k] for k in ("n", "h", "w", "c")}, comment=comment)
 
 
 def tensor_case_pool(

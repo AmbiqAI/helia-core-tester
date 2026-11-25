@@ -15,6 +15,7 @@ from helia_core_tester.core.steps import HostCheckStep
 from helia_core_tester.core.steps.base import StepResult, StepStatus
 from helia_core_tester.generation.reference import host_kernels as hk
 from helia_core_tester.mutation import host_build
+from helia_core_tester.tests.library_stub import NN_STATUS_ENUM
 
 TESTER_ROOT = Path(__file__).resolve().parents[2]
 
@@ -26,7 +27,7 @@ def _checkout(tmp_path: Path) -> Path:
     (root / "Include").mkdir(parents=True)
     (root / "Include" / "arm_nnfunctions.h").write_text(
         "#ifndef ARM_NNFUNCTIONS_H\n#define ARM_NNFUNCTIONS_H\n"
-        "typedef enum { ARM_CMSIS_NN_SUCCESS = 0 } arm_cmsis_nn_status;\n#endif\n"
+        + NN_STATUS_ENUM + "#endif\n"
     )
     basic = root / "Source" / "BasicMathFunctions"
     basic.mkdir(parents=True)

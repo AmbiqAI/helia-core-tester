@@ -5,8 +5,11 @@
   prototype takes them, and the correctness, benchmark and validation paths are the shared
   standalone ones.
 #}
+{% set lib = hct_harness() %}
 #include "{{ header_name }}"
-#include "arm_nnfunctions.h"
+{% for header in lib.includes %}
+#include "{{ header }}"
+{% endfor %}
 {% for include in pool.includes %}
 #include {{ include }}
 {% endfor %}
@@ -23,11 +26,11 @@
 {% set output_dtype = pool.output_ctype or output_dtype %}
 
 {% if harness.local_prototype %}
-// {{ kernel_fn }} is defined by ns-cmsis-nn but declared in no public header; it takes
-// {{ harness.prototype_from }}'s prototype, which the ns-cmsis-nn export records.
+// {{ kernel_fn }} is defined by {{ lib.library }} but declared in no public header; it takes
+// {{ harness.prototype_from }}'s prototype, which the {{ lib.library }} export records.
 {{ harness.local_prototype }}
 {% else %}
-// The kernel this harness links must have the prototype the ns-cmsis-nn export records.
+// The kernel this harness links must have the prototype the {{ lib.library }} export records.
 {{ contract_parity_assert(kernel_fn) }}
 {% endif %}
 {% if harness.fault_kind %}
@@ -40,7 +43,7 @@
 
 {% if harness.uses_ctx %}
 // Context for buffer allocation
-static cmsis_nn_context {{ name }}_ctx;
+static {{ lib.require("context") }} {{ name }}_ctx;
 {% endif %}
 {% if harness.scratch_buffer %}
 
@@ -182,12 +185,12 @@ int32_t {{ name }}_run(
     {% for call in harness.run_calls %}
     {{ call }};
     {% endfor %}
-    return ARM_CMSIS_NN_SUCCESS;
+    return {{ lib.status.success }};
     {% elif harness.run_calls %}
-    arm_cmsis_nn_status kernel_status = ARM_CMSIS_NN_SUCCESS;
+    {{ lib.status.type }} kernel_status = {{ lib.status.success }};
     {% for call in harness.run_calls %}
     kernel_status = {{ call }};
-    if (kernel_status != ARM_CMSIS_NN_SUCCESS) {
+    if (kernel_status != {{ lib.status.success }}) {
         {% if pool.cleanup %}
 {{ pool.cleanup }}
         {% endif %}
@@ -203,7 +206,7 @@ int32_t {{ name }}_run(
     return kernel_status;
     {% elif harness.void_return %}
     {{ harness.run_call }};
-    return ARM_CMSIS_NN_SUCCESS;
+    return {{ lib.status.success }};
     {% else %}
     return {{ harness.run_call }};
     {% endif %}
@@ -222,7 +225,7 @@ static int32_t {{ name }}_bench_init(void)
 {% endif %}
 {
     {{ harness_init() }}
-    return ARM_CMSIS_NN_SUCCESS;
+    return {{ lib.status.success }};
 }
 
 {% if use_batch_harness %}
@@ -233,7 +236,7 @@ static int32_t {{ name }}_bench_op(void)
 {
     {% if harness.void_return %}
     {{ harness.bench_call }};
-    return ARM_CMSIS_NN_SUCCESS;
+    return {{ lib.status.success }};
     {% else %}
     return {{ harness.bench_call }};
     {% endif %}
@@ -246,7 +249,7 @@ static int32_t {{ name }}_benchmark_run(void)
     // benchmark must not proceed on that path (#133); a kernel call that does not succeed
     // fails it too (helia_benchmark_run stops there), so no cycle count is reported for it.
     const int32_t init_status = {{ name }}_bench_init();
-    if (init_status != ARM_CMSIS_NN_SUCCESS) {
+    if (init_status != {{ lib.status.success }}) {
         HELIA_BENCH_PRINTF("[BENCH] {{ name }} skipped: scratch sizer rejected before the context was populated\r\n");
         return helia_benchmark_failed("{{ name }} benchmark init", init_status);
     }
@@ -286,7 +289,7 @@ int32_t {{ name }}_test_case_run(void)
 #else
     HELIA_GUARD_ARM({{ name }}_output, false /* real output, not scratch: don't poison */);
 #endif
-    {% elif expected_status | default("ARM_CMSIS_NN_SUCCESS") != "ARM_CMSIS_NN_SUCCESS" %}
+    {% elif expected_status | default(lib.status.success) != lib.status.success %}
     HELIA_GUARD_ARM({{ name }}_output, true /* a declined call must not write it: poison */);
     {% elif pool.output_poison %}
     HELIA_GUARD_ARM({{ name }}_output, true /* poisoned: the kernel must write every element it owns */);
@@ -347,14 +350,14 @@ int32_t {{ name }}_test_case_run(void)
     HELIA_VALIDATE_EXPECTED_STATUS(
         "{{ label }}",
         status,
-        ARM_CMSIS_NN_NO_IMPL_ERROR
+        {{ lib.require("not_implemented") }}
     );
 #else
     HELIA_VALIDATE_STATUS("{{ label }}", status);
 
 {{ validation_outputs(validation_mode_token | default("TOLERANT_INT"), validation_tolerance | default(1)) }}
 #endif
-    {% elif expected_status | default("ARM_CMSIS_NN_SUCCESS") != "ARM_CMSIS_NN_SUCCESS" %}
+    {% elif expected_status | default(lib.status.success) != lib.status.success %}
     HELIA_GUARD_CHECK_UNTOUCHED({{ name }}_output, "{{ label }} output", failures);
     HELIA_VALIDATE_EXPECTED_STATUS(
         "{{ label }}",

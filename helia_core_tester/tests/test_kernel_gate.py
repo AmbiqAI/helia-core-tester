@@ -15,16 +15,18 @@ from helia_core_tester.contract.ir import (
     load_contract_set,
 )
 from helia_core_tester.contract.planner import load_contracts_package
+from helia_core_tester.core.harness import legacy_harness
 from helia_core_tester.generation.kernel_gate import (
     BUILD_DECIDED_FEATURES,
     CPU_DECIDED_FEATURES,
-    NO_IMPL,
     cpu_features,
     gate_kernel_symbols,
     unmet_features,
 )
 from helia_core_tester.tests.contract_checkout import function, implementation, write_checkout
 from helia_core_tester.tests.contract_fallback import FIXTURE_ROOT
+
+NO_IMPL = legacy_harness().status.not_implemented
 
 
 def _decl(name: str) -> FunctionDecl:

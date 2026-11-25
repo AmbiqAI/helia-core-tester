@@ -14,6 +14,8 @@ Fields (schema ``hct/library-profile/1``):
 - ``contracts``: ``signatures`` and, optionally, ``implementations``: the library's kernel contract
   documents, relative to the profile's directory and inside ``source_root``. Without it, an
   ns-cmsis-nn profile reads ``Tests/KernelContracts/`` of its checkout.
+- ``harness``: what a generated harness needs from the library (``core/harness.py``). Without it, an
+  ns-cmsis-nn profile takes ns-cmsis-nn's; any other library has none and cannot generate tests.
 
 An ns-cmsis-nn checkout without a profile still loads, as the built-in ``legacy`` ns-cmsis-nn profile,
 until ns-cmsis-nn ships its own.
@@ -32,6 +34,7 @@ import jsonschema
 import yaml
 
 from helia_core_tester.core.errors import ConfigurationError
+from helia_core_tester.core.harness import HarnessProfile, HarnessProfileError, harness_for, legacy_harness
 
 PROFILE_FILE = "hct-library.yaml"
 SCHEMA_ID = "hct/library-profile/1"
@@ -59,6 +62,7 @@ class LibraryProfile:
     # The contract documents the profile names, or None when it names none.
     signatures: Optional[Path] = None
     implementations: Optional[Path] = None
+    harness: Optional[HarnessProfile] = None
 
     @property
     def names_contracts(self) -> bool:
@@ -167,6 +171,10 @@ def load_profile(path: Path) -> LibraryProfile:
     _validate(path, data)
     root = _source_root(path, data.get("source_root", "."))
     contracts = data.get("contracts") or {}
+    try:
+        harness = harness_for(data["library"], data.get("harness"), f"{path}: harness")
+    except HarnessProfileError as exc:
+        raise LibraryProfileError(str(exc)) from None
     return LibraryProfile(
         library=data["library"],
         source_root=root,
@@ -174,6 +182,7 @@ def load_profile(path: Path) -> LibraryProfile:
         signatures=_contract_path(path, root, "signatures", contracts["signatures"]) if contracts else None,
         implementations=_contract_path(path, root, "implementations", contracts["implementations"])
         if "implementations" in contracts else None,
+        harness=harness,
     )
 
 
@@ -193,7 +202,8 @@ def resolve_library(directory: Path, *, allow_legacy: bool = True) -> LibraryPro
         return load_profile(profile)
     resolved = directory.resolve()
     if allow_legacy and looks_like_ns_cmsis_nn(resolved):
-        return LibraryProfile(library=LEGACY_LIBRARY, source_root=resolved, profile_path=None)
+        return LibraryProfile(library=LEGACY_LIBRARY, source_root=resolved, profile_path=None,
+                              harness=legacy_harness())
     raise LibraryProfileError(
         f"{directory} has no {PROFILE_FILE}"
         + (" and is not an ns-cmsis-nn checkout" if allow_legacy else ""))

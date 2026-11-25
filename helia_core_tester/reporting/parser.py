@@ -6,7 +6,7 @@ import time
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Tuple, Dict, Any
+from typing import List, Mapping, Optional, Tuple, Dict, Any
 
 from helia_core_tester.reporting.models import TestResult, TestStatus
 
@@ -28,7 +28,10 @@ class TestResultParser:
     )
     failure_count_line_pattern = re.compile(r'^\d+\s+Failures$', re.IGNORECASE)
 
-    def __init__(self):
+    def __init__(self, status_names: Optional[Mapping[int, str]] = None):
+        # The library's status codes by value (its profile's harness status.codes), to name a
+        # returned status; a value it does not list is reported as the number alone.
+        self.status_names = dict(status_names or {})
         self.test_start_pattern = re.compile(r'Running test: (.+)')
         self.test_pass_pattern = re.compile(r'(.+):test__([^:]+):PASS')
         self.test_fail_pattern = re.compile(r'(.+):test__([^:]+):FAIL')
@@ -86,7 +89,7 @@ class TestResultParser:
         # Pattern for "Convolution failed" or API errors
         # A sizer answering outside its contract, and our own scratch bound
         # disagreeing with the shipped kernel. Both are emitted just before the
-        # harness unwinds with ARM_CMSIS_NN_ARG_ERROR, so both must be matched
+        # harness unwinds with the library's argument-error status, so both must be matched
         # ahead of api_error below; otherwise that rule claims the line first
         # and these classifications are unreachable. They are kept apart on
         # purpose: a negative answer is the kernel's defect, an answer larger
@@ -238,7 +241,9 @@ class TestResultParser:
         if api_error_match:
             label = api_error_match.group("label").strip()
             status_code = api_error_match.group("status")
-            return TestStatus.FAIL, f"{label} API error (status {status_code})", None, "api_error"
+            name = self.status_names.get(int(status_code))
+            status_text = f"status {status_code}, {name}" if name else f"status {status_code}"
+            return TestStatus.FAIL, f"{label} API error ({status_text})", None, "api_error"
 
         if self.zero_failures_pattern.search(output):
             return TestStatus.PASS, None, None, None

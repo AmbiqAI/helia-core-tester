@@ -25,9 +25,11 @@ _JINJA2_ENV_CACHE: Dict[str, jinja2.Environment] = {}
 def template_environment(template_dir: str) -> jinja2.Environment:
     """The one Jinja environment for a template directory (cached), with the
     contract-rendering globals installed so every template, and every test that
-    renders one, sees the same `contract_call` / `contract_parity_assert`."""
+    renders one, sees the same `contract_call` / `contract_parity_assert`, and
+    `hct_harness()`, the library profile's harness block."""
     if template_dir not in _JINJA2_ENV_CACHE:
         from helia_core_tester.contract.render import contract_globals
+        from helia_core_tester.core.harness import current_harness
 
         env = jinja2.Environment(
             loader=jinja2.FileSystemLoader(template_dir),
@@ -35,6 +37,7 @@ def template_environment(template_dir: str) -> jinja2.Environment:
             lstrip_blocks=True,
         )
         env.globals.update(contract_globals())
+        env.globals["hct_harness"] = current_harness
         _JINJA2_ENV_CACHE[template_dir] = env
     return _JINJA2_ENV_CACHE[template_dir]
 

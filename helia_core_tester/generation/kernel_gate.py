@@ -5,7 +5,7 @@ checkout's signature export. Where the implementation manifest has a record for 
 its ``since`` must not be after the checkout's library version (a contradiction, never a
 skip), and its ``requires`` decide what the case meets on the target CPU: when they do not
 hold and the record declines on a build cause, the entry is still callable and returns
-ARM_CMSIS_NN_NO_IMPL_ERROR there, so a case expecting that status runs (``declined``) and any
+the library's not-implemented status there, so a case expecting it runs (``declined``) and any
 other is skipped (``unmet``); without a build decline the implementation is absent from that
 build and the case is skipped.
 
@@ -26,6 +26,7 @@ from typing import Iterable, Optional
 
 from helia_core_tester.contract.ir import ContractSet
 from helia_core_tester.core.cpu_targets import get_cpu_profile
+from helia_core_tester.core.harness import current_harness
 
 BUILD_DECIDED_FEATURES = frozenset({"autovectorize", "single_rounding"})
 CPU_DECIDED_FEATURES = frozenset({"mvei", "dsp", "mvef", "mve_f16", "f32_api", "f16_api"})
@@ -95,15 +96,14 @@ def unmet_features(requires: Iterable[str], features: frozenset[str]) -> tuple[s
     return tuple(unmet)
 
 
-NO_IMPL = "ARM_CMSIS_NN_NO_IMPL_ERROR"
-
-
 def gate_kernel_symbols(contracts: ContractSet, symbols: Iterable[str], cpu: str,
                         *, features: Optional[frozenset[str]] = None,
-                        expected_status: str = "ARM_CMSIS_NN_SUCCESS") -> GateResult:
+                        expected_status: Optional[str] = None) -> GateResult:
     symbols = list(dict.fromkeys(str(symbol).strip() for symbol in symbols if str(symbol).strip()))
     if not contracts.present:
         return GateResult(decided=False)
+    status = current_harness().status
+    expected_status = status.success if expected_status is None else expected_status
     target = cpu_features(cpu) if features is None else features
     missing = tuple(symbol for symbol in symbols if contracts.find(symbol) is None)
     unmet: list[UnmetRequirement] = []
@@ -126,7 +126,7 @@ def gate_kernel_symbols(contracts: ContractSet, symbols: Iterable[str], cpu: str
                 continue
             if failed:
                 requirement = UnmetRequirement(symbol=symbol, implementation=impl.id, unmet=failed)
-                runs_to_decline = impl.declines_on_build and expected_status.strip() == NO_IMPL
+                runs_to_decline = impl.declines_on_build and expected_status.strip() == status.not_implemented
                 (declined if runs_to_decline else unmet).append(requirement)
     return GateResult(missing_symbols=missing, unmet=tuple(unmet), contradictions=tuple(contradictions),
                       declined=tuple(declined))

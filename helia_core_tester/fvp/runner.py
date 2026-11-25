@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from helia_core_tester.core.harness import current_harness
 from helia_core_tester.reporting.models import TestResult, TestStatus
 from helia_core_tester.reporting.parser import TestResultParser
 
@@ -237,7 +238,7 @@ def run_fvp_with_reporting(
     stop_event: Optional[threading.Event] = None,
     emit_output: bool = True,
 ) -> TestResult:
-    parser = TestResultParser()
+    parser = TestResultParser(status_names=current_harness().status.names())
 
     process_result = run_fvp_process(
         fvp_exe=fvp_exe,

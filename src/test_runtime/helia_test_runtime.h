@@ -27,7 +27,8 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "arm_nnfunctions.h"
+/* The library's headers and status macros, written by hct from its profile (core/harness.py). */
+#include "hct_library.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -116,7 +117,7 @@ enum {
 
 /*
  * float16_t is a typedef of __fp16 or of _Float16 depending on the toolchain
- * (ns-cmsis-nn Include/arm_nn_math_types_flt.h), and the two are distinct
+ * (the library's float16_t typedef), and the two are distinct
  * types where both exist, so every _Generic over element types has to carry
  * whichever rows the target actually has.
  */
@@ -231,7 +232,7 @@ void helia_guard_check(const char *label, const uint8_t *head, const uint8_t *ta
  * body; a no-op when there is no slack). */
 void helia_guard_stamp_at(void *body, size_t body_bytes, size_t used_bytes);
 void helia_guard_check_at(const char *label, const void *body, size_t body_bytes, size_t used_bytes, int *failures);
-/* Untouched check: a call the kernel rejects (ARM_CMSIS_NN_ARG_ERROR) must
+/* Untouched check: a call the kernel rejects (HCT_STATUS_ARGUMENT_ERROR) must
  * not write its output. Arm the guard with poison_body=true and verify every
  * body byte still carries HELIA_GUARD_POISON_BYTE afterwards. */
 void helia_guard_check_untouched(const char *label, const void *body, size_t body_bytes, int *failures);
@@ -282,7 +283,7 @@ void helia_guard_check_untouched(const char *label, const void *body, size_t bod
         int helia_status = (int)(status); \
         int helia_expected_status = (int)(expected_status); \
         if (helia_status != helia_expected_status) { \
-            if (helia_expected_status == (int)ARM_CMSIS_NN_SUCCESS) { \
+            if (helia_expected_status == (int)HCT_STATUS_SUCCESS) { \
                 return helia_test_status_failure((label), helia_status); \
             } \
             return helia_test_expected_status_failure((label), helia_status, helia_expected_status); \
@@ -307,7 +308,7 @@ void helia_guard_check_untouched(const char *label, const void *body, size_t bod
         long long helia_sizer_value = (long long)(value); \
         if (helia_sizer_value < 0) { \
             helia_test_sizer_invalid((label), helia_sizer_value); \
-            return ARM_CMSIS_NN_ARG_ERROR; \
+            return HCT_STATUS_ARGUMENT_ERROR; \
         } \
     } while (0)
 
@@ -317,12 +318,12 @@ void helia_guard_check_untouched(const char *label, const void *body, size_t bod
         long long helia_sizer_fits_capacity = (long long)(capacity); \
         if (helia_sizer_fits_value > helia_sizer_fits_capacity) { \
             helia_test_sizer_over_capacity((label), helia_sizer_fits_value, helia_sizer_fits_capacity); \
-            return ARM_CMSIS_NN_ARG_ERROR; \
+            return HCT_STATUS_ARGUMENT_ERROR; \
         } \
     } while (0)
 
 #define HELIA_VALIDATE_STATUS(label, status) \
-    HELIA_VALIDATE_EXPECTED_STATUS((label), (status), ARM_CMSIS_NN_SUCCESS)
+    HELIA_VALIDATE_EXPECTED_STATUS((label), (status), HCT_STATUS_SUCCESS)
 
 #define HELIA_VALIDATE_SCALAR_EQ_INT(label, subject, expected, actual) \
     do { \

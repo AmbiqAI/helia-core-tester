@@ -19,6 +19,8 @@ from pathlib import Path
 import jinja2
 import pytest
 
+from helia_core_tester.tests.library_stub import library_header_flags
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 C_HOST_DIR = Path(__file__).resolve().parent / "c_host"
 TEMPLATES_ROOT = PROJECT_ROOT / "assets" / "templates"
@@ -92,6 +94,7 @@ def host_sanity_output(tmp_path_factory: pytest.TempPathFactory) -> str:
             str(C_HOST_DIR),
             "-I",
             str(PROJECT_ROOT / "src"),
+            *library_header_flags(),
             str(PROJECT_ROOT / "src" / "test_runtime" / "helia_test_runtime.c"),
             str(C_HOST_DIR / "helia_guard_host_sanity.c"),
             "-o",
@@ -175,7 +178,7 @@ def test_guarded_byte_buffers_are_16_byte_aligned(tmp_path: Path) -> None:
     source.write_text(env.from_string(ALIGNMENT_TEMPLATE).render())
     binary = tmp_path / "guard_alignment"
     subprocess.run(
-        [cc, "-std=gnu11", "-O2", "-I", str(C_HOST_DIR), "-I", str(PROJECT_ROOT / "src"), str(source), "-o", str(binary)],
+        [cc, "-std=gnu11", "-O2", "-I", str(C_HOST_DIR), "-I", str(PROJECT_ROOT / "src"), *library_header_flags(), str(source), "-o", str(binary)],
         check=True,
         cwd=PROJECT_ROOT,
     )

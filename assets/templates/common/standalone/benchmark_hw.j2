@@ -35,7 +35,7 @@
     [BENCH] <name> warmup_runs=<W> measured_runs=<M>
     [PERF] <name>: <cycles> cycles
     [PMU] <name>: inst_retired=<N> l1d_refill=<N> stall=<N> br_mispred=<N>
-  A call that does not return ARM_CMSIS_NN_SUCCESS ends the run there with
+  A call that does not return the library's success status ends the run there with
   "<name> failed with status <N>" and "1 Failures"; no counters are printed for
   it or after it.
 
@@ -156,7 +156,7 @@ static inline int32_t helia_benchmark_run(const char *name, helia_bench_op_fn op
 
     for (int i = 0; i < HELIA_BENCHMARK_WARMUP_RUNS; i++) {
         int32_t status = op();
-        if (status != ARM_CMSIS_NN_SUCCESS) {
+        if (status != {{ hct_harness().status.success }}) {
             return helia_benchmark_failed(name, status);
         }
     }
@@ -170,7 +170,7 @@ static inline int32_t helia_benchmark_run(const char *name, helia_bench_op_fn op
         int32_t status = op();
         uint32_t end = helia_dwt_cycles();
         helia_pmu_stop();
-        if (status != ARM_CMSIS_NN_SUCCESS) {
+        if (status != {{ hct_harness().status.success }}) {
             return helia_benchmark_failed(name, status);
         }
 
