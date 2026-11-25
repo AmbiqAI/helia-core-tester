@@ -346,3 +346,30 @@ def test_validate_a_named_export_that_is_missing(tmp_path: Path) -> None:
 def test_validate_refuses_a_bad_library(tmp_path: Path) -> None:
     result, text = _validate("--library", str(tmp_path / "missing"))
     assert result.exit_code == contract_cli.EXIT_UNAVAILABLE and "library directory not found" in text
+
+
+def test_a_named_export_does_not_borrow_the_default_manifest(tmp_path: Path) -> None:
+    root = _dsp(tmp_path)
+    default = root / "Tests" / "KernelContracts" / "kernel_implementations.json"
+    default.parent.mkdir(parents=True)
+    default.write_text("not json")
+    contracts = _load(root)
+    assert contracts.present and contracts.manifest_path is None and contracts.implementations == {}
+    result, text = _validate("--library", str(root / "Testing" / "hct"))
+    assert result.exit_code == 0 and "⚠ implementation manifest: none" in text, text
+
+
+def test_profile_contract_paths_that_cannot_be_resolved_are_refused(tmp_path: Path) -> None:
+    pack = tmp_path / "lib" / "Testing" / "hct"
+    pack.mkdir(parents=True)
+    (pack / "loop_a").symlink_to(pack / "loop_b")
+    (pack / "loop_b").symlink_to(pack / "loop_a")
+    (pack / "hct-library.yaml").write_text("schema: hct/library-profile/1\nlibrary: cmsis-dsp\nsource_root: ../..\n"
+                                           "contracts:\n  signatures: loop_a/x.json\n")
+    with pytest.raises(LibraryProfileError, match="contracts.signatures 'loop_a/x.json' (cannot be resolved|.*outside)"):
+        load_profile(pack / "hct-library.yaml")
+    (pack / "hct-library.yaml").write_text("schema: hct/library-profile/1\nlibrary: cmsis-dsp\nsource_root: ../..\n"
+                                           'contracts:\n  signatures: "a\\0b"\n')
+    with pytest.raises(LibraryProfileError, match="contracts/signatures: .* does not match"):
+        load_profile(pack / "hct-library.yaml")
+

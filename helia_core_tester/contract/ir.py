@@ -244,21 +244,27 @@ def load_contract_set(cmsis_nn_root: Optional[Path], *, signatures: Optional[Pat
 
     `signatures` and `implementations` name the documents when they are not at ns-cmsis-nn's
     default places under the checkout; a named export that does not exist is an error, not
-    ``absent``. A present set is cached for the life of the process and reloaded when the export,
+    ``absent``. A named export without a named manifest has no manifest: the default place is
+    ns-cmsis-nn's, not the named library's. A present set is cached for the life of the process and reloaded when the export,
     the manifest or any header it names changes on disk (size or mtime), so generating a suite
     pays the header cross-check once instead of per case."""
     if cmsis_nn_root is None:
         return ContractSet(status=STATUS_ABSENT, root=None, path=None)
     root = Path(cmsis_nn_root)
     path = Path(signatures) if signatures is not None else root / CONTRACT_RELPATH
-    manifest = Path(implementations) if implementations is not None else root / MANIFEST_RELPATH
+    if implementations is not None:
+        manifest: Optional[Path] = Path(implementations)
+    else:
+        manifest = None if signatures is not None else root / MANIFEST_RELPATH
     if not path.exists():
         if signatures is not None:
             raise ContractError(f"{path}: the signature export the library names does not exist")
         return ContractSet(status=STATUS_ABSENT, root=root, path=path)
     if implementations is not None and not manifest.exists():
         raise ContractError(f"{manifest}: the implementation manifest the library names does not exist")
-    manifest_key = _fingerprint([manifest]) if manifest.exists() else ("no manifest", str(manifest))
+    if manifest is not None and not manifest.exists():
+        manifest = None
+    manifest_key = _fingerprint([manifest]) if manifest is not None else ("no manifest",)
     document_key = _fingerprint([path])
     key = None if manifest_key is None or document_key is None else (str(root),) + document_key + manifest_key
     cached = _CACHE.get(key) if key is not None else None
@@ -271,10 +277,10 @@ def load_contract_set(cmsis_nn_root: Optional[Path], *, signatures: Optional[Pat
     return contracts
 
 
-def _load_contract_set(root: Path, path: Path, manifest: Path) -> ContractSet:
+def _load_contract_set(root: Path, path: Path, manifest: Optional[Path]) -> ContractSet:
     signature_document = load_signature_document(path, root)
     implementation_document = load_implementation_document(manifest, signature_document) \
-        if manifest.exists() else None
+        if manifest is not None else None
     functions = {record["name"]: _adapt_function(record) for record in signature_document.functions}
     records = {} if implementation_document is None else {
         record["id"]: _adapt_implementation(record) for record in implementation_document.implementations}

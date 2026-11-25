@@ -151,7 +151,10 @@ def _source_root(path: Path, value: str) -> Path:
 def _contract_path(path: Path, root: Path, key: str, value: str) -> Path:
     if os.path.isabs(value) or "\\" in value:
         raise LibraryProfileError(f"{path}: contracts.{key} {value!r} must be a relative POSIX path")
-    target = (path.parent.resolve() / value).resolve()
+    try:
+        target = (path.parent.resolve() / value).resolve()
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise LibraryProfileError(f"{path}: contracts.{key} {value!r} cannot be resolved ({exc})") from None
     if root not in target.parents:
         raise LibraryProfileError(f"{path}: contracts.{key} {value!r} ({target}) is outside source_root {root}")
     return target
