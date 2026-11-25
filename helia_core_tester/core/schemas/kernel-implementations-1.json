@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hct/kernel-implementations/1",
+  "title": "Kernel implementation manifest: per implementation, its entry, route, build features, buffers, preparation, declines and numerics claim",
+  "type": "object",
+  "properties": {
+    "schema": {"enum": ["hct/kernel-implementations/1", "ns-cmsis-nn/kernel-implementations/1"]},
+    "library": {"$ref": "#/$defs/library"},
+    "library_version": {"$ref": "#/$defs/version"},
+    "signature_schema": {"enum": ["hct/kernel-contracts/1", "ns-cmsis-nn/kernel-contracts/1"]},
+    "signature_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "planner_abi": {"oneOf": [{"type": "null"}, {"type": "integer", "minimum": 1}]},
+    "implementations": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/implementation"}}
+  },
+  "required": ["schema", "library_version", "signature_schema", "signature_sha256", "planner_abi",
+               "implementations"],
+  "additionalProperties": false,
+  "if": {"properties": {"schema": {"const": "ns-cmsis-nn/kernel-implementations/1"}}},
+  "then": {"properties": {"library": false, "signature_schema": {"const": "ns-cmsis-nn/kernel-contracts/1"}}},
+  "else": {"required": ["library"], "properties": {"signature_schema": {"const": "hct/kernel-contracts/1"}}},
+  "$defs": {
+    "library": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"},
+    "version": {"type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"},
+    "identifier": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "maxLength": 255},
+    "name": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$", "maxLength": 128},
+    "token": {"type": "string", "pattern": "^!?[a-z][a-z0-9_]*$", "maxLength": 64},
+    "text": {"type": "string", "minLength": 1},
+    "optional_text": {"type": ["string", "null"]},
+    "strings": {"type": "object", "additionalProperties": {"type": "string"}},
+    "implementation": {
+      "type": "object",
+      "properties": {
+        "id": {"$ref": "#/$defs/name"},
+        "family": {"$ref": "#/$defs/name"},
+        "op": {"$ref": "#/$defs/name"},
+        "quantization": {"$ref": "#/$defs/name"},
+        "dtypes": {"$ref": "#/$defs/strings"},
+        "layout": {"$ref": "#/$defs/strings"},
+        "entry": {"$ref": "#/$defs/identifier"},
+        "operands": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/identifier"}]},
+        "routed_by": {"oneOf": [{"const": "direct"}, {"$ref": "#/$defs/route"}]},
+        "requires": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/token"}},
+        "varies_with": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/name"}},
+        "eligibility": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/eligibility"}]},
+        "buffers": {"type": "array", "items": {"$ref": "#/$defs/buffer"}},
+        "prepare": {"type": "array", "items": {"$ref": "#/$defs/step"}},
+        "declines": {"type": "array", "items": {"$ref": "#/$defs/decline"}},
+        "since": {"$ref": "#/$defs/version"},
+        "numerics": {"$ref": "#/$defs/numerics"},
+        "note": {"$ref": "#/$defs/optional_text"}
+      },
+      "required": ["id", "family", "op", "quantization", "dtypes", "layout", "entry", "operands", "routed_by",
+                   "requires", "varies_with", "eligibility", "buffers", "prepare", "declines", "since", "numerics",
+                   "note"],
+      "additionalProperties": false
+    },
+    "route": {
+      "type": "object",
+      "properties": {
+        "wrapper": {"$ref": "#/$defs/identifier"},
+        "route": {"type": "string", "pattern": "^[a-z0-9_]+:[a-z0-9_]+$"},
+        "requires": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/token"}},
+        "when": {"$ref": "#/$defs/text"}
+      },
+      "required": ["wrapper", "route", "requires", "when"],
+      "additionalProperties": false
+    },
+    "eligibility": {
+      "type": "object",
+      "properties": {
+        "when": {"$ref": "#/$defs/text"},
+        "predicate": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/identifier"}]},
+        "predicate_static": {"type": ["boolean", "null"]},
+        "args": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/strings"}]}
+      },
+      "required": ["when", "predicate", "predicate_static", "args"],
+      "additionalProperties": false
+    },
+    "buffer": {
+      "type": "object",
+      "properties": {
+        "name": {"$ref": "#/$defs/name"},
+        "param": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/identifier"}]},
+        "size_query": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/query"}]},
+        "units": {"const": "bytes"},
+        "align": {"type": "integer", "minimum": 1},
+        "lifetime": {"enum": ["call", "prepared", "prepare"]},
+        "optional": {"type": "boolean"},
+        "format": {"oneOf": [{"type": "null"}, {"type": "string", "pattern": "^[a-z][a-z0-9_]*/[1-9][0-9]*$"}]},
+        "note": {"$ref": "#/$defs/optional_text"}
+      },
+      "required": ["name", "param", "size_query", "units", "align", "lifetime", "optional", "format", "note"],
+      "additionalProperties": false
+    },
+    "query": {
+      "type": "object",
+      "properties": {"symbol": {"$ref": "#/$defs/identifier"}, "args": {"$ref": "#/$defs/strings"}},
+      "required": ["symbol", "args"],
+      "additionalProperties": false
+    },
+    "step": {
+      "type": "object",
+      "properties": {
+        "symbol": {"$ref": "#/$defs/identifier"},
+        "args": {"type": "object", "additionalProperties": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/text"}]}},
+        "consumes": {"type": "array", "items": {"$ref": "#/$defs/text"}},
+        "fills": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/name"}]},
+        "note": {"$ref": "#/$defs/optional_text"}
+      },
+      "required": ["symbol", "args", "consumes", "fills", "note"],
+      "additionalProperties": false
+    },
+    "decline": {
+      "type": "object",
+      "properties": {"cause": {"enum": ["build", "layer", "buffer"]}, "when": {"$ref": "#/$defs/text"}},
+      "required": ["cause", "when"],
+      "additionalProperties": false
+    },
+    "numerics": {
+      "type": "object",
+      "properties": {
+        "reference": {"oneOf": [{"type": "null"}, {"type": "string", "pattern": "^[a-z][a-z0-9_]*:[A-Za-z0-9_.:/-]+$"}]},
+        "claim": {"enum": ["bit_exact", "bounded"]},
+        "holds_with": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/text"}}
+      },
+      "required": ["reference", "claim", "holds_with"],
+      "additionalProperties": false
+    }
+  }
+}

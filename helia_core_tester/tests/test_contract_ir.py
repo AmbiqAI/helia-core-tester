@@ -1,4 +1,4 @@
-"""helia_core_tester.contract.ir: loading the ns-cmsis-nn kernel contract export."""
+"""helia_core_tester.contract.ir: loading a kernel contract export with hct's own reader."""
 
 from __future__ import annotations
 
@@ -21,7 +21,6 @@ from helia_core_tester.contract.ir import (
     ContractSchemaError,
     clear_contract_cache,
     load_contract_set,
-    load_contracts_package,
 )
 from helia_core_tester.tests.contract_checkout import implementation, install_reader, write_manifest
 
@@ -120,21 +119,21 @@ def test_unsupported_schema_names_the_tester_version(checkout: Path) -> None:
     "mutate, message",
     [
         (lambda d: d["functions"][0]["params"][0].update(type="mystery_t *"), "outside the known vocabulary"),
-        (lambda d: d["functions"][0]["params"][0].update(direction="inout"), "direction 'inout'"),
-        (lambda d: d["functions"][0]["params"][0].update(extent="4"), "not an array extent"),
-        (lambda d: d["functions"][0]["params"][0].update(name="1st"), "not an identifier"),
-        (lambda d: d["functions"][0]["params"][0].update(bogus=1), "unknown keys"),
+        (lambda d: d["functions"][0]["params"][0].update(direction="inout"), "direction: 'inout' is not one of"),
+        (lambda d: d["functions"][0]["params"][0].update(extent="4"), "params/0/extent: '4' does not match"),
+        (lambda d: d["functions"][0]["params"][0].update(name="1st"), "params/0/name: '1st' does not match"),
+        (lambda d: d["functions"][0]["params"][0].update(bogus=1), "'bogus' was unexpected"),
         (lambda d: d["functions"][0]["params"].append(dict(d["functions"][0]["params"][0])), "duplicate parameter"),
-        (lambda d: d["functions"][0].pop("returns"), "are not \\['guards', 'header'"),
-        (lambda d: d["functions"][0].update(extra=1), "are not \\['guards', 'header'"),
+        (lambda d: d["functions"][0].pop("returns"), "functions/0: 'returns' is a required property"),
+        (lambda d: d["functions"][0].update(extra=1), "'extra' was unexpected"),
         (lambda d: d["functions"][0].update(returns="what"), "return type 'what'"),
         (lambda d: d["functions"][0].update(header="Include/arm_nn_types.h"), "not a public functions header"),
-        (lambda d: d["functions"][0].update(line=0), "not a positive integer"),
-        (lambda d: d["functions"][0].update(line=True), "not a positive integer"),
-        (lambda d: d["functions"][0].update(guards="ARM_NN_ENABLE_F16"), "not a list of conditions"),
+        (lambda d: d["functions"][0].update(line=0), "line: 0 is less than the minimum of 1"),
+        (lambda d: d["functions"][0].update(line=True), "line: True is not of type 'integer'"),
+        (lambda d: d["functions"][0].update(guards="ARM_NN_ENABLE_F16"), "guards: 'ARM_NN_ENABLE_F16' is not of type 'array'"),
         (lambda d: d["functions"].append(dict(d["functions"][1])), "appears twice"),
-        (lambda d: d.update(functions=[]), "has no functions"),
-        (lambda d: d.update(functions="x"), "has no functions"),
+        (lambda d: d.update(functions=[]), "functions: \\[\\] should be non-empty"),
+        (lambda d: d.update(functions="x"), "functions: 'x' is not of type 'array'"),
     ],
 )
 def test_malformed_records_fail_closed(checkout: Path, mutate, message: str) -> None:
@@ -248,83 +247,79 @@ def test_absent_and_other_checkouts_do_not_share_the_cache(checkout: Path, tmp_p
     assert load_contract_set(other).functions.keys() == present.functions.keys()
 
 
-def test_the_reader_is_the_checkouts_own(checkout: Path) -> None:
-    package = load_contracts_package(checkout)
-    assert Path(package.__file__).parent == checkout / PACKAGE_RELPATH
-    assert load_contracts_package(checkout) is package
+def test_reading_runs_none_of_the_library_python(checkout: Path) -> None:
+    clear_contract_cache()
+    (checkout / PACKAGE_RELPATH / "__init__.py").write_text("raise RuntimeError('the reader must not import me')\n")
+    before = set(sys.modules)
+    contracts = load_contract_set(checkout)
+    assert contracts.present and contracts.schema == "ns-cmsis-nn/kernel-contracts/1"
+    assert contracts.library == "ns-cmsis-nn"
+    assert not [name for name in set(sys.modules) - before if "ns_cmsis_nn_contracts" in name]
 
 
-def test_an_export_without_a_reader_fails_closed(checkout: Path) -> None:
+def test_an_export_without_the_package_still_loads(checkout: Path) -> None:
     shutil.rmtree(checkout / "python")
-    with pytest.raises(ContractError, match="no python/ns_cmsis_nn_contracts to read it.*#889"):
-        load_contract_set(checkout)
+    assert load_contract_set(checkout).present
 
 
-def test_a_reader_without_an_export_is_absent(checkout: Path) -> None:
+def test_a_package_without_an_export_is_absent(checkout: Path) -> None:
     (checkout / CONTRACT_RELPATH).unlink()
     assert load_contract_set(checkout).status == STATUS_ABSENT
 
 
-def test_an_older_python_dir_without_the_reader_is_absent(tmp_path: Path) -> None:
+def test_an_older_python_dir_without_the_package_is_absent(tmp_path: Path) -> None:
     root = tmp_path / "v7.35.1"
     (root / "python" / "cmsis_nn").mkdir(parents=True)
     (root / "python" / "cmsis_nn" / "__init__.py").write_text("")
     (root / "Include").mkdir()
-    assert load_contracts_package(root) is None
-    assert load_contracts_package(None) is None
     assert load_contract_set(root).status == STATUS_ABSENT
 
 
-def test_a_reader_that_cannot_be_imported_fails_closed(checkout: Path) -> None:
-    (checkout / PACKAGE_RELPATH / "__init__.py").write_text("def broken(:\n")
-    before = set(sys.modules)
-    with pytest.raises(ContractError, match="cannot be imported \\(SyntaxError"):
-        load_contract_set(checkout)
-    assert not [name for name in set(sys.modules) - before if name.startswith("_hct_ns_cmsis_nn_contracts_")]
+def test_named_documents_must_exist(checkout: Path, tmp_path: Path) -> None:
+    with pytest.raises(ContractError, match="the signature export the library names does not exist"):
+        load_contract_set(checkout, signatures=tmp_path / "missing.json")
+    with pytest.raises(ContractError, match="the implementation manifest the library names does not exist"):
+        load_contract_set(checkout, implementations=tmp_path / "missing.json")
 
 
-def test_a_reader_without_the_api_fails_closed(checkout: Path) -> None:
-    (checkout / PACKAGE_RELPATH / "__init__.py").write_text("from .errors import ContractError\n")
-    with pytest.raises(ContractError, match="does not export \\['ContractSchemaError', 'load_signatures'"):
-        load_contract_set(checkout)
-
-
-def test_a_reader_of_a_schema_the_tester_does_not_read(checkout: Path) -> None:
-    signatures = checkout / PACKAGE_RELPATH / "signatures.py"
-    signatures.write_text(signatures.read_text().replace('kernel-contracts/1"', 'kernel-contracts/2"'))
-    _rewrite(checkout, lambda d: d.update(schema="ns-cmsis-nn/kernel-contracts/2"))
-    with pytest.raises(ContractSchemaError, match=rf"reads schema 'ns-cmsis-nn/kernel-contracts/2'.*{__version__}"):
-        load_contract_set(checkout)
-
-
-def test_each_checkout_reads_with_its_own_reader(checkout: Path, tmp_path: Path) -> None:
-    other = tmp_path / "other"
-    shutil.copytree(checkout, other)
-    marker = other / PACKAGE_RELPATH / "__init__.py"
-    marker.write_text(marker.read_text() + "\nHCT_MARKER = 'other'\n")
-    mine, theirs = load_contracts_package(checkout), load_contracts_package(other)
-    assert mine is not theirs and theirs.HCT_MARKER == "other" and not hasattr(mine, "HCT_MARKER")
-
-
-def test_an_edited_reader_is_reimported(checkout: Path) -> None:
+def test_documents_at_named_places(checkout: Path, tmp_path: Path) -> None:
     clear_contract_cache()
-    first = load_contract_set(checkout)
-    init = checkout / PACKAGE_RELPATH / "__init__.py"
-    init.write_text(init.read_text() + "\nHCT_MARKER = 1\n")
-    os.utime(init, ns=(init.stat().st_atime_ns, init.stat().st_mtime_ns + 1_000_000))
-    assert load_contract_set(checkout) is not first
-    assert load_contracts_package(checkout).HCT_MARKER == 1
+    elsewhere = checkout / "Tests" / "hct"
+    elsewhere.mkdir(parents=True)
+    (checkout / CONTRACT_RELPATH).rename(elsewhere / "signatures.json")
+    assert load_contract_set(checkout).status == STATUS_ABSENT
+    contracts = load_contract_set(checkout, signatures=elsewhere / "signatures.json")
+    assert contracts.present and contracts.path == elsewhere / "signatures.json"
 
 
-def test_an_unexpected_reader_failure_is_a_contract_error(checkout: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    clear_contract_cache()
-    package = load_contracts_package(checkout)
+def test_duplicate_json_keys_are_refused(checkout: Path) -> None:
+    path = checkout / CONTRACT_RELPATH
+    path.write_text('{"schema": "ns-cmsis-nn/kernel-contracts/1", "schema": "x", "functions": []}')
+    with pytest.raises(ContractError, match="not valid JSON \\(duplicate key 'schema'"):
+        load_contract_set(checkout)
 
-    def explode(root):
-        raise RuntimeError("injected")
 
-    monkeypatch.setattr(package, "load_signatures", explode)
-    with pytest.raises(ContractError, match="failed reading .*RuntimeError: injected"):
+def test_non_utf8_export_is_refused(checkout: Path) -> None:
+    (checkout / CONTRACT_RELPATH).write_bytes(b'{"schema": "\xff"}')
+    with pytest.raises(ContractError, match="is not UTF-8"):
+        load_contract_set(checkout)
+
+
+def test_an_oversized_export_is_refused(checkout: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from helia_core_tester.contract import documents
+
+    monkeypatch.setattr(documents, "MAX_DOCUMENT_BYTES", 16)
+    with pytest.raises(ContractError, match="a contract document is at most 16"):
+        load_contract_set(checkout)
+
+
+def test_a_header_outside_the_checkout_is_refused(checkout: Path, tmp_path: Path) -> None:
+    outside = tmp_path / "outside.h"
+    outside.write_text("arm_cmsis_nn_status arm_elementwise_add_s8(void);\n")
+    (checkout / "Include" / "link.h").symlink_to(outside)
+    _rewrite(checkout, lambda d: d.update(schema="hct/kernel-contracts/1", library="ns-cmsis-nn") or
+             d["functions"][0].update(header="Include/link.h"))
+    with pytest.raises(ContractError, match="names Include/link.h, which is outside"):
         load_contract_set(checkout)
 
 
@@ -360,11 +355,12 @@ def test_manifest_records_are_read_and_route_records_are_not_direct_calls(checko
         (lambda d: d["implementations"][0].update(entry="arm_not_exported"), ContractError,
          "'arm_not_exported' is not a public function"),
         (lambda d: d["implementations"][0].update(requires=["neon"]), ContractError, "unknown feature token"),
-        (lambda d: d.update(implementations=[]), ContractError, "has no implementations"),
-        (lambda d: d["implementations"][0].update(declines="build"), ContractError, "declines 'build' is not a list"),
+        (lambda d: d.update(implementations=[]), ContractError, "implementations: \\[\\] should be non-empty"),
+        (lambda d: d["implementations"][0].update(declines="build"), ContractError,
+         "implementations/0/declines: 'build' is not of type 'array'"),
         (lambda d: d["implementations"][0].update(declines=[{"cause": "weather", "when": "x"}]), ContractError,
-         "with a cause in \\['buffer', 'build', 'layer'\\]"),
-        (lambda d: d["implementations"][0].update(declines=["build"]), ContractError, "is not a list of"),
+         "declines/0/cause: 'weather' is not one of \\['build', 'layer', 'buffer'\\]"),
+        (lambda d: d["implementations"][0].update(declines=["build"]), ContractError, "declines/0: 'build' is not of type 'object'"),
     ],
 )
 def test_a_bad_manifest_fails_closed(checkout: Path, mutate, error, message: str) -> None:
@@ -384,27 +380,3 @@ def test_the_cache_reloads_when_the_manifest_appears_or_changes(checkout: Path) 
     write_manifest(checkout, [implementation("fx_pool_s8_b", "arm_fx_pool_s8", op="avg_pool")])
     os.utime(path, ns=(path.stat().st_atime_ns, path.stat().st_mtime_ns + 1_000_000))
     assert set(load_contract_set(checkout).implementations) == {"fx_pool_s8_b"}
-
-
-def test_a_reader_without_decline_causes_fails_closed(checkout: Path) -> None:
-    vocabulary = checkout / PACKAGE_RELPATH / "vocabulary.py"
-    vocabulary.write_text(vocabulary.read_text().replace("DECLINE_CAUSES = ", "_DECLINE_CAUSES = "))
-    with pytest.raises(ContractError, match="DECLINE_CAUSES None has no 'build' cause"):
-        load_contract_set(checkout)
-
-
-def test_a_reader_returning_an_unexpected_record_is_a_contract_error(checkout: Path,
-                                                                    monkeypatch: pytest.MonkeyPatch) -> None:
-    clear_contract_cache()
-    write_manifest(checkout, [implementation("fx_pool_s8", "arm_fx_pool_s8", op="avg_pool")])
-    package = load_contracts_package(checkout)
-    real = package.load_implementations
-
-    def without_records(root, signatures):
-        loaded = real(root, signatures)
-        return type(loaded)(path=loaded.path, library_version=loaded.library_version, planner_abi=None,
-                            implementations={"fx_pool_s8": object()})
-
-    monkeypatch.setattr(package, "load_implementations", without_records)
-    with pytest.raises(ContractError, match="failed reading .*AttributeError"):
-        load_contract_set(checkout)

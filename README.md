@@ -21,7 +21,7 @@ uv run helia_core_tester --help
 - `uv run helia_core_tester host-check` (see [Host check](#host-check))
 - `uv run helia_core_tester record` (see [Record mode](#record-mode))
 - `uv run helia_core_tester coverage-merge`
-- `uv run helia_core_tester contract inventory` (see [Kernel contracts](#kernel-contracts-iteration-1))
+- `uv run helia_core_tester contract inventory` and `contract validate` (see [Kernel contracts](#kernel-contracts-iteration-1))
 - `uv run helia_core_tester boards` / `probes list` / `probes match`
 - `uv run helia_core_tester hardware run|build|flash|stream|memory-report`
 - `uv run helia_core_tester explain <bundle> [--case ID] [--op OP] [--json]`
@@ -734,12 +734,15 @@ The FVP build compiles the ns-cmsis-nn checkout two levels up (`../..`, the nest
 
 ### Library under test (`--library`)
 
-`generate`, `build`, `host-check`, `record`, `full`, `contract inventory` and `doctor` take `--library <dir>`. `<dir>` holds the library's profile, `hct-library.yaml` (schema `hct/library-profile/1`, `helia_core_tester/core/schemas/library-profile-1.json`):
+`generate`, `build`, `host-check`, `record`, `full`, `contract inventory`, `contract validate` and `doctor` take `--library <dir>`. `<dir>` holds the library's profile, `hct-library.yaml` (schema `hct/library-profile/1`, `helia_core_tester/core/schemas/library-profile-1.json`):
 
 ```yaml
 schema: hct/library-profile/1
 library: ns-cmsis-nn      # the library's id
 source_root: ../..        # the checkout, relative to this file's directory (default .)
+contracts:                # optional; ns-cmsis-nn defaults to Tests/KernelContracts/ of the checkout
+  signatures: kernel_contracts.json              # hct/kernel-contracts/1, relative to this file
+  implementations: kernel_implementations.json   # hct/kernel-implementations/1, optional
 ```
 
 - **Where the build looks:** the profile sets the checkout the build uses to `source_root`.
@@ -752,8 +755,9 @@ source_root: ../..        # the checkout, relative to this file's directory (def
   - an unknown or duplicate field;
   - a wrong schema;
   - a `source_root` that is absolute, missing, or does not contain the profile;
-  - a library this hct cannot run yet. That is anything but `ns-cmsis-nn` for now.
-- **Checking a profile:** `doctor --library <dir>` checks a profile on its own.
+  - a `contracts` path that is absolute or outside `source_root`;
+  - a library this hct cannot run yet. That is anything but `ns-cmsis-nn` for now, and an ns-cmsis-nn profile whose `contracts` name other files than `Tests/KernelContracts/` (generation reads those).
+- **Checking a profile:** `doctor --library <dir>` checks a profile on its own, and `contract validate --library <dir>` checks the contract documents it names, for any library.
 
 ## Canonical Artifacts
 
@@ -1339,13 +1343,17 @@ Behavior:
 
 ## Kernel contracts (iteration 1)
 
-ns-cmsis-nn exports every public function signature (name, header, `#if` guards, return type, parameters with type, direction and array extent) to `Tests/KernelContracts/kernel_contracts.json`, schema `ns-cmsis-nn/kernel-contracts/1`, rendered by `scripts/check_kernel_contract.py export` from the Doxygen `@param` blocks and freshness-gated in that repo's CI. Next to it, `Tests/KernelContracts/kernel_implementations.json` (schema `ns-cmsis-nn/kernel-implementations/1`) lists, per kernel implementation, its entry, wrapper route, required build features (`requires`) and first release (`since`). Both are read by ns-cmsis-nn's own `ns_cmsis_nn_contracts` package (`python/`, AmbiqAI/ns-cmsis-nn#829). The tester never runs Doxygen or parses the headers.
+ns-cmsis-nn exports every public function signature (name, header, `#if` guards, return type, parameters with type, direction and array extent) to `Tests/KernelContracts/kernel_contracts.json`, schema `ns-cmsis-nn/kernel-contracts/1`, rendered by `scripts/check_kernel_contract.py export` from the Doxygen `@param` blocks and freshness-gated in that repo's CI. Next to it, `Tests/KernelContracts/kernel_implementations.json` (schema `ns-cmsis-nn/kernel-implementations/1`) lists, per kernel implementation, its entry, wrapper route, required build features (`requires`), first release (`since`) and numerics claim. The tester never runs Doxygen or parses the headers.
 
-The tester imports `ns_cmsis_nn_contracts` from the checkout it reads (the one `CMSIS_NN_ROOT` names), not from a pinned dependency: the reader then always matches the files it validates, ns-cmsis-nn can change both in one PR and test it with this tester as its submodule, and the package's host planner is built from that checkout's own C sources.
+hct reads both itself (`contract/documents.py`), against its own schemas `hct/kernel-contracts/1` and `hct/kernel-implementations/1` (`helia_core_tester/core/schemas/`); no library Python runs to read a contract. A library that is not ns-cmsis-nn writes those ids, adds `library: <its id>` to both documents and names them in its profile's `contracts`. The ns-cmsis-nn ids are read as the same shape without `library`, with ns-cmsis-nn's closed vocabulary (C types, public headers, `op`, `requires` tokens) checked on top (`contract/legacy_nn.py`); `test_contract_planner.py` keeps that vocabulary equal to ns-cmsis-nn's own reader. The checks are the schema (shape, types, `direction`, decline causes, buffer lifetimes, numerics claims), then what a schema cannot say: unique names, every symbol declared in the header it names (inside the checkout), every symbol a record references in the export, buffer parameters on the entry, `fills` naming a buffer, one record per wrapper route, and the manifest bound to the export it was made from (`signature_sha256`, `signature_schema`, `library`).
+
+`uv run helia_core_tester contract validate [--library DIR | --cmsis-nn-root R]` runs those checks and prints what it read: exit 0 when the documents validate, 1 when they do not, 2 when there is nothing to check (no library, or no export).
+
+The host planner is the library's own code, so `contract/planner.py` still imports `ns_cmsis_nn_contracts` from the checkout it reads (the one `CMSIS_NN_ROOT` names) to build it from that checkout's C sources.
 
 What consumes it:
 
-- `helia_core_tester/contract/ir.py` adapts what the package's `load_signatures()` and `load_implementations()` return to a `ContractSet` (`present` or `absent`). Validation is the package's; every error it raises (an unsupported schema, an unreadable or truncated file, a duplicate symbol, a symbol the checkout's `Include/` does not declare, a manifest bound to another export) is a `ContractError`, never a skip. An export without the package to read it, a package that cannot be imported, and a package of a schema the tester does not read (`SUPPORTED_CONTRACT_SCHEMAS`, `SUPPORTED_MANIFEST_SCHEMAS`) fail the same way.
+- `helia_core_tester/contract/ir.py` turns the checked documents into a `ContractSet` (`present` or `absent`). Every failed check (an unsupported schema, an unreadable, truncated, non-UTF-8 or duplicate-key file, a duplicate symbol, a symbol the named header does not declare, a manifest bound to another export) is a `ContractError`, never a skip. A manifest record's `numerics` (reference, claim, conditions) is read into `ImplementationDecl.numerics`.
 - Generation (`generation/kernel_gate.py`) skips a descriptor whose `required_kernel_symbols`, `entry:`, `entry_sizer` or planar rule is not in the signature export (`skipped_kernel_symbol`). Where the manifest has a record for one of those symbols, the record's `since` must not be after the checkout's version (otherwise a generation failure). When its `requires` do not hold on the target CPU, a record that declines on a `build` cause keeps the case (the entry is callable and returns `ARM_CMSIS_NN_NO_IMPL_ERROR` there, which the `*_declines_*` descriptors test); any other record skips it (`skipped_capability` with `unmet_kernel_requirements`). The CPU decides `mvei`, `dsp`, `mvef`, `mve_f16`, `f32_api` and `f16_api`; `!autovectorize` and `!single_rounding` are compile options of the generated tree and are left to the case (`autovectorize_declines`). A symbol the export lacks while `Source/**/<symbol>.c` defines it is a generation failure.
 - `uv run helia_core_tester contract inventory [--cmsis-nn-root R] [--generated-tests-dir D] [--fail-on-uncovered] [--allow-unknown]` reports which public kernels, sizers and support functions the generated cases call, writes `artifacts/reports/contracts/inventory.json` (schema `hct.contract_inventory/1`), and exits 2 when there is no contract or no cases: an empty inventory is never reported as coverage. `--fail-on-unknown` is on by default; the nhwc pooling aliases (helia-core-tester#205) are the known unknowns today.
 - `doctor` prints the contract status, function count and manifest record count.
@@ -1376,7 +1384,7 @@ Contract conformance (T4a, `generation/conformance.py`): a descriptor with `conf
 
 Absent semantics: a checkout without the file (ns-cmsis-nn before the export landed) loads as `absent`, whether or not it has a `python/` directory; generation then does not gate, and every template refuses at render time. Everything that does not need the contract keeps working; `contract inventory` exits 2, the real-tree contract tests skip with a reason (`HELIA_CORE_TESTER_REQUIRE_CONTRACT=1` turns that skip into a failure, which is what CI's present leg sets), `doctor` says `kernel contract: absent`, and a migrated template refuses to render, naming the minimum ns-cmsis-nn (AmbiqAI/ns-cmsis-nn#549 or later) instead of falling back to a hand-written call. `self-validate.yml` runs a `present` leg against the ns-cmsis-nn ref under test and an `absent` leg against `v7.35.1`; `scripts/assert_contract_summary.py` asserts each leg observed exactly that.
 
-Bumping the minimum ns-cmsis-nn: when the export or manifest schema changes, add the new string to `SUPPORTED_CONTRACT_SCHEMAS` / `SUPPORTED_MANIFEST_SCHEMAS` in `contract/ir.py`, refresh `tests/fixtures/contract/` (the loader fixture and the twelve-function hardware pilot, which a real-tree test keeps equal to the export), and update the `#549` reference in `contract/render.py` if a newer export is required. The unit-test fallback contract `tests/fixtures/contract/bound_operators` (export slice, headers, the vendored `ns_cmsis_nn_contracts` and the manifest rebound to the slice) is refreshed with `uv run python scripts/refresh_contract_fixture.py <ns-cmsis-nn>`; `test_contract_fallback.py` keeps it equal to a real checkout. Tests that build a temporary checkout install that vendored reader (`tests/contract_checkout.py`). Bumping the absent-leg pin means changing `v7.35.1` in `self-validate.yml` to the newest tag that still has no export.
+Bumping the minimum ns-cmsis-nn: when the export or manifest schema changes, add the new id to `SUPPORTED_SIGNATURE_SCHEMAS` / `SUPPORTED_IMPLEMENTATION_SCHEMAS` in `contract/documents.py` and to the schemas in `core/schemas/`, refresh `tests/fixtures/contract/` (the loader fixture and the twelve-function hardware pilot, which a real-tree test keeps equal to the export), and update the `#549` reference in `contract/render.py` if a newer export is required. The unit-test fallback contract `tests/fixtures/contract/bound_operators` (export slice, headers, the vendored `ns_cmsis_nn_contracts` and the manifest rebound to the slice) is refreshed with `uv run python scripts/refresh_contract_fixture.py <ns-cmsis-nn>`; `test_contract_fallback.py` keeps it equal to a real checkout. Tests that build a temporary checkout install that vendored package (`tests/contract_checkout.py`), which the planner tests use. Bumping the absent-leg pin means changing `v7.35.1` in `self-validate.yml` to the newest tag that still has no export.
 
 Deferred to later iterations: C references and `@hct` size, sizer and tolerance tags that would remove descriptors and op classes for new kernels; the host oracle and generic harness; on-target sizer validation for streamed cases; and the argument-pack streaming path (per-prototype trampolines replacing hand-written adapter bodies), which follows the NSX build conversion.
 

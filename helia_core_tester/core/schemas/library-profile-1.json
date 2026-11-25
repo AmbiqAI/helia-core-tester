@@ -4,9 +4,14 @@
   "title": "hct library profile (hct-library.yaml)",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "library"],
+  "required": [
+    "schema",
+    "library"
+  ],
   "properties": {
-    "schema": {"const": "hct/library-profile/1"},
+    "schema": {
+      "const": "hct/library-profile/1"
+    },
     "library": {
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
@@ -18,6 +23,28 @@
       "maxLength": 1024,
       "pattern": "^[^\\x00]+$",
       "description": "The library checkout, relative to the profile's directory; default \".\"."
+    },
+    "contracts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "signatures"
+      ],
+      "description": "The library's kernel contract documents, relative to the profile's directory and inside source_root.",
+      "properties": {
+        "signatures": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "description": "The signature export (hct/kernel-contracts/1)."
+        },
+        "implementations": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "description": "The implementation manifest (hct/kernel-implementations/1), when the library has one."
+        }
+      }
     }
   }
 }
