@@ -383,3 +383,18 @@ def test_profile_contract_paths_that_cannot_be_resolved_are_refused(tmp_path: Pa
     with pytest.raises(LibraryProfileError, match="contracts/signatures: .* does not match"):
         load_profile(pack / "hct-library.yaml")
 
+
+
+def test_a_header_resolve_failure_is_a_contract_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from helia_core_tester.contract import documents
+
+    real = Path.resolve
+
+    def resolve(self: Path, *args, **kwargs) -> Path:
+        if self.name == "basic_math_functions.h":
+            raise RuntimeError("Symlink loop")
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", resolve)
+    with pytest.raises(ContractError, match="names Include/dsp/basic_math_functions.h, which cannot be resolved"):
+        documents._cross_check_headers(tmp_path / "e.json", tmp_path, [ADD])

@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
+from helia_core_tester.contract import legacy_nn
 from helia_core_tester.contract.documents import (
     SUPPORTED_IMPLEMENTATION_SCHEMAS,
     SUPPORTED_SIGNATURE_SCHEMAS,
@@ -269,11 +270,16 @@ def load_contract_set(cmsis_nn_root: Optional[Path], *, signatures: Optional[Pat
     key = None if manifest_key is None or document_key is None else (str(root),) + document_key + manifest_key
     cached = _CACHE.get(key) if key is not None else None
     if cached is not None and cached[0] is not None and cached[0] == _fingerprint(_headers_of(cached[1])):
-        return cached[1]
-    contracts = _load_contract_set(root, path, manifest)
-    if key is not None:
-        _CACHE.clear()
-        _CACHE[key] = (_fingerprint(_headers_of(contracts)), contracts)
+        contracts = cached[1]
+    else:
+        contracts = _load_contract_set(root, path, manifest)
+        if key is not None:
+            _CACHE.clear()
+            _CACHE[key] = (_fingerprint(_headers_of(contracts)), contracts)
+    # The default places are ns-cmsis-nn's: another library's documents there would drive its gating.
+    if signatures is None and contracts.library != legacy_nn.LIBRARY:
+        raise ContractError(f"{path}: an export for {contracts.library!r} at ns-cmsis-nn's default place; "
+                            f"this checkout's contract must be {legacy_nn.LIBRARY!r}'s")
     return contracts
 
 

@@ -323,6 +323,30 @@ def test_a_header_outside_the_checkout_is_refused(checkout: Path, tmp_path: Path
         load_contract_set(checkout)
 
 
+def test_a_header_that_cannot_be_resolved_is_a_contract_error(checkout: Path) -> None:
+    (checkout / "Include" / "loop_a.h").symlink_to(checkout / "Include" / "loop_b.h")
+    (checkout / "Include" / "loop_b.h").symlink_to(checkout / "Include" / "loop_a.h")
+    _rewrite(checkout, lambda d: d.update(schema="hct/kernel-contracts/1", library="ns-cmsis-nn") or
+             d["functions"][0].update(header="Include/loop_a.h"))
+    with pytest.raises(ContractError, match="names Include/loop_a.h, which cannot be (resolved|read)"):
+        load_contract_set(checkout)
+
+
+@pytest.mark.parametrize("library", ["cmsis-dsp", "other"])
+def test_another_librarys_export_at_the_default_place_is_refused(checkout: Path, library: str) -> None:
+    _rewrite(checkout, lambda d: d.update(schema="hct/kernel-contracts/1", library=library))
+    with pytest.raises(ContractError, match=f"an export for '{library}' at ns-cmsis-nn's default place"):
+        load_contract_set(checkout)
+    # Twice: a cached set is held to the same rule.
+    with pytest.raises(ContractError, match="default place"):
+        load_contract_set(checkout)
+
+
+def test_ns_cmsis_nns_own_hct_export_at_the_default_place_loads(checkout: Path) -> None:
+    _rewrite(checkout, lambda d: d.update(schema="hct/kernel-contracts/1", library="ns-cmsis-nn"))
+    assert load_contract_set(checkout).library == "ns-cmsis-nn"
+
+
 def test_a_checkout_without_a_manifest_has_no_records(checkout: Path) -> None:
     contracts = load_contract_set(checkout)
     assert contracts.implementations == {} and contracts.library_version is None and contracts.manifest_path is None

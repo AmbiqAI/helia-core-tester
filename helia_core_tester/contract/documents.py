@@ -155,12 +155,18 @@ def _check_functions(path: Path, root: Path, functions: list[Mapping[str, Any]])
 
 def _cross_check_headers(path: Path, root: Path, functions: list[Mapping[str, Any]]) -> None:
     """Every symbol must be declared in the header the export names, or the export is stale."""
-    resolved_root = root.resolve()
+    try:
+        resolved_root = root.resolve()
+    except (OSError, RuntimeError, ValueError) as error:
+        raise _fail(path, f"its checkout {root} cannot be resolved ({error})") from None
     by_header: dict[str, list[str]] = {}
     for record in functions:
         by_header.setdefault(record["header"], []).append(record["name"])
     for header, symbols in sorted(by_header.items()):
-        target = (root / header).resolve()
+        try:
+            target = (root / header).resolve()
+        except (OSError, RuntimeError, ValueError) as error:
+            raise _fail(path, f"names {header}, which cannot be resolved in {root} ({error})") from None
         if resolved_root not in target.parents:
             raise _fail(path, f"names {header}, which is outside {root}")
         try:
