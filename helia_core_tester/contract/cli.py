@@ -11,7 +11,9 @@ from helia_core_tester.contract.inventory import InventoryError, build_inventory
 from helia_core_tester.contract.ir import ContractError, load_contract_set
 from helia_core_tester.core.discovery import find_repo_root_or_cwd
 from helia_core_tester.core.path_layout import generated_tests_root, reports_root
-from helia_core_tester.core.library import LibraryProfileError, require_supported, resolve_library
+from helia_core_tester.core.config import configured_library
+from helia_core_tester.core.errors import ConfigurationError
+from helia_core_tester.core.library import require_supported, resolve_library
 from helia_core_tester.generation.utils.temp_sizer_probe import resolve_cmsis_nn_root
 
 contract_app = typer.Typer(
@@ -35,7 +37,8 @@ def inventory(
     cmsis_nn_root: Optional[Path] = typer.Option(
         None, "--cmsis-nn-root", help="ns-cmsis-nn checkout (default: $CMSIS_NN_ROOT, else the nested layout)."),
     library: Optional[Path] = typer.Option(
-        None, "--library", help="Directory with the library's hct-library.yaml; not with --cmsis-nn-root."),
+        None, "--library", help="Directory with the library's hct-library.yaml (default: $HELIA_CORE_TESTER_LIBRARY, "
+        "else library in helia_core_tester.toml). Not with a different --cmsis-nn-root."),
     generated_tests_dir: Optional[Path] = typer.Option(
         None, "--generated-tests-dir", help="Generated tests tree to scan (default: artifacts/generated_tests)."),
     fail_on_uncovered: bool = typer.Option(
@@ -50,16 +53,19 @@ def inventory(
     produced (checkout without a contract, tree without cases): an empty inventory reads
     like full coverage and is never reported as success.
     """
-    if library is not None and cmsis_nn_root is not None:
-        _fail("Pass --library or --cmsis-nn-root, not both.", EXIT_UNAVAILABLE)
-    if library is not None:
-        try:
-            root = require_supported(resolve_library(library)).source_root
-        except LibraryProfileError as error:
-            _fail(str(error), EXIT_UNAVAILABLE)
-    else:
-        root = Path(cmsis_nn_root) if cmsis_nn_root is not None else resolve_cmsis_nn_root()
     project_root = find_repo_root_or_cwd()
+    try:
+        library_dir, source = configured_library(project_root, library)
+        profile = require_supported(resolve_library(library_dir)) if library_dir is not None else None
+    except ConfigurationError as error:
+        _fail(str(error), EXIT_UNAVAILABLE)
+    if profile is None:
+        root = Path(cmsis_nn_root) if cmsis_nn_root is not None else resolve_cmsis_nn_root()
+    else:
+        root = profile.source_root
+        if cmsis_nn_root is not None and Path(cmsis_nn_root).expanduser().resolve() != root:
+            _fail(f"{source} names {profile.describe()}, but --cmsis-nn-root names "
+                  f"{Path(cmsis_nn_root).expanduser().resolve()}; pass one of them", EXIT_UNAVAILABLE)
     tree = Path(generated_tests_dir) if generated_tests_dir is not None else generated_tests_root(project_root)
     try:
         contracts = load_contract_set(root)

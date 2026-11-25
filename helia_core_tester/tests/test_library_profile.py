@@ -108,6 +108,8 @@ def test_legacy_can_be_refused(tmp_path) -> None:
         ("- a\n- b\n", "is not of type 'object'"),
         ("schema: [\n", "not valid YAML"),
         ("schema: hct/library-profile/1\nlibrary: a\nlibrary: b\n", "duplicate key 'library'"),
+        ("? [a, b]\n: 1\nschema: hct/library-profile/1\nlibrary: a\n", "unhashable key ['a', 'b']"),
+        ("? {a: 1}\n: 1\n", "unhashable key {'a': 1}"),
         ("schema: hct/library-profile/1\nlibrary: a\nextra: 1\n", "Additional properties are not allowed ('extra'"),
         ("schema: hct/library-profile/2\nlibrary: a\n", "schema: 'hct/library-profile/1' was expected"),
         ("library: a\n", "'schema' is a required property"),
@@ -369,17 +371,102 @@ def test_conflicting_flags_exit_2(tmp_path, captured) -> None:
 def test_doctor_checks_the_library(tmp_path) -> None:
     repo = _repo(tmp_path)
     good = CliRunner().invoke(cli_module.app, ["doctor", "--repo-root", str(repo), "--library", str(_nn_checkout(tmp_path))])
-    assert "✓ Library: ns-cmsis-nn at" in _text(good)
+    assert "✓ Library (from --library): ns-cmsis-nn at" in _text(good)
     bad = CliRunner().invoke(cli_module.app, ["doctor", "--repo-root", str(repo), "--library", str(tmp_path / "missing")])
     assert bad.exit_code == 1 and "✗ Library: library directory not found" in _text(bad)
 
 
-def test_contract_inventory_refuses_both_flags(tmp_path) -> None:
+@pytest.mark.parametrize("where", ["env", "toml"])
+def test_doctor_checks_the_configured_library(tmp_path, monkeypatch, where) -> None:
+    repo = _repo(tmp_path)
+    if where == "env":
+        monkeypatch.setenv(LIBRARY_ENV, str(tmp_path / "missing"))
+        source = LIBRARY_ENV
+    else:
+        (repo / "helia_core_tester.toml").write_text(f'[helia_core_tester]\nlibrary = "{tmp_path / "missing"}"\n')
+        source = None
+    result = CliRunner().invoke(cli_module.app, ["doctor", "--repo-root", str(repo)])
+    assert result.exit_code == 1 and "✗ Library: library directory not found" in _text(result)
+    good = _nn_checkout(tmp_path)
+    if where == "env":
+        monkeypatch.setenv(LIBRARY_ENV, str(good))
+    else:
+        (repo / "helia_core_tester.toml").write_text(f'[helia_core_tester]\nlibrary = "{good}"\n')
+    result = CliRunner().invoke(cli_module.app, ["doctor", "--repo-root", str(repo)])
+    assert f"✓ Library (from {source or 'library in ' + str(repo / 'helia_core_tester.toml')}): ns-cmsis-nn" in _text(result)
+
+
+def test_doctor_without_a_library_says_nothing_about_one(tmp_path) -> None:
+    assert "Library" not in _text(CliRunner().invoke(cli_module.app, ["doctor", "--repo-root", str(_repo(tmp_path))]))
+
+
+def test_configured_library_precedence(tmp_path, monkeypatch) -> None:
+    from helia_core_tester.core.config import configured_library
+
+    repo = _repo(tmp_path)
+    (repo / "helia_core_tester.toml").write_text(f'[helia_core_tester]\nlibrary = "{tmp_path / "toml"}"\n')
+    assert configured_library(repo, None) == ((tmp_path / "toml").resolve(), f"library in {repo / 'helia_core_tester.toml'}")
+    monkeypatch.setenv(LIBRARY_ENV, str(tmp_path / "env"))
+    assert configured_library(repo, None) == ((tmp_path / "env").resolve(), LIBRARY_ENV)
+    assert configured_library(repo, tmp_path / "cli") == ((tmp_path / "cli").resolve(), "--library")
+    monkeypatch.delenv(LIBRARY_ENV)
+    (repo / "helia_core_tester.toml").write_text("[helia_core_tester]\nlibrary = 3\n")
+    with pytest.raises(ConfigurationError, match="must be a path string"):
+        configured_library(repo, None)
+    (repo / "helia_core_tester.toml").unlink()
+    assert configured_library(repo, None) == (None, "")
+
+
+def _stop_at_contract(monkeypatch) -> list:
+    seen: list = []
+
+    def _load(root):
+        seen.append(root)
+        raise contract_cli.ContractError("stop here")
+
+    monkeypatch.setattr(contract_cli, "load_contract_set", _load)
+    return seen
+
+
+def test_contract_inventory_accepts_the_same_checkout_twice(tmp_path, monkeypatch) -> None:
     checkout = _nn_checkout(tmp_path)
+    seen = _stop_at_contract(monkeypatch)
     result = CliRunner().invoke(cli_module.app, ["contract",
         "inventory", "--library", str(checkout), "--cmsis-nn-root", str(checkout)])
+    assert "stop here" in _text(result), _text(result)
+    assert seen == [checkout.resolve()]
+
+
+def test_contract_inventory_refuses_two_checkouts(tmp_path, monkeypatch) -> None:
+    one, other = _nn_checkout(tmp_path, "one"), _nn_checkout(tmp_path, "other")
+    seen = _stop_at_contract(monkeypatch)
+    result = CliRunner().invoke(cli_module.app, ["contract",
+        "inventory", "--library", str(one), "--cmsis-nn-root", str(other)])
     assert result.exit_code == contract_cli.EXIT_UNAVAILABLE
-    assert "not both" in _text(result)
+    assert "--library names ns-cmsis-nn at" in _text(result) and "pass one of them" in _text(result)
+    assert seen == []
+
+
+@pytest.mark.parametrize("where", ["env", "toml"])
+def test_contract_inventory_reads_the_configured_library(tmp_path, monkeypatch, where) -> None:
+    checkout, repo = _nn_checkout(tmp_path), _repo(tmp_path)
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(contract_cli, "find_repo_root_or_cwd", lambda: repo)
+    if where == "env":
+        monkeypatch.setenv(LIBRARY_ENV, str(checkout))
+    else:
+        (repo / "helia_core_tester.toml").write_text(f'[helia_core_tester]\nlibrary = "{checkout}"\n')
+    seen = _stop_at_contract(monkeypatch)
+    CliRunner().invoke(cli_module.app, ["contract", "inventory"])
+    assert seen == [checkout.resolve()]
+
+
+def test_contract_inventory_conflicts_with_the_env_library(tmp_path, monkeypatch) -> None:
+    one, other = _nn_checkout(tmp_path, "one"), _nn_checkout(tmp_path, "other")
+    monkeypatch.setenv(LIBRARY_ENV, str(one))
+    result = CliRunner().invoke(cli_module.app, ["contract", "inventory", "--cmsis-nn-root", str(other)])
+    assert result.exit_code == contract_cli.EXIT_UNAVAILABLE
+    assert f"{LIBRARY_ENV} names" in _text(result)
 
 
 def test_contract_inventory_refuses_a_bad_library(tmp_path) -> None:
@@ -391,13 +478,7 @@ def test_contract_inventory_refuses_a_bad_library(tmp_path) -> None:
 def test_contract_inventory_reads_the_library_checkout(tmp_path, monkeypatch) -> None:
     checkout = _nn_checkout(tmp_path)
     _nn_profile(checkout, pack="Tests/hct", source_root="../..")
-    seen: list = []
-
-    def _load(root):
-        seen.append(root)
-        raise contract_cli.ContractError("stop here")
-
-    monkeypatch.setattr(contract_cli, "load_contract_set", _load)
+    seen = _stop_at_contract(monkeypatch)
     result = CliRunner().invoke(cli_module.app, ["contract", "inventory", "--library", str(checkout / "Tests" / "hct")])
     assert result.exit_code == contract_cli.EXIT_UNAVAILABLE and "stop here" in _text(result)
     assert seen == [checkout.resolve()]

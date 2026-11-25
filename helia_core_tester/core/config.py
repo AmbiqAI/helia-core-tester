@@ -94,6 +94,44 @@ PATH_KEYS = frozenset(
 )
 
 
+def config_file_table(project_root: Path, config_file: Optional[Path] = None) -> tuple[Optional[Path], dict]:
+    """(config file, its [helia_core_tester] table): HELIA_CORE_TESTER_CONFIG, else `config_file`, else
+    <project_root>/helia_core_tester.toml. The table is empty when the file is absent or has none."""
+    env_path = os.environ.get("HELIA_CORE_TESTER_CONFIG")
+    if env_path:
+        config_file = Path(env_path).resolve()
+    elif config_file is None:
+        config_file = Path(project_root) / "helia_core_tester.toml"
+    if not config_file.exists():
+        return config_file, {}
+    try:
+        import tomllib
+
+        data = tomllib.loads(config_file.read_text())
+        table = data.get("helia_core_tester") or data.get("tool", {}).get("helia_core_tester", {})
+    except Exception as e:
+        raise ConfigurationError(f"Failed to read config file: {config_file}: {e}") from e
+    return config_file, table if isinstance(table, dict) else {}
+
+
+def configured_library(project_root: Path, cli_value: Optional[Path]) -> tuple[Optional[Path], str]:
+    """(library directory, where it came from) by Config's precedence: --library, then
+    HELIA_CORE_TESTER_LIBRARY, then `library` in the config file; (None, "") when none sets it.
+    For commands that do not build a Config."""
+    if cli_value is not None:
+        return Path(cli_value).expanduser().resolve(), "--library"
+    env_value = os.environ.get(f"{ENV_PREFIX}LIBRARY")
+    if env_value is not None:
+        return Path(env_value).expanduser().resolve(), f"{ENV_PREFIX}LIBRARY"
+    config_file, table = config_file_table(project_root)
+    value = table.get("library")
+    if value is None:
+        return None, ""
+    if not isinstance(value, str):
+        raise ConfigurationError(f"library in {config_file} must be a path string, got {value!r}")
+    return Path(value).expanduser().resolve(), f"library in {config_file}"
+
+
 def default_run_jobs() -> int:
     """Bounded parallel FVP run jobs for this host."""
     return min(os.cpu_count() or 1, DEFAULT_RUN_JOBS_CAP)
@@ -207,24 +245,7 @@ class Config:
         return MISSING
 
     def _load_config_file_defaults(self) -> None:
-        env_path = os.environ.get("HELIA_CORE_TESTER_CONFIG")
-        if env_path:
-            self.config_file = Path(env_path).resolve()
-        elif self.config_file is None:
-            self.config_file = self.project_root / "helia_core_tester.toml"
-
-        if not self.config_file or not self.config_file.exists():
-            return
-
-        try:
-            import tomllib
-
-            data = tomllib.loads(self.config_file.read_text())
-            table = data.get("helia_core_tester") or data.get("tool", {}).get("helia_core_tester", {})
-            if not isinstance(table, dict):
-                return
-        except Exception as e:
-            raise ConfigurationError(f"Failed to read config file: {self.config_file}: {e}") from e
+        self.config_file, table = config_file_table(self.project_root, self.config_file)
 
         explicit = set(self._explicit_overrides or set())
         for key, value in table.items():

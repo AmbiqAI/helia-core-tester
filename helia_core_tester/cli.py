@@ -509,19 +509,24 @@ def _tool_version(exe: str) -> str:
 @app.command()
 def doctor(
     project_root: Optional[Path] = typer.Option(None, "--repo-root", help="Repository root directory"),
-    library: Optional[Path] = typer.Option(None, "--library", help="Also check this library's hct-library.yaml"),
+    library: Optional[Path] = typer.Option(None, "--library", help="Also check this library's hct-library.yaml (default: $HELIA_CORE_TESTER_LIBRARY, else library in helia_core_tester.toml)"),
 ):
     """Run preflight checks (verify tools, paths, permissions)."""
     typer.echo("Running preflight checks...")
 
-    if library is not None:
-        from .core.library import LibraryProfileError, require_supported, resolve_library
+    from .core.config import configured_library
+    from .core.discovery import find_repo_root_or_cwd
+    from .core.errors import ConfigurationError
+    from .core.library import require_supported, resolve_library
 
-        try:
-            typer.echo(f"✓ Library: {require_supported(resolve_library(library)).describe()}")
-        except LibraryProfileError as e:
-            typer.echo(f"✗ Library: {e}", err=True)
-            sys.exit(1)
+    try:
+        library_dir, source = configured_library(
+            Path(project_root).resolve() if project_root else find_repo_root_or_cwd(), library)
+        if library_dir is not None:
+            typer.echo(f"✓ Library (from {source}): {require_supported(resolve_library(library_dir)).describe()}")
+    except ConfigurationError as e:
+        typer.echo(f"✗ Library: {e}", err=True)
+        sys.exit(1)
 
     try:
         from .core.discovery import find_repo_root
