@@ -228,8 +228,8 @@ def toolchain_drift(campaign: Campaign, facts: dict) -> bool:
 
 
 def leg_command(ws: Workspace, campaign: Campaign, eid: str, leg: str, lock_s: int, eval_s: int) -> list[str]:
-    """bench-agent wrapped `candidate eval`."""
-    cmd = ["bench-agent", "run", campaign.bench_id, "--reason", f"agent-loop {campaign.name} {eid} {leg}",
+    """farm-agent wrapped `candidate eval`."""
+    cmd = ["farm-agent", "run", campaign.bench_id, "--reason", f"agent-loop {campaign.name} {eid} {leg}",
            "--timeout", str(lock_s), "--", *store_env_args(), "timeout", str(eval_s), *ws.tester_cmd(), "candidate", "eval",
            "--kernels", str(ws.submit_dir / "tree"), "--baseline", str(ws.baseline(leg))]
     if campaign.min_score is not None:
