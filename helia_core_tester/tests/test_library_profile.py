@@ -396,7 +396,7 @@ def test_doctor_checks_the_library(tmp_path) -> None:
     good = CliRunner().invoke(cli_module.app, ["doctor", "--repo-root", str(repo), "--library", str(_nn_checkout(tmp_path))])
     assert "✓ Library (from --library): ns-cmsis-nn at" in _text(good)
     bad = CliRunner().invoke(cli_module.app, ["doctor", "--repo-root", str(repo), "--library", str(tmp_path / "missing")])
-    assert bad.exit_code == 1 and "✗ Library: library directory not found" in _text(bad)
+    assert bad.exit_code == 2 and "✗ Library: library directory not found" in _text(bad)
 
 
 @pytest.mark.parametrize("where", ["env", "toml"])
@@ -409,7 +409,7 @@ def test_doctor_checks_the_configured_library(tmp_path, monkeypatch, where) -> N
         (repo / "helia_core_tester.toml").write_text(f'[helia_core_tester]\nlibrary = "{tmp_path / "missing"}"\n')
         source = None
     result = CliRunner().invoke(cli_module.app, ["doctor", "--repo-root", str(repo)])
-    assert result.exit_code == 1 and "✗ Library: library directory not found" in _text(result)
+    assert result.exit_code == 2 and "✗ Library: library directory not found" in _text(result)
     good = _nn_checkout(tmp_path)
     if where == "env":
         monkeypatch.setenv(LIBRARY_ENV, str(good))
@@ -505,3 +505,19 @@ def test_contract_inventory_reads_the_library_checkout(tmp_path, monkeypatch) ->
     result = CliRunner().invoke(cli_module.app, ["contract", "inventory", "--library", str(checkout / "Tests" / "hct")])
     assert result.exit_code == contract_cli.EXIT_UNAVAILABLE and "stop here" in _text(result)
     assert seen == [checkout.resolve()]
+
+
+def test_a_nul_in_source_root_is_refused(tmp_path) -> None:
+    path = _profile(tmp_path / "lib", 'schema: hct/library-profile/1\nlibrary: a\nsource_root: "a\\0b"\n')
+    with pytest.raises(LibraryProfileError, match="source_root: .* does not match"):
+        load_profile(path)
+
+
+def test_a_source_root_that_cannot_be_resolved_is_refused(tmp_path) -> None:
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    (lib / "loop_a").symlink_to(lib / "loop_b")
+    (lib / "loop_b").symlink_to(lib / "loop_a")
+    path = _profile(lib, "schema: hct/library-profile/1\nlibrary: a\nsource_root: loop_a\n")
+    with pytest.raises(LibraryProfileError, match="source_root 'loop_a' (cannot be resolved|is not a directory)"):
+        load_profile(path)

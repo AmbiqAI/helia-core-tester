@@ -122,8 +122,11 @@ def _validate(path: Path, data: Any) -> None:
 def _source_root(path: Path, value: str) -> Path:
     if os.path.isabs(value) or "\\" in value:
         raise LibraryProfileError(f"{path}: source_root {value!r} must be a relative POSIX path")
-    profile_dir = path.parent.resolve()
-    root = (profile_dir / value).resolve()
+    try:
+        profile_dir = path.parent.resolve()
+        root = (profile_dir / value).resolve()
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise LibraryProfileError(f"{path}: source_root {value!r} cannot be resolved ({exc})") from None
     if not root.is_dir():
         raise LibraryProfileError(f"{path}: source_root {value!r} is not a directory ({root})")
     if profile_dir != root and root not in profile_dir.parents:

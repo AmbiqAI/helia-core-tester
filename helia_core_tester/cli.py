@@ -526,7 +526,7 @@ def doctor(
             typer.echo(f"✓ Library (from {source}): {require_supported(resolve_library(library_dir)).describe()}")
     except ConfigurationError as e:
         typer.echo(f"✗ Library: {e}", err=True)
-        sys.exit(1)
+        sys.exit(2)
 
     try:
         from .core.discovery import find_repo_root
