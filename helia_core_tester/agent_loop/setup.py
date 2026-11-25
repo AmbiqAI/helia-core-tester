@@ -181,7 +181,7 @@ def make_baseline(ws: Workspace, campaign: Campaign, leg: Leg, echo: Echo = prin
         ws.size_ref_of(leg.toolchain).unlink(missing_ok=True)
     shutil.rmtree(out, ignore_errors=True)
     out.parent.mkdir(parents=True, exist_ok=True)
-    cmd = ["bench-agent", "run", campaign.bench_id, "--reason", f"agent-loop {campaign.name} baseline {leg.name}",
+    cmd = ["farm-agent", "run", campaign.bench_id, "--reason", f"agent-loop {campaign.name} baseline {leg.name}",
            "--timeout", str(campaign.lock_timeout_s), "--", *store_env_args(), *ws.tester_cmd(), "candidate", "baseline",
            "--kernels", str(ws.base), "--board", campaign.board, "--out", str(out), "--repeats", str(campaign.repeats),
            "--placement", leg.placement, *toolchain_args(leg.toolchain), "--op", campaign.op, "--dtype", campaign.dtype]

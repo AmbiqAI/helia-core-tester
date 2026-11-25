@@ -376,11 +376,11 @@ the agent's view.
   set, its seed file, result bundles or logs.
 - The evaluator runs `candidate eval` as the human user, outside the
   sandbox, and hands the agent only stdout and the exit code.
-  - On the bench host, wrap it in `bench-agent run`. The command runs in
+  - On the bench host, wrap it in `farm-agent run`. The command runs in
     `$HOME`, so use absolute paths:
 
     ```bash
-    bench-agent run apollo510_evb --reason <sha> -- timeout 30m \
+    farm-agent run apollo510_evb --reason <sha> -- timeout 30m \
       uv --directory /abs/helia-core-tester run helia_core_tester \
       candidate eval --kernels /abs/agent-tree --baseline /abs/baseline
     ```
@@ -509,7 +509,7 @@ and three wrapper scripts are its only way to build, disassemble and run
 on a board. Every eval runs `candidate eval` once per leg (`tcm`, `mram`,
 and `sram` when listed) and appends a row to the campaign ledger.
 
-Needs, on the bench host: `uv`, `git`, `patch`, `bench-agent`, the
+Needs, on the bench host: `uv`, `git`, `patch`, `farm-agent`, the
 `claude` CLI (logged in), the Arm toolchain (`arm-none-eabi-size`,
 `arm-none-eabi-objdump`), and a committed tester checkout.
 
@@ -521,7 +521,7 @@ Start from `assets/campaigns/conv-s8.example.yaml`, `conv-s16.example.yaml`, `dw
 ```yaml
 name: conv-s8                  # lowercase, digits, dashes
 board: apollo510_evb           # tester board id
-bench_id: apollo510_evb        # bench-agent board id (default: board)
+bench_id: apollo510_evb        # farm-agent board id (default: board)
 legs: [tcm, mram]              # default: both when the board has MRAM; add sram to time activations in SRAM
 toolchains: [gcc]              # or [gcc, atfe]; atfe needs ATFE_ROOT
 target:
@@ -581,7 +581,7 @@ uv run helia_core_tester agent-loop init conv-s8.yaml -w ~/campaigns/conv-s8
 3. Writes a fresh secret seed and hidden set in `secrets_dir` (mode 0700,
    seed 0600). The dir must be new or empty. The workspace records that
    it owns the dir, and only that workspace's rerun reuses its seed.
-4. Records one `candidate baseline` per leg under `bench-agent run`.
+4. Records one `candidate baseline` per leg under `farm-agent run`.
 5. Builds the base kernel library once per toolchain and saves per-object
    code sizes (`W/size-ref.json`, `W/size-ref-atfe.json`). It records each
    compiler's version; a baseline recorded with another version is
@@ -649,7 +649,7 @@ uv run helia_core_tester agent-loop stop -w ~/campaigns/conv-s8
   and runs check on it. A tree that fails, or a check that runs past the
   deadline, is rejected and costs no eval.
   Every leg then judges that frozen copy, so edits made during a submit
-  wait for the next one. Each leg runs under `bench-agent run --timeout`
+  wait for the next one. Each leg runs under `farm-agent run --timeout`
   and `timeout`, both cut to fit `submit_deadline_s`. Once a leg ends
   below stage `score` or with a verdict worse than `no_gain`, later legs
   are skipped. Each placement leg runs only after the previous one listed
@@ -659,7 +659,7 @@ uv run helia_core_tester agent-loop stop -w ~/campaigns/conv-s8
   overall verdict is the worst leg that ran, and `pass` needs every leg.
   - A submit that cannot take the submit lock in time (another submit is
     running) returns a free `error` and a ledger row without an id.
-  - No verdict at all (board busy past the lock wait, bench-agent or
+  - No verdict at all (board busy past the lock wait, farm-agent or
     tester failure, `refused` at stage `tester` or `baseline`) is retried,
     then recorded with `infra: true`. It costs no eval, and the view hides
     any earlier leg's scores. After `max_infra_errors` such submits in a
@@ -696,7 +696,7 @@ a few lines of `start_notes`.
 - The trusted side runs as you too. `candidate eval` copies the agent's
   trees into a fresh checkout and never runs git in them, but a compiled
   kernel still runs on the board.
-- `bench-agent` serializes board use by flock; it does not reserve a board
+- `farm-agent` serializes board use by flock; it does not reserve a board
   for the whole campaign.
 
 ## Suite-Based Runs

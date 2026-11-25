@@ -150,16 +150,16 @@ jobs:
             echo "HCT_ATFE_SESSION_ID=nightly-atfe-${GITHUB_RUN_ID}-${HPX_BOARD}"
           } >> "${GITHUB_ENV}"
 
-      # hpx's bench lock; ttl frees it.
+      # hpx's farm lock; ttl frees it.
       - name: Take the board lock
         id: lock
         run: |
-          if [[ -z "${BENCH_BOARD:-}" ]] || ! command -v bench-agent > /dev/null; then
-            echo "::error::runner has no BENCH_BOARD or bench-agent" >&2
+          if [[ -z "${FARM_BOARD:-}" ]] || ! command -v farm-agent > /dev/null; then
+            echo "::error::runner has no FARM_BOARD or farm-agent" >&2
             exit 2
           fi
           # Untagged: runner orphan cleanup skips it.
-          if ! held="$(env -u RUNNER_TRACKING_ID bench-agent lock "${BENCH_BOARD}" \
+          if ! held="$(env -u RUNNER_TRACKING_ID farm-agent lock "${FARM_BOARD}" \
               --holder ci \
               --reason "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
               --timeout 1800 \
@@ -244,7 +244,7 @@ jobs:
       - name: Release the board lock
         if: always() && steps.lock.outcome == 'success'
         run: |
-          if ! freed="$(bench-agent unlock "${BENCH_BOARD}" 2>&1)"; then
+          if ! freed="$(farm-agent unlock "${FARM_BOARD}" 2>&1)"; then
             if [[ "${freed}" != *"is free"* ]]; then
               echo "::error::${freed}" >&2
               exit 1

@@ -1,7 +1,7 @@
 # Campaign for `helia_core_tester agent-loop init`.
 name: dw-s8
 board: apollo510_evb
-# bench-agent board id; defaults to board.
+# farm-agent board id; defaults to board.
 bench_id: apollo510_evb
 legs: [tcm, mram]
 target:
