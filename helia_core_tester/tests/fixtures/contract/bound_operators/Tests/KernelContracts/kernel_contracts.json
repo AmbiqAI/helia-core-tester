@@ -4,7 +4,7 @@
     {
       "name": "arm_abs_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 3833,
+      "line": 3839,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -63,7 +63,7 @@
     {
       "name": "arm_abs_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 3763,
+      "line": 3769,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -122,7 +122,7 @@
     {
       "name": "arm_add_row_broadcast_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 3648,
+      "line": 3654,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -221,7 +221,7 @@
     {
       "name": "arm_add_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 4065,
+      "line": 4071,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -320,7 +320,7 @@
     {
       "name": "arm_add_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 3620,
+      "line": 3626,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -419,7 +419,7 @@
     {
       "name": "arm_add_scalar_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 4110,
+      "line": 4116,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -508,7 +508,7 @@
     {
       "name": "arm_add_scalar_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 3692,
+      "line": 3698,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -597,7 +597,7 @@
     {
       "name": "arm_argmax_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 7899,
+      "line": 7905,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -626,7 +626,7 @@
     {
       "name": "arm_argmax_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 7873,
+      "line": 7879,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -655,7 +655,7 @@
     {
       "name": "arm_argmin_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 7912,
+      "line": 7918,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -684,7 +684,7 @@
     {
       "name": "arm_argmin_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 7886,
+      "line": 7892,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -713,7 +713,7 @@
     {
       "name": "arm_avgpool_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 6324,
+      "line": 6330,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -757,7 +757,7 @@
     {
       "name": "arm_avgpool_s16_get_buffer_size",
       "header": "Include/arm_nnfunctions.h",
-      "line": 6344,
+      "line": 6350,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -776,7 +776,7 @@
     {
       "name": "arm_avgpool_s16_get_buffer_size_dsp",
       "header": "Include/arm_nnfunctions.h",
-      "line": 6356,
+      "line": 6362,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -795,7 +795,7 @@
     {
       "name": "arm_avgpool_s16_get_buffer_size_mve",
       "header": "Include/arm_nnfunctions.h",
-      "line": 6369,
+      "line": 6375,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -814,7 +814,7 @@
     {
       "name": "arm_avgpool_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 6241,
+      "line": 6247,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -858,7 +858,7 @@
     {
       "name": "arm_avgpool_s8_get_buffer_size",
       "header": "Include/arm_nnfunctions.h",
-      "line": 6262,
+      "line": 6268,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -877,7 +877,7 @@
     {
       "name": "arm_avgpool_s8_get_buffer_size_dsp",
       "header": "Include/arm_nnfunctions.h",
-      "line": 6274,
+      "line": 6280,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -896,7 +896,7 @@
     {
       "name": "arm_avgpool_s8_get_buffer_size_mve",
       "header": "Include/arm_nnfunctions.h",
-      "line": 6287,
+      "line": 6293,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -915,7 +915,7 @@
     {
       "name": "arm_batch_matmul_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 7708,
+      "line": 7714,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -969,7 +969,7 @@
     {
       "name": "arm_batch_matmul_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 7668,
+      "line": 7674,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -1023,7 +1023,7 @@
     {
       "name": "arm_batch_matmul_s8_get_buffer_size",
       "header": "Include/arm_nnfunctions.h",
-      "line": 7733,
+      "line": 7739,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -1037,7 +1037,7 @@
     {
       "name": "arm_batch_matmul_s8_get_buffer_size_dsp",
       "header": "Include/arm_nnfunctions.h",
-      "line": 7744,
+      "line": 7750,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -1051,7 +1051,7 @@
     {
       "name": "arm_batch_matmul_s8_get_buffer_size_mve",
       "header": "Include/arm_nnfunctions.h",
-      "line": 7755,
+      "line": 7761,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -1065,7 +1065,7 @@
     {
       "name": "arm_batch_to_space_nd_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 6852,
+      "line": 6858,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -1104,7 +1104,7 @@
     {
       "name": "arm_batch_to_space_nd_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 6828,
+      "line": 6834,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -1143,7 +1143,7 @@
     {
       "name": "arm_broadcast_to_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 8486,
+      "line": 8492,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -1167,7 +1167,7 @@
     {
       "name": "arm_broadcast_to_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 8473,
+      "line": 8479,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -1191,7 +1191,7 @@
     {
       "name": "arm_clamp_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 5716,
+      "line": 5722,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -1225,7 +1225,7 @@
     {
       "name": "arm_clamp_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 5698,
+      "line": 5704,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -1259,7 +1259,7 @@
     {
       "name": "arm_comparison_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 5173,
+      "line": 5179,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -1343,7 +1343,7 @@
     {
       "name": "arm_comparison_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 5130,
+      "line": 5136,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -1427,7 +1427,7 @@
     {
       "name": "arm_concatenation_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 7150,
+      "line": 7156,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -1471,7 +1471,7 @@
     {
       "name": "arm_concatenation_s32",
       "header": "Include/arm_nnfunctions.h",
-      "line": 7175,
+      "line": 7181,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -1515,7 +1515,7 @@
     {
       "name": "arm_concatenation_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 7125,
+      "line": 7131,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -1559,7 +1559,7 @@
     {
       "name": "arm_concatenation_s8_w",
       "header": "Include/arm_nnfunctions.h",
-      "line": 7100,
+      "line": 7106,
       "guards": [],
       "returns": "void",
       "params": [
@@ -1603,7 +1603,7 @@
     {
       "name": "arm_concatenation_s8_x",
       "header": "Include/arm_nnfunctions.h",
-      "line": 6963,
+      "line": 6969,
       "guards": [],
       "returns": "void",
       "params": [
@@ -1652,7 +1652,7 @@
     {
       "name": "arm_concatenation_s8_y",
       "header": "Include/arm_nnfunctions.h",
-      "line": 7010,
+      "line": 7016,
       "guards": [],
       "returns": "void",
       "params": [
@@ -1701,7 +1701,7 @@
     {
       "name": "arm_concatenation_s8_z",
       "header": "Include/arm_nnfunctions.h",
-      "line": 7057,
+      "line": 7063,
       "guards": [],
       "returns": "void",
       "params": [
@@ -1750,7 +1750,7 @@
     {
       "name": "arm_convolve_1_x_n_s4",
       "header": "Include/arm_nnfunctions.h",
-      "line": 1799,
+      "line": 1805,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -1814,7 +1814,7 @@
     {
       "name": "arm_convolve_1_x_n_s4_get_buffer_size",
       "header": "Include/arm_nnfunctions.h",
-      "line": 1850,
+      "line": 1856,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -1843,7 +1843,7 @@
     {
       "name": "arm_convolve_1_x_n_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 1558,
+      "line": 1564,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -1912,7 +1912,7 @@
     {
       "name": "arm_convolve_1_x_n_s8_get_buffer_size",
       "header": "Include/arm_nnfunctions.h",
-      "line": 1828,
+      "line": 1834,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -1941,7 +1941,7 @@
     {
       "name": "arm_convolve_1x1_out_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 1732,
+      "line": 1738,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -2010,7 +2010,7 @@
     {
       "name": "arm_convolve_1x1_out_s8_get_buffer_size",
       "header": "Include/arm_nnfunctions.h",
-      "line": 1761,
+      "line": 1767,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -2024,7 +2024,7 @@
     {
       "name": "arm_convolve_1x1_s16_ns_np_nd",
       "header": "Include/arm_nnfunctions.h",
-      "line": 1191,
+      "line": 1197,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -2088,7 +2088,7 @@
     {
       "name": "arm_convolve_1x1_s4",
       "header": "Include/arm_nnfunctions.h",
-      "line": 1332,
+      "line": 1338,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -2152,7 +2152,7 @@
     {
       "name": "arm_convolve_1x1_s4_fast",
       "header": "Include/arm_nnfunctions.h",
-      "line": 1292,
+      "line": 1298,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -2216,7 +2216,7 @@
     {
       "name": "arm_convolve_1x1_s4_fast_get_buffer_size",
       "header": "Include/arm_nnfunctions.h",
-      "line": 1424,
+      "line": 1430,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -2230,7 +2230,7 @@
     {
       "name": "arm_convolve_1x1_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 1486,
+      "line": 1492,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -2299,7 +2299,7 @@
     {
       "name": "arm_convolve_1x1_s8_fast",
       "header": "Include/arm_nnfunctions.h",
-      "line": 1403,
+      "line": 1409,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -2368,7 +2368,7 @@
     {
       "name": "arm_convolve_1x1_s8_fast_get_buffer_size",
       "header": "Include/arm_nnfunctions.h",
-      "line": 1435,
+      "line": 1441,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -2382,7 +2382,7 @@
     {
       "name": "arm_convolve_1x1_s8_short_k",
       "header": "Include/arm_nnfunctions.h",
-      "line": 643,
+      "line": 649,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -2451,7 +2451,7 @@
     {
       "name": "arm_convolve_even_s4",
       "header": "Include/arm_nnfunctions.h",
-      "line": 514,
+      "line": 520,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -2515,7 +2515,7 @@
     {
       "name": "arm_convolve_even_s4_get_buffer_size",
       "header": "Include/arm_nnfunctions.h",
-      "line": 792,
+      "line": 798,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -2534,7 +2534,7 @@
     {
       "name": "arm_convolve_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 1148,
+      "line": 1154,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -2598,7 +2598,7 @@
     {
       "name": "arm_convolve_s16_fast_small_kernel",
       "header": "Include/arm_nnfunctions.h",
-      "line": 1234,
+      "line": 1240,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -2662,7 +2662,7 @@
     {
       "name": "arm_convolve_s16_get_buffer_size",
       "header": "Include/arm_nnfunctions.h",
-      "line": 1259,
+      "line": 1265,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -2681,7 +2681,7 @@
     {
       "name": "arm_convolve_s16_group_ch_mult_1",
       "header": "Include/arm_nnfunctions.h",
-      "line": 379,
+      "line": 385,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -2745,7 +2745,7 @@
     {
       "name": "arm_convolve_s4",
       "header": "Include/arm_nnfunctions.h",
-      "line": 473,
+      "line": 479,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -2809,7 +2809,7 @@
     {
       "name": "arm_convolve_s4_get_buffer_size",
       "header": "Include/arm_nnfunctions.h",
-      "line": 777,
+      "line": 783,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -2828,7 +2828,7 @@
     {
       "name": "arm_convolve_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 587,
+      "line": 593,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -2902,7 +2902,7 @@
     {
       "name": "arm_convolve_s8_3x3_c16_s1",
       "header": "Include/arm_nnfunctions.h",
-      "line": 751,
+      "line": 757,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -2976,7 +2976,7 @@
     {
       "name": "arm_convolve_s8_get_buffer_size",
       "header": "Include/arm_nnfunctions.h",
-      "line": 808,
+      "line": 814,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -2995,7 +2995,7 @@
     {
       "name": "arm_convolve_s8_get_buffer_size_mve",
       "header": "Include/arm_nnfunctions.h",
-      "line": 288,
+      "line": 294,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -3014,7 +3014,7 @@
     {
       "name": "arm_convolve_s8_get_weights_sum_size",
       "header": "Include/arm_nnfunctions.h",
-      "line": 821,
+      "line": 827,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -3028,7 +3028,7 @@
     {
       "name": "arm_convolve_s8_small_cin",
       "header": "Include/arm_nnfunctions.h",
-      "line": 699,
+      "line": 705,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -3102,7 +3102,7 @@
     {
       "name": "arm_convolve_weight_sum",
       "header": "Include/arm_nnfunctions.h",
-      "line": 1614,
+      "line": 1620,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -3146,7 +3146,7 @@
     {
       "name": "arm_convolve_wrapper_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 349,
+      "line": 355,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -3210,7 +3210,7 @@
     {
       "name": "arm_convolve_wrapper_s16_get_buffer_size",
       "header": "Include/arm_nnfunctions.h",
-      "line": 409,
+      "line": 415,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -3239,7 +3239,7 @@
     {
       "name": "arm_convolve_wrapper_s16_get_buffer_size_dsp",
       "header": "Include/arm_nnfunctions.h",
-      "line": 423,
+      "line": 429,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -3268,7 +3268,7 @@
     {
       "name": "arm_convolve_wrapper_s16_get_buffer_size_mve",
       "header": "Include/arm_nnfunctions.h",
-      "line": 437,
+      "line": 443,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -3297,7 +3297,7 @@
     {
       "name": "arm_convolve_wrapper_s4",
       "header": "Include/arm_nnfunctions.h",
-      "line": 107,
+      "line": 113,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -3361,7 +3361,7 @@
     {
       "name": "arm_convolve_wrapper_s4_get_buffer_size",
       "header": "Include/arm_nnfunctions.h",
-      "line": 143,
+      "line": 149,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -3390,7 +3390,7 @@
     {
       "name": "arm_convolve_wrapper_s4_get_buffer_size_dsp",
       "header": "Include/arm_nnfunctions.h",
-      "line": 174,
+      "line": 180,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -3419,7 +3419,7 @@
     {
       "name": "arm_convolve_wrapper_s4_get_buffer_size_mve",
       "header": "Include/arm_nnfunctions.h",
-      "line": 159,
+      "line": 165,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -3448,7 +3448,7 @@
     {
       "name": "arm_convolve_wrapper_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 235,
+      "line": 241,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -3517,7 +3517,7 @@
     {
       "name": "arm_convolve_wrapper_s8_get_buffer_size",
       "header": "Include/arm_nnfunctions.h",
-      "line": 274,
+      "line": 280,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -3546,7 +3546,7 @@
     {
       "name": "arm_convolve_wrapper_s8_get_buffer_size_dsp",
       "header": "Include/arm_nnfunctions.h",
-      "line": 315,
+      "line": 321,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -3575,7 +3575,7 @@
     {
       "name": "arm_convolve_wrapper_s8_get_buffer_size_mve",
       "header": "Include/arm_nnfunctions.h",
-      "line": 300,
+      "line": 306,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -3604,7 +3604,7 @@
     {
       "name": "arm_depth_to_space_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 6753,
+      "line": 6759,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -3638,7 +3638,7 @@
     {
       "name": "arm_depth_to_space_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 6731,
+      "line": 6737,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -3672,7 +3672,7 @@
     {
       "name": "arm_depthwise_conv_3x3_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 2499,
+      "line": 2505,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -3736,7 +3736,7 @@
     {
       "name": "arm_depthwise_conv_fast_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 2438,
+      "line": 2444,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -3800,7 +3800,7 @@
     {
       "name": "arm_depthwise_conv_fast_s16_get_buffer_size",
       "header": "Include/arm_nnfunctions.h",
-      "line": 2463,
+      "line": 2469,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -3819,7 +3819,7 @@
     {
       "name": "arm_depthwise_conv_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 2256,
+      "line": 2262,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -3883,7 +3883,7 @@
     {
       "name": "arm_depthwise_conv_s4",
       "header": "Include/arm_nnfunctions.h",
-      "line": 2206,
+      "line": 2212,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -3947,7 +3947,7 @@
     {
       "name": "arm_depthwise_conv_s4_opt",
       "header": "Include/arm_nnfunctions.h",
-      "line": 2878,
+      "line": 2884,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -4011,7 +4011,7 @@
     {
       "name": "arm_depthwise_conv_s4_opt_get_buffer_size",
       "header": "Include/arm_nnfunctions.h",
-      "line": 2919,
+      "line": 2925,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -4030,7 +4030,7 @@
     {
       "name": "arm_depthwise_conv_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 2162,
+      "line": 2168,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -4094,7 +4094,7 @@
     {
       "name": "arm_depthwise_conv_s8_opt",
       "header": "Include/arm_nnfunctions.h",
-      "line": 2589,
+      "line": 2595,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -4163,7 +4163,7 @@
     {
       "name": "arm_depthwise_conv_s8_opt_3x3",
       "header": "Include/arm_nnfunctions.h",
-      "line": 2759,
+      "line": 2765,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -4232,7 +4232,7 @@
     {
       "name": "arm_depthwise_conv_s8_opt_3x3_c64_s1",
       "header": "Include/arm_nnfunctions.h",
-      "line": 2805,
+      "line": 2811,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -4301,7 +4301,7 @@
     {
       "name": "arm_depthwise_conv_s8_opt_3x3_get_buffer_size",
       "header": "Include/arm_nnfunctions.h",
-      "line": 2832,
+      "line": 2838,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -4315,7 +4315,7 @@
     {
       "name": "arm_depthwise_conv_s8_opt_channelwise",
       "header": "Include/arm_nnfunctions.h",
-      "line": 2699,
+      "line": 2705,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -4384,7 +4384,7 @@
     {
       "name": "arm_depthwise_conv_s8_opt_get_buffer_size",
       "header": "Include/arm_nnfunctions.h",
-      "line": 2903,
+      "line": 2909,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -4403,7 +4403,7 @@
     {
       "name": "arm_depthwise_conv_s8_opt_planar",
       "header": "Include/arm_nnfunctions.h",
-      "line": 2662,
+      "line": 2668,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -4472,7 +4472,7 @@
     {
       "name": "arm_depthwise_conv_s8_opt_planar_supported",
       "header": "Include/arm_nnfunctions.h",
-      "line": 2626,
+      "line": 2632,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -4501,7 +4501,7 @@
     {
       "name": "arm_depthwise_conv_wrapper_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 2311,
+      "line": 2317,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -4565,7 +4565,7 @@
     {
       "name": "arm_depthwise_conv_wrapper_s16_get_buffer_size",
       "header": "Include/arm_nnfunctions.h",
-      "line": 2348,
+      "line": 2354,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -4594,7 +4594,7 @@
     {
       "name": "arm_depthwise_conv_wrapper_s16_get_buffer_size_dsp",
       "header": "Include/arm_nnfunctions.h",
-      "line": 2364,
+      "line": 2370,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -4623,7 +4623,7 @@
     {
       "name": "arm_depthwise_conv_wrapper_s16_get_buffer_size_mve",
       "header": "Include/arm_nnfunctions.h",
-      "line": 2381,
+      "line": 2387,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -4652,7 +4652,7 @@
     {
       "name": "arm_depthwise_conv_wrapper_s4",
       "header": "Include/arm_nnfunctions.h",
-      "line": 1989,
+      "line": 1995,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -4716,7 +4716,7 @@
     {
       "name": "arm_depthwise_conv_wrapper_s4_get_buffer_size",
       "header": "Include/arm_nnfunctions.h",
-      "line": 2088,
+      "line": 2094,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -4745,7 +4745,7 @@
     {
       "name": "arm_depthwise_conv_wrapper_s4_get_buffer_size_dsp",
       "header": "Include/arm_nnfunctions.h",
-      "line": 2105,
+      "line": 2111,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -4774,7 +4774,7 @@
     {
       "name": "arm_depthwise_conv_wrapper_s4_get_buffer_size_mve",
       "header": "Include/arm_nnfunctions.h",
-      "line": 2123,
+      "line": 2129,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -4803,7 +4803,7 @@
     {
       "name": "arm_depthwise_conv_wrapper_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 1940,
+      "line": 1946,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -4872,7 +4872,7 @@
     {
       "name": "arm_depthwise_conv_wrapper_s8_get_buffer_size",
       "header": "Include/arm_nnfunctions.h",
-      "line": 2028,
+      "line": 2034,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -4901,7 +4901,7 @@
     {
       "name": "arm_depthwise_conv_wrapper_s8_get_buffer_size_dsp",
       "header": "Include/arm_nnfunctions.h",
-      "line": 2044,
+      "line": 2050,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -4930,7 +4930,7 @@
     {
       "name": "arm_depthwise_conv_wrapper_s8_get_buffer_size_mve",
       "header": "Include/arm_nnfunctions.h",
-      "line": 2060,
+      "line": 2066,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -4959,7 +4959,7 @@
     {
       "name": "arm_depthwise_convolve_weight_sum",
       "header": "Include/arm_nnfunctions.h",
-      "line": 1666,
+      "line": 1672,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -5013,7 +5013,7 @@
     {
       "name": "arm_dequantize_f16_bits_f32",
       "header": "Include/arm_nnfunctions.h",
-      "line": 8192,
+      "line": 8198,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -5037,7 +5037,7 @@
     {
       "name": "arm_dequantize_s16_f32",
       "header": "Include/arm_nnfunctions.h",
-      "line": 8162,
+      "line": 8168,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -5071,7 +5071,7 @@
     {
       "name": "arm_dequantize_s8_f32",
       "header": "Include/arm_nnfunctions.h",
-      "line": 8139,
+      "line": 8145,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -5105,7 +5105,7 @@
     {
       "name": "arm_dynamic_update_slice_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 8720,
+      "line": 8734,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -5139,7 +5139,7 @@
     {
       "name": "arm_dynamic_update_slice_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 8702,
+      "line": 8716,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -5173,7 +5173,7 @@
     {
       "name": "arm_elementwise_add_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 4152,
+      "line": 4158,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -5262,7 +5262,7 @@
     {
       "name": "arm_elementwise_add_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 3732,
+      "line": 3738,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -5351,7 +5351,7 @@
     {
       "name": "arm_elementwise_mul_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 4760,
+      "line": 4766,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -5415,7 +5415,7 @@
     {
       "name": "arm_elementwise_mul_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 4669,
+      "line": 4675,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -5479,7 +5479,7 @@
     {
       "name": "arm_elementwise_prelu_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 6157,
+      "line": 6163,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -5543,7 +5543,7 @@
     {
       "name": "arm_elementwise_prelu_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 6065,
+      "line": 6071,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -5607,7 +5607,7 @@
     {
       "name": "arm_elementwise_squared_difference_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 4550,
+      "line": 4556,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -5696,7 +5696,7 @@
     {
       "name": "arm_elementwise_squared_difference_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 4418,
+      "line": 4424,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -5785,7 +5785,7 @@
     {
       "name": "arm_elementwise_sub_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 4286,
+      "line": 4292,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -5874,7 +5874,7 @@
     {
       "name": "arm_elementwise_sub_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 4018,
+      "line": 4024,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -5963,7 +5963,7 @@
     {
       "name": "arm_equal_bool",
       "header": "Include/arm_nnfunctions.h",
-      "line": 5030,
+      "line": 5036,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -6002,7 +6002,7 @@
     {
       "name": "arm_equal_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 5447,
+      "line": 5453,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -6081,7 +6081,7 @@
     {
       "name": "arm_equal_s32",
       "header": "Include/arm_nnfunctions.h",
-      "line": 4955,
+      "line": 4961,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -6120,7 +6120,7 @@
     {
       "name": "arm_equal_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 5213,
+      "line": 5219,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -6199,7 +6199,7 @@
     {
       "name": "arm_fully_connected_per_channel_packed_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 3201,
+      "line": 3207,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -6243,7 +6243,7 @@
     {
       "name": "arm_fully_connected_per_channel_packed_s8_get_packed_size",
       "header": "Include/arm_nnfunctions.h",
-      "line": 3141,
+      "line": 3147,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -6257,7 +6257,7 @@
     {
       "name": "arm_fully_connected_per_channel_packed_s8_pack",
       "header": "Include/arm_nnfunctions.h",
-      "line": 3161,
+      "line": 3167,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -6291,7 +6291,7 @@
     {
       "name": "arm_fully_connected_per_channel_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 3449,
+      "line": 3455,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -6355,7 +6355,7 @@
     {
       "name": "arm_fully_connected_per_channel_s16_get_buffer_size",
       "header": "Include/arm_nnfunctions.h",
-      "line": 3558,
+      "line": 3564,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -6369,7 +6369,7 @@
     {
       "name": "arm_fully_connected_per_channel_s16_get_buffer_size_dsp",
       "header": "Include/arm_nnfunctions.h",
-      "line": 3570,
+      "line": 3576,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -6383,7 +6383,7 @@
     {
       "name": "arm_fully_connected_per_channel_s16_get_buffer_size_mve",
       "header": "Include/arm_nnfunctions.h",
-      "line": 3582,
+      "line": 3588,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -6397,7 +6397,7 @@
     {
       "name": "arm_fully_connected_per_channel_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 3114,
+      "line": 3120,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -6461,7 +6461,7 @@
     {
       "name": "arm_fully_connected_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 3392,
+      "line": 3398,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -6525,7 +6525,7 @@
     {
       "name": "arm_fully_connected_s16_get_buffer_size",
       "header": "Include/arm_nnfunctions.h",
-      "line": 3527,
+      "line": 3533,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -6539,7 +6539,7 @@
     {
       "name": "arm_fully_connected_s16_get_buffer_size_dsp",
       "header": "Include/arm_nnfunctions.h",
-      "line": 3537,
+      "line": 3543,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -6553,7 +6553,7 @@
     {
       "name": "arm_fully_connected_s16_get_buffer_size_mve",
       "header": "Include/arm_nnfunctions.h",
-      "line": 3547,
+      "line": 3553,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -6567,7 +6567,7 @@
     {
       "name": "arm_fully_connected_s4",
       "header": "Include/arm_nnfunctions.h",
-      "line": 2969,
+      "line": 2975,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -6631,7 +6631,7 @@
     {
       "name": "arm_fully_connected_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 3041,
+      "line": 3047,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -6695,7 +6695,7 @@
     {
       "name": "arm_fully_connected_s8_get_buffer_size",
       "header": "Include/arm_nnfunctions.h",
-      "line": 3333,
+      "line": 3339,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -6709,7 +6709,7 @@
     {
       "name": "arm_fully_connected_s8_get_buffer_size_dsp",
       "header": "Include/arm_nnfunctions.h",
-      "line": 3344,
+      "line": 3350,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -6723,7 +6723,7 @@
     {
       "name": "arm_fully_connected_s8_get_buffer_size_mve",
       "header": "Include/arm_nnfunctions.h",
-      "line": 3355,
+      "line": 3361,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -6737,7 +6737,7 @@
     {
       "name": "arm_fully_connected_wrapper_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 3509,
+      "line": 3515,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -6801,7 +6801,7 @@
     {
       "name": "arm_fully_connected_wrapper_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 3272,
+      "line": 3278,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -6865,7 +6865,7 @@
     {
       "name": "arm_gather_nd_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 8413,
+      "line": 8419,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -6909,7 +6909,7 @@
     {
       "name": "arm_gather_nd_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 8388,
+      "line": 8394,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -6953,7 +6953,7 @@
     {
       "name": "arm_gather_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 8363,
+      "line": 8369,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -6997,7 +6997,7 @@
     {
       "name": "arm_gather_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 8338,
+      "line": 8344,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -7041,7 +7041,7 @@
     {
       "name": "arm_greater_equal_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 5564,
+      "line": 5570,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -7120,7 +7120,7 @@
     {
       "name": "arm_greater_equal_s32",
       "header": "Include/arm_nnfunctions.h",
-      "line": 4988,
+      "line": 4994,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -7159,7 +7159,7 @@
     {
       "name": "arm_greater_equal_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 5330,
+      "line": 5336,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -7238,7 +7238,7 @@
     {
       "name": "arm_greater_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 5525,
+      "line": 5531,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -7317,7 +7317,7 @@
     {
       "name": "arm_greater_s32",
       "header": "Include/arm_nnfunctions.h",
-      "line": 4977,
+      "line": 4983,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -7356,7 +7356,7 @@
     {
       "name": "arm_greater_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 5291,
+      "line": 5297,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -7435,7 +7435,7 @@
     {
       "name": "arm_hard_swish_compat_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 5941,
+      "line": 5947,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -7489,7 +7489,7 @@
     {
       "name": "arm_hard_swish_precise_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 6004,
+      "line": 6010,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -7548,7 +7548,7 @@
     {
       "name": "arm_hard_swish_precise_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 5972,
+      "line": 5978,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -7607,7 +7607,7 @@
     {
       "name": "arm_leaky_relu_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 5854,
+      "line": 5860,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -7661,7 +7661,7 @@
     {
       "name": "arm_leaky_relu_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 5829,
+      "line": 5835,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -7715,7 +7715,7 @@
     {
       "name": "arm_less_equal_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 5642,
+      "line": 5648,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -7794,7 +7794,7 @@
     {
       "name": "arm_less_equal_s32",
       "header": "Include/arm_nnfunctions.h",
-      "line": 5010,
+      "line": 5016,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -7833,7 +7833,7 @@
     {
       "name": "arm_less_equal_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 5408,
+      "line": 5414,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -7912,7 +7912,7 @@
     {
       "name": "arm_less_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 5603,
+      "line": 5609,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -7991,7 +7991,7 @@
     {
       "name": "arm_less_s32",
       "header": "Include/arm_nnfunctions.h",
-      "line": 4999,
+      "line": 5005,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -8030,7 +8030,7 @@
     {
       "name": "arm_less_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 5369,
+      "line": 5375,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -8109,7 +8109,7 @@
     {
       "name": "arm_logistic_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 5875,
+      "line": 5881,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -8143,7 +8143,7 @@
     {
       "name": "arm_lstm_unidirectional_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 7565,
+      "line": 7571,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -8172,7 +8172,7 @@
     {
       "name": "arm_lstm_unidirectional_s16_temp1_get_buffer_size",
       "header": "Include/arm_nnfunctions.h",
-      "line": 7612,
+      "line": 7618,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -8186,7 +8186,7 @@
     {
       "name": "arm_lstm_unidirectional_s16_temp2_get_buffer_size",
       "header": "Include/arm_nnfunctions.h",
-      "line": 7621,
+      "line": 7627,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -8200,7 +8200,7 @@
     {
       "name": "arm_lstm_unidirectional_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 7543,
+      "line": 7549,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -8229,7 +8229,7 @@
     {
       "name": "arm_lstm_unidirectional_s8_temp1_get_buffer_size",
       "header": "Include/arm_nnfunctions.h",
-      "line": 7591,
+      "line": 7597,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -8243,7 +8243,7 @@
     {
       "name": "arm_lstm_unidirectional_s8_temp2_get_buffer_size",
       "header": "Include/arm_nnfunctions.h",
-      "line": 7601,
+      "line": 7607,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -8257,7 +8257,7 @@
     {
       "name": "arm_max_pool_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 6439,
+      "line": 6445,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -8301,7 +8301,7 @@
     {
       "name": "arm_max_pool_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 6401,
+      "line": 6407,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -8345,7 +8345,7 @@
     {
       "name": "arm_maximum_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 4872,
+      "line": 4878,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -8389,7 +8389,7 @@
     {
       "name": "arm_maximum_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 4818,
+      "line": 4824,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -8433,7 +8433,7 @@
     {
       "name": "arm_mean_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 7853,
+      "line": 7859,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -8487,7 +8487,7 @@
     {
       "name": "arm_mean_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 7826,
+      "line": 7832,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -8541,7 +8541,7 @@
     {
       "name": "arm_minimum_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 4845,
+      "line": 4851,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -8585,7 +8585,7 @@
     {
       "name": "arm_minimum_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 4791,
+      "line": 4797,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -8629,7 +8629,7 @@
     {
       "name": "arm_mirror_pad_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 8553,
+      "line": 8564,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -8653,7 +8653,7 @@
     {
       "name": "arm_mirror_pad_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 8541,
+      "line": 8552,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -8677,7 +8677,7 @@
     {
       "name": "arm_mul_row_broadcast_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 4610,
+      "line": 4616,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -8751,7 +8751,7 @@
     {
       "name": "arm_mul_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 4701,
+      "line": 4707,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -8825,7 +8825,7 @@
     {
       "name": "arm_mul_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 4587,
+      "line": 4593,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -8899,7 +8899,7 @@
     {
       "name": "arm_mul_scalar_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 4731,
+      "line": 4737,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -8963,7 +8963,7 @@
     {
       "name": "arm_mul_scalar_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 4640,
+      "line": 4646,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -9027,7 +9027,7 @@
     {
       "name": "arm_nn_activation_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 5911,
+      "line": 5917,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -9061,7 +9061,7 @@
     {
       "name": "arm_not_equal_bool",
       "header": "Include/arm_nnfunctions.h",
-      "line": 5050,
+      "line": 5056,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -9100,7 +9100,7 @@
     {
       "name": "arm_not_equal_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 5486,
+      "line": 5492,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -9179,7 +9179,7 @@
     {
       "name": "arm_not_equal_s32",
       "header": "Include/arm_nnfunctions.h",
-      "line": 4966,
+      "line": 4972,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -9218,7 +9218,7 @@
     {
       "name": "arm_not_equal_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 5252,
+      "line": 5258,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -9297,7 +9297,7 @@
     {
       "name": "arm_pad_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 7795,
+      "line": 7801,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -9336,7 +9336,7 @@
     {
       "name": "arm_pad_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 7775,
+      "line": 7781,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -9375,7 +9375,7 @@
     {
       "name": "arm_prelu_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 6127,
+      "line": 6133,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -9449,7 +9449,7 @@
     {
       "name": "arm_prelu_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 6035,
+      "line": 6041,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -9523,7 +9523,7 @@
     {
       "name": "arm_prelu_scalar_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 6186,
+      "line": 6192,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -9592,7 +9592,7 @@
     {
       "name": "arm_prelu_scalar_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 6094,
+      "line": 6100,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -9661,7 +9661,7 @@
     {
       "name": "arm_quantize_f32_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 8028,
+      "line": 8034,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -9695,7 +9695,7 @@
     {
       "name": "arm_quantize_f32_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 8008,
+      "line": 8014,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -9729,7 +9729,7 @@
     {
       "name": "arm_reduce_all_bool",
       "header": "Include/arm_nnfunctions.h",
-      "line": 5097,
+      "line": 5103,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -9763,7 +9763,7 @@
     {
       "name": "arm_reduce_any_bool",
       "header": "Include/arm_nnfunctions.h",
-      "line": 5074,
+      "line": 5080,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -9797,7 +9797,7 @@
     {
       "name": "arm_reduce_max_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 7945,
+      "line": 7951,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -9831,7 +9831,7 @@
     {
       "name": "arm_reduce_max_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 7927,
+      "line": 7933,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -9865,7 +9865,7 @@
     {
       "name": "arm_reduce_min_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 7981,
+      "line": 7987,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -9899,7 +9899,7 @@
     {
       "name": "arm_reduce_min_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 7963,
+      "line": 7969,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -9933,7 +9933,7 @@
     {
       "name": "arm_relu6_q7",
       "header": "Include/arm_nnfunctions.h",
-      "line": 5677,
+      "line": 5683,
       "guards": [],
       "returns": "void",
       "params": [
@@ -9952,7 +9952,7 @@
     {
       "name": "arm_relu_generic_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 5804,
+      "line": 5810,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -10006,7 +10006,7 @@
     {
       "name": "arm_relu_generic_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 5758,
+      "line": 5764,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -10060,7 +10060,7 @@
     {
       "name": "arm_relu_q15",
       "header": "Include/arm_nnfunctions.h",
-      "line": 5684,
+      "line": 5690,
       "guards": [],
       "returns": "void",
       "params": [
@@ -10079,7 +10079,7 @@
     {
       "name": "arm_relu_q7",
       "header": "Include/arm_nnfunctions.h",
-      "line": 5670,
+      "line": 5676,
       "guards": [],
       "returns": "void",
       "params": [
@@ -10098,7 +10098,7 @@
     {
       "name": "arm_relu_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 5781,
+      "line": 5787,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -10142,7 +10142,7 @@
     {
       "name": "arm_relu_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 5735,
+      "line": 5741,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -10186,7 +10186,7 @@
     {
       "name": "arm_requantize_s16_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 8111,
+      "line": 8117,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -10230,7 +10230,7 @@
     {
       "name": "arm_requantize_s8_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 8044,
+      "line": 8050,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -10274,7 +10274,7 @@
     {
       "name": "arm_requantize_s8_u8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 8067,
+      "line": 8073,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -10318,7 +10318,7 @@
     {
       "name": "arm_requantize_u8_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 8090,
+      "line": 8096,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -10362,7 +10362,7 @@
     {
       "name": "arm_reshape_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 6568,
+      "line": 6574,
       "guards": [],
       "returns": "void",
       "params": [
@@ -10386,7 +10386,7 @@
     {
       "name": "arm_resize_bilinear_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 6587,
+      "line": 6593,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -10420,7 +10420,7 @@
     {
       "name": "arm_resize_bilinear_s8_pow2",
       "header": "Include/arm_nnfunctions.h",
-      "line": 6607,
+      "line": 6613,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -10454,7 +10454,7 @@
     {
       "name": "arm_resize_nearest_neighbor_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 6662,
+      "line": 6668,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -10503,7 +10503,7 @@
     {
       "name": "arm_resize_nearest_neighbor_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 6633,
+      "line": 6639,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -10552,7 +10552,7 @@
     {
       "name": "arm_reverse_sequence_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 8680,
+      "line": 8694,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -10581,7 +10581,7 @@
     {
       "name": "arm_reverse_sequence_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 8664,
+      "line": 8678,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -10610,7 +10610,7 @@
     {
       "name": "arm_rsqrt_s16_per_op",
       "header": "Include/arm_nnfunctions.h",
-      "line": 3859,
+      "line": 3865,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -10659,7 +10659,7 @@
     {
       "name": "arm_rsqrt_s16_universal",
       "header": "Include/arm_nnfunctions.h",
-      "line": 3893,
+      "line": 3899,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -10723,7 +10723,7 @@
     {
       "name": "arm_scatter_nd_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 8521,
+      "line": 8532,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -10752,7 +10752,7 @@
     {
       "name": "arm_scatter_nd_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 8505,
+      "line": 8516,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -10781,7 +10781,7 @@
     {
       "name": "arm_select_v2_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 8642,
+      "line": 8653,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -10815,7 +10815,7 @@
     {
       "name": "arm_select_v2_s32",
       "header": "Include/arm_nnfunctions.h",
-      "line": 8606,
+      "line": 8617,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -10849,7 +10849,7 @@
     {
       "name": "arm_select_v2_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 8624,
+      "line": 8635,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -10883,7 +10883,7 @@
     {
       "name": "arm_softmax_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 6523,
+      "line": 6529,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -10927,7 +10927,7 @@
     {
       "name": "arm_softmax_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 6467,
+      "line": 6473,
       "guards": [],
       "returns": "void",
       "params": [
@@ -10971,7 +10971,7 @@
     {
       "name": "arm_softmax_s8_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 6489,
+      "line": 6495,
       "guards": [],
       "returns": "void",
       "params": [
@@ -11015,7 +11015,7 @@
     {
       "name": "arm_softmax_u8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 6546,
+      "line": 6552,
       "guards": [],
       "returns": "void",
       "params": [
@@ -11059,7 +11059,7 @@
     {
       "name": "arm_space_to_batch_nd_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 6803,
+      "line": 6809,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -11103,7 +11103,7 @@
     {
       "name": "arm_space_to_batch_nd_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 6777,
+      "line": 6783,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -11147,7 +11147,7 @@
     {
       "name": "arm_space_to_depth_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 6709,
+      "line": 6715,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -11181,7 +11181,7 @@
     {
       "name": "arm_space_to_depth_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 6687,
+      "line": 6693,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -11215,7 +11215,7 @@
     {
       "name": "arm_split_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 7221,
+      "line": 7227,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -11259,7 +11259,7 @@
     {
       "name": "arm_split_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 7198,
+      "line": 7204,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -11303,7 +11303,7 @@
     {
       "name": "arm_sqrt_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 3793,
+      "line": 3799,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -11332,7 +11332,7 @@
     {
       "name": "arm_sqrt_s16_tablefree",
       "header": "Include/arm_nnfunctions.h",
-      "line": 3816,
+      "line": 3822,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -11361,7 +11361,7 @@
     {
       "name": "arm_sqrt_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 3782,
+      "line": 3788,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -11390,7 +11390,7 @@
     {
       "name": "arm_squared_difference_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 4464,
+      "line": 4470,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -11489,7 +11489,7 @@
     {
       "name": "arm_squared_difference_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 4332,
+      "line": 4338,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -11588,7 +11588,7 @@
     {
       "name": "arm_squared_difference_scalar_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 4508,
+      "line": 4514,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -11677,7 +11677,7 @@
     {
       "name": "arm_squared_difference_scalar_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 4376,
+      "line": 4382,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -11766,7 +11766,7 @@
     {
       "name": "arm_strided_slice_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 8270,
+      "line": 8276,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -11805,7 +11805,7 @@
     {
       "name": "arm_strided_slice_s32",
       "header": "Include/arm_nnfunctions.h",
-      "line": 8309,
+      "line": 8315,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -11844,7 +11844,7 @@
     {
       "name": "arm_strided_slice_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 8231,
+      "line": 8237,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -11883,7 +11883,7 @@
     {
       "name": "arm_sub_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 4199,
+      "line": 4205,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -11982,7 +11982,7 @@
     {
       "name": "arm_sub_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 3934,
+      "line": 3940,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -12081,7 +12081,7 @@
     {
       "name": "arm_sub_scalar_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 4244,
+      "line": 4250,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -12170,7 +12170,7 @@
     {
       "name": "arm_sub_scalar_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 3978,
+      "line": 3984,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -12259,7 +12259,7 @@
     {
       "name": "arm_svdf_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 7313,
+      "line": 7319,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -12358,7 +12358,7 @@
     {
       "name": "arm_svdf_s8_get_buffer_size",
       "header": "Include/arm_nnfunctions.h",
-      "line": 7418,
+      "line": 7424,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -12372,7 +12372,7 @@
     {
       "name": "arm_svdf_s8_get_buffer_size_dsp",
       "header": "Include/arm_nnfunctions.h",
-      "line": 7429,
+      "line": 7435,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -12386,7 +12386,7 @@
     {
       "name": "arm_svdf_s8_get_buffer_size_mve",
       "header": "Include/arm_nnfunctions.h",
-      "line": 7440,
+      "line": 7446,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -12400,7 +12400,7 @@
     {
       "name": "arm_svdf_s8_input_ctx_get_buffer_size",
       "header": "Include/arm_nnfunctions.h",
-      "line": 7463,
+      "line": 7469,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -12419,7 +12419,7 @@
     {
       "name": "arm_svdf_s8_output_ctx_get_buffer_size",
       "header": "Include/arm_nnfunctions.h",
-      "line": 7493,
+      "line": 7499,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -12443,7 +12443,7 @@
     {
       "name": "arm_svdf_state_s16_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 7385,
+      "line": 7391,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -12537,7 +12537,7 @@
     {
       "name": "arm_svdf_state_s16_s8_input_ctx_get_buffer_size",
       "header": "Include/arm_nnfunctions.h",
-      "line": 7506,
+      "line": 7512,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -12556,7 +12556,7 @@
     {
       "name": "arm_svdf_state_s16_s8_output_ctx_get_buffer_size",
       "header": "Include/arm_nnfunctions.h",
-      "line": 7516,
+      "line": 7522,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -12580,7 +12580,7 @@
     {
       "name": "arm_tanh_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 5892,
+      "line": 5898,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -12614,7 +12614,7 @@
     {
       "name": "arm_tile_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 8452,
+      "line": 8458,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -12638,7 +12638,7 @@
     {
       "name": "arm_tile_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 8440,
+      "line": 8446,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -12662,7 +12662,7 @@
     {
       "name": "arm_transpose_conv_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 1073,
+      "line": 1079,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -12731,7 +12731,7 @@
     {
       "name": "arm_transpose_conv_s16_get_buffer_size",
       "header": "Include/arm_nnfunctions.h",
-      "line": 1098,
+      "line": 1104,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -12760,7 +12760,7 @@
     {
       "name": "arm_transpose_conv_s16_get_buffer_size_mve",
       "header": "Include/arm_nnfunctions.h",
-      "line": 1111,
+      "line": 1117,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -12789,7 +12789,7 @@
     {
       "name": "arm_transpose_conv_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 950,
+      "line": 956,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -12858,7 +12858,7 @@
     {
       "name": "arm_transpose_conv_s8_get_buffer_size",
       "header": "Include/arm_nnfunctions.h",
-      "line": 980,
+      "line": 986,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -12887,7 +12887,7 @@
     {
       "name": "arm_transpose_conv_s8_get_buffer_size_mve",
       "header": "Include/arm_nnfunctions.h",
-      "line": 1009,
+      "line": 1015,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -12916,7 +12916,7 @@
     {
       "name": "arm_transpose_conv_s8_get_reverse_conv_buffer_size",
       "header": "Include/arm_nnfunctions.h",
-      "line": 996,
+      "line": 1002,
       "guards": [],
       "returns": "int32_t",
       "params": [
@@ -12940,7 +12940,7 @@
     {
       "name": "arm_transpose_conv_wrapper_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 891,
+      "line": 897,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -13014,7 +13014,7 @@
     {
       "name": "arm_transpose_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 6914,
+      "line": 6920,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -13048,7 +13048,7 @@
     {
       "name": "arm_transpose_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 6886,
+      "line": 6892,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -13082,7 +13082,7 @@
     {
       "name": "arm_vector_sum_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 3296,
+      "line": 3302,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -13126,7 +13126,7 @@
     {
       "name": "arm_vector_sum_s8_s64",
       "header": "Include/arm_nnfunctions.h",
-      "line": 3315,
+      "line": 3321,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -13165,7 +13165,7 @@
     {
       "name": "arm_where_s16",
       "header": "Include/arm_nnfunctions.h",
-      "line": 8585,
+      "line": 8596,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -13194,7 +13194,7 @@
     {
       "name": "arm_where_s8",
       "header": "Include/arm_nnfunctions.h",
-      "line": 8571,
+      "line": 8582,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -13223,7 +13223,7 @@
     {
       "name": "arm_argmax_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 5025,
+      "line": 5263,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -13254,7 +13254,7 @@
     {
       "name": "arm_argmax_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 2530,
+      "line": 2574,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -13285,7 +13285,7 @@
     {
       "name": "arm_argmin_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4991,
+      "line": 5229,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -13316,7 +13316,7 @@
     {
       "name": "arm_argmin_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 2496,
+      "line": 2540,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -13347,7 +13347,7 @@
     {
       "name": "arm_avg_pool_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3931,
+      "line": 4145,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -13393,7 +13393,7 @@
     {
       "name": "arm_avg_pool_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 964,
+      "line": 984,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -13439,7 +13439,7 @@
     {
       "name": "arm_batch_matmul_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4635,
+      "line": 4873,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -13490,7 +13490,7 @@
     {
       "name": "arm_batch_matmul_f16_get_buffer_size",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4647,
+      "line": 4885,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -13521,7 +13521,7 @@
     {
       "name": "arm_batch_matmul_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 2041,
+      "line": 2085,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -13572,7 +13572,7 @@
     {
       "name": "arm_batch_matmul_f32_get_buffer_size",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 2060,
+      "line": 2104,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -13603,7 +13603,7 @@
     {
       "name": "arm_batch_norm_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4580,
+      "line": 4818,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -13644,7 +13644,7 @@
     {
       "name": "arm_batch_norm_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 1940,
+      "line": 1984,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -13685,7 +13685,7 @@
     {
       "name": "arm_concatenation_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4526,
+      "line": 4764,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -13731,7 +13731,7 @@
     {
       "name": "arm_concatenation_f16_w",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4515,
+      "line": 4753,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -13777,7 +13777,7 @@
     {
       "name": "arm_concatenation_f16_x",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4479,
+      "line": 4717,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -13828,7 +13828,7 @@
     {
       "name": "arm_concatenation_f16_y",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4491,
+      "line": 4729,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -13879,7 +13879,7 @@
     {
       "name": "arm_concatenation_f16_z",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4503,
+      "line": 4741,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -13930,7 +13930,7 @@
     {
       "name": "arm_concatenation_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 1809,
+      "line": 1853,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -13976,7 +13976,7 @@
     {
       "name": "arm_concatenation_f32_w",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 1782,
+      "line": 1826,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -14022,7 +14022,7 @@
     {
       "name": "arm_concatenation_f32_x",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 1708,
+      "line": 1752,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -14073,7 +14073,7 @@
     {
       "name": "arm_concatenation_f32_y",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 1733,
+      "line": 1777,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -14124,7 +14124,7 @@
     {
       "name": "arm_concatenation_f32_z",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 1758,
+      "line": 1802,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -14175,7 +14175,7 @@
     {
       "name": "arm_convolve_1_x_n_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3581,
+      "line": 3762,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -14241,7 +14241,7 @@
     {
       "name": "arm_convolve_1_x_n_f16_acc16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3601,
+      "line": 3782,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -14307,7 +14307,7 @@
     {
       "name": "arm_convolve_1_x_n_f16_get_buffer_size",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3642,
+      "line": 3824,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -14343,7 +14343,7 @@
     {
       "name": "arm_convolve_1_x_n_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 532,
+      "line": 551,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -14409,7 +14409,7 @@
     {
       "name": "arm_convolve_1_x_n_f32_get_buffer_size",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 614,
+      "line": 633,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -14445,7 +14445,7 @@
     {
       "name": "arm_convolve_1_x_n_nhwc_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3457,
+      "line": 3638,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -14506,7 +14506,7 @@
     {
       "name": "arm_convolve_1_x_n_nhwc_f16_acc16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3516,
+      "line": 3697,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -14567,7 +14567,7 @@
     {
       "name": "arm_convolve_1_x_n_nhwc_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 448,
+      "line": 467,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -14628,7 +14628,7 @@
     {
       "name": "arm_convolve_1_x_n_nhwc_ohwi_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3477,
+      "line": 3658,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -14689,7 +14689,7 @@
     {
       "name": "arm_convolve_1_x_n_nhwc_ohwi_f16_acc16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3536,
+      "line": 3717,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -14750,7 +14750,7 @@
     {
       "name": "arm_convolve_1_x_n_nhwc_ohwi_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 468,
+      "line": 487,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -14811,7 +14811,7 @@
     {
       "name": "arm_convolve_1_x_n_nhwc_packed_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3497,
+      "line": 3678,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -14872,7 +14872,7 @@
     {
       "name": "arm_convolve_1_x_n_nhwc_packed_f16_acc16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3556,
+      "line": 3737,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -14933,7 +14933,7 @@
     {
       "name": "arm_convolve_1_x_n_nhwc_packed_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 488,
+      "line": 507,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -14994,7 +14994,7 @@
     {
       "name": "arm_convolve_1d_k3_nhwc_ohwi_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3707,
+      "line": 3889,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -15055,7 +15055,7 @@
     {
       "name": "arm_convolve_1d_k3_nhwc_ohwi_f16_acc16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3721,
+      "line": 3903,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -15116,7 +15116,7 @@
     {
       "name": "arm_convolve_1d_k3_nhwc_ohwi_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 710,
+      "line": 729,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -15177,7 +15177,7 @@
     {
       "name": "arm_convolve_1d_k3_nhwc_packed_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3735,
+      "line": 3917,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -15238,7 +15238,7 @@
     {
       "name": "arm_convolve_1d_k3_nhwc_packed_f16_acc16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3749,
+      "line": 3931,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -15299,7 +15299,7 @@
     {
       "name": "arm_convolve_1d_k3_nhwc_packed_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 724,
+      "line": 743,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -15360,7 +15360,7 @@
     {
       "name": "arm_convolve_1d_k5_nhwc_ohwi_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3651,
+      "line": 3833,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -15421,7 +15421,7 @@
     {
       "name": "arm_convolve_1d_k5_nhwc_ohwi_f16_acc16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3665,
+      "line": 3847,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -15482,7 +15482,7 @@
     {
       "name": "arm_convolve_1d_k5_nhwc_ohwi_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 653,
+      "line": 672,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -15543,7 +15543,7 @@
     {
       "name": "arm_convolve_1d_k5_nhwc_packed_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3679,
+      "line": 3861,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -15604,7 +15604,7 @@
     {
       "name": "arm_convolve_1d_k5_nhwc_packed_f16_acc16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3693,
+      "line": 3875,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -15665,7 +15665,7 @@
     {
       "name": "arm_convolve_1d_k5_nhwc_packed_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 667,
+      "line": 686,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -15726,7 +15726,7 @@
     {
       "name": "arm_convolve_1x1_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3422,
+      "line": 3603,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -15792,7 +15792,7 @@
     {
       "name": "arm_convolve_1x1_f16_acc16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3442,
+      "line": 3623,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -15858,7 +15858,7 @@
     {
       "name": "arm_convolve_1x1_f16_get_buffer_size",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3633,
+      "line": 3815,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -15894,7 +15894,7 @@
     {
       "name": "arm_convolve_1x1_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 404,
+      "line": 423,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -15960,7 +15960,7 @@
     {
       "name": "arm_convolve_1x1_f32_get_buffer_size",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 597,
+      "line": 616,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -15996,7 +15996,7 @@
     {
       "name": "arm_convolve_1x1_nhwc_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3313,
+      "line": 3494,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -16057,7 +16057,7 @@
     {
       "name": "arm_convolve_1x1_nhwc_f16_acc16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3370,
+      "line": 3551,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -16118,7 +16118,7 @@
     {
       "name": "arm_convolve_1x1_nhwc_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 333,
+      "line": 352,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -16179,7 +16179,7 @@
     {
       "name": "arm_convolve_1x1_nhwc_ohwi_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3332,
+      "line": 3513,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -16240,7 +16240,7 @@
     {
       "name": "arm_convolve_1x1_nhwc_ohwi_f16_acc16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3389,
+      "line": 3570,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -16301,7 +16301,7 @@
     {
       "name": "arm_convolve_1x1_nhwc_ohwi_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 352,
+      "line": 371,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -16362,7 +16362,7 @@
     {
       "name": "arm_convolve_1x1_nhwc_packed_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3351,
+      "line": 3532,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -16423,7 +16423,7 @@
     {
       "name": "arm_convolve_1x1_nhwc_packed_f16_acc16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3408,
+      "line": 3589,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -16484,7 +16484,7 @@
     {
       "name": "arm_convolve_1x1_nhwc_packed_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 371,
+      "line": 390,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -16545,7 +16545,7 @@
     {
       "name": "arm_convolve_direct_nhwc_ohwi_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3833,
+      "line": 4030,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -16606,7 +16606,7 @@
     {
       "name": "arm_convolve_direct_nhwc_ohwi_f16_acc16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3847,
+      "line": 4045,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -16667,7 +16667,7 @@
     {
       "name": "arm_convolve_direct_nhwc_ohwi_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 873,
+      "line": 893,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -16728,7 +16728,7 @@
     {
       "name": "arm_convolve_direct_nhwc_packed_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3861,
+      "line": 4074,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -16789,7 +16789,7 @@
     {
       "name": "arm_convolve_direct_nhwc_packed_f16_acc16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3875,
+      "line": 4089,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -16850,7 +16850,7 @@
     {
       "name": "arm_convolve_direct_nhwc_packed_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 887,
+      "line": 907,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -16911,7 +16911,7 @@
     {
       "name": "arm_convolve_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3245,
+      "line": 3407,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -16977,7 +16977,7 @@
     {
       "name": "arm_convolve_f16_acc16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3265,
+      "line": 3427,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -17041,9 +17041,70 @@
       ]
     },
     {
+      "name": "arm_convolve_f16_fast_small_kernel",
+      "header": "Include/arm_nnfunctions_flt.h",
+      "line": 3295,
+      "guards": [
+        "ARM_NN_ENABLE_F16"
+      ],
+      "returns": "arm_cmsis_nn_status",
+      "params": [
+        {
+          "direction": "in,out",
+          "name": "ctx",
+          "type": "const cmsis_nn_context *"
+        },
+        {
+          "direction": "in",
+          "name": "conv_params",
+          "type": "const cmsis_nn_conv_params_f16 *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "input_data",
+          "type": "const float16_t *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_data",
+          "type": "const float16_t *"
+        },
+        {
+          "direction": "in",
+          "name": "bias_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "bias_data",
+          "type": "const float16_t *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "out",
+          "name": "output_data",
+          "type": "float16_t *"
+        }
+      ]
+    },
+    {
       "name": "arm_convolve_f16_get_buffer_size",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3616,
+      "line": 3798,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -17077,9 +17138,70 @@
       ]
     },
     {
+      "name": "arm_convolve_f16_group_ch_mult_1",
+      "header": "Include/arm_nnfunctions_flt.h",
+      "line": 3332,
+      "guards": [
+        "ARM_NN_ENABLE_F16"
+      ],
+      "returns": "arm_cmsis_nn_status",
+      "params": [
+        {
+          "direction": "in,out",
+          "name": "ctx",
+          "type": "const cmsis_nn_context *"
+        },
+        {
+          "direction": "in",
+          "name": "conv_params",
+          "type": "const cmsis_nn_conv_params_f16 *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "input_data",
+          "type": "const float16_t *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_data",
+          "type": "const float16_t *"
+        },
+        {
+          "direction": "in",
+          "name": "bias_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "bias_data",
+          "type": "const float16_t *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "out",
+          "name": "output_data",
+          "type": "float16_t *"
+        }
+      ]
+    },
+    {
       "name": "arm_convolve_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 278,
+      "line": 290,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -17145,7 +17267,7 @@
     {
       "name": "arm_convolve_f32_get_buffer_size",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 560,
+      "line": 579,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -17181,7 +17303,7 @@
     {
       "name": "arm_convolve_nhwc_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3188,
+      "line": 3265,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -17242,7 +17364,7 @@
     {
       "name": "arm_convolve_nhwc_f16_acc16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3207,
+      "line": 3351,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -17303,7 +17425,7 @@
     {
       "name": "arm_convolve_nhwc_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 244,
+      "line": 251,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -17364,7 +17486,7 @@
     {
       "name": "arm_convolve_patch_gemm_f16_get_buffer_size",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3891,
+      "line": 4105,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -17395,7 +17517,7 @@
     {
       "name": "arm_convolve_patch_gemm_f32_get_buffer_size",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 910,
+      "line": 930,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -17426,7 +17548,7 @@
     {
       "name": "arm_convolve_patch_gemm_nhwc_ohwi_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3777,
+      "line": 3959,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -17487,7 +17609,7 @@
     {
       "name": "arm_convolve_patch_gemm_nhwc_ohwi_f16_acc16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3791,
+      "line": 3973,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -17548,7 +17670,7 @@
     {
       "name": "arm_convolve_patch_gemm_nhwc_ohwi_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 816,
+      "line": 834,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -17609,7 +17731,7 @@
     {
       "name": "arm_convolve_patch_gemm_nhwc_packed_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3805,
+      "line": 3987,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -17670,7 +17792,7 @@
     {
       "name": "arm_convolve_patch_gemm_nhwc_packed_f16_acc16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3819,
+      "line": 4001,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -17731,7 +17853,7 @@
     {
       "name": "arm_convolve_patch_gemm_nhwc_packed_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 830,
+      "line": 848,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -17792,7 +17914,7 @@
     {
       "name": "arm_convolve_small_c_nhwc_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3763,
+      "line": 3945,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -17853,7 +17975,7 @@
     {
       "name": "arm_convolve_small_c_nhwc_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 769,
+      "line": 788,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -17914,7 +18036,7 @@
     {
       "name": "arm_convolve_wrapper_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3280,
+      "line": 3461,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -17975,7 +18097,7 @@
     {
       "name": "arm_convolve_wrapper_f16_acc16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3299,
+      "line": 3480,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -18036,7 +18158,7 @@
     {
       "name": "arm_convolve_wrapper_f16_get_buffer_size",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3625,
+      "line": 3807,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -18067,7 +18189,7 @@
     {
       "name": "arm_convolve_wrapper_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 306,
+      "line": 325,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -18128,7 +18250,7 @@
     {
       "name": "arm_convolve_wrapper_f32_get_buffer_size",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 576,
+      "line": 595,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -18159,7 +18281,7 @@
     {
       "name": "arm_depthwise_conv_1d_k3_nhwc_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 2927,
+      "line": 2971,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -18220,7 +18342,7 @@
     {
       "name": "arm_depthwise_conv_1d_k3_nhwc_f16_acc16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 2943,
+      "line": 2987,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -18281,7 +18403,7 @@
     {
       "name": "arm_depthwise_conv_2x5_nhwc_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 2960,
+      "line": 3004,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -18342,7 +18464,7 @@
     {
       "name": "arm_depthwise_conv_2x5_nhwc_f16_acc16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 2976,
+      "line": 3020,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -18403,7 +18525,7 @@
     {
       "name": "arm_depthwise_conv_cin1_nhwc_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3028,
+      "line": 3072,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -18464,7 +18586,7 @@
     {
       "name": "arm_depthwise_conv_cin1_nhwc_f16_acc16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3045,
+      "line": 3089,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -18525,7 +18647,7 @@
     {
       "name": "arm_depthwise_conv_direct_nhwc_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 2992,
+      "line": 3036,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -18586,7 +18708,7 @@
     {
       "name": "arm_depthwise_conv_direct_nhwc_f16_acc16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3008,
+      "line": 3052,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -18647,7 +18769,7 @@
     {
       "name": "arm_depthwise_conv_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3076,
+      "line": 3120,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -18713,7 +18835,7 @@
     {
       "name": "arm_depthwise_conv_f16_acc16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3100,
+      "line": 3144,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -18779,7 +18901,7 @@
     {
       "name": "arm_depthwise_conv_f16_get_buffer_size",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3171,
+      "line": 3215,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -18917,7 +19039,7 @@
     {
       "name": "arm_depthwise_conv_generic_nhwc_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 2894,
+      "line": 2938,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -18978,7 +19100,7 @@
     {
       "name": "arm_depthwise_conv_generic_nhwc_f16_acc16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 2910,
+      "line": 2954,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -19039,7 +19161,7 @@
     {
       "name": "arm_depthwise_conv_wrapper_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3132,
+      "line": 3176,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -19100,7 +19222,7 @@
     {
       "name": "arm_depthwise_conv_wrapper_f16_acc16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3155,
+      "line": 3199,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -19161,7 +19283,7 @@
     {
       "name": "arm_depthwise_conv_wrapper_f16_get_buffer_size",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3180,
+      "line": 3224,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -19284,7 +19406,7 @@
     {
       "name": "arm_depthwise_nhwc_conv_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 2834,
+      "line": 2878,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -19345,7 +19467,7 @@
     {
       "name": "arm_depthwise_nhwc_conv_f16_acc16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 2857,
+      "line": 2901,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -19467,7 +19589,7 @@
     {
       "name": "arm_dequantize_f16_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4174,
+      "line": 4412,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -19493,7 +19615,7 @@
     {
       "name": "arm_elementwise_add_broadcast_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4300,
+      "line": 4538,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -19544,7 +19666,7 @@
     {
       "name": "arm_elementwise_add_broadcast_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 1507,
+      "line": 1551,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -19595,7 +19717,7 @@
     {
       "name": "arm_elementwise_add_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4071,
+      "line": 4285,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -19636,7 +19758,7 @@
     {
       "name": "arm_elementwise_add_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 1140,
+      "line": 1160,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -19677,7 +19799,7 @@
     {
       "name": "arm_elementwise_add_fp16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4102,
+      "line": 4316,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -19718,7 +19840,7 @@
     {
       "name": "arm_elementwise_div_broadcast_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4240,
+      "line": 4478,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -19769,7 +19891,7 @@
     {
       "name": "arm_elementwise_div_broadcast_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 1304,
+      "line": 1348,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -19820,7 +19942,7 @@
     {
       "name": "arm_elementwise_div_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4216,
+      "line": 4454,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -19861,7 +19983,7 @@
     {
       "name": "arm_elementwise_div_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 1280,
+      "line": 1324,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -19902,7 +20024,7 @@
     {
       "name": "arm_elementwise_mul_broadcast_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4314,
+      "line": 4552,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -19953,7 +20075,7 @@
     {
       "name": "arm_elementwise_mul_broadcast_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 1531,
+      "line": 1575,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -20004,7 +20126,7 @@
     {
       "name": "arm_elementwise_mul_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4252,
+      "line": 4490,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -20045,7 +20167,7 @@
     {
       "name": "arm_elementwise_mul_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 1338,
+      "line": 1382,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -20084,9 +20206,91 @@
       ]
     },
     {
+      "name": "arm_elementwise_squared_difference_broadcast_f16",
+      "header": "Include/arm_nnfunctions_flt.h",
+      "line": 4368,
+      "guards": [
+        "ARM_NN_ENABLE_F16"
+      ],
+      "returns": "arm_cmsis_nn_status",
+      "params": [
+        {
+          "direction": "in",
+          "name": "input_1_data",
+          "type": "const float16_t *"
+        },
+        {
+          "direction": "in",
+          "name": "input_1_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "input_2_data",
+          "type": "const float16_t *"
+        },
+        {
+          "direction": "in",
+          "name": "input_2_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "out",
+          "name": "output_data",
+          "type": "float16_t *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        }
+      ]
+    },
+    {
+      "name": "arm_elementwise_squared_difference_broadcast_f32",
+      "header": "Include/arm_nnfunctions_flt.h",
+      "line": 1252,
+      "guards": [
+        "ARM_NN_ENABLE_F32"
+      ],
+      "returns": "arm_cmsis_nn_status",
+      "params": [
+        {
+          "direction": "in",
+          "name": "input_1_data",
+          "type": "const float32_t *"
+        },
+        {
+          "direction": "in",
+          "name": "input_1_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "input_2_data",
+          "type": "const float32_t *"
+        },
+        {
+          "direction": "in",
+          "name": "input_2_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "out",
+          "name": "output_data",
+          "type": "float32_t *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        }
+      ]
+    },
+    {
       "name": "arm_elementwise_squared_difference_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4132,
+      "line": 4346,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -20117,7 +20321,7 @@
     {
       "name": "arm_elementwise_squared_difference_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 1210,
+      "line": 1230,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -20148,7 +20352,7 @@
     {
       "name": "arm_elementwise_sub_broadcast_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4286,
+      "line": 4524,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -20199,7 +20403,7 @@
     {
       "name": "arm_elementwise_sub_broadcast_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 1483,
+      "line": 1527,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -20250,7 +20454,7 @@
     {
       "name": "arm_elementwise_sub_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4112,
+      "line": 4326,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -20291,7 +20495,7 @@
     {
       "name": "arm_elementwise_sub_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 1172,
+      "line": 1192,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -20332,7 +20536,7 @@
     {
       "name": "arm_fully_connected_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4418,
+      "line": 4656,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -20398,7 +20602,7 @@
     {
       "name": "arm_fully_connected_f16_acc16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4438,
+      "line": 4676,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -20464,7 +20668,7 @@
     {
       "name": "arm_fully_connected_f16_get_buffer_size",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4453,
+      "line": 4691,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -20500,7 +20704,7 @@
     {
       "name": "arm_fully_connected_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 1634,
+      "line": 1678,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -20566,7 +20770,7 @@
     {
       "name": "arm_fully_connected_f32_get_buffer_size",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 1657,
+      "line": 1701,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -20602,7 +20806,7 @@
     {
       "name": "arm_fully_connected_nhwc_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4375,
+      "line": 4613,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -20663,7 +20867,7 @@
     {
       "name": "arm_fully_connected_nhwc_f16_acc16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4394,
+      "line": 4632,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -20724,7 +20928,7 @@
     {
       "name": "arm_fully_connected_nhwc_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 1606,
+      "line": 1650,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -20785,7 +20989,7 @@
     {
       "name": "arm_gather_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 5226,
+      "line": 5464,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -20831,7 +21035,7 @@
     {
       "name": "arm_gather_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 2744,
+      "line": 2788,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -20877,7 +21081,7 @@
     {
       "name": "arm_gather_nd_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 5271,
+      "line": 5509,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -20923,7 +21127,7 @@
     {
       "name": "arm_gather_nd_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 2789,
+      "line": 2833,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -20969,7 +21173,7 @@
     {
       "name": "arm_gru_unidirectional_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4897,
+      "line": 5135,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -21000,7 +21204,7 @@
     {
       "name": "arm_gru_unidirectional_f16_temp1_get_buffer_size",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4936,
+      "line": 5174,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -21016,7 +21220,7 @@
     {
       "name": "arm_gru_unidirectional_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 2362,
+      "line": 2406,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -21047,7 +21251,7 @@
     {
       "name": "arm_gru_unidirectional_f32_temp1_get_buffer_size",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 2413,
+      "line": 2457,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -21063,7 +21267,7 @@
     {
       "name": "arm_hard_swish_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4035,
+      "line": 4249,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -21089,7 +21293,7 @@
     {
       "name": "arm_hard_swish_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 1106,
+      "line": 1126,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -21115,7 +21319,7 @@
     {
       "name": "arm_lstm_unidirectional_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4866,
+      "line": 5104,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -21146,7 +21350,7 @@
     {
       "name": "arm_lstm_unidirectional_f16_temp1_get_buffer_size",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4913,
+      "line": 5151,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -21162,7 +21366,7 @@
     {
       "name": "arm_lstm_unidirectional_f16_temp2_get_buffer_size",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4921,
+      "line": 5159,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -21178,7 +21382,7 @@
     {
       "name": "arm_lstm_unidirectional_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 2331,
+      "line": 2375,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -21209,7 +21413,7 @@
     {
       "name": "arm_lstm_unidirectional_f32_temp1_get_buffer_size",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 2383,
+      "line": 2427,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -21225,7 +21429,7 @@
     {
       "name": "arm_lstm_unidirectional_f32_temp2_get_buffer_size",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 2392,
+      "line": 2436,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -21241,7 +21445,7 @@
     {
       "name": "arm_max_pool_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3914,
+      "line": 4128,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -21287,7 +21491,7 @@
     {
       "name": "arm_max_pool_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 939,
+      "line": 959,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -21333,7 +21537,7 @@
     {
       "name": "arm_maximum_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4273,
+      "line": 4511,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -21379,7 +21583,7 @@
     {
       "name": "arm_maximum_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 1444,
+      "line": 1488,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -21425,7 +21629,7 @@
     {
       "name": "arm_minimum_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4262,
+      "line": 4500,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -21471,7 +21675,7 @@
     {
       "name": "arm_minimum_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 1408,
+      "line": 1452,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -21517,7 +21721,7 @@
     {
       "name": "arm_nn_abs_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4140,
+      "line": 4378,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -21543,7 +21747,7 @@
     {
       "name": "arm_nn_abs_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 1224,
+      "line": 1268,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -21569,7 +21773,7 @@
     {
       "name": "arm_nn_activation_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3969,
+      "line": 4183,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -21605,7 +21809,7 @@
     {
       "name": "arm_nn_activation_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 1029,
+      "line": 1049,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -21641,7 +21845,7 @@
     {
       "name": "arm_nn_fill_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4155,
+      "line": 4393,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -21667,7 +21871,7 @@
     {
       "name": "arm_nn_fill_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 1259,
+      "line": 1303,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -21693,7 +21897,7 @@
     {
       "name": "arm_nn_gelu_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4059,
+      "line": 4273,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -21719,7 +21923,7 @@
     {
       "name": "arm_nn_gelu_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 998,
+      "line": 1018,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -21745,7 +21949,7 @@
     {
       "name": "arm_nn_mean_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 5177,
+      "line": 5415,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -21781,7 +21985,7 @@
     {
       "name": "arm_nn_mean_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 2695,
+      "line": 2739,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -21817,7 +22021,7 @@
     {
       "name": "arm_nn_sqrt_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4344,
+      "line": 4582,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -21843,7 +22047,7 @@
     {
       "name": "arm_nn_sqrt_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 1562,
+      "line": 1606,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -21869,7 +22073,7 @@
     {
       "name": "arm_pack_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4537,
+      "line": 4775,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -21910,7 +22114,7 @@
     {
       "name": "arm_pack_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 1860,
+      "line": 1904,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -21951,7 +22155,7 @@
     {
       "name": "arm_pad_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4563,
+      "line": 4801,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -21992,7 +22196,7 @@
     {
       "name": "arm_pad_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 1911,
+      "line": 1955,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -22033,7 +22237,7 @@
     {
       "name": "arm_prelu_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 3991,
+      "line": 4205,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -22074,7 +22278,7 @@
     {
       "name": "arm_prelu_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 1057,
+      "line": 1077,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -22115,7 +22319,7 @@
     {
       "name": "arm_reduce_max_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 5056,
+      "line": 5294,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -22151,7 +22355,7 @@
     {
       "name": "arm_reduce_max_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 2561,
+      "line": 2605,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -22187,7 +22391,7 @@
     {
       "name": "arm_reduce_max_tflite_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 5116,
+      "line": 5354,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -22223,7 +22427,7 @@
     {
       "name": "arm_reduce_max_tflite_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 2621,
+      "line": 2665,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -22259,7 +22463,7 @@
     {
       "name": "arm_reduce_min_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 5090,
+      "line": 5328,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -22295,7 +22499,7 @@
     {
       "name": "arm_reduce_min_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 2595,
+      "line": 2639,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -22331,7 +22535,7 @@
     {
       "name": "arm_reduce_min_tflite_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 5142,
+      "line": 5380,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -22367,7 +22571,7 @@
     {
       "name": "arm_reduce_min_tflite_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 2647,
+      "line": 2691,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -22403,7 +22607,7 @@
     {
       "name": "arm_reduce_sum_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4954,
+      "line": 5192,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -22439,7 +22643,7 @@
     {
       "name": "arm_reduce_sum_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 2459,
+      "line": 2503,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -22475,7 +22679,7 @@
     {
       "name": "arm_reshape_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4590,
+      "line": 4828,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -22501,7 +22705,7 @@
     {
       "name": "arm_reshape_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 1954,
+      "line": 1998,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -22527,7 +22731,7 @@
     {
       "name": "arm_resize_nearest_neighbor_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4610,
+      "line": 4848,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -22578,7 +22782,7 @@
     {
       "name": "arm_resize_nearest_neighbor_f16_get_buffer_size",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4602,
+      "line": 4840,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -22594,7 +22798,7 @@
     {
       "name": "arm_resize_nearest_neighbor_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 2008,
+      "line": 2052,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -22645,7 +22849,7 @@
     {
       "name": "arm_resize_nearest_neighbor_f32_get_buffer_size",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 1975,
+      "line": 2019,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -22661,7 +22865,7 @@
     {
       "name": "arm_rsqrt_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4363,
+      "line": 4601,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -22687,7 +22891,7 @@
     {
       "name": "arm_rsqrt_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 1581,
+      "line": 1625,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -22713,7 +22917,7 @@
     {
       "name": "arm_softmax_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4948,
+      "line": 5186,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -22744,7 +22948,7 @@
     {
       "name": "arm_softmax_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 2439,
+      "line": 2483,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -22775,7 +22979,7 @@
     {
       "name": "arm_split_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4179,
+      "line": 4417,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -22821,7 +23025,7 @@
     {
       "name": "arm_split_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 1835,
+      "line": 1879,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -22867,7 +23071,7 @@
     {
       "name": "arm_strided_slice_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4190,
+      "line": 4428,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -22908,7 +23112,7 @@
     {
       "name": "arm_strided_slice_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 1373,
+      "line": 1417,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -22949,7 +23153,7 @@
     {
       "name": "arm_svdf_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4787,
+      "line": 5025,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -23040,7 +23244,7 @@
     {
       "name": "arm_svdf_f16_input_ctx_get_buffer_size",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4829,
+      "line": 5067,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -23061,7 +23265,7 @@
     {
       "name": "arm_svdf_f16_output_ctx_get_buffer_size",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4852,
+      "line": 5090,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -23087,7 +23291,7 @@
     {
       "name": "arm_svdf_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 2244,
+      "line": 2288,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -23178,7 +23382,7 @@
     {
       "name": "arm_svdf_f32_input_ctx_get_buffer_size",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 2284,
+      "line": 2328,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -23199,7 +23403,7 @@
     {
       "name": "arm_svdf_f32_output_ctx_get_buffer_size",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 2304,
+      "line": 2348,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -23225,7 +23429,7 @@
     {
       "name": "arm_transpose_conv_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4693,
+      "line": 4931,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -23296,7 +23500,7 @@
     {
       "name": "arm_transpose_conv_f16_get_buffer_size",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4709,
+      "line": 4947,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -23327,7 +23531,7 @@
     {
       "name": "arm_transpose_conv_f16_get_reverse_conv_buffer_size",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4717,
+      "line": 4955,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -23353,7 +23557,7 @@
     {
       "name": "arm_transpose_conv_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 2150,
+      "line": 2194,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -23424,7 +23628,7 @@
     {
       "name": "arm_transpose_conv_f32_get_buffer_size",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 2173,
+      "line": 2217,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -23455,7 +23659,7 @@
     {
       "name": "arm_transpose_conv_f32_get_reverse_conv_buffer_size",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 2187,
+      "line": 2231,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -23481,7 +23685,7 @@
     {
       "name": "arm_transpose_conv_nhwc_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4678,
+      "line": 4916,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -23547,7 +23751,7 @@
     {
       "name": "arm_transpose_conv_nhwc_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 2120,
+      "line": 2164,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -23613,7 +23817,7 @@
     {
       "name": "arm_transpose_conv_wrapper_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4662,
+      "line": 4900,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -23684,7 +23888,7 @@
     {
       "name": "arm_transpose_conv_wrapper_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 2090,
+      "line": 2134,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -23755,7 +23959,7 @@
     {
       "name": "arm_transpose_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4469,
+      "line": 4707,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -23796,7 +24000,7 @@
     {
       "name": "arm_transpose_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 1685,
+      "line": 1729,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -23837,7 +24041,7 @@
     {
       "name": "arm_unpack_f16",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 4547,
+      "line": 4785,
       "guards": [
         "ARM_NN_ENABLE_F16"
       ],
@@ -23873,7 +24077,7 @@
     {
       "name": "arm_unpack_f32",
       "header": "Include/arm_nnfunctions_flt.h",
-      "line": 1884,
+      "line": 1928,
       "guards": [
         "ARM_NN_ENABLE_F32"
       ],
@@ -23947,7 +24151,7 @@
     {
       "name": "arm_elementwise_mul_acc_s16",
       "header": "Include/arm_nnsupportfunctions.h",
-      "line": 3877,
+      "line": 3882,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -24011,7 +24215,7 @@
     {
       "name": "arm_elementwise_mul_s16_batch_offset",
       "header": "Include/arm_nnsupportfunctions.h",
-      "line": 3850,
+      "line": 3855,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
@@ -24065,7 +24269,7 @@
     {
       "name": "arm_elementwise_mul_s16_s8",
       "header": "Include/arm_nnsupportfunctions.h",
-      "line": 3824,
+      "line": 3829,
       "guards": [],
       "returns": "arm_cmsis_nn_status",
       "params": [
