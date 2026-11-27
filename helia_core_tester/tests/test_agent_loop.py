@@ -230,7 +230,7 @@ def _submit(ws: Workspace, board: FakeBoard, capsys, checker=_ok_check) -> tuple
 
 
 def test_submit_carries_the_store_switch(ws: Workspace, capsys, monkeypatch: pytest.MonkeyPatch) -> None:
-    # bench-agent run scrubs the environment.
+    # farm-agent run scrubs the environment.
     monkeypatch.setenv("HCT_BLOB_STORE", "0")
     board = FakeBoard([_leg("pass"), _leg("pass")])
     _submit(ws, board, capsys)

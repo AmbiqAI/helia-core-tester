@@ -138,7 +138,7 @@ def blob_store_enabled() -> bool:
 
 
 def store_env_args() -> list[str]:
-    """Carry the switch past bench-agent's scrubbed env."""
+    """Carry the switch past farm-agent's scrubbed env."""
     value = os.environ.get(BLOB_STORE_ENV)
     return [] if value is None else ["env", f"{BLOB_STORE_ENV}={value}"]
 

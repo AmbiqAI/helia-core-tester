@@ -1,0 +1,105 @@
+operator: ResizeBilinear
+name: resize_bilinear_aligned_odd_f32
+suite: float
+tensor_dtypes: {input: FP32, output: FP32}
+input_shape: [1, 9, 9, 21]
+size: [17, 17]
+align_corners: true
+half_pixel_centers: false
+required_kernel_symbols: [arm_resize_bilinear_f32]
+---
+operator: ResizeBilinear
+name: resize_bilinear_half_pixel_f32
+suite: float
+tensor_dtypes: {input: FP32, output: FP32}
+input_shape: [2, 3, 5, 9]
+size: [6, 10]
+align_corners: false
+half_pixel_centers: true
+required_kernel_symbols: [arm_resize_bilinear_f32]
+---
+operator: ResizeBilinear
+name: resize_bilinear_downsample_f32
+suite: float
+tensor_dtypes: {input: FP32, output: FP32}
+input_shape: [1, 5, 7, 3]
+size: [3, 1]
+align_corners: false
+half_pixel_centers: false
+required_kernel_symbols: [arm_resize_bilinear_f32]
+---
+operator: ResizeBilinear
+name: resize_bilinear_singleton_f32
+suite: float
+tensor_dtypes: {input: FP32, output: FP32}
+input_shape: [1, 1, 1, 7]
+size: [2, 3]
+align_corners: false
+half_pixel_centers: true
+required_kernel_symbols: [arm_resize_bilinear_f32]
+---
+operator: ResizeBilinear
+name: resize_bilinear_identity_f32
+suite: float
+tensor_dtypes: {input: FP32, output: FP32}
+input_shape: [1, 2, 3, 5]
+size: [2, 3]
+align_corners: true
+half_pixel_centers: false
+required_kernel_symbols: [arm_resize_bilinear_f32]
+---
+operator: ResizeBilinear
+name: resize_bilinear_aligned_odd_f16
+suite: float
+tensor_dtypes: {input: FP16, output: FP16}
+# For all three interpolating FP16 cases, |input| <= 2 and the weights sum to 1.
+# With u = 2^-11, rounding a weight, a product and up to three sums contributes
+# at most 2*((1+u)^5-1). Rounding the FP32 reference to half adds at most 2*u.
+comparison: {atol: 0.006, rtol: 0}
+input_shape: [1, 9, 9, 21]
+size: [17, 17]
+align_corners: true
+half_pixel_centers: false
+required_kernel_symbols: [arm_resize_bilinear_f16]
+---
+operator: ResizeBilinear
+name: resize_bilinear_half_pixel_f16
+suite: float
+tensor_dtypes: {input: FP16, output: FP16}
+comparison: {atol: 0.006, rtol: 0}
+input_shape: [2, 3, 5, 9]
+size: [6, 10]
+align_corners: false
+half_pixel_centers: true
+required_kernel_symbols: [arm_resize_bilinear_f16]
+---
+operator: ResizeBilinear
+name: resize_bilinear_downsample_f16
+suite: float
+tensor_dtypes: {input: FP16, output: FP16}
+comparison: {atol: 0.006, rtol: 0}
+input_shape: [1, 5, 7, 3]
+size: [3, 1]
+align_corners: false
+half_pixel_centers: false
+required_kernel_symbols: [arm_resize_bilinear_f16]
+---
+operator: ResizeBilinear
+name: resize_bilinear_singleton_f16
+suite: float
+tensor_dtypes: {input: FP16, output: FP16}
+input_shape: [1, 1, 1, 7]
+size: [2, 3]
+align_corners: false
+half_pixel_centers: true
+required_kernel_symbols: [arm_resize_bilinear_f16]
+---
+operator: ResizeBilinear
+name: resize_bilinear_identity_f16
+suite: float
+tensor_dtypes: {input: FP16, output: FP16}
+input_shape: [1, 2, 3, 5]
+size: [2, 3]
+align_corners: true
+half_pixel_centers: false
+required_kernel_symbols: [arm_resize_bilinear_f16]

@@ -2,7 +2,7 @@
 # heartkit-seg and heartkit-arr a16w8 conv layers.
 name: conv-s16
 board: apollo510_evb
-# bench-agent board id; defaults to board.
+# farm-agent board id; defaults to board.
 bench_id: apollo510_evb
 legs: [tcm, mram]
 toolchains: [gcc, atfe]
