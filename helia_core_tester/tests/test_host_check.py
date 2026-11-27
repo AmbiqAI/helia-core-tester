@@ -116,8 +116,11 @@ def test_bad_inputs_fail_closed(tmp_path, cache) -> None:
     tree = _checkout(tmp_path)
     with pytest.raises(hk.HostCheckError, match="unknown host kernel mode"):
         hk.ensure_host_kernels(tree, mode="mve", cache_root=cache)
-    with pytest.raises(hk.HostCheckError, match="not an ns-cmsis-nn checkout"):
+    with pytest.raises(hk.HostCheckError, match="library checkout not found"):
         hk.ensure_host_kernels(tmp_path / "nowhere", cache_root=cache)
+    (tmp_path / "empty").mkdir()
+    with pytest.raises(hk.HostCheckError, match="not an ns-cmsis-nn checkout"):
+        hk.ensure_host_kernels(tmp_path / "empty", cache_root=cache)
     with pytest.raises(hk.HostCheckError, match="not found"):
         hk.run_host_check([tmp_path / "no-cases"], tree, cache_root=cache)
 

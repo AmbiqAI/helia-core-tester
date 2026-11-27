@@ -40,9 +40,11 @@ class RecordStep(StepBase):
         return self.config.generation_report_dir_for(cpu, suite=suite) / REPORT_NAME
 
     def validate(self) -> Optional[str]:
-        tree = self._tree()
-        if tree is None or not (tree / "Source").is_dir():
-            return "record needs an ns-cmsis-nn checkout (Include/ and Source/): set --cmsis-nn-root or CMSIS_NN_ROOT"
+        from helia_core_tester.generation.reference.host_kernels import checkout_problem
+
+        problem = checkout_problem(self._tree())
+        if problem:
+            return f"record: {problem}: set --cmsis-nn-root or CMSIS_NN_ROOT"
         return None
 
     def plan_validate(self) -> Optional[str]:

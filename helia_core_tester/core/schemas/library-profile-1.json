@@ -148,6 +148,48 @@
           "description": "Group name: spellings of one parameter; a harness value binds to any of them."
         }
       }
+    },
+    "host_reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "option",
+        "manifest",
+        "build_inputs"
+      ],
+      "description": "The library's host reference build; an ns-cmsis-nn profile without it takes ns-cmsis-nn's. Paths are relative to source_root.",
+      "properties": {
+        "project": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^[^\\x00\\\\]+$",
+          "description": "The CMake project that builds it; default \".\"."
+        },
+        "option": {
+          "$ref": "#/$defs/identifier",
+          "description": "The cache option that turns the build on."
+        },
+        "manifest": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*\\.json$",
+          "maxLength": 128,
+          "description": "The hct/host-reference/1 manifest the build writes in its build directory."
+        },
+        "build_inputs": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "pattern": "^[^\\x00\\\\]+$"
+          },
+          "description": "What decides the build: a change to any of them rebuilds the reference."
+        }
+      }
     }
   },
   "$defs": {

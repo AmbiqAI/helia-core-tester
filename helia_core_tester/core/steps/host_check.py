@@ -48,13 +48,11 @@ class HostCheckStep(StepBase):
         return targets
 
     def validate(self) -> Optional[str]:
-        tree = self._tree()
-        if tree is None or not (tree / "Source").is_dir():
-            return (
-                "host check needs an ns-cmsis-nn checkout (Include/ and Source/): set --cmsis-nn-root "
-                "or CMSIS_NN_ROOT, or pass --skip-host-check"
-            )
-        from helia_core_tester.generation.reference.host_kernels import HOST_KERNEL_MODES
+        from helia_core_tester.generation.reference.host_kernels import HOST_KERNEL_MODES, checkout_problem
+
+        problem = checkout_problem(self._tree())
+        if problem:
+            return f"host check: {problem}: set --cmsis-nn-root or CMSIS_NN_ROOT, or pass --skip-host-check"
 
         unknown = [m for m in self.config.host_kernels if m not in HOST_KERNEL_MODES]
         if unknown:

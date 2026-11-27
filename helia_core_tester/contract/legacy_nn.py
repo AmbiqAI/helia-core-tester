@@ -34,6 +34,15 @@ OPS = frozenset({"fully_connected", "depthwise_conv", "avg_pool", "max_pool"})
 
 Fail = Callable[[Path, str], Exception]
 
+# The profile's ``host_reference`` block for an ns-cmsis-nn profile that has none, the built-in legacy
+# profile included: ns-cmsis-nn's own CMake offers it. A checkout whose CMake lacks the option has no
+# host reference, and host-check scans its sources instead.
+HOST_REFERENCE: dict[str, Any] = {
+    "option": "NS_CMSIS_NN_HOST_REFERENCE",
+    "manifest": "ns_cmsis_nn_host_reference.json",
+    "build_inputs": ["CMakeLists.txt", "cmake", "Include", "Source"],
+}
+
 # The profile's ``harness`` block for an ns-cmsis-nn profile that has none, the built-in legacy profile
 # included. Values are ns-cmsis-nn's Include/arm_nn_types.h; hct_library.h asserts each code against it.
 HARNESS: dict[str, Any] = {

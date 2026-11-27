@@ -199,7 +199,8 @@ def run_record(
     if library.provider != host_kernels.PROVIDER_HOST_REFERENCE:
         raise RecordError(
             f"{library.tree} has no host reference build; record mode takes goldens only from the "
-            "library's own scalar build (ns-cmsis-nn: NS_CMSIS_NN_HOST_REFERENCE)"
+            "library's own scalar build, which its profile's host_reference block names "
+            "(ns-cmsis-nn: NS_CMSIS_NN_HOST_REFERENCE)"
         )
     report = RecordReport(
         tree=str(library.tree),

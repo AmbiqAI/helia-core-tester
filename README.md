@@ -1183,16 +1183,20 @@ uv run helia_core_tester full --cpu cortex-m55 --skip-host-check         # bypas
   not run; a case the generator specialised for the target CPU (an `entry:` or `fault:` case, or
   FullyConnected s8 folding its bias into the MVE-only kernel sums) still runs, but its failure is
   *advisory* (reported, not blocking); everything else blocks. The report lists all three.
-- `m0` kernels come from the checkout's own host reference build when it offers one
-  (`NS_CMSIS_NN_HOST_REFERENCE=ON`: the library's CMake, every float width, `-O2
-  -ffp-contract=off -fno-fast-math`, no DSP/MVE path). hct configures and builds it with the
-  host compiler and compiles each case with the definitions and include dirs its manifest
-  (`ns_cmsis_nn_host_reference.json`, schema `hct/host-reference/1`) lists; a bad or missing
-  manifest fails the check. Builds are cached in `artifacts/host_kernels/host_reference/<key>/`,
-  keyed by the checkout's `CMakeLists.txt`, `cmake/`, `Include/` and `Source/` content, the
-  compiler and the CMake version. A checkout without the option falls back to hct's scan of
-  its int and f32 sources (f16 excluded); the step warns and the report's `provider` is
-  `source-scan` instead of `host-reference`. `dsp` always uses the scan.
+- `m0` kernels come from the library's own host reference build, which the profile's
+  `host_reference` block names. The block has four fields: `project` (default `.`), `option`,
+  `manifest` and `build_inputs`. `project` and `build_inputs` are relative to `source_root`.
+  ns-cmsis-nn's block is built in (`NS_CMSIS_NN_HOST_REFERENCE=ON` on the checkout: the library's CMake,
+  every float width, `-O2 -ffp-contract=off -fno-fast-math`, no DSP/MVE path). hct configures
+  and builds the project with the host compiler and compiles each case with the definitions and
+  include dirs its manifest (schema `hct/host-reference/1`) lists; a bad or missing manifest
+  fails the check. Builds are cached in `artifacts/host_kernels/host_reference/<key>/`, keyed by
+  the recipe, the content of its build inputs, the compiler and the CMake version. An
+  ns-cmsis-nn checkout whose CMake lacks the option falls back to hct's scan of its int and f32
+  sources (f16 excluded); the step warns and the report's `provider` is `source-scan` instead of
+  `host-reference`. `dsp` always uses the scan, so it runs for ns-cmsis-nn only. A recipe that a
+  profile names must build (no fallback), and a library other than ns-cmsis-nn without one is
+  refused.
 - The scanned kernel library and the test runtime are cached in `artifacts/host_kernels/<key>/`,
   keyed by the checkout's `Include/` and `Source/` (commit when clean, content when dirty), the
   mode, flags and compiler identity.
@@ -1218,7 +1222,7 @@ uv run helia_core_tester record --cpu cortex-m0 --suite both --cmsis-nn-root <ns
   element, e.g. `HELIA_VALIDATE_FLOAT_BITS`), `refused_f16_host`, `not_applicable`, or a failure
   (`status_mismatch`, `harness_failed`, `crashed`, `record_error`, `capture_error`,
   `compile_failed`, `timeout`, `no_records`).
-- Only a host reference build supplies recorded values: a checkout without one is refused, not
+- Only a host reference build supplies recorded values: a library without one is refused, not
   scanned. f16 is recorded only where the build's `float16_t` is `_Float16` (Linux x86-64; on a Mac,
   `docker run --platform linux/amd64`); with `__fp16` those cases are `refused_f16_host`.
 - The step fails unless every blocking case is `identical`; advisory cases (generated for a

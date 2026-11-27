@@ -10,12 +10,15 @@ from pathlib import Path
 import pytest
 
 from helia_core_tester.core import host_reference as hr
+from helia_core_tester.core.library import legacy_host_reference
 from helia_core_tester.generation.reference import host_kernels as hk
 from helia_core_tester.tests.library_stub import NN_STATUS_ENUM
 
 needs_cmake = pytest.mark.skipif(
     shutil.which("cmake") is None or shutil.which("cc") is None, reason="cmake and a host cc required"
 )
+
+NN = legacy_host_reference()
 
 _FAKE_CMAKELISTS = r"""
 cmake_minimum_required(VERSION 3.15)
@@ -139,36 +142,36 @@ def test_unreadable_manifest_is_refused(tmp_path, content, message) -> None:
 
 
 def test_supports_reads_the_option_from_cmakelists(tmp_path) -> None:
-    assert not hr.supports(tmp_path)
+    assert not hr.supports(tmp_path, NN)
     (tmp_path / "CMakeLists.txt").write_text("project(x C)\n")
-    assert not hr.supports(tmp_path)
+    assert not hr.supports(tmp_path, NN)
     (tmp_path / "CMakeLists.txt").write_text('option(NS_CMSIS_NN_HOST_REFERENCE "" OFF)\n')
-    assert hr.supports(tmp_path)
+    assert hr.supports(tmp_path, NN)
 
 
 def test_tree_without_the_option_is_refused(tmp_path) -> None:
     tree = _fake_tree(tmp_path)
     (tree / "CMakeLists.txt").write_text("project(x C)\n")
     with pytest.raises(hr.HostReferenceError, match="does not offer NS_CMSIS_NN_HOST_REFERENCE"):
-        hr.ensure_host_reference(tree, cache_root=tmp_path / "cache")
+        hr.ensure_host_reference(tree, NN, cache_root=tmp_path / "cache")
 
 
 def test_bad_jobs_is_refused(tmp_path) -> None:
     with pytest.raises(hr.HostReferenceError, match="jobs must be >= 1"):
-        hr.ensure_host_reference(_fake_tree(tmp_path), cache_root=tmp_path / "cache", jobs=0)
+        hr.ensure_host_reference(_fake_tree(tmp_path), NN, cache_root=tmp_path / "cache", jobs=0)
 
 
 def test_missing_cmake_is_refused(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(hr.shutil, "which", lambda name: None)
     with pytest.raises(hr.HostReferenceError, match="cmake is not on PATH"):
-        hr.ensure_host_reference(_fake_tree(tmp_path), cache_root=tmp_path / "cache", cc="/usr/bin/cc")
+        hr.ensure_host_reference(_fake_tree(tmp_path), NN, cache_root=tmp_path / "cache", cc="/usr/bin/cc")
 
 
 @needs_cmake
 def test_builds_caches_and_rekeys(tmp_path, monkeypatch) -> None:
     tree = _fake_tree(tmp_path)
     cache = tmp_path / "cache"
-    ref = hr.ensure_host_reference(tree, cache_root=cache, jobs=2)
+    ref = hr.ensure_host_reference(tree, NN, cache_root=cache, jobs=2)
     assert ref.archive.is_file()
     assert (cache / ref.key / "complete.json").is_file()
     assert ref.compile_definitions == ("HCT_FAKE_REF=1",)
@@ -176,11 +179,11 @@ def test_builds_caches_and_rekeys(tmp_path, monkeypatch) -> None:
     calls = []
     real_run = hr._run
     monkeypatch.setattr(hr, "_run", lambda *a, **k: calls.append(a) or real_run(*a, **k))
-    again = hr.ensure_host_reference(tree, cache_root=cache)
+    again = hr.ensure_host_reference(tree, NN, cache_root=cache)
     assert again.key == ref.key and calls == []
 
     (tree / "Source" / "BasicMathFunctions" / "kernel_s8.c").write_text("#include <stdint.h>\nint32_t hct_kernel(void) { return 7; }\n")
-    edited = hr.ensure_host_reference(tree, cache_root=cache)
+    edited = hr.ensure_host_reference(tree, NN, cache_root=cache)
     assert edited.key != ref.key and len(calls) == 2
 
 
@@ -188,10 +191,10 @@ def test_builds_caches_and_rekeys(tmp_path, monkeypatch) -> None:
 def test_incomplete_cache_entry_is_rebuilt(tmp_path) -> None:
     tree = _fake_tree(tmp_path)
     cache = tmp_path / "cache"
-    ref = hr.ensure_host_reference(tree, cache_root=cache)
+    ref = hr.ensure_host_reference(tree, NN, cache_root=cache)
     (cache / ref.key / "complete.json").unlink()
     (ref.archive).unlink()
-    rebuilt = hr.ensure_host_reference(tree, cache_root=cache)
+    rebuilt = hr.ensure_host_reference(tree, NN, cache_root=cache)
     assert rebuilt.archive.is_file() and (cache / ref.key / "complete.json").is_file()
 
 
@@ -200,7 +203,7 @@ def test_build_failure_leaves_no_cache_entry(tmp_path) -> None:
     tree = _fake_tree(tmp_path, kernel='#error "injected kernel build failure"')
     cache = tmp_path / "cache"
     with pytest.raises(hr.HostReferenceError) as err:
-        hr.ensure_host_reference(tree, cache_root=cache)
+        hr.ensure_host_reference(tree, NN, cache_root=cache)
     assert "host reference build failed" in str(err.value)
     assert "injected kernel build failure" in str(err.value)
     assert [p for p in cache.iterdir() if not p.name.startswith(".")] == []
@@ -214,7 +217,7 @@ def test_configure_failure_is_reported(tmp_path) -> None:
         'message(FATAL_ERROR "injected configure failure")\n'
     )
     with pytest.raises(hr.HostReferenceError) as err:
-        hr.ensure_host_reference(tree, cache_root=tmp_path / "cache")
+        hr.ensure_host_reference(tree, NN, cache_root=tmp_path / "cache")
     assert "host reference configure failed" in str(err.value)
     assert "injected configure failure" in str(err.value)
 
@@ -225,7 +228,7 @@ def test_option_without_a_manifest_is_refused(tmp_path) -> None:
     text = (tree / "CMakeLists.txt").read_text().replace("NOT HCT_FAKE_SKIP_MANIFEST", "FALSE")
     (tree / "CMakeLists.txt").write_text(text)
     with pytest.raises(hr.HostReferenceError, match="wrote no ns_cmsis_nn_host_reference.json"):
-        hr.ensure_host_reference(tree, cache_root=tmp_path / "cache")
+        hr.ensure_host_reference(tree, NN, cache_root=tmp_path / "cache")
 
 
 @needs_cmake
@@ -236,7 +239,7 @@ def test_manifest_for_another_tree_is_refused(tmp_path) -> None:
     )
     (tree / "CMakeLists.txt").write_text(text)
     with pytest.raises(hr.HostReferenceError, match="describes /elsewhere"):
-        hr.ensure_host_reference(tree, cache_root=tmp_path / "cache")
+        hr.ensure_host_reference(tree, NN, cache_root=tmp_path / "cache")
     assert not any((tmp_path / "cache").glob("*/complete.json"))
 
 
@@ -288,7 +291,7 @@ _REAL_TREE = os.environ.get("HCT_TEST_HOST_REFERENCE_TREE", "").strip()
 
 @pytest.mark.skipif(not _REAL_TREE, reason="set HCT_TEST_HOST_REFERENCE_TREE to an ns-cmsis-nn checkout")
 def test_real_ns_cmsis_nn_host_reference(tmp_path) -> None:
-    ref = hr.ensure_host_reference(Path(_REAL_TREE), cache_root=tmp_path / "cache")
+    ref = hr.ensure_host_reference(Path(_REAL_TREE), NN, cache_root=tmp_path / "cache")
     assert sorted(ref.compile_definitions) == ["ARM_NN_ENABLE_F16=1", "ARM_NN_ENABLE_F32=1"]
     assert ref.library_compile_options == ("-O2", "-ffp-contract=off", "-fno-fast-math")
     assert ref.float16_type in hr.FLOAT16_TYPES

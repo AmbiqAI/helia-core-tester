@@ -210,7 +210,7 @@ def test_step_refuses_a_tree_without_sources(tmp_path) -> None:
     config = Config(project_root=hk.tester_root(), generated_tests_root=tmp_path / "g", reports_root=tmp_path / "r",
                     cmsis_nn_root=tmp_path / "empty")
     result = RecordStep(config).execute()
-    assert result.status == StepStatus.FAILED and "record needs an ns-cmsis-nn checkout" in result.message
+    assert result.status == StepStatus.FAILED and "is not an ns-cmsis-nn checkout" in result.message
 
 
 @pytest.mark.parametrize("ok", [True, False])
@@ -221,6 +221,7 @@ def test_step_writes_one_report_per_target_and_fails_on_differences(tmp_path, mo
 
     tree = tmp_path / "tree"
     (tree / "Source").mkdir(parents=True)
+    (tree / "Include").mkdir()
     config = Config(project_root=hk.tester_root(), generated_tests_root=tmp_path / "g", reports_root=tmp_path / "r",
                     cmsis_nn_root=tree, cpu="cortex-m0", suite="both")
     seen = []
