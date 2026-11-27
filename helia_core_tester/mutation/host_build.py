@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence
 
+from helia_core_tester.core.harness import current_harness, harness_of_root, header_dir
 from helia_core_tester.utils.host_compiler import find_host_cc
 
 _HOST_DIR = Path(__file__).resolve().parent / "host"
@@ -198,7 +199,7 @@ def build_runtime_obj(
     `kernel_flags` (a host reference's definitions and include dirs) replaces the
     tree's bare Include dir when the kernels come from a host reference build."""
     cc = _resolve_cc(cc)
-    # helia_test_runtime.h pulls in arm_nnfunctions.h (for ARM_CMSIS_NN_SUCCESS),
+    # helia_test_runtime.h includes hct_library.h, which includes the library's headers,
     # so it needs the kernel headers too.
     kernel = list(kernel_flags) if kernel_flags is not None else ["-I", str(tree_root / "Include")]
     src = tester_root / "src" / "test_runtime" / "helia_test_runtime.c"
@@ -211,6 +212,7 @@ def build_runtime_obj(
             "-Dhelia_test_finish=helia_test_finish_fvp_unused",
             "-I",
             str(tester_root / "src"),
+            *library_header_flags(tree_root),
             *kernel,
             str(src),
             "-o",
@@ -220,6 +222,13 @@ def build_runtime_obj(
     if proc.returncode != 0:
         raise HostBuildError(f"runtime compile failed:\n{proc.stderr}")
     return obj
+
+
+def library_header_flags(tree_root: Optional[Path] = None) -> List[str]:
+    """`-I` for the hct_library.h of the library at `tree_root` (else the one generation resolves),
+    which the runtime includes."""
+    harness = harness_of_root(tree_root) if tree_root is not None else current_harness()
+    return ["-I", str(header_dir(harness))]
 
 
 def discover_cases(cases_roots: Iterable[Path]) -> List[Path]:
@@ -273,6 +282,7 @@ def build_and_run_case(
         *host_sizer_defines(sources),
         "-I",
         str(tester_root / "src"),
+        *library_header_flags(tree_root),
         "-I",
         str(case_dir),
         "-I",

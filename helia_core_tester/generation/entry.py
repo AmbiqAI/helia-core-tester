@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Mapping, Optional
 from helia_core_tester.contract import render
 from helia_core_tester.contract.bind import ContractBindError, check_types, takes
 from helia_core_tester.contract.ir import ContractSet, ImplementationDecl
+from helia_core_tester.core.harness import current_harness
 
 # Operators whose template renders its kernel and sizer calls by binding from the contract.
 CONTRACT_BOUND_OPERATORS: frozenset[str] = frozenset(
@@ -39,7 +40,6 @@ ENTRY_CTX_BUFFER_KEY = "entry_ctx_buffer"
 # The capability a CPU needs for each positive manifest feature token (see core/cpu_targets.py).
 FEATURE_CAPABILITIES = {"mvei": ("mve",), "mvef": ("mve",), "mve_f16": ("mve", "fp16_execution"),
                         "dsp": ("dsp",), "f32_api": ("fp32_execution",), "f16_api": ("fp16_execution",)}
-SUCCESS = "ARM_CMSIS_NN_SUCCESS"
 
 
 class EntryError(ValueError):
@@ -71,7 +71,7 @@ def apply_entry_manifest(desc: Mapping[str, Any], contracts: Optional[ContractSe
     the entry is given no ctx or one without a query. A case that expects the full result also gets
     the capabilities of the record's positive `requires` tokens, and declines under
     ARM_MATH_AUTOVECTORIZE when the record needs `!autovectorize` and declines on a build cause. A
-    case expecting ARM_CMSIS_NN_NO_IMPL_ERROR runs wherever the entry declines, so it gets neither.
+    case expecting the library's not-implemented status runs wherever the entry declines, so it gets neither.
     """
     entry = str(desc.get("entry") or "").strip()
     if not entry:
@@ -97,8 +97,9 @@ def apply_entry_manifest(desc: Mapping[str, Any], contracts: Optional[ContractSe
         derived["entry_sizer"] = ctx.size_query
     else:
         derived["entry_scratch"] = ENTRY_SCRATCH_NONE
-    expected = str(desc.get("expected_status", SUCCESS)).strip()
-    if expected != "ARM_CMSIS_NN_NO_IMPL_ERROR":
+    status = current_harness().status
+    expected = str(desc.get("expected_status", status.success)).strip()
+    if expected != status.not_implemented:
         capabilities: List[str] = []
         for token in sorted(t for t in record.requires if not t.startswith("!")):
             if token not in FEATURE_CAPABILITIES:
@@ -106,7 +107,7 @@ def apply_entry_manifest(desc: Mapping[str, Any], contracts: Optional[ContractSe
             capabilities.extend(c for c in FEATURE_CAPABILITIES[token] if c not in capabilities)
         if capabilities:
             derived["required_capabilities"] = capabilities
-    if expected == SUCCESS and "!autovectorize" in record.requires and record.declines_on_build:
+    if expected == status.success and "!autovectorize" in record.requires and record.declines_on_build:
         derived["autovectorize_declines"] = True
     return {**desc, **derived}
 

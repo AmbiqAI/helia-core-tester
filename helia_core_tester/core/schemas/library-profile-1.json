@@ -47,6 +47,119 @@
           "pattern": "^[^\\x00]+$"
         }
       }
+    },
+    "harness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "includes",
+        "header_includes",
+        "status"
+      ],
+      "description": "What a generated harness needs from the library; an ns-cmsis-nn profile without it takes ns-cmsis-nn's.",
+      "properties": {
+        "includes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/header"
+          },
+          "description": "Headers every generated test and the test runtime include (through hct_library.h)."
+        },
+        "header_includes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/header"
+          },
+          "description": "Headers each case's harness header includes."
+        },
+        "status": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "success",
+            "argument_error",
+            "codes"
+          ],
+          "properties": {
+            "type": {
+              "$ref": "#/$defs/identifier",
+              "description": "The kernels' status type."
+            },
+            "success": {
+              "$ref": "#/$defs/identifier",
+              "description": "The code a kernel returns when it succeeds."
+            },
+            "argument_error": {
+              "$ref": "#/$defs/identifier",
+              "description": "The code for rejected arguments; the harness returns it when a scratch query fails."
+            },
+            "not_implemented": {
+              "$ref": "#/$defs/identifier",
+              "description": "The code an entry returns when it declines on the build, when the library has one."
+            },
+            "codes": {
+              "type": "object",
+              "minProperties": 1,
+              "maxProperties": 256,
+              "propertyNames": {
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+                "maxLength": 128
+              },
+              "additionalProperties": {
+                "type": "integer",
+                "minimum": -2147483648,
+                "maximum": 2147483647
+              },
+              "description": "Every status code by name and value; hct_library.h asserts each against the headers."
+            }
+          }
+        },
+        "context": {
+          "$ref": "#/$defs/identifier",
+          "description": "The scratch context type, when the kernels take one."
+        },
+        "dims": {
+          "$ref": "#/$defs/identifier",
+          "description": "The tensor shape type, when the library has one."
+        },
+        "alias_groups": {
+          "type": "object",
+          "maxProperties": 256,
+          "propertyNames": {
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+            "maxLength": 128
+          },
+          "additionalProperties": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 32,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/$defs/identifier"
+            }
+          },
+          "description": "Group name: spellings of one parameter; a harness value binds to any of them."
+        }
+      }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+      "maxLength": 128
+    },
+    "header": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_][A-Za-z0-9_+.-]*(/[A-Za-z0-9_][A-Za-z0-9_+.-]*)*\\.h$",
+      "maxLength": 256
     }
   }
 }

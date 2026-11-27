@@ -15,6 +15,7 @@ import pytest
 
 from helia_core_tester.record import capture as cap
 from helia_core_tester.record.capture import CaptureError, encode_capture, encode_status, encode_tensor, parse_capture
+from helia_core_tester.tests.library_stub import library_header_flags
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 C_HOST_DIR = Path(__file__).resolve().parent / "c_host"
@@ -96,19 +97,19 @@ def record_binary(tmp_path_factory):
         subprocess.run(
             [_cc(), "-std=c11", "-O1", "-Wall", "-Wextra", "-Werror", "-Wno-unused-parameter",
              "-DHCT_RECORD", *[f"-D{d}" for d in defines],
-             "-I", str(C_HOST_DIR), "-I", str(PROJECT_ROOT / "src"),
+             "-I", str(C_HOST_DIR), "-I", str(PROJECT_ROOT / "src"), *library_header_flags(),
              str(work / "case.c"),
              "-Dhelia_test_finish=helia_test_finish_fvp_unused", "-c", "-o", str(work / "unused.o")],
             check=True, capture_output=True, text=True)
         runtime = work / "runtime.o"
         subprocess.run(
             [_cc(), "-std=c11", "-O1", "-c", "-Dhelia_test_finish=helia_test_finish_fvp_unused",
-             "-I", str(C_HOST_DIR), "-I", str(PROJECT_ROOT / "src"),
+             "-I", str(C_HOST_DIR), "-I", str(PROJECT_ROOT / "src"), *library_header_flags(),
              str(PROJECT_ROOT / "src" / "test_runtime" / "helia_test_runtime.c"), "-o", str(runtime)],
             check=True, capture_output=True, text=True)
         subprocess.run(
             [_cc(), "-std=c11", "-O1", "-DHCT_RECORD", *[f"-D{d}" for d in defines],
-             "-I", str(C_HOST_DIR), "-I", str(PROJECT_ROOT / "src"),
+             "-I", str(C_HOST_DIR), "-I", str(PROJECT_ROOT / "src"), *library_header_flags(),
              str(work / "case.c"), str(runtime), str(HOST_FINISH),
              str(PROJECT_ROOT / "src" / "test_runtime" / "hct_record.c"), "-lm", "-o", str(binary)],
             check=True, capture_output=True, text=True)

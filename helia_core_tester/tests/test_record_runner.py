@@ -15,6 +15,7 @@ from helia_core_tester.mutation import host_build
 from helia_core_tester.record import parity, runner
 from helia_core_tester.record.capture import encode_capture, encode_status, encode_tensor, encode_unrecordable
 from helia_core_tester.tests.test_host_reference import _fake_tree
+from helia_core_tester.tests.library_stub import NN_STATUS_ENUM
 
 needs_cmake = pytest.mark.skipif(
     shutil.which("cmake") is None or shutil.which("cc") is None, reason="cmake and a host cc required"
@@ -139,8 +140,8 @@ def test_report_verdict_and_summaries() -> None:
 _KERNEL = "int32_t hct_kernel(void) { return HCT_FAKE_REF * 42; }"
 _HEADER = (
     "#ifndef ARM_NNFUNCTIONS_H\n#define ARM_NNFUNCTIONS_H\n"
-    "typedef enum { ARM_CMSIS_NN_SUCCESS = 0, ARM_CMSIS_NN_ARG_ERROR = -1, ARM_CMSIS_NN_NO_IMPL_ERROR = -2 }"
-    " arm_cmsis_nn_status;\n#endif\n"
+    + NN_STATUS_ENUM
+    + "#endif\n"
 )
 
 

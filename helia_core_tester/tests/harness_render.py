@@ -9,6 +9,7 @@ import jinja2
 from helia_core_tester.contract.ir import ContractSet
 from helia_core_tester.contract.render import contract_globals, load_current_contracts
 from helia_core_tester.core.discovery import find_tester_templates_dir
+from helia_core_tester.core.harness import HarnessProfile, current_harness
 from helia_core_tester.generation.harness import plan_harness, render_declaration
 from helia_core_tester.generation.harness import ArgumentPool
 from helia_core_tester.generation.ops.ConvolutionFunctions.convolve import convolve_argument_pool
@@ -81,7 +82,8 @@ def depthwise_context(kernel_fn: str, sizer: Optional[str], *, float_kernel: boo
 
 
 def render_pool(context: dict, pool: ArgumentPool, *, stem: str, validation_key: str, label: str,
-                contracts: Optional[ContractSet] = None, sizer_fn: Any = "context") -> tuple[str, str]:
+                contracts: Optional[ContractSet] = None, sizer_fn: Any = "context",
+                harness: Optional[HarnessProfile] = None) -> tuple[str, str]:
     """(header, source) as OperationBase.render_harness_files writes them."""
     contracts = contracts if contracts is not None else load_current_contracts()
     # A private environment: the cached one is shared by every generation in the session, and a
@@ -89,6 +91,7 @@ def render_pool(context: dict, pool: ArgumentPool, *, stem: str, validation_key:
     env = jinja2.Environment(loader=jinja2.FileSystemLoader(str(find_tester_templates_dir())),
                              trim_blocks=True, lstrip_blocks=True)
     env.globals.update(contract_globals(lambda: contracts))
+    env.globals["hct_harness"] = (lambda: harness) if harness is not None else current_harness
     sizer = context.get("kernel_get_buffer_size_fn") if sizer_fn == "context" else sizer_fn
     plan = plan_harness(pool, kernel_fn=context["kernel_fn"], sizer_fn=sizer,
                         scratch_bytes=None if sizer else int(context.get("entry_scratch_bytes") or 0),

@@ -25,9 +25,11 @@ _JINJA2_ENV_CACHE: Dict[str, jinja2.Environment] = {}
 def template_environment(template_dir: str) -> jinja2.Environment:
     """The one Jinja environment for a template directory (cached), with the
     contract-rendering globals installed so every template, and every test that
-    renders one, sees the same `contract_call` / `contract_parity_assert`."""
+    renders one, sees the same `contract_call` / `contract_parity_assert`, and
+    `hct_harness()`, the library profile's harness block."""
     if template_dir not in _JINJA2_ENV_CACHE:
         from helia_core_tester.contract.render import contract_globals
+        from helia_core_tester.core.harness import current_harness
 
         env = jinja2.Environment(
             loader=jinja2.FileSystemLoader(template_dir),
@@ -35,6 +37,7 @@ def template_environment(template_dir: str) -> jinja2.Environment:
             lstrip_blocks=True,
         )
         env.globals.update(contract_globals())
+        env.globals["hct_harness"] = current_harness
         _JINJA2_ENV_CACHE[template_dir] = env
     return _JINJA2_ENV_CACHE[template_dir]
 
@@ -246,13 +249,6 @@ class OperationBase(ABC):
     # kinds its fault template can inject; an operator with no fault template
     # keeps the empty default and rejects `fault:` outright.
     FAULT_KINDS: Tuple[str, ...] = ()
-    EXPECTED_STATUS_VALUES: Tuple[str, ...] = (
-        "ARM_CMSIS_NN_SUCCESS",
-        "ARM_CMSIS_NN_ARG_ERROR",
-        "ARM_CMSIS_NN_NO_IMPL_ERROR",
-        "ARM_CMSIS_NN_FAILURE",
-    )
-
     def fault_kind(self) -> Optional[str]:
         """Return the validated `fault:` kind, or None when the descriptor has none."""
         requested = self.desc.get("fault")
@@ -271,14 +267,18 @@ class OperationBase(ABC):
         return kind
 
     def expected_status(self) -> str:
-        """Return the arm_cmsis_nn_status token the kernel call must return."""
-        status = str(self.desc.get("expected_status", "ARM_CMSIS_NN_SUCCESS")).strip()
-        if status not in self.EXPECTED_STATUS_VALUES:
+        """Return the status code (a name from the profile's harness status.codes) the kernel call must return."""
+        from helia_core_tester.core.harness import current_harness
+
+        codes = current_harness().status
+        status = str(self.desc.get("expected_status", codes.success)).strip()
+        known = [name for name, _ in codes.codes]
+        if status not in known:
             raise ValueError(
                 f"Unsupported expected_status {status!r} for descriptor {self.desc.get('name')!r}; "
-                f"known values are {list(self.EXPECTED_STATUS_VALUES)}"
+                f"known values are {known}"
             )
-        if status != "ARM_CMSIS_NN_SUCCESS" and self.desc.get("autovectorize_declines"):
+        if status != codes.success and self.desc.get("autovectorize_declines"):
             raise ValueError(
                 f"{self.desc.get('name')!r}: autovectorize_declines expects the full result where the entry runs; "
                 f"it cannot be combined with expected_status {status}"
@@ -941,8 +941,11 @@ class OperationBase(ABC):
             scratch_bytes=None if sizer else int(context.get("entry_scratch_bytes") or 0),
             contracts=contract_render.load_current_contracts(),
         )
-        expected = str(context.get("expected_status", "ARM_CMSIS_NN_SUCCESS"))
-        if plan.void_return and expected != "ARM_CMSIS_NN_SUCCESS":
+        from helia_core_tester.core.harness import current_harness
+
+        success = current_harness().status.success
+        expected = str(context.get("expected_status", success))
+        if plan.void_return and expected != success:
             raise HarnessError(f"{context['name']}: {context['kernel_fn']} returns void, so expected_status "
                                f"{expected} can never be observed")
         if plan.outputs:
@@ -950,7 +953,7 @@ class OperationBase(ABC):
                              ("nonfinite_mask_array_str", "a nonfinite mask")):
                 if context.get(key):
                     raise HarnessError(f"{context['name']}: output slots do not support {why}")
-            if expected != "ARM_CMSIS_NN_SUCCESS":
+            if expected != success:
                 raise HarnessError(f"{context['name']}: output slots validate every slice, so expected_status "
                                    f"{expected} is not supported")
         render_context = TemplateContextBuilder.build_validation_context(validation_key, dict(context), self.desc)

@@ -12,6 +12,7 @@ from helia_core_tester.generation.io.descriptors import load_descriptor
 from helia_core_tester.generation.ops.BasicMathFunctions.sqrt import OpSqrt
 from helia_core_tester.generation.ops.BasicMathFunctions.rsqrt import OpRsqrt
 from helia_core_tester.tests.reference_models import sqrt_float_reference
+from helia_core_tester.tests.library_stub import NN_STATUS_DEFINES, library_header_flags
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -141,9 +142,8 @@ def test_generated_validator_detects_planted_faults(
     op.generate_c_files(tmp_path)
     (tmp_path / "arm_nnfunctions.h").write_text(
         "#pragma once\n#include <stdint.h>\ntypedef _Float16 float16_t;\ntypedef float float32_t;\n"
-        "typedef int arm_cmsis_nn_status;\n#define ARM_CMSIS_NN_SUCCESS 0\n"
-        "#define ARM_CMSIS_NN_ARG_ERROR -1\n"
-        f"int {kernel}(const {ctype} *, {ctype} *, int32_t);\n"
+        "typedef int arm_cmsis_nn_status;\n" + NN_STATUS_DEFINES
+        +         f"int {kernel}(const {ctype} *, {ctype} *, int32_t);\n"
     )
     # The harness header also pulls in the types header; the stub prototypes live in one place.
     (tmp_path / "arm_nn_types.h").write_text('#include "arm_nnfunctions.h"\n')
@@ -200,6 +200,7 @@ def test_generated_validator_detects_planted_faults(
                 str(tmp_path / "includes"),
                 "-I",
                 str(ROOT / "src"),
+                *library_header_flags(),
                 str(tmp_path / f"probe_{suffix}.c"),
                 str(runtime),
                 str(stub),

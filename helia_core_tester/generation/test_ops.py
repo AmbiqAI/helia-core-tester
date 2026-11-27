@@ -17,6 +17,7 @@ import yaml
 
 from helia_core_tester.core.discovery import find_descriptors_dir, find_generated_tests_dir, find_repo_root
 from helia_core_tester.core.cpu_targets import missing_required_capabilities, normalize_cpu
+from helia_core_tester.core.harness import current_harness, write_header as write_library_header
 from helia_core_tester.generation.golden_check import DegenerateGoldenError, check_case_golden
 from helia_core_tester.generation.kernel_dispatch import DEPTHWISE_CONV_S8_PLANAR_RULE
 from helia_core_tester.generation.io.dtypes import descriptor_matches_dtype_filter, resolve_comparison, resolve_tensor_dtypes
@@ -590,7 +591,7 @@ def test_generation(test_filters):
             )
             continue
         gate = gate_kernel_symbols(contracts, _required_kernel_symbols(desc), target_cpu,
-                                   expected_status=str(desc.get("expected_status", "ARM_CMSIS_NN_SUCCESS")))
+                                   expected_status=str(desc.get("expected_status", current_harness().status.success)))
         missing_symbols = list(gate.missing_symbols)
         # Backstop (hct#92 review): a symbol the signature export lacks while its
         # kernel source ships in the checkout means the export is stale or the
@@ -954,6 +955,7 @@ def _write_manifest_and_cmake(
     cmake_lines.append(")")
     cmake_path = generated_tests_dir / "tests.cmake"
     cmake_path.write_text("\n".join(cmake_lines) + "\n")
+    write_library_header(generated_tests_dir, current_harness())
     return manifest_path
 
 

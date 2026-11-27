@@ -363,6 +363,9 @@ class Config:
                 "pass one of them")
         self.cmsis_nn_root = profile.source_root
         self._library_profile = profile
+        from helia_core_tester.core.harness import register_library
+
+        register_library(profile)
 
     @property
     def library_profile(self) -> Optional[LibraryProfile]:

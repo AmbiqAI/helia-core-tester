@@ -11,6 +11,7 @@ import yaml
 
 from helia_core_tester.generation.ops.ActivationFunctions.gelu import OpGelu, gelu_contract_reference, gelu_exact_reference
 from helia_core_tester.generation.ops._shared.contract_interval import _key, contract_interval
+from helia_core_tester.tests.library_stub import NN_STATUS_DEFINES, library_header_flags
 
 ROOT = Path(__file__).resolve().parents[2]
 CASES = list(yaml.safe_load_all((ROOT / "assets/descriptors/ActivationFunctions/gelu_float16.yaml").read_text()))
@@ -105,8 +106,8 @@ def test_interval_validator_detects_planted_faults(tmp_path):
     lo, hi = lo.tolist(), hi.tolist()
     (tmp_path / "arm_nnfunctions.h").write_text(
         "#pragma once\n#include <stdint.h>\ntypedef _Float16 float16_t;\n"
-        "typedef int arm_cmsis_nn_status;\n#define ARM_CMSIS_NN_SUCCESS 0\n"
-        "int arm_nn_gelu_f16(const float16_t *, float16_t *, int32_t);\n"
+        "typedef int arm_cmsis_nn_status;\n" + NN_STATUS_DEFINES
+        +         "int arm_nn_gelu_f16(const float16_t *, float16_t *, int32_t);\n"
     )
     # The generic harness header includes it alongside arm_nnfunctions.h.
     (tmp_path / "arm_nn_types.h").write_text("#pragma once\n")
@@ -145,7 +146,7 @@ def test_interval_validator_detects_planted_faults(tmp_path):
         binary = tmp_path / label
         subprocess.run(
             [cc, "-std=c11", "-O3", "-ffast-math", "-I", str(tmp_path), "-I", str(tmp_path / "includes"),
-             "-I", str(ROOT / "src"), str(tmp_path / "probe_gelu.c"), str(runtime), str(stub), "-o", str(binary)],
+             "-I", str(ROOT / "src"), *library_header_flags(), str(tmp_path / "probe_gelu.c"), str(runtime), str(stub), "-o", str(binary)],
             check=True,
             capture_output=True,
         )

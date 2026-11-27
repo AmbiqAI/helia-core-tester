@@ -45,6 +45,7 @@ from helia_core_tester.mutation.runner import (
     prepare_tree,
     run_mutation_scoring,
 )
+from helia_core_tester.tests.library_stub import NN_STATUS_ENUM
 
 TESTER_ROOT = Path(__file__).resolve().parents[2]
 
@@ -314,13 +315,13 @@ def _crafted_checkout(tmp_path: Path) -> Path:
     for sub in KERNEL_SOURCE_DIRS:
         (checkout / sub).mkdir(parents=True)
     (checkout / "Include").mkdir()
-    # helia_test_runtime.h includes arm_nnfunctions.h for ARM_CMSIS_NN_SUCCESS;
-    # stub just that out rather than depending on a real ns-cmsis-nn checkout.
+    # helia_test_runtime.h includes arm_nnfunctions.h through hct_library.h, which checks its
+    # status codes; stub just those rather than depending on a real ns-cmsis-nn checkout.
     (checkout / "Include" / "arm_nnfunctions.h").write_text(
         "#ifndef ARM_NNFUNCTIONS_H\n"
         "#define ARM_NNFUNCTIONS_H\n"
-        "typedef enum { ARM_CMSIS_NN_SUCCESS = 0 } arm_cmsis_nn_status;\n"
-        "#endif\n"
+        + NN_STATUS_ENUM
+        +         "#endif\n"
     )
     (checkout / "Source" / "BasicMathFunctions" / "kernel.c").write_text(
         "#include <stdint.h>\n"

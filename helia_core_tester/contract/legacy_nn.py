@@ -1,4 +1,5 @@
-"""ns-cmsis-nn's own contract ids and vocabulary, read until ns-cmsis-nn exports ``hct/*`` documents.
+"""ns-cmsis-nn's own contract ids, vocabulary and harness settings, until ns-cmsis-nn ships ``hct/*`` documents
+and a profile of its own.
 
 The ``ns-cmsis-nn/kernel-contracts/1`` and ``ns-cmsis-nn/kernel-implementations/1`` documents have
 the ``hct/*`` shape without a ``library`` field. Their vocabulary is closed by ns-cmsis-nn's
@@ -32,6 +33,37 @@ FEATURES = frozenset(_BASE_FEATURES[:6]) | {"!" + feature for feature in _BASE_F
 OPS = frozenset({"fully_connected", "depthwise_conv", "avg_pool", "max_pool"})
 
 Fail = Callable[[Path, str], Exception]
+
+# The profile's ``harness`` block for an ns-cmsis-nn profile that has none, the built-in legacy profile
+# included. Values are ns-cmsis-nn's Include/arm_nn_types.h; hct_library.h asserts each code against it.
+HARNESS: dict[str, Any] = {
+    "includes": ["arm_nnfunctions.h"],
+    "header_includes": ["arm_nnfunctions.h", "arm_nn_types.h"],
+    "status": {
+        "type": "arm_cmsis_nn_status",
+        "success": "ARM_CMSIS_NN_SUCCESS",
+        "argument_error": "ARM_CMSIS_NN_ARG_ERROR",
+        "not_implemented": "ARM_CMSIS_NN_NO_IMPL_ERROR",
+        "codes": {
+            "ARM_CMSIS_NN_SUCCESS": 0,
+            "ARM_CMSIS_NN_ARG_ERROR": -1,
+            "ARM_CMSIS_NN_NO_IMPL_ERROR": -2,
+            "ARM_CMSIS_NN_FAILURE": -3,
+        },
+    },
+    "context": "cmsis_nn_context",
+    "dims": "cmsis_nn_dims",
+    # ns-cmsis-nn spells a few parameters two ways; a harness value answers to every spelling of its group.
+    "alias_groups": {
+        "input": ["input_data", "input", "src"],
+        "output": ["output_data", "output", "dst"],
+        "filter": ["filter_data", "kernel"],
+        "bias": ["bias_data", "bias"],
+        "input_1": ["input_1_data", "input_1_vect", "input1_data", "input_1"],
+        "input_2": ["input_2_data", "input_2_vect", "input2_data", "input_2"],
+        "out_offset": ["out_offset", "output_offset"],
+    },
+}
 
 
 def type_is_known(c_type: str) -> bool:

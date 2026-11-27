@@ -13,9 +13,12 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Optional
 
 import jinja2
 import pytest
+
+from helia_core_tester.core.harness import HarnessProfile, legacy_harness, parse_harness, write_header
 
 ROOT = Path(__file__).resolve().parents[2]
 TEMPLATES = ROOT / "assets" / "templates"
@@ -57,10 +60,33 @@ NNFUNCTIONS_STUB = """\
 #pragma once
 #include <stdint.h>
 typedef _Float16 float16_t;
-typedef int arm_cmsis_nn_status;
-#define ARM_CMSIS_NN_SUCCESS 0
-#define ARM_CMSIS_NN_ARG_ERROR -1
+typedef enum {
+    ARM_CMSIS_NN_SUCCESS = 0,
+    ARM_CMSIS_NN_ARG_ERROR = -1,
+    ARM_CMSIS_NN_NO_IMPL_ERROR = -2,
+    ARM_CMSIS_NN_FAILURE = -3,
+} arm_cmsis_nn_status;
 """
+
+# A second library, shaped like CMSIS-DSP: the runtime and the benchmark templates must work from
+# its profile alone, with nothing of ns-cmsis-nn in scope.
+DSP_STUB = """\
+#pragma once
+#include <stdint.h>
+typedef _Float16 float16_t;
+typedef enum {
+    ARM_MATH_SUCCESS = 0,
+    ARM_MATH_ARGUMENT_ERROR = -1,
+    ARM_MATH_LENGTH_ERROR = -2,
+} arm_status;
+"""
+DSP_HARNESS = parse_harness("cmsis-dsp", {
+    "includes": ["arm_math.h"],
+    "header_includes": ["arm_math.h"],
+    "status": {"type": "arm_status", "success": "ARM_MATH_SUCCESS", "argument_error": "ARM_MATH_ARGUMENT_ERROR",
+               "codes": {"ARM_MATH_SUCCESS": 0, "ARM_MATH_ARGUMENT_ERROR": -1, "ARM_MATH_LENGTH_ERROR": -2}},
+})
+LIBRARIES = {"ns-cmsis-nn": (legacy_harness(), NNFUNCTIONS_STUB), "cmsis-dsp": (DSP_HARNESS, DSP_STUB)}
 
 # HELIA_HARDWARE_BUILD routes output through am_util_stdio_printf because plain printf is
 # a no-op on the NSX bring-up; tagging that channel shows which one each line used.
@@ -88,7 +114,7 @@ static int helia_probe_calls;
 static int helia_probe_fail_at;
 static int32_t helia_probe_op(void)
 {{
-    return ++helia_probe_calls == helia_probe_fail_at ? ARM_CMSIS_NN_ARG_ERROR : ARM_CMSIS_NN_SUCCESS;
+    return ++helia_probe_calls == helia_probe_fail_at ? HCT_STATUS_ARGUMENT_ERROR : HCT_STATUS_SUCCESS;
 }}
 int main(int argc, char **argv)
 {{
@@ -100,8 +126,9 @@ int main(int argc, char **argv)
 """
 
 
-def _render_benchmark(target: str) -> str:
+def _render_benchmark(target: str, harness: HarnessProfile) -> str:
     env = jinja2.Environment(loader=jinja2.FileSystemLoader(str(TEMPLATES)))
+    env.globals["hct_harness"] = lambda: harness
     return env.get_template("common/standalone/benchmark.j2").render(benchmark_target=target)
 
 
@@ -126,14 +153,18 @@ def _write_runtime(directory: Path) -> Path:
     return runtime
 
 
-def _build_probe(tmp_path: Path, target: str, extra_flags: list[str]) -> Path:
+def _build_probe(tmp_path: Path, target: str, extra_flags: list[str], library: str = "ns-cmsis-nn",
+                 harness: Optional[HarnessProfile] = None) -> Path:
     cc = _host_cc()
+    default, stub = LIBRARIES[library]
+    harness = harness or default
     (tmp_path / "host_stubs.h").write_text(HOST_STUBS)
     (tmp_path / "pmu_armv8.h").write_text(PMU_STUBS)
-    (tmp_path / "arm_nnfunctions.h").write_text(NNFUNCTIONS_STUB)
+    (tmp_path / harness.includes[0]).write_text(stub)
+    write_header(tmp_path, harness)
     (tmp_path / "am_mcu_apollo.h").write_text("#pragma once\n")
     (tmp_path / "am_util_stdio.h").write_text(AMBIQ_STUBS)
-    (tmp_path / "probe.c").write_text(PROBE_MAIN.format(benchmark=_render_benchmark(target)))
+    (tmp_path / "probe.c").write_text(PROBE_MAIN.format(benchmark=_render_benchmark(target, harness)))
     binary = tmp_path / "probe"
     subprocess.run(
         [
@@ -159,9 +190,31 @@ def _build_probe(tmp_path: Path, target: str, extra_flags: list[str]) -> Path:
     return binary
 
 
-@pytest.fixture(params=["fvp", "hardware"])
+@pytest.fixture(params=[(t, lib) for lib in LIBRARIES for t in ("fvp", "hardware")],
+                ids=lambda p: f"{p[1]}-{p[0]}")
 def probe(request, tmp_path: Path) -> tuple[Path, str]:
-    return _build_probe(tmp_path, request.param, []), request.param
+    target, library = request.param
+    return _build_probe(tmp_path, target, [], library), target
+
+
+def test_benchmark_renders_nothing_of_another_library() -> None:
+    for target in ("fvp", "hardware"):
+        rendered = _render_benchmark(target, DSP_HARNESS)
+        assert "ARM_MATH_SUCCESS" in rendered
+        assert "CMSIS_NN" not in rendered and "cmsis_nn" not in rendered
+
+
+def test_runtime_refuses_a_profile_whose_codes_differ_from_the_headers(tmp_path: Path) -> None:
+    """hct_library.h asserts each profile code against the library's header, so a drifted profile
+    cannot misreport a status."""
+    drifted = parse_harness("cmsis-dsp", {
+        "includes": ["arm_math.h"], "header_includes": ["arm_math.h"],
+        "status": {"type": "arm_status", "success": "ARM_MATH_SUCCESS", "argument_error": "ARM_MATH_ARGUMENT_ERROR",
+                   "codes": {"ARM_MATH_SUCCESS": 0, "ARM_MATH_ARGUMENT_ERROR": -2}},
+    })
+    with pytest.raises(subprocess.CalledProcessError) as raised:
+        _build_probe(tmp_path, "fvp", [], "cmsis-dsp", harness=drifted)
+    assert "ARM_MATH_ARGUMENT_ERROR is not -2, as the profile says" in raised.value.stderr.decode()
 
 
 def _run(binary: Path, fail_at: int) -> tuple[int, str]:
@@ -287,6 +340,7 @@ def convolve_benchmark(request, tmp_path_factory: pytest.TempPathFactory) -> tup
         patch.setenv("HELIA_BENCH_TARGET", target)
         generation_module.generate_test(desc, str(out_dir), cpu="cortex-m55")
     case_dir = out_dir / desc["_family"] / case
+    write_header(out_dir, legacy_harness())
     (out_dir / "host_stubs.h").write_text(HOST_STUBS)
     (out_dir / "pmu_armv8.h").write_text(PMU_STUBS)
     (out_dir / "am_mcu_apollo.h").write_text("#pragma once\n")

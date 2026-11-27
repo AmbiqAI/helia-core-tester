@@ -88,4 +88,9 @@ def test_templates_use_umbrella_public_headers_only() -> None:
 
     assert "arm_nnfunctions_flt.h" not in texts
     assert "arm_nn_types_flt.h" not in texts
-    assert "arm_nnfunctions.h" in texts
+    # The generic harness takes its includes from the profile; ns-cmsis-nn's are the umbrella headers.
+    from helia_core_tester.core.harness import legacy_harness
+
+    built_in = legacy_harness()
+    assert built_in.includes == ("arm_nnfunctions.h",)
+    assert set(built_in.header_includes) == {"arm_nnfunctions.h", "arm_nn_types.h"}

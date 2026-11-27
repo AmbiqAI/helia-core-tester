@@ -9,7 +9,6 @@ import jinja2
 import pytest
 
 from helia_core_tester.contract.bind import (
-    ALIAS_GROUPS,
     ContractBindError,
     bind,
     check_types,
@@ -19,7 +18,10 @@ from helia_core_tester.contract.bind import (
 )
 from helia_core_tester.contract.ir import STATUS_PRESENT, ContractSet, FunctionDecl, ParamDecl, load_contract_set
 from helia_core_tester.contract.render import contract_globals, render_call
+from helia_core_tester.core.harness import legacy_harness
 from helia_core_tester.generation.utils.temp_sizer_probe import resolve_cmsis_nn_root
+
+ALIAS_GROUPS = legacy_harness().alias_groups
 
 
 def _decl(name: str, *params: tuple[str, str, str]) -> FunctionDecl:
@@ -164,8 +166,8 @@ def test_alias_groups_are_unambiguous_in_the_real_tree() -> None:
     clashes = []
     for decl in real.functions.values():
         names = {p.name for p in decl.params}
-        for group in ALIAS_GROUPS:
+        for _key, group in ALIAS_GROUPS:
             if len(names & set(group)) > 1:
                 clashes.append(f"{decl.name}: {sorted(names & set(group))}")
     assert not clashes, clashes
-    assert all(re.fullmatch(r"\w+", name) for group in ALIAS_GROUPS for name in group)
+    assert all(re.fullmatch(r"\w+", name) for _key, group in ALIAS_GROUPS for name in group)

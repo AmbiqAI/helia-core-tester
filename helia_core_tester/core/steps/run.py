@@ -9,6 +9,7 @@ from typing import Optional
 from helia_core_tester.core.runtime_env import RuntimeEnvContext, bootstrap_runtime_env, build_locked_fvp_flags
 from helia_core_tester.core.steps.base import StepBase, StepPlan, StepResult, StepStatus
 from helia_core_tester.core.errors import FVPRunError
+from helia_core_tester.core.harness import library_env
 from helia_core_tester.core.logging import get_logger
 from helia_core_tester.core.discovery import find_fvp_script_path
 
@@ -117,6 +118,8 @@ class RunStep(StepBase):
         try:
             runtime_env = self._ensure_runtime_env()
             commands = self._run_commands()
+            # The runner names returned status codes from this library's profile.
+            child_env = {**runtime_env.child_env, **library_env(self.config)}
             for cmd in commands:
                 if self.config.verbosity >= 2:
                     self.logger.info(f"Running command: {' '.join(cmd)}")
@@ -129,7 +132,7 @@ class RunStep(StepBase):
                     check=True,
                     text=True,
                     bufsize=1,
-                    env=runtime_env.child_env,
+                    env=child_env,
                 )
             
             if self.config.verbosity >= 2:

@@ -8,6 +8,8 @@ from typing import Any, Mapping
 
 import numpy as np
 
+from helia_core_tester.core.harness import current_harness
+
 # Descriptor key: reason a degenerate golden is intended.
 EDGE_CASE_KEY = "degenerate_golden_reason"
 
@@ -63,8 +65,9 @@ def case_problems(case_dir: Path) -> list[str]:
 
 def _status_only(desc: Mapping[str, Any]) -> bool:
     """True when the case checks a status."""
-    status = str(desc.get("expected_status", "ARM_CMSIS_NN_SUCCESS"))
-    return bool(desc.get("fault")) or status != "ARM_CMSIS_NN_SUCCESS"
+    success = current_harness().status.success
+    status = str(desc.get("expected_status", success))
+    return bool(desc.get("fault")) or status != success
 
 
 def check_case_golden(case_dir: Path, desc: Mapping[str, Any]) -> None:

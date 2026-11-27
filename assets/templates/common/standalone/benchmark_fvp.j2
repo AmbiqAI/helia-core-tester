@@ -27,7 +27,7 @@
   Output format is consumed by helia_core_tester.reporting.parser.TestResultParser:
     [BENCH] <name> warmup_runs=<W> measured_runs=<M>
     [PERF] <name>: <cycles> cycles     (repeated M times, one per measured run)
-  A call that does not return ARM_CMSIS_NN_SUCCESS ends the run there with
+  A call that does not return the library's success status ends the run there with
   "<name> failed with status <N>" and "1 Failures"; no cycles are printed for it
   or after it.
 #}
@@ -81,7 +81,7 @@ static inline int32_t helia_benchmark_run(const char *name, helia_bench_op_fn op
 
     for (int i = 0; i < HELIA_BENCHMARK_WARMUP_RUNS; i++) {
         int32_t status = op();
-        if (status != ARM_CMSIS_NN_SUCCESS) {
+        if (status != {{ hct_harness().status.success }}) {
             return helia_benchmark_failed(name, status);
         }
     }
@@ -93,7 +93,7 @@ static inline int32_t helia_benchmark_run(const char *name, helia_bench_op_fn op
         uint32_t start = helia_dwt_cycles();
         int32_t status = op();
         uint32_t end = helia_dwt_cycles();
-        if (status != ARM_CMSIS_NN_SUCCESS) {
+        if (status != {{ hct_harness().status.success }}) {
             return helia_benchmark_failed(name, status);
         }
         printf("[PERF] %s: %lu cycles\r\n", name, (unsigned long)(end - start));
