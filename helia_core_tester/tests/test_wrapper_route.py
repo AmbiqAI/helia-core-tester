@@ -22,6 +22,8 @@ CMSIS_NN_ROOT = Path(os.environ.get("CMSIS_NN_ROOT") or PROJECT_ROOT.parent.pare
 HARNESS = Path(__file__).parent / "fixtures" / "wrapper_route" / "route_harness.c"
 PLANAR_SOURCE = Path("Source/NNSupportFunctions/arm_nn_depthwise_conv_s8_planar.c")
 OPT_SELECTOR = "arm_nn_depthwise_conv_s8_opt_select("
+# A layer the planner refuses as out of range: only the to_conv route's convolution kernel rejects these small dims.
+TO_CONV_REFUSED = "to_conv:refused"
 
 
 def _rows(seed: int = 7, count: int = 20000) -> list[tuple]:
@@ -53,6 +55,12 @@ def _rows(seed: int = 7, count: int = 20000) -> list[tuple]:
             continue
         rows.append((kind, i, f, o, stride, pad, dil, ch_mult))
     return rows + _EDGE_ROWS
+
+
+def _matches(route: str, want: str) -> bool:
+    if want == TO_CONV_REFUSED:
+        return route.startswith("to_conv:")
+    return route.removeprefix("to_conv:") == want
 
 
 def _partial_groups(i: tuple, f: tuple, o: tuple) -> bool:
@@ -92,9 +100,12 @@ def _expected(row: tuple, mve: bool, gate_1xn: bool = True, dw_known: bool = Tru
         route = dw_route(i, f, o, stride, pad, dil, ch_mult, mve, gate_1xn)
     except PlanRefusedError as error:
         # The planner refuses dims that disagree; the C wrapper runs them unchecked.
-        if error.status != "shape":
-            raise
-        return None
+        if error.status == "shape":
+            return None
+        # The C wrapper still routes them to the convolution that rejects them (ns-cmsis-nn#921).
+        if error.status == "range":
+            return TO_CONV_REFUSED
+        raise
     if route != DW_OPT:
         return route
     ctx_size = opt_scratch_size(i, f, o, stride, pad, dil, ch_mult, mve)
@@ -138,10 +149,10 @@ def test_mirror_matches_c_wrappers(tmp_path: Path, mve: bool) -> None:
         assert sum(e is None for e in dw_expected) < len(dw_expected) // 2, "the planner refuses most depthwise rows"
     mismatches = [
         (row, route) for row, route, want in zip(rows, routes, expected)
-        if want is not None and route.removeprefix("to_conv:") != want
+        if want is not None and not _matches(route, want)
     ]
     assert not mismatches, f"{len(mismatches)} rows differ, first: {mismatches[:3]}"
-    seen = {route for route, want in zip(routes, expected) if want is not None}
+    seen = {route for route, want in zip(routes, expected) if want not in (None, TO_CONV_REFUSED)}
     wanted = {
         "arm_convolve_1x1_s8_fast", "arm_convolve_1x1_s8", "arm_convolve_1_x_n_s8", "arm_convolve_s8",
         "arm_convolve_1x1_s4_fast", "arm_convolve_1x1_s4", "arm_convolve_1_x_n_s4", "arm_convolve_s4",
