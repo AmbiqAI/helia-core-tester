@@ -156,6 +156,19 @@ def default_cache_root() -> Path:
     return find_repo_root() / "artifacts" / "host_kernels"
 
 
+def _profile_of(tree: Path):
+    """The profile host kernels for the resolved `tree` are built from; its source root must be `tree`."""
+    try:
+        profile = library_of_root(tree)
+    except ConfigurationError as exc:
+        raise HostCheckError(f"library profile for {tree}: {exc}") from exc
+    if Path(profile.source_root).resolve() != tree:
+        raise HostCheckError(
+            f"{profile.describe()} has source_root {profile.source_root}, not {tree}; host kernels are "
+            "built from the profile's own source root")
+    return profile
+
+
 def checkout_problem(tree: Optional[Path]) -> Optional[str]:
     """Why `tree` cannot supply host kernels, or None: a profile that names a host reference
     takes its own layout, anything else needs ns-cmsis-nn's Include/ and Source/."""
@@ -165,9 +178,9 @@ def checkout_problem(tree: Optional[Path]) -> Optional[str]:
     if not tree.is_dir():
         return f"library checkout not found: {tree}"
     try:
-        profile = library_of_root(tree)
-    except ConfigurationError as exc:
-        return f"library profile for {tree}: {exc}"
+        profile = _profile_of(tree)
+    except HostCheckError as exc:
+        return str(exc)
     if profile.host_reference is not None and profile.host_reference.declared:
         return None
     if not (tree / "Include").is_dir() or not (tree / "Source").is_dir():
@@ -188,14 +201,7 @@ def ensure_host_kernels(
     tree = Path(tree).resolve()
     if not tree.is_dir():
         raise HostCheckError(f"library checkout not found: {tree}")
-    try:
-        profile = library_of_root(tree)
-    except ConfigurationError as exc:
-        raise HostCheckError(f"library profile for {tree}: {exc}") from exc
-    if Path(profile.source_root).resolve() != tree:
-        raise HostCheckError(
-            f"{profile.describe()} has source_root {profile.source_root}, not {tree}; host kernels are "
-            "built from the profile's own source root")
+    profile = _profile_of(tree)
     root = Path(cache_root) if cache_root is not None else default_cache_root()
     recipe = profile.host_reference if mode == "m0" else None
     # A recipe the profile names must build; ns-cmsis-nn's built-in one applies only where the

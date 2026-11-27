@@ -1194,8 +1194,9 @@ uv run helia_core_tester full --cpu cortex-m55 --skip-host-check         # bypas
   the recipe, the content of its build inputs, the compiler and the CMake version. An
   ns-cmsis-nn checkout whose CMake lacks the option falls back to hct's scan of its int and f32
   sources (f16 excluded); the step warns and the report's `provider` is `source-scan` instead of
-  `host-reference`. `dsp` always uses the scan. A recipe that a profile names must build (no
-  fallback), and a library other than ns-cmsis-nn without one is refused.
+  `host-reference`. `dsp` always uses the scan, so it runs for ns-cmsis-nn only. A recipe that a
+  profile names must build (no fallback), and a library other than ns-cmsis-nn without one is
+  refused.
 - The scanned kernel library and the test runtime are cached in `artifacts/host_kernels/<key>/`,
   keyed by the checkout's `Include/` and `Source/` (commit when clean, content when dirty), the
   mode, flags and compiler identity.

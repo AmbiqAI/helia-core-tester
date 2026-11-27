@@ -364,3 +364,11 @@ def test_the_steps_refuse_an_empty_checkout(tmp_path) -> None:
     assert "record: " in RecordStep(_step_config(tmp_path, root)).validate()
     message = GenerateStep(_step_config(tmp_path, root, golden="record")).validate()
     assert message is not None and "ns-cmsis-nn" in message
+
+
+def test_checkout_problem_refuses_a_profile_whose_source_root_is_elsewhere(tmp_path) -> None:
+    lib = _dsp_tree(tmp_path / "lib")
+    inner = lib / "inner"
+    inner.mkdir()
+    _profile(inner, "schema: hct/library-profile/1\nlibrary: cmsis-dsp\nsource_root: ..\n" + _DSP_HARNESS + _DSP_RECIPE)
+    assert "has source_root" in hk.checkout_problem(inner)
