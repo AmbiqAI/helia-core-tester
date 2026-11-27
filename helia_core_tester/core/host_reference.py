@@ -1,7 +1,7 @@
 """A kernel library's host reference build: its plain-C configuration for the host CPU.
 
-The library builds it with its own CMake (for ns-cmsis-nn, ``NS_CMSIS_NN_HOST_REFERENCE=ON``)
-and describes the result in a manifest (schema ``hct/host-reference/1``): the archive, the
+The library builds it with its own CMake project, which the profile's ``host_reference`` block names
+(for ns-cmsis-nn, ``NS_CMSIS_NN_HOST_REFERENCE=ON`` on the checkout itself), and describes the result in a manifest (schema ``hct/host-reference/1``): the archive, the
 include directories and definitions a caller compiles against, the libraries to link, the
 compiler and how it spells ``float16_t``. hct reads the manifest instead of guessing flags.
 
@@ -16,11 +16,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from pathlib import Path, PurePosixPath
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from helia_core_tester.utils.file_lock import exclusive_lock
 from helia_core_tester.utils.host_compiler import compiler_identity, find_host_cc
@@ -48,14 +49,73 @@ class HostReferenceRecipe:
     manifest: str
     # Paths, relative to the library root, whose content decides what the build produces.
     build_inputs: Tuple[str, ...]
+    # The CMake project that builds it, relative to the library root.
+    project: str = "."
+    # True when a profile names the recipe: the build must then exist, rather than being skipped
+    # when the project does not offer the option.
+    declared: bool = False
 
 
-NS_CMSIS_NN = HostReferenceRecipe(
-    library="ns-cmsis-nn",
-    option="NS_CMSIS_NN_HOST_REFERENCE",
-    manifest="ns_cmsis_nn_host_reference.json",
-    build_inputs=("CMakeLists.txt", "cmake", "Include", "Source"),
-)
+_OPTION_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_MANIFEST_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*\.json$")
+_MAX_BUILD_INPUTS = 64
+
+
+def _relative(where: str, field: str, value: Any, root: Optional[Path]) -> str:
+    """A POSIX path relative to the library root that stays inside it."""
+    if not isinstance(value, str) or not value or "\0" in value or len(value) > 1024:
+        raise HostReferenceError(f"{where}: '{field}' must be a non-empty path")
+    if os.path.isabs(value) or "\\" in value or ".." in PurePosixPath(value).parts:
+        raise HostReferenceError(f"{where}: '{field}' {value!r} must be a relative POSIX path without '..'")
+    if root is not None:
+        try:
+            target = (root / value).resolve()
+        except (OSError, RuntimeError) as exc:
+            raise HostReferenceError(f"{where}: '{field}' {value!r} cannot be resolved ({exc})") from None
+        if target != root and root not in target.parents:
+            raise HostReferenceError(f"{where}: '{field}' {value!r} ({target}) is outside the library root {root}")
+        if not target.exists():
+            raise HostReferenceError(f"{where}: '{field}' {value!r} does not exist under {root}")
+    return PurePosixPath(value).as_posix()
+
+
+def parse_recipe(library: str, data: Any, where: str, root: Optional[Path] = None) -> HostReferenceRecipe:
+    """A profile's ``host_reference`` block. With `root`, every path must exist inside it, and the
+    project's CMakeLists.txt must lie in a build input, so an edit to it rebuilds the reference."""
+    if not isinstance(data, dict):
+        raise HostReferenceError(f"{where}: must be a mapping")
+    unknown = sorted(set(data) - {"project", "option", "manifest", "build_inputs"})
+    if unknown:
+        raise HostReferenceError(f"{where}: unknown field(s) {', '.join(map(repr, unknown))}")
+    option = data.get("option")
+    if not isinstance(option, str) or not _OPTION_RE.match(option) or len(option) > 128:
+        raise HostReferenceError(f"{where}: 'option' must be a CMake option name, got {option!r}")
+    manifest = data.get("manifest")
+    if not isinstance(manifest, str) or not _MANIFEST_RE.match(manifest) or len(manifest) > 128:
+        raise HostReferenceError(f"{where}: 'manifest' must be a bare .json file name, got {manifest!r}")
+    inputs = data.get("build_inputs")
+    if not isinstance(inputs, list) or not inputs or len(inputs) > _MAX_BUILD_INPUTS:
+        raise HostReferenceError(f"{where}: 'build_inputs' must be a list of 1 to {_MAX_BUILD_INPUTS} paths")
+    root = Path(root).resolve() if root is not None else None
+    build_inputs = tuple(_relative(where, "build_inputs", value, root) for value in inputs)
+    if len(set(build_inputs)) != len(build_inputs):
+        raise HostReferenceError(f"{where}: 'build_inputs' has duplicates")
+    project = _relative(where, "project", data.get("project", "."), root)
+    if root is not None:
+        if not (root / project / "CMakeLists.txt").is_file():
+            raise HostReferenceError(f"{where}: project {project!r} has no CMakeLists.txt")
+        listed = PurePosixPath(project, "CMakeLists.txt")
+        # Compared resolved: the cache digest does not follow a symlinked directory, so a project
+        # reached through one is covered only by an input that holds its real file.
+        real = (root / listed).resolve()
+        covered = any(
+            real == (root / i).resolve() or (root / i).resolve() in real.parents for i in build_inputs
+        )
+        if not covered:
+            raise HostReferenceError(
+                f"{where}: no build input covers {listed}; an edit to it would reuse a stale reference")
+    return HostReferenceRecipe(library=library, option=option, manifest=manifest,
+                               build_inputs=build_inputs, project=project, declared=root is not None)
 
 
 @dataclass(frozen=True)
@@ -95,9 +155,9 @@ class HostReference:
         }
 
 
-def supports(tree: Path, recipe: HostReferenceRecipe = NS_CMSIS_NN) -> bool:
-    """True when the checkout's top-level CMakeLists.txt offers the recipe's option."""
-    cmakelists = Path(tree) / "CMakeLists.txt"
+def supports(tree: Path, recipe: HostReferenceRecipe) -> bool:
+    """True when the recipe's project CMakeLists.txt offers the recipe's option."""
+    cmakelists = Path(tree) / recipe.project / "CMakeLists.txt"
     try:
         return recipe.option in cmakelists.read_text(encoding="utf-8", errors="replace")
     except OSError:
@@ -192,7 +252,7 @@ def _tool_version(tool: str) -> str:
 def host_reference_key(tree: Path, recipe: HostReferenceRecipe, cc: str, cmake: str) -> str:
     payload = {
         "schema": _CACHE_SCHEMA,
-        "recipe": [recipe.library, recipe.option, recipe.manifest, list(recipe.build_inputs)],
+        "recipe": [recipe.library, recipe.option, recipe.manifest, list(recipe.build_inputs), recipe.project],
         "inputs": _input_digest(tree, recipe.build_inputs),
         "compiler": compiler_identity(cc),
         "cmake": _tool_version(cmake),
@@ -241,7 +301,7 @@ def _validated(manifest: Path, tree: Path, recipe: HostReferenceRecipe, cc: str,
 
 def ensure_host_reference(
     tree: Path,
-    recipe: HostReferenceRecipe = NS_CMSIS_NN,
+    recipe: HostReferenceRecipe,
     cache_root: Optional[Path] = None,
     cc: Optional[str] = None,
     jobs: Optional[int] = None,
@@ -252,7 +312,8 @@ def ensure_host_reference(
         raise HostReferenceError(f"{tree} is not a directory")
     if not supports(tree, recipe):
         raise HostReferenceError(
-            f"{tree} has no host reference build: its CMakeLists.txt does not offer {recipe.option}"
+            f"{tree} has no host reference build: {tree / recipe.project / 'CMakeLists.txt'} "
+            f"does not offer {recipe.option}"
         )
     if jobs is not None and jobs < 1:
         raise HostReferenceError(f"jobs must be >= 1, got {jobs}")
@@ -276,7 +337,7 @@ def ensure_host_reference(
         build_dir.mkdir(parents=True)
         try:
             _run(
-                [cmake, "-S", str(tree), "-B", str(build_dir), f"-D{recipe.option}=ON", f"-DCMAKE_C_COMPILER={cc}"],
+                [cmake, "-S", str(tree / recipe.project), "-B", str(build_dir), f"-D{recipe.option}=ON", f"-DCMAKE_C_COMPILER={cc}"],
                 "configure",
                 _CONFIGURE_TIMEOUT_S,
             )

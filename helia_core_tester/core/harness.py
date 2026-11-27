@@ -230,26 +230,33 @@ def _harness_of(profile: Any) -> HarnessProfile:
     return profile.harness
 
 
-def harness_of_root(root: Optional[Path]) -> HarnessProfile:
-    """The harness block of the library at `root`: the run's profile ($HCT_LIBRARY_PROFILE, or the one
-    Config resolved) when its source root is `root`, else `root`/hct-library.yaml, else ns-cmsis-nn's."""
-    key = str(Path(root).expanduser().resolve()) if root is not None else None
+def library_of_root(root: Path) -> Any:
+    """The profile of the library at `root`: the run's profile ($HCT_LIBRARY_PROFILE, or the one Config
+    resolved) when its source root is `root`, else `root`/hct-library.yaml, else ns-cmsis-nn's."""
+    key = str(Path(root).expanduser().resolve())
     env_profile = _env_profile()
     if env_profile is not None and key == str(Path(env_profile.source_root).resolve()):
-        return _harness_of(env_profile)
+        return env_profile
     if key in _REGISTERED:
-        return _harness_of(_REGISTERED[key])
-    return _harness_of_root(key)
+        return _REGISTERED[key]
+    return _library_of_root(key)
 
 
 @lru_cache(maxsize=8)
-def _harness_of_root(root: Optional[str]) -> HarnessProfile:
-    from helia_core_tester.core.library import PROFILE_FILE, resolve_library
+def _library_of_root(root: str) -> Any:
+    from helia_core_tester.core.library import PROFILE_FILE, legacy_profile, resolve_library
 
     # A root without a profile is read as ns-cmsis-nn, as generation reads its contracts.
-    if root is None or not (Path(root) / PROFILE_FILE).exists() and not (Path(root) / PROFILE_FILE).is_symlink():
+    if not (Path(root) / PROFILE_FILE).exists() and not (Path(root) / PROFILE_FILE).is_symlink():
+        return legacy_profile(Path(root))
+    return resolve_library(Path(root))
+
+
+def harness_of_root(root: Optional[Path]) -> HarnessProfile:
+    """The harness block of the library at `root` (library_of_root); ns-cmsis-nn's without a root."""
+    if root is None:
         return legacy_harness()
-    return _harness_of(resolve_library(Path(root)))
+    return _harness_of(library_of_root(root))
 
 
 def current_harness() -> HarnessProfile:

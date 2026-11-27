@@ -66,10 +66,10 @@ def _profile(directory: Path, body: str) -> Path:
 def _fresh_cache(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv(harness_mod.PROFILE_ENV, raising=False)
     monkeypatch.setattr(harness_mod, "_REGISTERED", {})
-    harness_mod._harness_of_root.cache_clear()
+    harness_mod._library_of_root.cache_clear()
     harness_mod._profile_file.cache_clear()
     yield
-    harness_mod._harness_of_root.cache_clear()
+    harness_mod._library_of_root.cache_clear()
     harness_mod._profile_file.cache_clear()
 
 
@@ -160,7 +160,7 @@ def test_other_library_without_a_block_has_none(tmp_path: Path) -> None:
     profile = load_profile(_profile(tmp_path, "schema: hct/library-profile/1\nlibrary: cmsis-dsp\n"))
     assert profile.harness is None
     with pytest.raises(HarnessProfileError, match="no harness block"):
-        harness_mod._harness_of_root(str(tmp_path))
+        harness_mod.harness_of_root(tmp_path)
 
 
 def test_ns_cmsis_nn_profile_without_a_block_takes_the_built_in_one(tmp_path: Path) -> None:

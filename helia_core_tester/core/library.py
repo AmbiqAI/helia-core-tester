@@ -16,6 +16,11 @@ Fields (schema ``hct/library-profile/1``):
   ns-cmsis-nn profile reads ``Tests/KernelContracts/`` of its checkout.
 - ``harness``: what a generated harness needs from the library (``core/harness.py``). Without it, an
   ns-cmsis-nn profile takes ns-cmsis-nn's; any other library has none and cannot generate tests.
+- ``host_reference``: the library's host reference build (``core/host_reference.py``): ``project``, the
+  CMake project that builds it (default ``.``); ``option``, the cache option that turns it on;
+  ``manifest``, the file name it writes in the build directory; ``build_inputs``, what decides the build.
+  ``project`` and ``build_inputs`` are relative to ``source_root`` and must exist inside it. Without it,
+  an ns-cmsis-nn profile takes ns-cmsis-nn's; any other library has none and cannot record goldens.
 
 An ns-cmsis-nn checkout without a profile still loads, as the built-in ``legacy`` ns-cmsis-nn profile,
 until ns-cmsis-nn ships its own.
@@ -35,6 +40,7 @@ import yaml
 
 from helia_core_tester.core.errors import ConfigurationError
 from helia_core_tester.core.harness import HarnessProfile, HarnessProfileError, harness_for, legacy_harness
+from helia_core_tester.core.host_reference import HostReferenceError, HostReferenceRecipe, parse_recipe
 
 PROFILE_FILE = "hct-library.yaml"
 SCHEMA_ID = "hct/library-profile/1"
@@ -63,6 +69,7 @@ class LibraryProfile:
     signatures: Optional[Path] = None
     implementations: Optional[Path] = None
     harness: Optional[HarnessProfile] = None
+    host_reference: Optional[HostReferenceRecipe] = None
 
     @property
     def names_contracts(self) -> bool:
@@ -164,6 +171,23 @@ def _contract_path(path: Path, root: Path, key: str, value: str) -> Path:
     return target
 
 
+def legacy_host_reference() -> HostReferenceRecipe:
+    from helia_core_tester.contract import legacy_nn
+
+    return parse_recipe(legacy_nn.LIBRARY, legacy_nn.HOST_REFERENCE, "ns-cmsis-nn built-in host reference")
+
+
+def host_reference_for(library: str, data: Any, where: str, root: Path) -> Optional[HostReferenceRecipe]:
+    """The profile's block, checked against `root`; ns-cmsis-nn's when an ns-cmsis-nn profile has
+    none; else None."""
+    if data is not None:
+        try:
+            return parse_recipe(library, data, where, root=root)
+        except HostReferenceError as exc:
+            raise LibraryProfileError(str(exc)) from None
+    return legacy_host_reference() if library == LEGACY_LIBRARY else None
+
+
 def load_profile(path: Path) -> LibraryProfile:
     """Load and check one hct-library.yaml."""
     path = Path(path)
@@ -183,7 +207,15 @@ def load_profile(path: Path) -> LibraryProfile:
         implementations=_contract_path(path, root, "implementations", contracts["implementations"])
         if "implementations" in contracts else None,
         harness=harness,
+        host_reference=host_reference_for(
+            data["library"], data.get("host_reference"), f"{path}: host_reference", root),
     )
+
+
+def legacy_profile(root: Path) -> LibraryProfile:
+    """The built-in ns-cmsis-nn profile of a checkout that ships none."""
+    return LibraryProfile(library=LEGACY_LIBRARY, source_root=Path(root).resolve(), profile_path=None,
+                          harness=legacy_harness(), host_reference=legacy_host_reference())
 
 
 def resolve_library(directory: Path, *, allow_legacy: bool = True) -> LibraryProfile:
@@ -202,8 +234,7 @@ def resolve_library(directory: Path, *, allow_legacy: bool = True) -> LibraryPro
         return load_profile(profile)
     resolved = directory.resolve()
     if allow_legacy and looks_like_ns_cmsis_nn(resolved):
-        return LibraryProfile(library=LEGACY_LIBRARY, source_root=resolved, profile_path=None,
-                              harness=legacy_harness())
+        return legacy_profile(resolved)
     raise LibraryProfileError(
         f"{directory} has no {PROFILE_FILE}"
         + (" and is not an ns-cmsis-nn checkout" if allow_legacy else ""))

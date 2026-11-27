@@ -29,7 +29,8 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from helia_core_tester.core import host_reference
-from helia_core_tester.core.harness import harness_of_root, header_digest
+from helia_core_tester.core.errors import ConfigurationError
+from helia_core_tester.core.harness import harness_of_root, header_digest, library_of_root
 from helia_core_tester.mutation import host_build
 from helia_core_tester.utils.file_lock import exclusive_lock
 from helia_core_tester.utils.host_compiler import compiler_identity, find_host_cc
@@ -51,6 +52,7 @@ _KERNEL_CAPABILITIES = frozenset({"dsp", "mve"})
 # every float width), or, for a tree that predates it, hct's scan of the integer
 # sources. The fallback is reported, never silent.
 PROVIDER_HOST_REFERENCE = "host-reference"
+LIBRARY_WITH_SOURCE_SCAN = "ns-cmsis-nn"
 PROVIDER_SOURCE_SCAN = "source-scan"
 
 STATUS_BLOCKING = "blocking"
@@ -165,11 +167,32 @@ def ensure_host_kernels(
     if mode not in HOST_KERNEL_MODES:
         raise HostCheckError(f"unknown host kernel mode {mode!r} (expected one of {', '.join(HOST_KERNEL_MODES)})")
     tree = Path(tree).resolve()
+    if not tree.is_dir():
+        raise HostCheckError(f"library checkout not found: {tree}")
+    try:
+        profile = library_of_root(tree)
+    except ConfigurationError as exc:
+        raise HostCheckError(f"library profile for {tree}: {exc}") from exc
+    if Path(profile.source_root).resolve() != tree:
+        raise HostCheckError(
+            f"{profile.describe()} has source_root {profile.source_root}, not {tree}; host kernels are "
+            "built from the profile's own source root")
+    root = Path(cache_root) if cache_root is not None else default_cache_root()
+    recipe = profile.host_reference if mode == "m0" else None
+    # A recipe the profile names must build; ns-cmsis-nn's built-in one applies only where the
+    # checkout's CMake offers it, and older checkouts fall back to the source scan.
+    if recipe is not None and (recipe.declared or host_reference.supports(tree, recipe)):
+        return _ensure_from_host_reference(tree, root, recipe, cc=cc, jobs=jobs)
+    if profile.library != LIBRARY_WITH_SOURCE_SCAN:
+        if mode != "m0":
+            raise HostCheckError(
+                f"{tree} ({profile.library}): {mode} host kernels come from hct's source scan, which reads "
+                "ns-cmsis-nn only")
+        raise HostCheckError(
+            f"{tree} ({profile.library}) has no host reference build; the source scan reads ns-cmsis-nn only, "
+            "so its profile must name one in host_reference")
     if not (tree / "Include").is_dir() or not (tree / "Source").is_dir():
         raise HostCheckError(f"{tree} is not an ns-cmsis-nn checkout (needs Include/ and Source/)")
-    root = Path(cache_root) if cache_root is not None else default_cache_root()
-    if mode == "m0" and host_reference.supports(tree):
-        return _ensure_from_host_reference(tree, root, cc=cc, jobs=jobs)
     cc = cc or find_host_cc()
     key = host_kernels_key(tree, mode, cc)
     final = root / key
@@ -232,11 +255,13 @@ def ensure_host_kernels(
     return result()
 
 
-def _ensure_from_host_reference(tree: Path, root: Path, cc: Optional[str], jobs: Optional[int]) -> HostKernelLibrary:
+def _ensure_from_host_reference(
+    tree: Path, root: Path, recipe: host_reference.HostReferenceRecipe, cc: Optional[str], jobs: Optional[int]
+) -> HostKernelLibrary:
     """The m0 kernels from the tree's own host reference build, plus the test runtime
     compiled against that build's definitions."""
     try:
-        ref = host_reference.ensure_host_reference(tree, cache_root=root / "host_reference", cc=cc, jobs=jobs)
+        ref = host_reference.ensure_host_reference(tree, recipe, cache_root=root / "host_reference", cc=cc, jobs=jobs)
     except host_reference.HostReferenceError as exc:
         raise HostCheckError(f"host reference build failed: {exc}") from exc
     compiler = str(ref.compiler)
