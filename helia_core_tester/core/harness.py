@@ -31,6 +31,9 @@ from helia_core_tester.core.errors import ConfigurationError
 
 HEADER_NAME = "hct_library.h"
 HEADER_ENV = "HCT_LIBRARY_HEADER_DIR"
+# The profile file of the library a run tests, for steps run in a child process: a profile may live
+# below its checkout (source_root: ../..), where the checkout root alone does not find it.
+PROFILE_ENV = "HCT_LIBRARY_PROFILE"
 _IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _INCLUDE_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_+.-]*(/[A-Za-z0-9_][A-Za-z0-9_+.-]*)*\.h")
 INT32_MIN, INT32_MAX = -(2**31), 2**31 - 1
@@ -193,9 +196,50 @@ def harness_for(library: str, data: Any, where: str) -> Optional[HarnessProfile]
     return legacy_harness() if library == legacy_nn.LIBRARY else None
 
 
+_REGISTERED: dict[str, Any] = {}
+
+
+def register_library(profile: Any) -> None:
+    """Record the profile a run resolved (Config does), so the harness of its source root is that
+    profile's even when the profile lives below the checkout."""
+    if getattr(profile, "profile_path", None) is not None:
+        _REGISTERED[str(Path(profile.source_root).resolve())] = profile
+
+
+@lru_cache(maxsize=8)
+def _profile_file(path: str) -> Any:
+    from helia_core_tester.core.library import load_profile
+
+    return load_profile(Path(path))
+
+
+def _env_profile() -> Any:
+    value = os.environ.get(PROFILE_ENV, "").strip()
+    if not value:
+        return None
+    if not Path(value).is_file():
+        raise HarnessProfileError(f"{PROFILE_ENV}={value} is not a file")
+    return _profile_file(str(Path(value).resolve()))
+
+
+def _harness_of(profile: Any) -> HarnessProfile:
+    if profile.harness is None:
+        raise HarnessProfileError(
+            f"{profile.describe()}: its profile has no harness block; hct needs one to generate tests for "
+            f"{profile.library}")
+    return profile.harness
+
+
 def harness_of_root(root: Optional[Path]) -> HarnessProfile:
-    """The harness block of the library at `root` (its hct-library.yaml, else ns-cmsis-nn's)."""
-    return _harness_of_root(str(Path(root).expanduser().resolve()) if root is not None else None)
+    """The harness block of the library at `root`: the run's profile ($HCT_LIBRARY_PROFILE, or the one
+    Config resolved) when its source root is `root`, else `root`/hct-library.yaml, else ns-cmsis-nn's."""
+    key = str(Path(root).expanduser().resolve()) if root is not None else None
+    env_profile = _env_profile()
+    if env_profile is not None and key == str(Path(env_profile.source_root).resolve()):
+        return _harness_of(env_profile)
+    if key in _REGISTERED:
+        return _harness_of(_REGISTERED[key])
+    return _harness_of_root(key)
 
 
 @lru_cache(maxsize=8)
@@ -205,26 +249,42 @@ def _harness_of_root(root: Optional[str]) -> HarnessProfile:
     # A root without a profile is read as ns-cmsis-nn, as generation reads its contracts.
     if root is None or not (Path(root) / PROFILE_FILE).exists() and not (Path(root) / PROFILE_FILE).is_symlink():
         return legacy_harness()
-    profile = resolve_library(Path(root))
-    if profile.harness is None:
-        raise HarnessProfileError(
-            f"{profile.describe()}: its profile has no harness block; hct needs one to generate tests for "
-            f"{profile.library}")
-    return profile.harness
+    return _harness_of(resolve_library(Path(root)))
 
 
 def current_harness() -> HarnessProfile:
-    """The harness block of the library generation runs against: CMSIS_NN_ROOT as given (any layout),
-    else the nested checkout generation resolves, else ns-cmsis-nn's. A step that knows its checkout
-    passes it to harness_of_root instead."""
+    """The harness block of the library generation runs against: $HCT_LIBRARY_PROFILE's, else
+    CMSIS_NN_ROOT's as given (any layout), else the nested checkout generation resolves, else
+    ns-cmsis-nn's. A step that knows its checkout passes it to harness_of_root instead."""
     env_root = os.environ.get("CMSIS_NN_ROOT", "").strip()
+    if env_root and not Path(env_root).is_dir():
+        raise HarnessProfileError(f"CMSIS_NN_ROOT={env_root} is not a directory")
+    env_profile = _env_profile()
+    if env_profile is not None:
+        if env_root and Path(env_root).resolve() != Path(env_profile.source_root).resolve():
+            raise HarnessProfileError(
+                f"{PROFILE_ENV} names {env_profile.describe()}, but CMSIS_NN_ROOT is {env_root}")
+        return _harness_of(env_profile)
     if env_root:
-        if not Path(env_root).is_dir():
-            raise HarnessProfileError(f"CMSIS_NN_ROOT={env_root} is not a directory")
         return harness_of_root(Path(env_root))
     from helia_core_tester.generation.utils.temp_sizer_probe import resolve_cmsis_nn_root
 
     return harness_of_root(resolve_cmsis_nn_root())
+
+
+def library_env(config: Any) -> dict[str, str]:
+    """What a child process needs to resolve the run's library: CMSIS_NN_ROOT and, for a library
+    with a profile file, HCT_LIBRARY_PROFILE."""
+    env: dict[str, str] = {}
+    root = getattr(config, "cmsis_nn_root", None)
+    if root:
+        env["CMSIS_NN_ROOT"] = str(root)
+    # Only a profile the run already resolved (--library): a root with its profile at the top is found
+    # through CMSIS_NN_ROOT, and resolving here would refuse roots generation otherwise accepts.
+    profile = getattr(config, "_library_profile", None)
+    if profile is not None and profile.profile_path is not None:
+        env[PROFILE_ENV] = str(profile.profile_path)
+    return env
 
 
 def render_header(harness: HarnessProfile) -> str:

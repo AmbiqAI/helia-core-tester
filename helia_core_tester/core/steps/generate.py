@@ -10,6 +10,7 @@ from typing import Optional
 
 from helia_core_tester.core.steps.base import StepBase, StepPlan, StepResult, StepStatus
 from helia_core_tester.core.errors import GenerationError
+from helia_core_tester.core.harness import library_env
 from helia_core_tester.core.logging import get_logger
 from helia_core_tester.core.path_layout import generated_tests_dir, generated_tests_root, generation_report_dir
 from helia_core_tester.utils.command_runner import run_command
@@ -205,8 +206,9 @@ class GenerateStep(StepBase):
         # CMSIS_NN_REPO_ROOT which overrides helia-core-tester's own repo
         # root discovery.
         subprocess_env = self._hidden_env() if self.config.hidden_dir is not None else None
-        if self.config.cmsis_nn_root:
-            subprocess_env = {**(subprocess_env or os.environ), "CMSIS_NN_ROOT": str(self.config.cmsis_nn_root)}
+        library = library_env(self.config)
+        if library:
+            subprocess_env = {**(subprocess_env or os.environ), **library}
         handled: tuple[type[BaseException], ...] = (subprocess.CalledProcessError, FileNotFoundError)
         if self.config.golden == "record":
             handled += _freeze_errors()

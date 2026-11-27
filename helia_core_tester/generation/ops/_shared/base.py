@@ -941,8 +941,11 @@ class OperationBase(ABC):
             scratch_bytes=None if sizer else int(context.get("entry_scratch_bytes") or 0),
             contracts=contract_render.load_current_contracts(),
         )
-        expected = str(context.get("expected_status", "ARM_CMSIS_NN_SUCCESS"))
-        if plan.void_return and expected != "ARM_CMSIS_NN_SUCCESS":
+        from helia_core_tester.core.harness import current_harness
+
+        success = current_harness().status.success
+        expected = str(context.get("expected_status", success))
+        if plan.void_return and expected != success:
             raise HarnessError(f"{context['name']}: {context['kernel_fn']} returns void, so expected_status "
                                f"{expected} can never be observed")
         if plan.outputs:
@@ -950,7 +953,7 @@ class OperationBase(ABC):
                              ("nonfinite_mask_array_str", "a nonfinite mask")):
                 if context.get(key):
                     raise HarnessError(f"{context['name']}: output slots do not support {why}")
-            if expected != "ARM_CMSIS_NN_SUCCESS":
+            if expected != success:
                 raise HarnessError(f"{context['name']}: output slots validate every slice, so expected_status "
                                    f"{expected} is not supported")
         render_context = TemplateContextBuilder.build_validation_context(validation_key, dict(context), self.desc)

@@ -63,10 +63,14 @@ def _profile(directory: Path, body: str) -> Path:
 
 
 @pytest.fixture(autouse=True)
-def _fresh_cache():
+def _fresh_cache(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv(harness_mod.PROFILE_ENV, raising=False)
+    monkeypatch.setattr(harness_mod, "_REGISTERED", {})
     harness_mod._harness_of_root.cache_clear()
+    harness_mod._profile_file.cache_clear()
     yield
     harness_mod._harness_of_root.cache_clear()
+    harness_mod._profile_file.cache_clear()
 
 
 def test_dsp_block_parses() -> None:
@@ -372,3 +376,116 @@ def test_run_step_passes_the_configured_checkout_to_the_runner(tmp_path: Path, m
     cfg = Config(project_root=root, cmsis_nn_root=checkout, enable_reporting=False)
     assert RunStep(cfg, runtime_env=_runtime_env(root))._do_execute().success
     assert seen and all(env["CMSIS_NN_ROOT"] == str(checkout.resolve()) for env in seen)
+
+
+# --- a profile below its checkout (source_root: ../..) -------------------------------------------
+
+
+def _nested_nn_checkout(tmp_path: Path) -> tuple[Path, Path]:
+    """An ns-cmsis-nn checkout whose profile, in Testing/hct, renames the success code."""
+    import yaml
+
+    checkout = tmp_path / "lib"
+    (checkout / "Include").mkdir(parents=True)
+    (checkout / "CMakeLists.txt").write_text("project(cmsis-nn)\n")
+    (checkout / "Include" / "arm_nnfunctions.h").write_text("")
+    pack = checkout / "Testing" / "hct"
+    pack.mkdir(parents=True)
+    block = copy.deepcopy(legacy_nn.HARNESS)
+    codes = dict(block["status"]["codes"])
+    codes["LIB_OK"] = codes.pop(block["status"]["success"])
+    block["status"] = {**block["status"], "success": "LIB_OK", "codes": codes}
+    path = _profile(pack, yaml.safe_dump({"schema": "hct/library-profile/1", "library": legacy_nn.LIBRARY,
+                                          "source_root": "../..", "harness": block}))
+    return checkout, path
+
+
+def test_the_checkout_root_alone_does_not_find_a_nested_profile(tmp_path: Path) -> None:
+    checkout, _ = _nested_nn_checkout(tmp_path)
+    assert harness_mod.harness_of_root(checkout) == legacy_harness()
+
+
+def test_the_run_profile_env_names_the_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    checkout, path = _nested_nn_checkout(tmp_path)
+    monkeypatch.setenv(harness_mod.PROFILE_ENV, str(path))
+    monkeypatch.setenv("CMSIS_NN_ROOT", str(checkout))
+    assert current_harness().status.success == "LIB_OK"
+    assert harness_mod.harness_of_root(checkout).status.success == "LIB_OK"
+    # Another tree in the same process keeps its own harness.
+    assert harness_mod.harness_of_root(tmp_path) == legacy_harness()
+
+
+def test_a_run_profile_and_a_root_that_disagree_are_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _, path = _nested_nn_checkout(tmp_path)
+    other = tmp_path / "other"
+    other.mkdir()
+    monkeypatch.setenv(harness_mod.PROFILE_ENV, str(path))
+    monkeypatch.setenv("CMSIS_NN_ROOT", str(other))
+    with pytest.raises(HarnessProfileError, match="but CMSIS_NN_ROOT is"):
+        current_harness()
+
+
+def test_a_missing_run_profile_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CMSIS_NN_ROOT", raising=False)
+    monkeypatch.setenv(harness_mod.PROFILE_ENV, str(tmp_path / "missing.yaml"))
+    with pytest.raises(HarnessProfileError, match="is not a file"):
+        current_harness()
+    with pytest.raises(HarnessProfileError, match="is not a file"):
+        harness_mod.harness_of_root(tmp_path)
+
+
+def test_config_registers_its_library_and_hands_it_to_children(tmp_path: Path,
+                                                              monkeypatch: pytest.MonkeyPatch) -> None:
+    from helia_core_tester.core.config import Config
+    from helia_core_tester.core.harness import library_env
+
+    for name in ("HELIA_CORE_TESTER_LIBRARY", "HELIA_CORE_TESTER_CMSIS_NN_ROOT", "CMSIS_NN_ROOT",
+                 "HELIA_CORE_TESTER_CONFIG"):
+        monkeypatch.delenv(name, raising=False)
+    checkout, path = _nested_nn_checkout(tmp_path)
+    repo = tmp_path / "tester"
+    (repo / "helia_core_tester" / "generation").mkdir(parents=True)
+    (repo / "helia_core_tester" / "fvp").mkdir(parents=True)
+    (repo / "helia_core_tester" / "fvp" / "build_and_run_fvp.py").write_text("")
+    config = Config(project_root=repo, library=path.parent, _explicit_overrides={"project_root", "library"})
+    # In this process: host builds compile against the tree's profile, found through Config.
+    assert harness_mod.harness_of_root(checkout).status.success == "LIB_OK"
+    env = library_env(config)
+    assert env == {"CMSIS_NN_ROOT": str(checkout.resolve()), harness_mod.PROFILE_ENV: str(path.resolve())}
+
+
+def test_a_legacy_checkout_hands_children_its_root_only(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    from helia_core_tester.core.harness import library_env
+
+    legacy = SimpleNamespace(cmsis_nn_root=tmp_path, _library_profile=SimpleNamespace(profile_path=None))
+    assert library_env(legacy) == {"CMSIS_NN_ROOT": str(tmp_path)}
+    # A root that is not (yet) a library is handed on as given, not resolved here.
+    assert library_env(SimpleNamespace(cmsis_nn_root=tmp_path)) == {"CMSIS_NN_ROOT": str(tmp_path)}
+    assert library_env(SimpleNamespace(cmsis_nn_root=None)) == {}
+
+
+def test_render_compares_the_profile_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from helia_core_tester.generation.harness import HarnessError
+    from helia_core_tester.generation.ops.ConcatenationFunctions.slices import split_argument_pool
+    from helia_core_tester.generation.ops.ConcatenationFunctions.split import OpSplit
+    from helia_core_tester.tests.test_slice_harness import split_context
+
+    renamed = legacy_harness()
+    codes = tuple(("LIB_OK" if name == renamed.status.success else name, value) for name, value in renamed.status.codes)
+    renamed = harness_mod.HarnessProfile(**{**renamed.__dict__, "status": harness_mod.StatusSet(
+        **{**renamed.status.__dict__, "success": "LIB_OK", "codes": codes})})
+    monkeypatch.setattr(harness_mod, "current_harness", lambda: renamed)
+    op = OpSplit({"operator": "Split", "name": "sp", "activation_dtype": "S8",
+                  "tensor_dtypes": {"input": "S8", "output": "S8"}}, seed=0, target_cpu="cortex-m55")
+    for expected, refused in (("LIB_OK", False), ("ARM_CMSIS_NN_ARG_ERROR", True)):
+        context = split_context(expected_status=expected)
+        render = lambda: op.render_harness_files(  # noqa: E731
+            tmp_path, stem="split", context=context, pool=split_argument_pool(context),
+            validation_key="ConcatenationFunctions/split/split.c.j2", label="Split")
+        if refused:
+            with pytest.raises(HarnessError, match="is not supported"):
+                render()
+        else:
+            render()  # the profile's success name is not refused as a non-success status
