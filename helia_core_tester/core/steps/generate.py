@@ -65,9 +65,11 @@ class GenerateStep(StepBase):
             except (OSError, ValueError) as exc:
                 return str(exc)
         if self.config.golden == "record":
-            tree = self._record_tree()
-            if tree is None or not (tree / "Source").is_dir():
-                return "--golden record needs an ns-cmsis-nn checkout (Include/ and Source/): set --cmsis-nn-root or CMSIS_NN_ROOT"
+            from helia_core_tester.generation.reference.host_kernels import checkout_problem
+
+            problem = checkout_problem(self._record_tree())
+            if problem:
+                return f"--golden record: {problem}: set --cmsis-nn-root or CMSIS_NN_ROOT"
         return None
 
     def _record_tree(self) -> Optional[Path]:

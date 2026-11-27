@@ -302,3 +302,65 @@ def test_real_cmsis_dsp_host_reference(tmp_path) -> None:
     ref = hr.ensure_host_reference(root, recipe, cache_root=tmp_path / "cache")
     assert ref.library == "cmsis-dsp" and ref.archive.is_file()
     assert ref.float16_type in hr.FLOAT16_TYPES
+
+
+def _src_only_library(root: Path) -> Path:
+    """A library whose profile names a host reference and which has no Include/ or Source/."""
+    (root / "Src").mkdir(parents=True)
+    (root / "Src" / "CMakeLists.txt").write_text("project(x C)\n")
+    _profile(root, "schema: hct/library-profile/1\nlibrary: cmsis-dsp\n" + _DSP_HARNESS
+             + "host_reference:\n  project: Src\n  option: X_HOST_REFERENCE\n  manifest: x.json\n  build_inputs: [Src]\n")
+    return root
+
+
+def test_checkout_problem_names_what_is_wrong(tmp_path) -> None:
+    assert hk.checkout_problem(None) == "no library checkout"
+    assert "library checkout not found" in hk.checkout_problem(tmp_path / "missing")
+    (tmp_path / "empty").mkdir()
+    assert "not an ns-cmsis-nn checkout" in hk.checkout_problem(tmp_path / "empty")
+    assert hk.checkout_problem(_fake_tree(tmp_path / "nn")) is None
+    assert hk.checkout_problem(_src_only_library(tmp_path / "lib")) is None
+
+
+def test_checkout_problem_reports_a_broken_profile(tmp_path) -> None:
+    root = _dsp_tree(tmp_path)
+    _dsp_profile(root, _recipe(build_inputs="[Include, Missing, Testing/hct/host_reference]"))
+    assert "'build_inputs' 'Missing' does not exist" in hk.checkout_problem(root)
+
+
+def test_a_library_without_a_recipe_still_needs_the_ns_cmsis_nn_layout(tmp_path) -> None:
+    root = tmp_path / "lib"
+    root.mkdir()
+    _profile(root, "schema: hct/library-profile/1\nlibrary: cmsis-dsp\n" + _DSP_HARNESS)
+    assert "not an ns-cmsis-nn checkout" in hk.checkout_problem(root)
+
+
+def _step_config(tmp_path: Path, root: Path, **kw):
+    from helia_core_tester.core.config import Config
+
+    project = tmp_path / "proj"
+    project.mkdir(exist_ok=True)
+    return Config(project_root=project, generation_dir=hk.tester_root() / "helia_core_tester" / "generation",
+                  generated_tests_root=tmp_path / "g", reports_root=tmp_path / "r", cmsis_nn_root=root, **kw)
+
+
+def test_the_steps_take_a_library_whose_profile_names_its_layout(tmp_path) -> None:
+    from helia_core_tester.core.steps.host_check import HostCheckStep
+    from helia_core_tester.core.steps.record import RecordStep
+
+    root = _src_only_library(tmp_path / "lib")
+    assert HostCheckStep(_step_config(tmp_path, root)).validate() is None
+    assert RecordStep(_step_config(tmp_path, root)).validate() is None
+
+
+def test_the_steps_refuse_an_empty_checkout(tmp_path) -> None:
+    from helia_core_tester.core.steps.generate import GenerateStep
+    from helia_core_tester.core.steps.host_check import HostCheckStep
+    from helia_core_tester.core.steps.record import RecordStep
+
+    (tmp_path / "empty").mkdir()
+    root = tmp_path / "empty"
+    assert "host check: " in HostCheckStep(_step_config(tmp_path, root)).validate()
+    assert "record: " in RecordStep(_step_config(tmp_path, root)).validate()
+    message = GenerateStep(_step_config(tmp_path, root, golden="record")).validate()
+    assert message is not None and "ns-cmsis-nn" in message

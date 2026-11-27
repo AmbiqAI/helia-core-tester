@@ -156,6 +156,25 @@ def default_cache_root() -> Path:
     return find_repo_root() / "artifacts" / "host_kernels"
 
 
+def checkout_problem(tree: Optional[Path]) -> Optional[str]:
+    """Why `tree` cannot supply host kernels, or None: a profile that names a host reference
+    takes its own layout, anything else needs ns-cmsis-nn's Include/ and Source/."""
+    if tree is None:
+        return "no library checkout"
+    tree = Path(tree).resolve()
+    if not tree.is_dir():
+        return f"library checkout not found: {tree}"
+    try:
+        profile = library_of_root(tree)
+    except ConfigurationError as exc:
+        return f"library profile for {tree}: {exc}"
+    if profile.host_reference is not None and profile.host_reference.declared:
+        return None
+    if not (tree / "Include").is_dir() or not (tree / "Source").is_dir():
+        return f"{tree} is not an ns-cmsis-nn checkout (needs Include/ and Source/)"
+    return None
+
+
 def ensure_host_kernels(
     tree: Path,
     mode: str = "m0",
