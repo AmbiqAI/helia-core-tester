@@ -96,7 +96,7 @@ class PackCaseGenerator(OperationBase):
             spec = generator.build(case)
         except PackError:
             raise
-        except Exception as exc:
+        except (Exception, SystemExit) as exc:
             raise PackError(f"{self.desc['name']}: generator {generator.key} ({generator.module}) failed: "
                             f"{type(exc).__name__}: {exc}") from exc
         if not isinstance(spec, CaseSpec):
@@ -190,7 +190,8 @@ class PackCaseGenerator(OperationBase):
                                   array=True, comment="Expected output (golden)"))
         pool = ArgumentPool(
             name=name, values=values, header=header, output_param=output.name, output_count=f"({count})",
-            inputs=tuple(HarnessInput(p.name, f"arg_{p.name}", f"{name}_{p.name}") for p in params if p.name in arrays),
+            inputs=tuple(HarnessInput(p.name, f"arg_{p.name}", f"{name}_{p.name}", ctype=p.element)
+                         for p in params if p.name in arrays),
             benchmark=False, scratch_buffer=False,
             output_capacity=None if count > 0 else "1", output_poison=count == 0, output_untouched=count == 0,
         )

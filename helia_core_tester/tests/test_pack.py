@@ -41,6 +41,9 @@ _FUNCTIONS = [
     ("arm_mix_f32", [("in", "pSrc", "const float64_t *"), ("out", "pDst", "float32_t *"),
                      ("in", "blockSize", "uint32_t")]),
     ("arm_sized_q15", [("in", "pSrc", "const q15_t *"), ("out", "pDst", "q15_t *"), ("in", "blockSize", "size_t")]),
+    ("arm_gather_q15", [("in", "pSrc", "const q15_t *"), ("in", "pIndex", "const int32_t *"),
+                        ("out", "pDst", "q15_t *"), ("in", "blockSize", "uint32_t")]),
+    ("arm_rows_q15", [("in", "pRows", "const q15_t * const *"), ("out", "pDst", "q15_t *"), ("in", "blockSize", "uint32_t")]),
 ]
 
 _BINARY = '''
@@ -697,3 +700,129 @@ def test_check_accepts_an_nn_pack_of_operator_descriptors(monkeypatch, tmp_path)
         "pack:\n  api: \"1.0\"\n  descriptors: descriptors\n")
     result = _cli("check", "--library", str(pack_dir))
     assert result.exit_code == 0, result.output
+
+
+# --- review 2: per-input types, signatures, exits, file names, sync, and one module instance -----
+
+_GATHER = _module(
+    "    a = np.arange(4, dtype=np.int16)\n    i = np.arange(4, dtype=np.int32)\n"
+    "    return CaseSpec(arrays={'pSrc': a, 'pIndex': i}, output='pDst', output_count=4, scalars={'blockSize': 4})")
+
+
+def test_each_input_is_passed_as_its_own_type(monkeypatch, tmp_path) -> None:
+    _, source, header = _render(monkeypatch, tmp_path, module=_GATHER, entry="arm_gather_q15")
+    assert "const q15_t* __restrict arg_pSrc" in source
+    assert "const int32_t* __restrict arg_pIndex" in source
+    assert "static const int32_t case_a_pIndex[]" in header
+
+
+def test_a_pointer_to_pointers_is_refused(monkeypatch, tmp_path) -> None:
+    with pytest.raises(PackError, match="a pointer to pointers"):
+        _cases(monkeypatch, tmp_path, {"BasicMath/a.yaml": _doc("a", entry="arm_rows_q15")},
+               modules={"basic": _module("    return None")})
+
+
+def test_an_array_parameter_is_refused(monkeypatch, tmp_path) -> None:
+    profile = _library(tmp_path, descriptors={"BasicMath/a.yaml": _doc("a", entry="arm_offset_q15")},
+                       modules={"basic": _module("    return None")})
+    contract = profile.parent / "kernel_contracts.json"
+    data = json.loads(contract.read_text())
+    record = next(r for r in data["functions"] if r["name"] == "arm_offset_q15")
+    record["params"][1]["extent"] = "[4]"
+    contract.write_text(json.dumps(data))
+    _use(monkeypatch, profile)
+    from helia_core_tester.generation.io.descriptors import load_all_descriptors
+
+    with pytest.raises(PackError, match=r"offset is an array parameter \(q15_t\[4\]\)"):
+        load_case_descriptors(load_all_descriptors)
+
+
+def test_a_generator_that_exits_is_a_pack_error(monkeypatch, tmp_path) -> None:
+    with pytest.raises(PackError, match="generator basic.binary \\(basic\\) failed: SystemExit"):
+        _render(monkeypatch, tmp_path, module=_module("    raise SystemExit(0)"))
+
+
+def test_a_source_that_exits_does_not_pass_check(tmp_path) -> None:
+    text = _SOURCE.replace("def source(contracts):\n", "def source(contracts):\n    raise SystemExit(0)\n")
+    profile = _library(tmp_path, modules={"basic": text})
+    result = _cli("check", "--library", str(profile.parent))
+    assert result.exit_code == pack_cli.EXIT_UNAVAILABLE and "descriptor_source failed: SystemExit" in result.output
+
+
+@pytest.mark.parametrize("rel", ["./BasicMath/add.yaml", "BasicMath//add.yaml"])
+def test_a_source_must_spell_its_file_names_plainly(tmp_path, rel) -> None:
+    text = _SOURCE.replace('"BasicMath/add.yaml"', repr(rel))
+    profile = _library(tmp_path, modules={"basic": text})
+    result = _cli("check", "--library", str(profile.parent))
+    assert result.exit_code == pack_cli.EXIT_UNAVAILABLE and "must be written as 'BasicMath/add.yaml'" in result.output
+
+
+@pytest.mark.parametrize("link", ["family", "file"])
+def test_sync_does_not_write_through_a_symlink(tmp_path, link) -> None:
+    profile = _library(tmp_path / "lib", modules={"basic": _SOURCE})
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "add.yaml").write_text("keep\n")
+    family = profile.parent / "descriptors" / "BasicMath"
+    if link == "family":
+        family.symlink_to(outside, target_is_directory=True)
+    else:
+        family.mkdir()
+        (family / "add.yaml").symlink_to(outside / "add.yaml")
+    result = _cli("sync", "--library", str(profile.parent))
+    assert result.exit_code == pack_cli.EXIT_UNAVAILABLE and "is a symlink" in result.output
+    assert (outside / "add.yaml").read_text() == "keep\n"
+
+
+def test_check_refuses_a_status_a_void_entry_cannot_return(monkeypatch, tmp_path) -> None:
+    with pytest.raises(PackError, match="returns void, so expected_status DSP_ARG can never be observed"):
+        _cases(monkeypatch, tmp_path, {"BasicMath/a.yaml": _doc("a", expected_status="DSP_ARG")})
+
+
+def test_check_refuses_an_unknown_capability(monkeypatch, tmp_path) -> None:
+    with pytest.raises(PackError, match="unknown required capabilities \\['mve_fp64'\\]"):
+        _cases(monkeypatch, tmp_path, {"BasicMath/a.yaml": _doc("a", required_capabilities=["mve_fp64"])})
+
+
+def test_check_refuses_a_decline_the_manifest_gives(monkeypatch, tmp_path) -> None:
+    from helia_core_tester.generation import entry as entry_mod
+
+    monkeypatch.setattr(entry_mod, "apply_entry_manifest", lambda desc, contracts=None: {**desc, "autovectorize_declines": True})
+    with pytest.raises(PackError, match="manifest gives arm_add_q15 autovectorize_declines"):
+        _cases(monkeypatch, tmp_path, {"BasicMath/a.yaml": _doc("a")})
+
+
+def test_a_module_another_module_imported_is_not_run_twice(tmp_path) -> None:
+    log = tmp_path / "imports.log"
+    second = (f"open({str(log)!r}, 'a').write('second\\n')\nHCT_PACK_API = '1.0'\n"
+              "def register(pack):\n    pack.generator('g2', len, entries=['arm_mult_*'])\n")
+    first = ("from . import second\nHCT_PACK_API = '1.0'\n"
+             "def register(pack):\n    pack.generator('g1', len, entries=['arm_add_*'])\n")
+    pack = _load(tmp_path, {"first": first, "second": second})
+    assert log.read_text() == "second\n"
+    assert set(pack.registry.generators) == {"g1", "g2"}
+
+
+def test_a_helper_runs_from_its_source_even_beside_stale_bytecode(monkeypatch, tmp_path) -> None:
+    import importlib.util
+    import py_compile
+
+    profile = _library(tmp_path, modules={"basic": _module(
+        "    from . import helper\n    a = np.full(4, helper.VALUE, dtype=np.int16)\n"
+        "    return CaseSpec(arrays={'pSrcA': a, 'pSrcB': a}, output='pDst', output_count=4, scalars={'blockSize': 4})")})
+    helper = profile.parent / "helper.py"
+    helper.write_text("VALUE = 1\n")
+    stamp = helper.stat().st_mtime_ns
+    py_compile.compile(str(helper), cfile=importlib.util.cache_from_source(str(helper)), doraise=True)
+    helper.write_text("VALUE = 2\n")
+    os.utime(helper, ns=(stamp, stamp))
+    _use(monkeypatch, profile)
+    from helia_core_tester.generation.io.descriptors import load_all_descriptors
+    from helia_core_tester.generation.test_ops import generate_test
+
+    (profile.parent / "descriptors" / "BasicMath").mkdir(parents=True, exist_ok=True)
+    (profile.parent / "descriptors" / "BasicMath" / "a.yaml").write_text(_doc("case_a"))
+    cases, _ = load_case_descriptors(load_all_descriptors)
+    generate_test(cases[0], str(tmp_path / "out"), seed=5, cpu="cortex-m55", golden="record", kernel_numerics="bounded")
+    header = (tmp_path / "out" / "BasicMath" / "case_a" / "includes" / "case_a_pack.h").read_text()
+    assert "2, 2, 2, 2" in header
