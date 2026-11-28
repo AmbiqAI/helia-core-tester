@@ -1,5 +1,8 @@
 #include "{{ name }}_select_v2.h"
 #include "arm_nnfunctions.h"
+{% if bit_exact | default(false) %}
+#include <string.h>
+{% endif %}
 {% include "common/standalone/runtime_common.j2" %}
 {% from "common/standalone/runtime_common.j2" import helia_guard_declare %}
 
@@ -20,6 +23,11 @@ int32_t {{ name }}_test_case_run(void)
     HELIA_GUARD_CHECK({{ name }}_output, "SelectV2 output", failures);
     HELIA_VALIDATE_STATUS("SelectV2", status);
 
+{% if bit_exact | default(false) %}
+    if (memcmp({{ name }}_output, {{ name }}_expected_output, sizeof({{ name }}_expected_output)) != 0) {
+        failures++;
+    }
+{% else %}
     HELIA_VALIDATE_OUTPUTS(
         {{ validation_mode_token | default("TOLERANT_INT") }},
         {{ name }}_output,
@@ -31,6 +39,7 @@ int32_t {{ name }}_test_case_run(void)
         {{ validation_report_limit | default(20) }},
         failures
     );
+{% endif %}
     HELIA_VALIDATE_RETURN_FAILURES(failures);
 }
 

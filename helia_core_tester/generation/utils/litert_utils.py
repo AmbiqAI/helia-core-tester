@@ -426,6 +426,13 @@ def load_litert_interpreter(tflite_path: str, op_resolver_type: Any = None) -> A
     return interpreter
 
 
+def load_builtin_reference(tflite_path: str) -> Any:
+    """Use the portable LiteRT kernel for direct-entry golden data."""
+    from ai_edge_litert.interpreter import OpResolverType
+
+    return load_litert_interpreter(tflite_path, OpResolverType.BUILTIN_REF)
+
+
 def run_inference_with_litert(interpreter: Any, input_data: np.ndarray, model: Any = None, subgraph: Any = None, operator_index: int = 0) -> np.ndarray:
     """
     Run inference using LiteRT interpreter with optional shape validation.
