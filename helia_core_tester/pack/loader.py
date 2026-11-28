@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
+import importlib.abc
+import importlib.machinery
 import importlib.util
 import os
 import re
@@ -30,21 +33,57 @@ def _package_name(library: str, root: Path) -> str:
     return f"_hct_pack_{re.sub(r'[^A-Za-z0-9_]', '_', library)}_{digest}"
 
 
+class _SourceOnlyLoader(importlib.machinery.SourceFileLoader):
+    """Compiles the module from its source each time: no bytecode is read from or written into the pack."""
+
+    def get_code(self, fullname):
+        path = self.get_filename(fullname)
+        return compile(self.get_data(path), path, "exec", dont_inherit=True)
+
+
+class _PackFinder(importlib.abc.MetaPathFinder):
+    """Finds the modules of each loaded pack's package, the ones register() runs and every helper
+    they import (at load or later, from a generator), so all of them load from source only."""
+
+    def __init__(self) -> None:
+        self.roots: Dict[str, Path] = {}
+
+    def find_spec(self, fullname, path=None, target=None):
+        package, _, rest = fullname.partition(".")
+        root = self.roots.get(package)
+        if root is None or not rest:
+            return None
+        base = root.joinpath(*rest.split("."))
+        if (base / "__init__.py").is_file():
+            init = str(base / "__init__.py")
+            return importlib.util.spec_from_file_location(
+                fullname, init, loader=_SourceOnlyLoader(fullname, init), submodule_search_locations=[str(base)])
+        source = base.parent / f"{base.name}.py"
+        if source.is_file():
+            return importlib.util.spec_from_file_location(
+                fullname, str(source), loader=_SourceOnlyLoader(fullname, str(source)))
+        return None
+
+
+_FINDER = _PackFinder()
+
+
+def _install_finder(package: str, root: Path) -> None:
+    if _FINDER not in sys.meta_path:
+        sys.meta_path.insert(0, _FINDER)
+    _FINDER.roots[package] = root
+
+
 def _load_module(package: str, name: str, path: Path) -> types.ModuleType:
+    """The pack module `name`; one an earlier module already imported in this load is reused, not run again."""
     qualified = f"{package}.{name}"
-    spec = importlib.util.spec_from_file_location(qualified, path)
-    if spec is None or spec.loader is None:
+    if not path.is_file():
         raise PackError(f"{path}: cannot be loaded as a Python module")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[qualified] = module
     try:
-        # Compiled from the source each time: no bytecode is read from or written into the library tree.
-        code = compile(path.read_bytes(), str(path), "exec", dont_inherit=True)
-        exec(code, module.__dict__)  # noqa: S102
+        return importlib.import_module(qualified)
     except (Exception, SystemExit) as exc:
         sys.modules.pop(qualified, None)
         raise PackError(f"{path}: import failed: {type(exc).__name__}: {exc}") from exc
-    return module
 
 
 def load_pack(profile: Any) -> LoadedPack:
@@ -62,15 +101,11 @@ def load_pack(profile: Any) -> LoadedPack:
     parent = types.ModuleType(package)
     parent.__path__ = [str(spec.root)]  # type: ignore[attr-defined]
     sys.modules[package] = parent
+    _install_finder(package, spec.root)
     registry = Registry()
     files = [] if profile.profile_path is None else [Path(profile.profile_path)]
     files.extend(Path(p) for p in (profile.signatures, profile.implementations) if p is not None)
-    writes_bytecode = sys.dont_write_bytecode
-    sys.dont_write_bytecode = True
-    try:
-        _register_modules(package, spec, registry, files)
-    finally:
-        sys.dont_write_bytecode = writes_bytecode
+    _register_modules(package, spec, registry, files)
     registry._module = "<frozen>"
     registry._frozen = True
     # Helpers a module imports and data a generator reads decide its cases too.

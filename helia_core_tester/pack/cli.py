@@ -57,7 +57,21 @@ def _relpath(value: object, where: str) -> str:
     path = PurePosixPath(value)
     if "\\" in value or path.is_absolute() or ".." in path.parts or len(path.parts) != 2 or path.suffix != ".yaml":
         raise PackError(f"{where}: {value!r} must be <Family>/<stem>.yaml")
+    if value != path.as_posix():
+        raise PackError(f"{where}: {value!r} must be written as {path.as_posix()!r}")
     return value
+
+
+def _sync_target(directory: Path, rel: str) -> Path:
+    """Where sync may write or remove `rel`: a plain file in a plain family directory inside `directory`."""
+    target = directory / rel
+    for part in (target.parent, target):
+        if part.is_symlink():
+            raise PackError(f"{part}: is a symlink; pack sync writes only plain files under {directory}")
+    root = directory.resolve()
+    if not target.resolve().is_relative_to(root):
+        raise PackError(f"{target}: resolves outside {directory}")
+    return target
 
 
 def generated_files(pack, contracts) -> Dict[str, str]:
@@ -71,7 +85,7 @@ def generated_files(pack, contracts) -> Dict[str, str]:
                 produced = source(contracts)
             except PackError:
                 raise
-            except Exception as exc:
+            except (Exception, SystemExit) as exc:
                 raise PackError(f"{where} failed: {type(exc).__name__}: {exc}") from exc
             if not isinstance(produced, Mapping):
                 raise PackError(f"{where} returned {type(produced).__name__}, not a mapping of file to documents")
@@ -198,10 +212,12 @@ def sync(library: Optional[Path] = typer.Option(None, "--library", help=_LIBRARY
             expected = generated_files(pack, contracts)
             directory = pack.spec.descriptors
             _, extra, _ = drift(expected, committed_files(directory))
-            for rel in extra:
-                (directory / rel).unlink()
-            for rel, text in expected.items():
-                target = directory / rel
+            # Every path is checked before any file changes.
+            removals = [_sync_target(directory, rel) for rel in extra]
+            writes = [(_sync_target(directory, rel), text) for rel, text in expected.items()]
+            for target in removals:
+                target.unlink()
+            for target, text in writes:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(text, encoding="utf-8")
         except (ConfigurationError, ContractError, OSError) as exc:

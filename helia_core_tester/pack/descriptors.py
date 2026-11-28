@@ -60,6 +60,11 @@ def signature_problem(function: Any) -> Optional[str]:
     """Why a pack case cannot call `function` with what it supports, or None."""
     for param in function.params:
         element = element_type(param.c_type)
+        if getattr(param, "extent", ""):
+            return (f"{function.name}: {param.name} is an array parameter ({param.c_type}{param.extent}), which "
+                    "pack cases do not support yet")
+        if param.c_type.count("*") > 1:
+            return f"{function.name}: {param.name} is {param.c_type}, a pointer to pointers, which pack cases do not support"
         if is_pointer(param.c_type):
             if param.direction not in ("in", "out"):
                 return (f"{function.name}: {param.name} is an {param.direction} pointer, which pack cases do not "
@@ -170,6 +175,7 @@ def _case(doc: Mapping[str, Any], path: Path, directory: Path, contracts: Any, r
     if expected is not None and expected not in codes:
         raise PackError(f"{where}: expected_status {expected} is not one of the profile's codes "
                         f"({', '.join(sorted(codes))})")
+    _generation_problems(doc, where, function, contracts)
     family = path.parent.name
     suite = "float" if output_element in FLOAT_ELEMENTS else "int"
     case: Dict[str, Any] = {
@@ -194,6 +200,32 @@ def _case(doc: Mapping[str, Any], path: Path, directory: Path, contracts: Any, r
         "_descriptor_suite": suite,
     })
     return case
+
+
+def _generation_problems(doc: Mapping[str, Any], where: str, function: Any, contracts: Any) -> None:
+    """What generation would refuse in this case, refused here too, so pack check agrees with generate."""
+    from helia_core_tester.core.cpu_targets import known_capabilities
+    from helia_core_tester.core.harness import current_harness
+    from helia_core_tester.generation.entry import EntryError, apply_entry_manifest
+
+    success = current_harness().status.success
+    expected = str(doc.get("expected_status", success))
+    if expected != success and str(function.returns).strip() == "void":
+        raise PackError(f"{where}: {function.name} returns void, so expected_status {expected} can never be observed")
+    try:
+        derived = apply_entry_manifest(dict(doc), contracts)
+    except EntryError as exc:
+        raise PackError(f"{where}: {exc}") from None
+    decided = [key for key in ("entry_sizer", "autovectorize_declines") if derived.get(key)]
+    if decided:
+        raise PackError(f"{where}: the implementation manifest gives {function.name} {', '.join(decided)}, which "
+                        "pack cases do not support yet")
+    raw = derived.get("required_capabilities") or []
+    known = known_capabilities()
+    unknown = sorted({str(c).strip().lower() for c in ([raw] if isinstance(raw, str) else raw) if str(c).strip()}
+                     - set(known))
+    if unknown:
+        raise PackError(f"{where}: unknown required capabilities {unknown}; known capabilities are {sorted(known)}")
 
 
 def load_pack_descriptors(pack: Any, contracts: Any, status_codes: Iterable[str]) -> List[Dict[str, Any]]:
