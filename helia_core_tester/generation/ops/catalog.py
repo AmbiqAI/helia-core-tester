@@ -404,7 +404,8 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
     ),
     "ResizeBilinear": _spec(
         "ResizeBilinear", "ReshapeFunctions", "resize_bilinear", "OpResizeBilinear",
-        "ReshapeFunctions/resize_bilinear.yaml", "ReshapeFunctions/resize_bilinear",
+        descriptor_relpaths=("ReshapeFunctions/resize_bilinear.yaml", "ReshapeFunctions/resize_bilinear_float.yaml"),
+        template_relpath="ReshapeFunctions/resize_bilinear",
     ),
     "ResizeNearestNeighbor": _spec(
         "ResizeNearestNeighbor",
