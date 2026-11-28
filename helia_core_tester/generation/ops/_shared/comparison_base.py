@@ -135,9 +135,18 @@ class ComparisonFamilyBase(OperationBase):
         output_shape = _broadcast_shape(input_shape_1, input_shape_2)
 
         builder = TemplateContextBuilder()
-        input_1_dims = builder.nhwc_to_cmsis_dims(input_shape_1)
-        input_2_dims = builder.nhwc_to_cmsis_dims(input_shape_2)
-        output_dims = builder.nhwc_to_cmsis_dims(output_shape)
+        def operand_dims(shape):
+            # LiteRT aligns broadcast axes on the right, including rank-two
+            # feature tensors whose final dimension is the channel dimension.
+            if activation_dtype == "FP32":
+                if len(shape) > 4:
+                    raise ValueError("FP32 GREATER supports at most four dimensions")
+                shape = (1,) * (4 - len(shape)) + tuple(shape)
+            return builder.nhwc_to_cmsis_dims(shape)
+
+        input_1_dims = operand_dims(input_shape_1)
+        input_2_dims = operand_dims(input_shape_2)
+        output_dims = operand_dims(output_shape)
 
         if activation_dtype in ("S32", "FP32"):
             params = {}
