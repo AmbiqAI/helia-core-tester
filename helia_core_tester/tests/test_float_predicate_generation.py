@@ -49,3 +49,19 @@ def test_scalar_broadcast_produces_both_boolean_values(tmp_path, side, seed):
     desc = next(c for c in cases if f"scalar_{side}" in c["name"])
     generate_test(desc, str(tmp_path), seed=seed, cpu="cortex-m55")
     assert list(tmp_path.rglob(desc["name"] + "_comparison.c"))
+
+
+def test_rank_two_broadcast_uses_trailing_cmsis_axes(tmp_path):
+    import re
+
+    cases = load_descriptor(str(ROOT / "ComparisonFunctions/comparison_float.yaml"))
+    desc = next(c for c in cases if "_rank2_vector_" in c["name"])
+    name = desc["name"]
+    op = OpComparison(desc, seed=7, target_cpu="cortex-m55")
+    op.convert_to_tflite(None, str(tmp_path / (name + ".tflite")), 7)
+    op.generate_c_files(tmp_path)
+    header = (tmp_path / "includes" / (name + "_comparison.h")).read_text()
+    for operand, expected in [("input_1", (1, 1, 2, 3)), ("input_2", (1, 1, 1, 3)), ("output", (1, 1, 2, 3))]:
+        initializer = header.split(f"{name}_{operand}_dims = {{", 1)[1].split("};", 1)[0]
+        dims = dict(re.findall(r"\.(\w)\s*=\s*(\d+)", initializer))
+        assert tuple(int(dims[axis]) for axis in "nhwc") == expected
