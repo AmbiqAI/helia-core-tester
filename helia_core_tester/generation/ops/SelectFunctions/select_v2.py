@@ -23,7 +23,7 @@ class OpSelectV2(OperationBase):
 
         activation_dtype = self.desc.get("activation_dtype", "S8")
         tensor_type = {"S8": litert.TensorType.INT8, "S16": litert.TensorType.INT16,
-                       "S32": litert.TensorType.INT32}[activation_dtype]
+                       "S32": litert.TensorType.INT32, "FP32": litert.TensorType.FLOAT32}[activation_dtype]
 
         output_shape = tuple(self.desc["input_shape"])
         condition_shape = tuple(self.desc.get("condition_shape", output_shape))
@@ -52,6 +52,8 @@ class OpSelectV2(OperationBase):
 
     def _select_kernel(self) -> Dict[str, str]:
         activation_dtype = self.desc.get("activation_dtype", "S8")
+        if activation_dtype == "FP32":
+            return {"kernel_fn": "arm_select_v2_f32", "c_type": "float32_t", "np_dtype": "float32"}
         if activation_dtype == "S32":
             return {"kernel_fn": "arm_select_v2_s32", "c_type": "int32_t", "np_dtype": "int32", "qmin": -(2**31), "qmax": 2**31 - 1}
         if activation_dtype == "S16":
@@ -95,6 +97,10 @@ class OpSelectV2(OperationBase):
 
             x_data = sample_int32(rng, x_shape)
             y_data = sample_int32(rng, y_shape, phase=1)
+        elif np_dtype == np.float32:
+            x_data = rng.standard_normal(x_shape).astype(np.float32)
+            y_data = rng.standard_normal(y_shape).astype(np.float32)
+            x_data.flat[0], y_data.flat[0] = -0.0, 0.0
         else:
             x_data = rng.integers(ki["qmin"], ki["qmax"] + 1, size=x_shape, dtype=np_dtype)
             y_data = rng.integers(ki["qmin"], ki["qmax"] + 1, size=y_shape, dtype=np_dtype)
@@ -102,7 +108,12 @@ class OpSelectV2(OperationBase):
         # Use TFLite interpreter for reference output (fallback to numpy if unsupported)
         tflite_path = str(output_dir / f"{name}.tflite")
         try:
-            interpreter = self.load_litert_interpreter(tflite_path)
+            if np_dtype == np.float32:
+                from helia_core_tester.generation.utils.litert_utils import load_builtin_reference
+
+                interpreter = load_builtin_reference(str(tflite_path))
+            else:
+                interpreter = self.load_litert_interpreter(tflite_path)
             input_details = interpreter.get_input_details()
             output_details = interpreter.get_output_details()
             interpreter.set_tensor(input_details[0]["index"], condition)
@@ -111,7 +122,7 @@ class OpSelectV2(OperationBase):
             interpreter.invoke()
             output_data = np.array(interpreter.get_tensor(output_details[0]["index"]))
         except (ValueError, RuntimeError):
-            if ki["np_dtype"] == "int32":
+            if ki["np_dtype"] in ("int32", "float32"):
                 raise
             output_data = np.where(condition, x_data, y_data)
 
@@ -139,6 +150,7 @@ class OpSelectV2(OperationBase):
             "y_data_array": builder.format_array_as_c_literal(y_data),
             "expected_output_array": builder.format_array_as_c_literal(output_data),
             "c_type": ki["c_type"],
+            "bit_exact": np_dtype == np.float32,
             "condition_c_type": "bool",
             "kernel_fn": ki["kernel_fn"],
         }
