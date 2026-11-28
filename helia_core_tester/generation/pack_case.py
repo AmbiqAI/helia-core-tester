@@ -18,6 +18,8 @@ from helia_core_tester.pack import Case, CaseSpec, PackError, Param
 from helia_core_tester.pack.descriptors import FLOAT_SCALARS, INTEGER_SCALARS, element_type, is_pointer, signature_problem
 
 STEM = "pack"
+# Beside a case whose golden is a placeholder for the recorded one: there is no hct reference to compare with.
+PLACEHOLDER_SUFFIX = ".golden_placeholder"
 
 ELEMENT_NUMPY: Dict[str, Any] = {
     "q7_t": np.int8, "int8_t": np.int8, "uint8_t": np.uint8,
@@ -170,6 +172,7 @@ class PackCaseGenerator(OperationBase):
                                 "host reference build: generate it with --golden record")
             golden = np.zeros(count, dtype=out_dtype)
             self.golden_pending = True
+            (output_dir / f"{name}{PLACEHOLDER_SUFFIX}").write_text("", encoding="utf-8")
         else:
             golden = np.asarray(spec.golden)
             if golden.dtype != np.dtype(out_dtype):

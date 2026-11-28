@@ -103,7 +103,10 @@ class GenerateStep(StepBase):
         path = freeze.write_report(report, report_dir / freeze.REPORT_NAME)
         shutil.rmtree(work, ignore_errors=True)
         self.logger.info(f"golden freeze {cpu}/{suite} [{record.float16_type}]: {report.counts()} ({path})")
-        mismatched = [c for c in report.cases if c.verdict == parity.MISMATCH and c.source == freeze.SOURCE_RECORD]
+        from helia_core_tester.generation.pack_case import PLACEHOLDER_SUFFIX
+
+        mismatched = [c for c in report.cases if c.verdict == parity.MISMATCH and c.source == freeze.SOURCE_RECORD
+                      and not (cases_root / c.family / c.name / f"{c.name}{PLACEHOLDER_SUFFIX}").is_file()]
         if mismatched:
             self.logger.warning(
                 f"  {len(mismatched)} frozen case(s) differed from hct_ref beyond tolerance: "

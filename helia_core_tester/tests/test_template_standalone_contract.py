@@ -788,7 +788,7 @@ def test_top_level_cmake_no_longer_uses_unity() -> None:
     assert "unity_fetch" not in text
     assert "ThrowTheSwitch/Unity" not in text
     assert "FetchContent_Declare(unity" not in text
-    assert "target_link_libraries(${TGT_NAME} PRIVATE cmsis-nn retarget cmsis_startup helia_test_runtime)" in text
+    assert "target_link_libraries(${TGT_NAME} PRIVATE ${HCT_LIBRARY} retarget cmsis_startup helia_test_runtime)" in text
     assert "target_compile_definitions(helia_test_runtime PRIVATE USING_FVP_CORSTONE_300)" in text
     # Hardware builds through NSX now.
     assert "HELIA_HARDWARE_BUILD" not in text

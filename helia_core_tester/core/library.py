@@ -26,6 +26,10 @@ Fields (schema ``hct/library-profile/1``):
   relative to the pack root; ``modules``, the Python modules under the pack root that generate them.
   Every path must exist inside ``source_root``. Without it, an ns-cmsis-nn profile runs hct's built-in
   ns-cmsis-nn descriptors; any other library has none and cannot generate tests.
+- ``build``: how the FVP tests build the library (``core/library_build.py``): ``project``, the CMake
+  project hct adds (default ``.``, relative to ``source_root``); ``target``, the library target the tests
+  link; ``definitions`` and ``cpu_definitions``, its cache values. ns-cmsis-nn builds from hct's own rules
+  and its profile names none; any other library without it cannot build FVP tests.
 
 An ns-cmsis-nn checkout without a profile still loads, as the built-in ``legacy`` ns-cmsis-nn profile,
 until ns-cmsis-nn ships its own.
@@ -46,6 +50,7 @@ import yaml
 from helia_core_tester.core.errors import ConfigurationError
 from helia_core_tester.core.harness import HarnessProfile, HarnessProfileError, harness_for, legacy_harness
 from helia_core_tester.core.host_reference import HostReferenceError, HostReferenceRecipe, parse_recipe
+from helia_core_tester.core.library_build import BuildSpec, BuildSpecError, build_for as _build_for
 from helia_core_tester.pack import api_version_problem
 
 PROFILE_FILE = "hct-library.yaml"
@@ -90,6 +95,7 @@ class LibraryProfile:
     harness: Optional[HarnessProfile] = None
     host_reference: Optional[HostReferenceRecipe] = None
     pack: Optional[PackSpec] = None
+    build: Optional[BuildSpec] = None
 
     @property
     def names_contracts(self) -> bool:
@@ -227,6 +233,18 @@ def pack_for(path: Path, data: Any, root: Path) -> Optional[PackSpec]:
     return spec
 
 
+def build_for(path: Path, data: Any, root: Path) -> Optional[BuildSpec]:
+    """The profile's ``build`` block, checked against `root`, or None when it has none."""
+    if data is None:
+        return None
+    where = f"{path}: build"
+    project = _inside(root, f"{where}.project", root, data.get("project", "."))
+    try:
+        return _build_for(data, where, project)
+    except BuildSpecError as exc:
+        raise LibraryProfileError(str(exc)) from None
+
+
 def legacy_host_reference() -> HostReferenceRecipe:
     from helia_core_tester.contract import legacy_nn
 
@@ -266,6 +284,7 @@ def load_profile(path: Path) -> LibraryProfile:
         host_reference=host_reference_for(
             data["library"], data.get("host_reference"), f"{path}: host_reference", root),
         pack=pack_for(path, data.get("pack"), root),
+        build=build_for(path, data.get("build"), root),
     )
 
 
@@ -310,6 +329,9 @@ def require_supported(profile: LibraryProfile) -> LibraryProfile:
                 f"library {profile.library!r} ({profile.describe()}) runs from its own pack, so its profile "
                 f"must name {', '.join(missing)}")
         return profile
+    if profile.build is not None:
+        raise LibraryProfileError(
+            f"{profile.profile_path}: names build, but this hct builds {profile.library} from its own rules")
     # Generation reads ns-cmsis-nn's contracts from their default places until the engine reads the
     # profile's; a profile that names others would be silently ignored, so it is refused.
     defaults = (profile.source_root / LEGACY_SIGNATURES, profile.source_root / LEGACY_IMPLEMENTATIONS)

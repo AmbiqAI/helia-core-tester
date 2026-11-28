@@ -164,7 +164,8 @@ def test_build_passes_a_valid_root_to_cmake(tmp_path) -> None:
 
 def test_cmake_error_names_the_option_and_env_var() -> None:
     text = (Path(cli_module.__file__).resolve().parents[1] / "CMakeLists.txt").read_text()
-    block = text[text.index('message(FATAL_ERROR\n    "cmsis-nn CMakeLists.txt not found'):]
+    start = text.index('"cmsis-nn CMakeLists.txt not found')
+    block = text[text.rindex("message(FATAL_ERROR", 0, start):]
     block = block[: block.index(")\n")]
     assert "--cmsis-nn-root" in block and ENV_NAME in block
 

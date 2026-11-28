@@ -6,7 +6,7 @@ and determine descriptor status based on test results and artifact presence.
 """
 
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from helia_core_tester.generation.io.descriptors import load_all_descriptors
 from helia_core_tester.reporting.models import TestStatus, TestResult
@@ -15,14 +15,17 @@ from helia_core_tester.reporting.models import TestStatus, TestResult
 class DescriptorTracker:
     """Track descriptors and map them to test results."""
     
-    def __init__(self, descriptors_dir: Path):
+    def __init__(self, descriptors_dir: Path, loader: Optional[Callable[..., List[Dict]]] = None):
         """
         Initialize descriptor tracker.
         
         Args:
             descriptors_dir: Path to directory containing YAML descriptors
+            loader: Loads the descriptors as `loader(directory, best_effort=...)`; hct's operator
+                descriptor loader when not given. A pack library passes its own.
         """
         self.descriptors_dir = descriptors_dir
+        self._loader = loader or load_all_descriptors
         self._descriptors: Dict[str, Dict] = {}
         self._descriptor_paths: Dict[str, Path] = {}
     
@@ -42,7 +45,7 @@ class DescriptorTracker:
         if not self.descriptors_dir.exists():
             return {}
 
-        descriptors_list = load_all_descriptors(str(self.descriptors_dir), best_effort=best_effort)
+        descriptors_list = self._loader(str(self.descriptors_dir), best_effort=best_effort)
 
         for desc in descriptors_list:
             name = desc.get('name')

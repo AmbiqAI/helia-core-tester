@@ -71,6 +71,22 @@ def _tests_report_dir(cpu: str, suite: str) -> Path:
     return canonical_tests_report_dir(REPO_ROOT, cpu, suite=suite)
 
 
+def descriptor_tracker() -> DescriptorTracker:
+    """The tracker for the library this run tests: its pack's cases, or hct's built-in descriptors."""
+    from helia_core_tester.generation.io.descriptors import load_all_descriptors
+    from helia_core_tester.pack.descriptors import load_case_descriptors
+    from helia_core_tester.pack.loader import current_pack
+
+    pack = current_pack()
+    if pack is None:
+        return DescriptorTracker(find_descriptors_dir())
+
+    def load(_directory, best_effort=False):
+        return load_case_descriptors(load_all_descriptors)[0]
+
+    return DescriptorTracker(pack.spec.descriptors, loader=load)
+
+
 def run_tests_with_reporting(
     cpus: List[str],
     suite: str,
@@ -86,8 +102,7 @@ def run_tests_with_reporting(
     all_results: List[TestResult] = []
     any_fail = False
     verbosity = getattr(args, "verbosity", 0)
-    descriptors_dir = find_descriptors_dir()
-    tracker = DescriptorTracker(descriptors_dir)
+    tracker = descriptor_tracker()
     all_descriptors_dict = tracker.load_all_descriptors()
 
     for cpu in cpus:
