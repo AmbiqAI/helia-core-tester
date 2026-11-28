@@ -756,7 +756,7 @@ contracts:                # optional; ns-cmsis-nn defaults to Tests/KernelContra
   - a wrong schema;
   - a `source_root` that is absolute, missing, or does not contain the profile;
   - a `contracts` path that is absolute or outside `source_root`;
-  - a library this hct cannot run: another library whose profile does not name its `pack`, `harness` and `contracts`, and an ns-cmsis-nn profile whose `contracts` name anything but both documents in `Tests/KernelContracts/`, leaving out the implementation manifest included (generation reads both).
+  - a library this hct cannot run: another library whose profile does not name its `pack`, `harness` and `contracts`, and an ns-cmsis-nn profile whose `contracts` name anything but both documents in `Tests/KernelContracts/`, leaving out the implementation manifest included (generation reads both), or that names a `build`.
 - **Checking a profile:** `doctor --library <dir>` checks a profile on its own, and `contract validate --library <dir>` checks the contract documents it names, for any library.
 
 ### A library's own tests (`pack`)
@@ -793,6 +793,25 @@ pack:
   - A golden of `None` is recorded from the library's host reference build, so such a case needs `generate --golden record`.
 - **Drift check:** `pack check --library <dir>` loads the pack and checks every descriptor. If a module registers a descriptor source, it also compares the source's output with the committed files and exits 1 on any missing, extra or changed file. A source must give the same output twice.
   - `pack sync --library <dir>` rewrites the committed files from the sources.
+
+### Building a library's FVP tests (`build`)
+
+ns-cmsis-nn's FVP tests build from hct's own rules, and its profile names no `build`. Any other library's profile says how hct's Corstone-300 CMake project builds it:
+
+```yaml
+build:
+  project: .                # the CMake project hct adds, relative to source_root (default .)
+  target: CMSISDSP          # the library target the tests link
+  definitions:              # cache values for every CPU
+    CMSISCORE: "{cmsis_path}/CMSIS/Core"
+  cpu_definitions:          # and for one CPU
+    cortex-m55: {HELIUM: "ON"}
+    cortex-m4: {DISABLEFLOAT16: "ON"}
+```
+
+- `{cmsis_path}` is the CMSIS_5 checkout the build uses; it is the only placeholder.
+- A value is a string without `;`, `"`, `$`, a backslash or a newline. hct refuses a name it sets itself (`CMAKE_*`, `HCT_*`, `HELIA_*`, `ENABLE_COVERAGE*`, `ARM_NN_*`, `CMSIS_PATH`, `CMSIS_NN_ROOT`, `TARGET_CPU`, ...) and a name set both for every CPU and for one.
+- hct builds each CPU with its own definitions and compiles the target at `--optimization`. `--coverage` instruments ns-cmsis-nn only, so it is refused for another library.
 
 ## Canonical Artifacts
 

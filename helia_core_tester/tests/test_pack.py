@@ -369,11 +369,13 @@ def test_a_case_renders_the_entry_call_from_the_contract(monkeypatch, tmp_path) 
     assert "__builtin_types_compatible_p(__typeof__(arm_add_q15)" in source
     assert not (case_dir / "case_a.reference.json").exists()
     assert hk.classify_case(case_dir, "cortex-m55", "m0").status == hk.STATUS_BLOCKING
+    assert (case_dir / "case_a.golden_placeholder").is_file()
 
 
 def test_a_case_with_its_own_golden_needs_no_record(monkeypatch, tmp_path) -> None:
-    _, _, header = _render(monkeypatch, tmp_path, golden="hct_ref", params={"n": 9, "golden": True})
+    case_dir, _, header = _render(monkeypatch, tmp_path, golden="hct_ref", params={"n": 9, "golden": True})
     assert "0, 4, 8, 12" in header
+    assert not (case_dir / "case_a.golden_placeholder").exists()
 
 
 def test_a_case_without_a_golden_needs_record_mode(monkeypatch, tmp_path) -> None:
@@ -697,3 +699,64 @@ def test_check_accepts_an_nn_pack_of_operator_descriptors(monkeypatch, tmp_path)
         "pack:\n  api: \"1.0\"\n  descriptors: descriptors\n")
     result = _cli("check", "--library", str(pack_dir))
     assert result.exit_code == 0, result.output
+
+
+# --- FVP reporting -------------------------------------------------------------------------------
+
+def test_the_fvp_report_counts_a_pack_librarys_cases(monkeypatch, tmp_path) -> None:
+    from helia_core_tester.fvp.reporting import descriptor_tracker
+    from helia_core_tester.reporting.models import TestStatus
+
+    profile = _library(tmp_path / "lib", descriptors={"BasicMath/add.yaml": _doc("add_q15", params={"n": 9})})
+    _use(monkeypatch, profile)
+    tracker = descriptor_tracker()
+    cases = tracker.load_all_descriptors()
+    assert set(cases) == {"add_q15"}
+    assert tracker.get_descriptor_path("add_q15") == profile.parent / "descriptors" / "BasicMath" / "add.yaml"
+    build, generated = tmp_path / "build", tmp_path / "gen"
+    assert tracker.elf_path_for("add_q15", build) == build / "tests" / "BasicMath" / "add_q15.elf"
+    includes = generated / "BasicMath" / "add_q15" / "includes"
+    includes.mkdir(parents=True)
+    assert tracker.determine_descriptor_status("add_q15", None, build, generated)[0] == TestStatus.GENERATION_FAILED
+    (includes / "add_q15_pack.h").write_text("")
+    assert tracker.determine_descriptor_status("add_q15", None, build, generated)[0] == TestStatus.BUILD_FAILED
+
+
+def test_the_fvp_report_of_hcts_own_library_is_unchanged(monkeypatch) -> None:
+    from helia_core_tester.core.discovery import find_descriptors_dir
+    from helia_core_tester.fvp.reporting import descriptor_tracker
+
+    tracker = descriptor_tracker()
+    assert tracker.descriptors_dir == find_descriptors_dir()
+    assert tracker._loader is not None and len(tracker.load_all_descriptors()) > 0
+
+
+def test_the_fvp_report_refuses_a_broken_pack_rather_than_counting_nothing(monkeypatch, tmp_path) -> None:
+    from helia_core_tester.fvp.reporting import descriptor_tracker
+
+    profile = _library(tmp_path, descriptors={"BasicMath/add.yaml": _doc("add_q15", entry="arm_nope_q15")})
+    _use(monkeypatch, profile)
+    with pytest.raises(PackError, match="arm_nope_q15 is not in the library's contract"):
+        descriptor_tracker().load_all_descriptors()
+
+
+def test_the_fvp_report_of_an_nn_pack_reads_the_packs_descriptors(monkeypatch, tmp_path) -> None:
+    import shutil
+
+    from helia_core_tester.core.discovery import find_descriptors_dir
+    from helia_core_tester.fvp.reporting import descriptor_tracker
+    from helia_core_tester.tests.test_host_reference import _fake_tree
+
+    family = "TileFunctions"
+    pack_dir = _fake_tree(tmp_path / "nn") / "Tests" / "hct"
+    shutil.copytree(Path(find_descriptors_dir()) / family, pack_dir / "descriptors" / family)
+    (pack_dir / "hct-library.yaml").write_text(
+        "schema: hct/library-profile/1\nlibrary: ns-cmsis-nn\nsource_root: ../..\n"
+        "pack:\n  api: \"1.0\"\n  descriptors: descriptors\n")
+    _use(monkeypatch, pack_dir / "hct-library.yaml")
+    tracker = descriptor_tracker()
+    cases = tracker.load_all_descriptors()
+    assert tracker.descriptors_dir == pack_dir / "descriptors"
+    assert cases and {c["_source_family"] for c in cases.values()} == {family}
+    name = next(iter(cases))
+    assert tracker.get_descriptor_path(name).is_relative_to(pack_dir / "descriptors" / family)

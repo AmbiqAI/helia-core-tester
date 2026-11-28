@@ -231,6 +231,45 @@
           "description": "Module names under the pack root (<name>.py); each defines register(pack)."
         }
       }
+    },
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target"
+      ],
+      "description": "How the FVP tests build the library: the CMake project hct adds and the target its tests link. ns-cmsis-nn builds from hct's own rules and names none.",
+      "properties": {
+        "project": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^[^\\x00\\\\]+$",
+          "description": "The CMake project, relative to source_root; default \".\"."
+        },
+        "target": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_.+-]*$",
+          "maxLength": 128,
+          "description": "The library target the tests link."
+        },
+        "definitions": {
+          "$ref": "#/$defs/definitions",
+          "description": "Cache values for every CPU; a value may name {cmsis_path}."
+        },
+        "cpu_definitions": {
+          "type": "object",
+          "maxProperties": 16,
+          "propertyNames": {
+            "pattern": "^[A-Za-z0-9_.+-]+$",
+            "maxLength": 64
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/definitions"
+          },
+          "description": "More cache values for one CPU, by CPU name."
+        }
+      }
     }
   },
   "$defs": {
@@ -243,6 +282,19 @@
       "type": "string",
       "pattern": "^[A-Za-z0-9_][A-Za-z0-9_+.-]*(/[A-Za-z0-9_][A-Za-z0-9_+.-]*)*\\.h$",
       "maxLength": 256
+    },
+    "definitions": {
+      "type": "object",
+      "maxProperties": 128,
+      "propertyNames": {
+        "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+        "maxLength": 128
+      },
+      "additionalProperties": {
+        "type": "string",
+        "maxLength": 1024
+      },
+      "description": "CMake cache values by name."
     }
   }
 }

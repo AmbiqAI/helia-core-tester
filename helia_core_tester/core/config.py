@@ -12,7 +12,9 @@ from typing import Any, Dict, Optional
 from helia_core_tester.core.cpu_targets import get_cpu_profile, parse_cpu_list
 from helia_core_tester.core.discovery import find_repo_root
 from helia_core_tester.core.errors import ConfigurationError, PathNotFoundError
-from helia_core_tester.core.library import LibraryProfile, LibraryProfileError, require_supported, resolve_library
+from helia_core_tester.core.library import (
+    SUPPORTED_LIBRARIES, LibraryProfile, LibraryProfileError, require_supported, resolve_library,
+)
 from helia_core_tester.core.path_layout import (
     VALID_TOOLCHAINS,
     artifacts_root,
@@ -656,6 +658,10 @@ class Config:
     def cmsis_nn_root_error(self) -> Optional[str]:
         """Why an explicit cmsis_nn_root is unusable, or None when it is unset or valid."""
         if self.cmsis_nn_root is None:
+            return None
+        profile = self._library_profile
+        if profile is not None and profile.library not in SUPPORTED_LIBRARIES:
+            # Its profile placed the checkout; the build step checks the project its build block names.
             return None
         root = Path(self.cmsis_nn_root)
         if not (root / "CMakeLists.txt").is_file():

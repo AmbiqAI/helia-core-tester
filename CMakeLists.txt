@@ -7,6 +7,11 @@ set(CMAKE_EXECUTABLE_SUFFIX ".elf")
 
 set(CMSIS_PATH "artifacts/downloads/CMSIS_5" CACHE PATH "Path to CMSIS (CMSIS_5 checkout)")
 set(CMSIS_NN_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." CACHE PATH "ns-cmsis-nn repo root")
+# Another library's build (its profile's build block): the CMake project to add and the target the tests
+# link. Unset, the library is ns-cmsis-nn at CMSIS_NN_ROOT.
+set(HCT_LIBRARY_DIR "" CACHE PATH "CMake project of the library under test (default: CMSIS_NN_ROOT)")
+set(HCT_LIBRARY_TARGET "" CACHE STRING "Library target the tests link (default: cmsis-nn)")
+set(HCT_LIBRARY_COMPILE_OPTIONS "" CACHE STRING "Compile options for a library other than ns-cmsis-nn")
 set(FVP_CORSTONE_300_PATH "${CMAKE_CURRENT_SOURCE_DIR}/Corstone-300" CACHE PATH "FVP startup/retarget files")
 set(GENERATED_TESTS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/artifacts/generated_tests" CACHE PATH "Path to generated tests")
 set(TARGET_CPU "" CACHE STRING "Target CPU override (e.g. cortex-m55)")
@@ -93,16 +98,44 @@ else()
   add_link_options(   -mfloat-abi=soft)
 endif()
 
-# ---------- cmsis-nn subproject ----------
-if(EXISTS "${CMSIS_NN_ROOT}/CMakeLists.txt")
-  # Use a stable binary subdir name "cmsis-nn" (we need this exact name below)
-  add_subdirectory("${CMSIS_NN_ROOT}" cmsis-nn)
+# ---------- library subproject ----------
+if(HCT_LIBRARY_DIR STREQUAL "" AND HCT_LIBRARY_TARGET STREQUAL "")
+  set(HCT_LIBRARY cmsis-nn)
+  if(NOT HCT_LIBRARY_COMPILE_OPTIONS STREQUAL "")
+    message(FATAL_ERROR "HCT_LIBRARY_COMPILE_OPTIONS is for another library; ns-cmsis-nn takes CMSIS_OPTIMIZATION_LEVEL")
+  endif()
+  if(EXISTS "${CMSIS_NN_ROOT}/CMakeLists.txt")
+    # Use a stable binary subdir name "cmsis-nn" (we need this exact name below)
+    add_subdirectory("${CMSIS_NN_ROOT}" cmsis-nn)
+  else()
+    message(FATAL_ERROR
+      "cmsis-nn CMakeLists.txt not found at: ${CMSIS_NN_ROOT}\n"
+      "Point it at an ns-cmsis-nn checkout with helia_core_tester --cmsis-nn-root <path> "
+      "(or HELIA_CORE_TESTER_CMSIS_NN_ROOT=<path>; a bare CMSIS_NN_ROOT env var is not read), "
+      "or -DCMSIS_NN_ROOT=<path> when running CMake directly.")
+  endif()
 else()
-  message(FATAL_ERROR
-    "cmsis-nn CMakeLists.txt not found at: ${CMSIS_NN_ROOT}\n"
-    "Point it at an ns-cmsis-nn checkout with helia_core_tester --cmsis-nn-root <path> "
-    "(or HELIA_CORE_TESTER_CMSIS_NN_ROOT=<path>; a bare CMSIS_NN_ROOT env var is not read), "
-    "or -DCMSIS_NN_ROOT=<path> when running CMake directly.")
+  if(HCT_LIBRARY_DIR STREQUAL "" OR HCT_LIBRARY_TARGET STREQUAL "")
+    message(FATAL_ERROR "HCT_LIBRARY_DIR and HCT_LIBRARY_TARGET are set together")
+  endif()
+  if(HCT_LIBRARY_TARGET STREQUAL "cmsis-nn")
+    message(FATAL_ERROR "ns-cmsis-nn builds from CMSIS_NN_ROOT, not HCT_LIBRARY_DIR")
+  endif()
+  if(ENABLE_COVERAGE)
+    message(FATAL_ERROR "ENABLE_COVERAGE instruments ns-cmsis-nn only, not ${HCT_LIBRARY_TARGET}")
+  endif()
+  if(NOT EXISTS "${HCT_LIBRARY_DIR}/CMakeLists.txt")
+    message(FATAL_ERROR "HCT_LIBRARY_DIR has no CMakeLists.txt: ${HCT_LIBRARY_DIR}")
+  endif()
+  set(HCT_LIBRARY "${HCT_LIBRARY_TARGET}")
+  add_subdirectory("${HCT_LIBRARY_DIR}" hct-library)
+  if(NOT TARGET ${HCT_LIBRARY})
+    message(FATAL_ERROR "${HCT_LIBRARY_DIR} defines no target ${HCT_LIBRARY}")
+  endif()
+  if(NOT HCT_LIBRARY_COMPILE_OPTIONS STREQUAL "")
+    separate_arguments(_hct_library_options UNIX_COMMAND "${HCT_LIBRARY_COMPILE_OPTIONS}")
+    target_compile_options(${HCT_LIBRARY} PRIVATE ${_hct_library_options})
+  endif()
 endif()
 
 if(ENABLE_COVERAGE)
@@ -201,11 +234,15 @@ else()
   add_library(helia_test_runtime STATIC src/test_runtime/helia_test_runtime.c)
   target_include_directories(helia_test_runtime PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src" "${GENERATED_TESTS_DIR}")
   target_compile_definitions(helia_test_runtime PRIVATE USING_FVP_CORSTONE_300)
-  target_link_libraries(helia_test_runtime PRIVATE cmsis-nn)
+  target_link_libraries(helia_test_runtime PRIVATE ${HCT_LIBRARY})
   # Generated sources that include the library's inline float16 conversion take the VCVT form its
   # assembler probe chose (ns-cmsis-nn#427), as its own unit tests do; a static library keeps the
   # verdict private.
-  get_target_property(_nn_gas_defs cmsis-nn COMPILE_DEFINITIONS)
+  if(HCT_LIBRARY STREQUAL "cmsis-nn")
+    get_target_property(_nn_gas_defs cmsis-nn COMPILE_DEFINITIONS)
+  else()
+    set(_nn_gas_defs "")
+  endif()
   if(_nn_gas_defs)
     list(FILTER _nn_gas_defs INCLUDE REGEX "^ARM_NN_GAS_")
     target_compile_definitions(helia_test_runtime PUBLIC ${_nn_gas_defs})
@@ -307,7 +344,7 @@ if(HELIA_BUILD_GENERATED_TESTS)
       # Pull in libgcov runtime symbols and emit gcov metadata in the final ELF.
       target_link_options(${TGT_NAME} PRIVATE --coverage)
     endif()
-    target_link_libraries(${TGT_NAME} PRIVATE cmsis-nn retarget cmsis_startup helia_test_runtime)
+    target_link_libraries(${TGT_NAME} PRIVATE ${HCT_LIBRARY} retarget cmsis_startup helia_test_runtime)
 
     list(APPEND GENERATED_TEST_TARGETS ${TGT_NAME})
   endforeach()
@@ -319,7 +356,11 @@ endif()
 
 # ---------- Summary ----------
 message(STATUS "  CMSIS_PATH             : ${CMSIS_PATH}")
-message(STATUS "  CMSIS_NN_ROOT          : ${CMSIS_NN_ROOT}")
+if(HCT_LIBRARY STREQUAL "cmsis-nn")
+  message(STATUS "  CMSIS_NN_ROOT          : ${CMSIS_NN_ROOT}")
+else()
+  message(STATUS "  Library                : ${HCT_LIBRARY} from ${HCT_LIBRARY_DIR}")
+endif()
 message(STATUS "  FVP_CORSTONE_300_PATH  : ${FVP_CORSTONE_300_PATH}")
 message(STATUS "  TARGET CPU             : ${CMAKE_SYSTEM_PROCESSOR}")
 message(STATUS "  Coverage               : ${ENABLE_COVERAGE}")
