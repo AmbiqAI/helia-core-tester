@@ -15,6 +15,8 @@ a hand-written call without reintroducing the drift the contract removes.
 
 from __future__ import annotations
 
+import os
+
 import re
 from pathlib import Path
 from typing import Callable, Mapping, Optional
@@ -95,20 +97,38 @@ def require_bound_symbol(contracts: ContractSet, symbol: str) -> FunctionDecl:
 
 
 def load_current_contracts() -> ContractSet:
-    """The kernel contract of the resolved ns-cmsis-nn checkout (`absent` when it has none)."""
+    """The kernel contract of the library generation runs against: the documents a library with its
+    own pack names, else the resolved ns-cmsis-nn checkout's (`absent` when it has none)."""
+    from helia_core_tester.contract import legacy_nn
+    from helia_core_tester.core.harness import current_library
+
+    profile = current_library()
+    if profile is not None and profile.library != legacy_nn.LIBRARY:
+        if profile.signatures is None:
+            raise ContractError(f"{profile.describe()}: its profile names no contracts")
+        return load_contract_set(profile.source_root, signatures=profile.signatures,
+                                 implementations=profile.implementations)
     return load_contract_set(resolve_cmsis_nn_root())
+
+
+def _current_library_key() -> tuple:
+    """What load_current_contracts() resolves from, so a cached set follows a change of library."""
+    from helia_core_tester.core.harness import PROFILE_ENV
+
+    return tuple(os.environ.get(name, "").strip() for name in (PROFILE_ENV, "CMSIS_NN_ROOT"))
 
 
 def contract_globals(loader: Optional[Callable[[], ContractSet]] = None) -> dict[str, Callable]:
     """Jinja globals bound to a lazily loaded contract set (default: the resolved
     ns-cmsis-nn checkout). Loading happens on first use so templates that never call
     them cost nothing and old checkouts keep rendering."""
-    cache: dict[str, ContractSet] = {}
+    cache: dict[tuple, ContractSet] = {}
 
     def contracts() -> ContractSet:
-        if "set" not in cache:
-            cache["set"] = loader() if loader is not None else load_current_contracts()
-        return cache["set"]
+        key = () if loader is not None else _current_library_key()
+        if key not in cache:
+            cache[key] = loader() if loader is not None else load_current_contracts()
+        return cache[key]
 
     def require(symbol: str) -> FunctionDecl:
         return require_bound_symbol(contracts(), symbol)

@@ -22,6 +22,7 @@ from helia_core_tester.core.pipeline import FullTestPipeline
 from helia_core_tester.core.steps import BuildStep, CleanStep, GenerateStep, HostCheckStep, RecordStep, RunStep
 from helia_core_tester.reporting.coverage_merge import run_coverage_merge
 from helia_core_tester.contract.cli import contract_app
+from helia_core_tester.pack.cli import pack_app
 from helia_core_tester.hardware.cli import boards as boards_command
 from helia_core_tester.hardware.cli import explain as explain_command
 from helia_core_tester.hardware.cli import hardware_app, probes_app
@@ -45,6 +46,7 @@ app = typer.Typer(
 app.add_typer(hardware_app, name="hardware")
 app.add_typer(probes_app, name="probes")
 app.add_typer(contract_app, name="contract")
+app.add_typer(pack_app, name="pack")
 app.add_typer(candidate_app, name="candidate")
 app.add_typer(agent_loop_app, name="agent-loop")
 app.command(name="boards")(boards_command)

@@ -350,7 +350,8 @@ def _reused_manifest_entry(
 def _write_reference_record(op, test_dir: Path, name: str, *, run_seed: int, case_seed: int) -> None:
     """Write `<name>.reference.json`; a case with a golden but no recorded call is an error."""
     if op.reference is None:
-        if op.status_only() or op.self_checking():
+        # A pack case's golden is the pack's own or recorded from the library: no C reference call.
+        if op.status_only() or op.self_checking() or getattr(op, "pack_case", False):
             return
         raise RuntimeError(f"{name}: {type(op).__name__} recorded no ReferenceCall; every golden comes "
                            "from the C reference (only a status-only or self-checking case has none)")
@@ -389,12 +390,16 @@ def generate_test(
     operator = desc['operator']
     print(f"Generating test: {name} ({operator})")
 
-    # Get operation class
-    op_map = get_op_map()
-    if operator not in op_map:
-        raise ValueError(f"Unsupported operator: {operator}")
+    # Get operation class: a pack case is built by the pack generator its descriptor resolves to.
+    if desc.get("_pack"):
+        from helia_core_tester.generation.pack_case import PackCaseGenerator
 
-    op_class = op_map[operator]
+        op_class = PackCaseGenerator
+    else:
+        op_map = get_op_map()
+        if operator not in op_map:
+            raise ValueError(f"Unsupported operator: {operator}")
+        op_class = op_map[operator]
 
     if kernel_numerics not in ("shipped", "bounded"):
         raise ValueError(f"kernel_numerics must be 'shipped' or 'bounded', got {kernel_numerics!r}")
@@ -443,7 +448,9 @@ def generate_test(
     try:
         op.generate_c_files(test_dir)
         op.assert_input_mode_consumed()
-        check_case_golden(test_dir, desc)
+        # A golden still to be recorded is a placeholder; generate --golden record freezes the real one.
+        if not getattr(op, "golden_pending", False):
+            check_case_golden(test_dir, desc)
         _write_reference_record(op, test_dir, name, run_seed=run_seed, case_seed=seed)
     except Exception as e:
         import traceback
@@ -508,8 +515,13 @@ def test_generation(test_filters):
             normalize_cpu(test_filters.get("cpu") or "cortex-m55"), shape_ops,
         )
     else:
-        descriptors_dir = find_descriptors_dir()
-    descriptors = load_all_descriptors(str(descriptors_dir))
+        descriptors_dir = None
+    if descriptors_dir is None:
+        from helia_core_tester.pack.descriptors import load_case_descriptors
+
+        descriptors, pack = load_case_descriptors(load_all_descriptors)
+    else:
+        descriptors, pack = load_all_descriptors(str(descriptors_dir)), None
     # Draws checked names; suites split them.
     unknown_ops = [] if random_shapes else unmatched_ops(descriptors, _split_filter(test_filters.get("op")))
     assert not unknown_ops, f"No descriptor matches --op: {', '.join(unknown_ops)}"
@@ -549,6 +561,11 @@ def test_generation(test_filters):
     force_generate = bool(test_filters.get("force_generate"))
     float_precision_mode = _float_precision_mode(test_filters)
     version_hash = generator_version_hash()
+    if pack is not None:
+        from helia_core_tester.pack.loader import files_digest
+
+        # The pack's modules decide its cases as hct's generators decide the built-in ones.
+        version_hash = hashlib.sha256(f"{version_hash}\0{files_digest(pack)}".encode("utf-8")).hexdigest()
     manifest_entries: List[Dict[str, Any]] = []
     skipped_entries: List[Dict[str, Any]] = []
     generation_failures: List[Dict[str, Any]] = []

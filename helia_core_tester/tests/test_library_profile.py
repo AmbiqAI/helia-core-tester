@@ -210,7 +210,8 @@ def test_bad_library_directories(tmp_path, layout) -> None:
 
 def test_unsupported_library(tmp_path) -> None:
     profile = load_profile(_profile(tmp_path / "lib", "schema: hct/library-profile/1\nlibrary: cmsis-dsp\n"))
-    with pytest.raises(LibraryProfileError, match="'cmsis-dsp'.*not supported by this hct; it runs: ns-cmsis-nn"):
+    with pytest.raises(LibraryProfileError,
+                       match="'cmsis-dsp'.*runs from its own pack, so its profile must name pack, harness, contracts"):
         require_supported(profile)
 
 
@@ -298,7 +299,7 @@ def test_bad_library_fails_at_init(tmp_path) -> None:
 def test_unsupported_library_fails_at_init(tmp_path) -> None:
     pack = tmp_path / "dsp"
     _profile(pack, "schema: hct/library-profile/1\nlibrary: cmsis-dsp\n")
-    with pytest.raises(LibraryProfileError, match="not supported"):
+    with pytest.raises(LibraryProfileError, match="runs from its own pack"):
         _config(_repo(tmp_path), library=pack)
 
 
