@@ -190,6 +190,47 @@
           "description": "What decides the build: a change to any of them rebuilds the reference."
         }
       }
+    },
+    "pack": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "api",
+        "descriptors"
+      ],
+      "description": "The library's test pack: its descriptors and the Python modules that generate them (hct.pack API). Paths are relative to the profile's directory.",
+      "properties": {
+        "api": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+$",
+          "description": "The hct.pack API version the pack is written for, MAJOR.MINOR."
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^[^\\x00\\\\]+$",
+          "description": "The pack root; default \".\"."
+        },
+        "descriptors": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^[^\\x00\\\\]+$",
+          "description": "The directory of committed descriptors, relative to the pack root."
+        },
+        "modules": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+            "maxLength": 64
+          },
+          "description": "Module names under the pack root (<name>.py); each defines register(pack)."
+        }
+      }
     }
   },
   "$defs": {

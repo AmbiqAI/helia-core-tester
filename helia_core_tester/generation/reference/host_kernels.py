@@ -442,7 +442,8 @@ def classify_case(case_dir: Path, target_cpu: Optional[str], mode: str) -> CaseC
     if not extra:
         return CaseClass(STATUS_BLOCKING)
     why = f"generated for {target_cpu} ({', '.join(extra)})"
-    if desc.get("entry"):
+    # A pack case's entry is the function it calls, not one the manifest resolved for the target.
+    if desc.get("entry") and not desc.get("_pack"):
         return CaseClass(STATUS_ADVISORY, f"entry resolved {why}")
     if desc.get("fault"):
         return CaseClass(STATUS_ADVISORY, f"fault reachability decided {why}")

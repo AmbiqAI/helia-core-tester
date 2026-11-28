@@ -259,10 +259,9 @@ def harness_of_root(root: Optional[Path]) -> HarnessProfile:
     return _harness_of(library_of_root(root))
 
 
-def current_harness() -> HarnessProfile:
-    """The harness block of the library generation runs against: $HCT_LIBRARY_PROFILE's, else
-    CMSIS_NN_ROOT's as given (any layout), else the nested checkout generation resolves, else
-    ns-cmsis-nn's. A step that knows its checkout passes it to harness_of_root instead."""
+def current_library() -> Any:
+    """The profile of the library generation runs against: $HCT_LIBRARY_PROFILE's, else CMSIS_NN_ROOT's
+    as given (any layout), else the nested checkout generation resolves; None when there is none."""
     env_root = os.environ.get("CMSIS_NN_ROOT", "").strip()
     if env_root and not Path(env_root).is_dir():
         raise HarnessProfileError(f"CMSIS_NN_ROOT={env_root} is not a directory")
@@ -271,12 +270,20 @@ def current_harness() -> HarnessProfile:
         if env_root and Path(env_root).resolve() != Path(env_profile.source_root).resolve():
             raise HarnessProfileError(
                 f"{PROFILE_ENV} names {env_profile.describe()}, but CMSIS_NN_ROOT is {env_root}")
-        return _harness_of(env_profile)
+        return env_profile
     if env_root:
-        return harness_of_root(Path(env_root))
+        return library_of_root(Path(env_root))
     from helia_core_tester.generation.utils.temp_sizer_probe import resolve_cmsis_nn_root
 
-    return harness_of_root(resolve_cmsis_nn_root())
+    root = resolve_cmsis_nn_root()
+    return None if root is None else library_of_root(root)
+
+
+def current_harness() -> HarnessProfile:
+    """The harness block of current_library(), else ns-cmsis-nn's. A step that knows its checkout
+    passes it to harness_of_root instead."""
+    profile = current_library()
+    return legacy_harness() if profile is None else _harness_of(profile)
 
 
 def library_env(config: Any) -> dict[str, str]:

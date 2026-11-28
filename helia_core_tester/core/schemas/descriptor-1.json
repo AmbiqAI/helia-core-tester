@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hct/descriptor/1",
+  "title": "hct pack descriptor",
+  "description": "One test case of a library's pack: the contract function it calls, the generator that builds it and that generator's parameters.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "name",
+    "entry"
+  ],
+  "properties": {
+    "schema": {
+      "const": "hct/descriptor/1"
+    },
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "maxLength": 96,
+      "description": "The case name, unique across the pack; it names the generated directory and C symbols."
+    },
+    "entry": {
+      "$ref": "#/$defs/identifier",
+      "description": "The contract function the case calls."
+    },
+    "generator": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$",
+      "maxLength": 128,
+      "description": "The registered generator; default: the one generator that claims the entry."
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 1024
+    },
+    "params": {
+      "type": "object",
+      "maxProperties": 64,
+      "propertyNames": {
+        "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/value"
+      },
+      "description": "What the generator reads; it refuses what it does not know."
+    },
+    "comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tolerance": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65536,
+          "description": "Integer outputs: the largest difference allowed; needs a reason."
+        },
+        "atol": {
+          "type": "number",
+          "minimum": 0
+        },
+        "rtol": {
+          "type": "number",
+          "minimum": 0
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      },
+      "description": "Integer outputs compare exactly and float outputs with the dtype's defaults; atol and rtol may only tighten them."
+    },
+    "expected_status": {
+      "$ref": "#/$defs/identifier",
+      "description": "The status the entry must return; one of the profile's harness codes."
+    },
+    "required_capabilities": {
+      "type": "array",
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9_]+$"
+      }
+    },
+    "degenerate_golden_reason": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+      "maxLength": 128
+    },
+    "scalar": {
+      "type": [
+        "string",
+        "number",
+        "boolean"
+      ]
+    },
+    "value": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/scalar"
+        },
+        {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "$ref": "#/$defs/scalar"
+          }
+        }
+      ]
+    }
+  }
+}

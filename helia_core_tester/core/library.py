@@ -21,6 +21,11 @@ Fields (schema ``hct/library-profile/1``):
   ``manifest``, the file name it writes in the build directory; ``build_inputs``, what decides the build.
   ``project`` and ``build_inputs`` are relative to ``source_root`` and must exist inside it. Without it,
   an ns-cmsis-nn profile takes ns-cmsis-nn's; any other library has none and cannot record goldens.
+- ``pack``: the library's tests (``helia_core_tester.pack``): ``api``, the pack API version it is written
+  for; ``path``, the pack root (default ``.``); ``descriptors``, the directory of committed descriptors,
+  relative to the pack root; ``modules``, the Python modules under the pack root that generate them.
+  Every path must exist inside ``source_root``. Without it, an ns-cmsis-nn profile runs hct's built-in
+  ns-cmsis-nn descriptors; any other library has none and cannot generate tests.
 
 An ns-cmsis-nn checkout without a profile still loads, as the built-in ``legacy`` ns-cmsis-nn profile,
 until ns-cmsis-nn ships its own.
@@ -41,11 +46,12 @@ import yaml
 from helia_core_tester.core.errors import ConfigurationError
 from helia_core_tester.core.harness import HarnessProfile, HarnessProfileError, harness_for, legacy_harness
 from helia_core_tester.core.host_reference import HostReferenceError, HostReferenceRecipe, parse_recipe
+from helia_core_tester.pack import api_version_problem
 
 PROFILE_FILE = "hct-library.yaml"
 SCHEMA_ID = "hct/library-profile/1"
 SCHEMA_PATH = Path(__file__).with_name("schemas") / "library-profile-1.json"
-# Every library this hct can run; the engine is ns-cmsis-nn-only until the profile drives it.
+# Libraries hct carries a built-in pack for; any other runs from the pack its profile names.
 SUPPORTED_LIBRARIES = ("ns-cmsis-nn",)
 LEGACY_LIBRARY = "ns-cmsis-nn"
 LEGACY_SIGNATURES = Path("Tests") / "KernelContracts" / "kernel_contracts.json"
@@ -55,6 +61,19 @@ MAX_PROFILE_BYTES = 256 * 1024
 
 class LibraryProfileError(ConfigurationError):
     """The library or its profile cannot be used."""
+
+
+@dataclass(frozen=True)
+class PackSpec:
+    """The profile's ``pack`` block, resolved: the pack root, its descriptors and its modules."""
+
+    api: str
+    root: Path
+    descriptors: Path
+    modules: tuple[str, ...] = ()
+
+    def module_path(self, module: str) -> Path:
+        return self.root / f"{module}.py"
 
 
 @dataclass(frozen=True)
@@ -70,6 +89,7 @@ class LibraryProfile:
     implementations: Optional[Path] = None
     harness: Optional[HarnessProfile] = None
     host_reference: Optional[HostReferenceRecipe] = None
+    pack: Optional[PackSpec] = None
 
     @property
     def names_contracts(self) -> bool:
@@ -171,6 +191,42 @@ def _contract_path(path: Path, root: Path, key: str, value: str) -> Path:
     return target
 
 
+def _inside(path: Path, where: str, root: Path, value: str) -> Path:
+    if os.path.isabs(value) or "\\" in value:
+        raise LibraryProfileError(f"{where} {value!r} must be a relative POSIX path")
+    if ".." in Path(value).parts:
+        raise LibraryProfileError(f"{where} {value!r} must not contain '..'")
+    try:
+        target = (path / value).resolve()
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise LibraryProfileError(f"{where} {value!r} cannot be resolved ({exc})") from None
+    if target != root and root not in target.parents:
+        raise LibraryProfileError(f"{where} {value!r} ({target}) is outside source_root {root}")
+    return target
+
+
+def pack_for(path: Path, data: Any, root: Path) -> Optional[PackSpec]:
+    """The profile's ``pack`` block, checked against `root`, or None when it has none."""
+    if data is None:
+        return None
+    where = f"{path}: pack"
+    problem = api_version_problem(data["api"])
+    if problem:
+        raise LibraryProfileError(f"{where}: {problem}")
+    pack_root = _inside(path.parent.resolve(), f"{where}.path", root, data.get("path", "."))
+    if not pack_root.is_dir():
+        raise LibraryProfileError(f"{where}.path {data.get('path', '.')!r} is not a directory ({pack_root})")
+    descriptors = _inside(pack_root, f"{where}.descriptors", root, data["descriptors"])
+    if not descriptors.is_dir():
+        raise LibraryProfileError(f"{where}.descriptors {data['descriptors']!r} is not a directory ({descriptors})")
+    spec = PackSpec(api=data["api"], root=pack_root, descriptors=descriptors, modules=tuple(data.get("modules", ())))
+    for module in spec.modules:
+        target = _inside(pack_root, f"{where}.modules", root, f"{module}.py")
+        if not target.is_file():
+            raise LibraryProfileError(f"{where}.modules: {module!r} has no {target}")
+    return spec
+
+
 def legacy_host_reference() -> HostReferenceRecipe:
     from helia_core_tester.contract import legacy_nn
 
@@ -209,6 +265,7 @@ def load_profile(path: Path) -> LibraryProfile:
         harness=harness,
         host_reference=host_reference_for(
             data["library"], data.get("host_reference"), f"{path}: host_reference", root),
+        pack=pack_for(path, data.get("pack"), root),
     )
 
 
@@ -241,11 +298,18 @@ def resolve_library(directory: Path, *, allow_legacy: bool = True) -> LibraryPro
 
 
 def require_supported(profile: LibraryProfile) -> LibraryProfile:
-    """Refuse a library this hct's engine cannot run yet."""
+    """Refuse a library this hct's engine cannot run yet.
+
+    ns-cmsis-nn runs from hct's built-in pack or its own. Any other library runs from its own pack, so
+    its profile must name the pack, the harness and the contracts its cases are generated against."""
     if profile.library not in SUPPORTED_LIBRARIES:
-        raise LibraryProfileError(
-            f"library {profile.library!r} ({profile.describe()}) is not supported by this hct; "
-            f"it runs: {', '.join(SUPPORTED_LIBRARIES)}")
+        missing = [name for name, value in (("pack", profile.pack), ("harness", profile.harness),
+                                            ("contracts", profile.signatures)) if value is None]
+        if missing:
+            raise LibraryProfileError(
+                f"library {profile.library!r} ({profile.describe()}) runs from its own pack, so its profile "
+                f"must name {', '.join(missing)}")
+        return profile
     # Generation reads ns-cmsis-nn's contracts from their default places until the engine reads the
     # profile's; a profile that names others would be silently ignored, so it is refused.
     defaults = (profile.source_root / LEGACY_SIGNATURES, profile.source_root / LEGACY_IMPLEMENTATIONS)

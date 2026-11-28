@@ -756,8 +756,43 @@ contracts:                # optional; ns-cmsis-nn defaults to Tests/KernelContra
   - a wrong schema;
   - a `source_root` that is absolute, missing, or does not contain the profile;
   - a `contracts` path that is absolute or outside `source_root`;
-  - a library this hct cannot run yet. That is anything but `ns-cmsis-nn` for now, and an ns-cmsis-nn profile whose `contracts` name anything but both documents in `Tests/KernelContracts/`, leaving out the implementation manifest included (generation reads both).
+  - a library this hct cannot run: another library whose profile does not name its `pack`, `harness` and `contracts`, and an ns-cmsis-nn profile whose `contracts` name anything but both documents in `Tests/KernelContracts/`, leaving out the implementation manifest included (generation reads both).
 - **Checking a profile:** `doctor --library <dir>` checks a profile on its own, and `contract validate --library <dir>` checks the contract documents it names, for any library.
+
+### A library's own tests (`pack`)
+
+A library other than ns-cmsis-nn brings its tests in a pack, which its profile names. ns-cmsis-nn runs hct's built-in descriptors unless its profile names a pack too.
+
+```yaml
+pack:
+  api: "1.0"               # the helia_core_tester.pack API version the pack is written for
+  path: .                  # the pack root, relative to this file (default .)
+  descriptors: descriptors # committed descriptors, relative to the pack root
+  modules: [basic_math]    # <pack root>/basic_math.py
+```
+
+- **Modules:** each module sets `HCT_PACK_API = "1.0"` and defines `register(pack)`. That calls `pack.generator(key, build, entries=[...])` for the entries a generator builds (`*` patterns allowed) and, optionally, `pack.descriptor_source(fn)`.
+  - The modules load as one package rooted at the pack directory. They import each other relatively, and the directory is not put on `sys.path`.
+  - hct runs a pack whose API major is its own and whose minor is not newer. Anything else is refused, and so is a module that fails to import or register, or a generator key registered twice.
+- **Descriptors:** each file is `<Family>/<stem>.yaml`, holding one or more `hct/descriptor/1` documents (`helia_core_tester/core/schemas/descriptor-1.json`):
+
+  ```yaml
+  schema: hct/descriptor/1
+  name: add_q15_lanes_plus_1   # unique in the pack
+  entry: arm_add_q15           # a function of the library's contract
+  generator: basic_math.binary # optional: default is the one generator that claims the entry
+  params: {block_size: 9}      # what the generator reads
+  comparison: {tolerance: 1, reason: "..."}   # optional
+  ```
+
+  - The suite and dtypes come from the entry's contract types. A pack case calls an entry with exactly one output pointer, whose pointers are `in` or `out` (not `in,out`) of q7, q15, q31, int8/16/32, uint16, f32 or f16, and whose by-value parameters are 8-, 16- or 32-bit integers or floats. `pack check` refuses any other entry, as generation does.
+  - Integer outputs compare exactly, and a tolerance needs a `reason`. Float outputs use the dtype's default bounds, which `atol` and `rtol` may only tighten.
+  - A load reports every problem in the pack together.
+- **Cases:** `build(case)` gets the entry's contract parameters, the descriptor's `params` and a seeded generator. It returns a `CaseSpec`: one array per input pointer, the output pointer and its element count, one value per scalar parameter, and the golden.
+  - hct checks every array and scalar against the contract (the set of parameters, the element type, the range) before it writes anything.
+  - A golden of `None` is recorded from the library's host reference build, so such a case needs `generate --golden record`.
+- **Drift check:** `pack check --library <dir>` loads the pack and checks every descriptor. If a module registers a descriptor source, it also compares the source's output with the committed files and exits 1 on any missing, extra or changed file. A source must give the same output twice.
+  - `pack sync --library <dir>` rewrites the committed files from the sources.
 
 ## Canonical Artifacts
 
