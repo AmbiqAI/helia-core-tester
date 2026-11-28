@@ -184,7 +184,7 @@ def _case(doc: Mapping[str, Any], path: Path, directory: Path, contracts: Any, r
         "entry": entry,
         "params": dict(doc.get("params") or {}),
         "suite": suite,
-        "resolved_tensor_dtypes": {"input": input_dtype, "output": output_dtype},
+        "resolved_tensor_dtypes": _signature_dtypes(function, input_dtype, output_dtype),
         "resolved_comparison": _comparison(doc, output_dtype, where),
     }
     for key in ("description", "expected_status", "required_capabilities", "degenerate_golden_reason"):
@@ -202,13 +202,29 @@ def _case(doc: Mapping[str, Any], path: Path, directory: Path, contracts: Any, r
     return case
 
 
+def _signature_dtypes(function: Any, input_dtype: str, output_dtype: str) -> Dict[str, str]:
+    """The case's input and output dtypes plus every other float operand's, by parameter name, so precision
+    filtering and the derived fp16/fp32 requirements see a float16 input or scalar beyond the first."""
+    dtypes = {"input": input_dtype, "output": output_dtype}
+    for param in function.params:
+        dtype = ELEMENT_DTYPES.get(element_type(param.c_type))
+        if dtype in ("FP16", "FP32") :
+            dtypes.setdefault(f"param:{param.name}", dtype)
+    return dtypes
+
+
 def _generation_problems(doc: Mapping[str, Any], where: str, function: Any, contracts: Any) -> None:
     """What generation would refuse in this case, refused here too, so pack check agrees with generate."""
     from helia_core_tester.core.cpu_targets import known_capabilities
     from helia_core_tester.core.harness import current_harness
     from helia_core_tester.generation.entry import EntryError, apply_entry_manifest
 
-    success = current_harness().status.success
+    status = current_harness().status
+    success = status.success
+    returns = " ".join(str(function.returns).split())
+    if returns not in ("void", status.type):
+        raise PackError(f"{where}: {function.name} returns {returns}; a pack case calls only entries that return void "
+                        f"or the profile's status type {status.type}")
     expected = str(doc.get("expected_status", success))
     if expected != success and str(function.returns).strip() == "void":
         raise PackError(f"{where}: {function.name} returns void, so expected_status {expected} can never be observed")

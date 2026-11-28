@@ -44,7 +44,13 @@ _FUNCTIONS = [
     ("arm_gather_q15", [("in", "pSrc", "const q15_t *"), ("in", "pIndex", "const int32_t *"),
                         ("out", "pDst", "q15_t *"), ("in", "blockSize", "uint32_t")]),
     ("arm_rows_q15", [("in", "pRows", "const q15_t * const *"), ("out", "pDst", "q15_t *"), ("in", "blockSize", "uint32_t")]),
+    ("arm_mix16_f32", [("in", "pSrcA", "const float32_t *"), ("in", "pSrcB", "const float16_t *"),
+                       ("out", "pDst", "float32_t *"), ("in", "blockSize", "uint32_t")]),
+    ("arm_ret_f32", [("in", "pSrcA", "const float32_t *"), ("out", "pDst", "float32_t *"), ("in", "blockSize", "uint32_t")]),
+    ("arm_ret_q15", [("in", "pSrcA", "const q15_t *"), ("out", "pDst", "q15_t *"), ("in", "blockSize", "uint32_t")]),
 ]
+# Return types other than void.
+_RETURNS = {"arm_ret_f32": "float32_t", "arm_ret_q15": "dsp_status"}
 
 _BINARY = '''
 import numpy as np
@@ -64,7 +70,8 @@ def binary(case):
 
 
 def register(pack):
-    pack.generator("basic.binary", binary, entries=["arm_add_q15", "arm_add_f32", "arm_add_f64", "arm_max_q15"])
+    pack.generator("basic.binary", binary, entries=["arm_add_q15", "arm_add_f32", "arm_add_f64", "arm_mix16_f32",
+                                                    "arm_ret_f32", "arm_ret_q15", "arm_max_q15"])
 '''
 
 
@@ -86,20 +93,22 @@ def _fresh(monkeypatch: pytest.MonkeyPatch):
 
 
 def _library(root: Path, *, pack: Optional[str] = None, modules: dict | None = None,
-             descriptors: dict | None = None, library: str = "cmsis-dsp") -> Path:
+             descriptors: dict | None = None, library: str = "cmsis-dsp",
+             contract_library: Optional[str] = None) -> Path:
     """A small DSP-like library: a header, its contract export and a profile below Testing/hct."""
     (root / "Include").mkdir(parents=True, exist_ok=True)
     header, records = [], []
     for name, params in _FUNCTIONS:
-        header.append(f"void {name}({', '.join(f'{t} {n}' for _, n, t in params)});")
+        returns = _RETURNS.get(name, "void")
+        header.append(f"{returns} {name}({', '.join(f'{t} {n}' for _, n, t in params)});")
         records.append({"name": name, "header": "Include/dsp.h", "line": len(header), "guards": [],
-                        "returns": "void",
+                        "returns": returns,
                         "params": [{"direction": d, "name": n, "type": t} for d, n, t in params]})
     (root / "Include" / "dsp.h").write_text("\n".join(header) + "\n")
     pack_dir = root / "Testing" / "hct"
     (pack_dir / "descriptors").mkdir(parents=True, exist_ok=True)
     (pack_dir / "kernel_contracts.json").write_text(json.dumps(
-        {"schema": "hct/kernel-contracts/1", "library": library, "functions": records}))
+        {"schema": "hct/kernel-contracts/1", "library": contract_library or library, "functions": records}))
     for name, text in (modules if modules is not None else {"basic": _BINARY}).items():
         (pack_dir / f"{name}.py").write_text(text)
     for rel, text in (descriptors or {}).items():
@@ -826,3 +835,33 @@ def test_a_helper_runs_from_its_source_even_beside_stale_bytecode(monkeypatch, t
     generate_test(cases[0], str(tmp_path / "out"), seed=5, cpu="cortex-m55", golden="record", kernel_numerics="bounded")
     header = (tmp_path / "out" / "BasicMath" / "case_a" / "includes" / "case_a_pack.h").read_text()
     assert "2, 2, 2, 2" in header
+
+
+def test_an_entry_returning_a_value_is_refused(monkeypatch, tmp_path) -> None:
+    with pytest.raises(PackError, match="arm_ret_f32 returns float32_t; a pack case calls only entries that return "
+                                        "void or the profile's status type dsp_status"):
+        _cases(monkeypatch, tmp_path, {"BasicMath/a.yaml": _doc("a", "arm_ret_f32")})
+
+
+def test_an_entry_returning_the_status_type_is_accepted(monkeypatch, tmp_path) -> None:
+    cases, _ = _cases(monkeypatch, tmp_path, {"BasicMath/a.yaml": _doc("a", "arm_ret_q15", expected_status="DSP_ARG")})
+    assert [case["entry"] for case in cases] == ["arm_ret_q15"]
+
+
+def test_a_float16_operand_after_the_first_input_counts(monkeypatch, tmp_path) -> None:
+    from helia_core_tester.generation import test_ops
+
+    (case,), _ = _cases(monkeypatch, tmp_path, {"BasicMath/a.yaml": _doc("a", "arm_mix16_f32")})
+    dtypes = case["resolved_tensor_dtypes"]
+    assert (dtypes["input"], dtypes["output"], dtypes["param:pSrcB"]) == ("FP32", "FP32", "FP16")
+    assert "fp16_execution" in test_ops._required_capabilities(case)
+    assert not test_ops.should_run_test(case, {"suite": "float", "float_precision": "f32"})
+    assert test_ops.should_run_test(case, {"suite": "float", "float_precision": "f16"})
+
+
+def test_contracts_for_another_library_are_refused(monkeypatch, tmp_path) -> None:
+    from helia_core_tester.contract.render import load_current_contracts
+
+    _use(monkeypatch, _library(tmp_path, contract_library="heliadsp"))
+    with pytest.raises(contract_ir.ContractError, match="is for library 'heliadsp', but .* is for 'cmsis-dsp'"):
+        load_current_contracts()

@@ -106,8 +106,12 @@ def load_current_contracts() -> ContractSet:
     if profile is not None and profile.library != legacy_nn.LIBRARY:
         if profile.signatures is None:
             raise ContractError(f"{profile.describe()}: its profile names no contracts")
-        return load_contract_set(profile.source_root, signatures=profile.signatures,
-                                 implementations=profile.implementations)
+        contracts = load_contract_set(profile.source_root, signatures=profile.signatures,
+                                      implementations=profile.implementations)
+        if contracts.library != profile.library:
+            raise ContractError(f"{contracts.path} is for library {contracts.library!r}, but "
+                                f"{profile.describe()} is for {profile.library!r}")
+        return contracts
     return load_contract_set(resolve_cmsis_nn_root())
 
 
