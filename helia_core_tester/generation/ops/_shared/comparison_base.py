@@ -19,6 +19,7 @@ _OP_MAP = {
 _DTYPE_INFO = {
     "S8": ("int8", "int8_t", np.int8, -128, 127, "s8"),
     "S16": ("int16", "int16_t", np.int16, -32768, 32767, "s16"),
+    "FP32": ("float32", "float32_t", np.float32, None, None, "f32"),
     "S32": ("int32", "int32_t", np.int32, -(2**31), 2**31 - 1, "s32"),
 }
 
@@ -138,22 +139,40 @@ class ComparisonFamilyBase(OperationBase):
         input_2_dims = builder.nhwc_to_cmsis_dims(input_shape_2)
         output_dims = builder.nhwc_to_cmsis_dims(output_shape)
 
-        if activation_dtype == "S32":
-            from helia_core_tester.generation.ops._shared.int32_data import sample_int32
-
+        if activation_dtype in ("S32", "FP32"):
             params = {}
             rng = self._seeded_rng()
-            input_1_q = sample_int32(rng, input_shape_1)
-            input_2_q = sample_int32(rng, input_shape_2, phase=1)
-            if input_1_q.size == 1:
-                input_1_q[...] = 0
-            elif input_2_q.size == 1:
-                input_2_q[...] = 0
-            elif input_2_q.size >= input_1_q.size:
-                _pin_near(rng, input_1_q, input_2_q, output_shape, qmin, qmax, 1)
+            if activation_dtype == "FP32":
+                if op != "greater":
+                    raise ValueError("FP32 comparison requires the direct GREATER entry")
+                input_1_q = rng.standard_normal(input_shape_1).astype(np.float32)
+                input_2_q = rng.standard_normal(input_shape_2).astype(np.float32)
+                # The first two broadcast positions must include a tie and a true
+                # predicate even when one side is a scalar, for every seed.
+                input_1_q.flat[0] = input_2_q.flat[0] = 0
+                if input_1_q.size > 1:
+                    input_1_q.flat[1] = 1
+                if input_2_q.size > 1:
+                    input_2_q.flat[1] = -1
             else:
-                _pin_near(rng, input_2_q, input_1_q, output_shape, qmin, qmax, 1)
-            interpreter = self.load_litert_interpreter(str(tflite_path))
+                from helia_core_tester.generation.ops._shared.int32_data import sample_int32
+
+                input_1_q = sample_int32(rng, input_shape_1)
+                input_2_q = sample_int32(rng, input_shape_2, phase=1)
+                if input_1_q.size == 1:
+                    input_1_q[...] = 0
+                elif input_2_q.size == 1:
+                    input_2_q[...] = 0
+                elif input_2_q.size >= input_1_q.size:
+                    _pin_near(rng, input_1_q, input_2_q, output_shape, qmin, qmax, 1)
+                else:
+                    _pin_near(rng, input_2_q, input_1_q, output_shape, qmin, qmax, 1)
+            if activation_dtype == "FP32":
+                from helia_core_tester.generation.utils.litert_utils import load_builtin_reference
+
+                interpreter = load_builtin_reference(str(tflite_path))
+            else:
+                interpreter = self.load_litert_interpreter(str(tflite_path))
             details = interpreter.get_input_details()
             interpreter.set_tensor(details[0]["index"], input_1_q)
             interpreter.set_tensor(details[1]["index"], input_2_q)
@@ -173,7 +192,7 @@ class ComparisonFamilyBase(OperationBase):
 
         context = {
             "name": name,
-            "unquantized": activation_dtype == "S32",
+            "unquantized": activation_dtype in ("S32", "FP32"),
             "input_1_dims": input_1_dims,
             "input_2_dims": input_2_dims,
             "output_dims": output_dims,

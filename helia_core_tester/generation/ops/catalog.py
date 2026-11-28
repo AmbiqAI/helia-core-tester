@@ -234,7 +234,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
     ),
     "Sqrt": _spec("Sqrt", "BasicMathFunctions", "sqrt", "OpSqrt", template_relpath="BasicMathFunctions/sqrt", descriptor_relpaths=("BasicMathFunctions/sqrt.yaml", "BasicMathFunctions/sqrt_float.yaml")),
     "Rsqrt": _spec("Rsqrt", "BasicMathFunctions", "rsqrt", "OpRsqrt", template_relpath="BasicMathFunctions/rsqrt", descriptor_relpaths=("BasicMathFunctions/rsqrt.yaml", "BasicMathFunctions/rsqrt_float.yaml")),
-    "Comparison": _spec("Comparison", "ComparisonFunctions", "comparison", "OpComparison", "ComparisonFunctions/comparison.yaml", "ComparisonFunctions/comparison"),
+    "Comparison": _spec("Comparison", "ComparisonFunctions", "comparison", "OpComparison", template_relpath="ComparisonFunctions/comparison", descriptor_relpaths=("ComparisonFunctions/comparison.yaml", "ComparisonFunctions/comparison_float.yaml")),
     "Concatenation": _spec(
         "Concatenation",
         "ConcatenationFunctions",
@@ -495,7 +495,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
     "BroadcastTo": _spec("BroadcastTo", "BroadcastFunctions", "broadcast_to", "OpBroadcastTo", "BroadcastFunctions/broadcast_to.yaml", "BroadcastFunctions/broadcast_to"),
     "ScatterNd": _spec("ScatterNd", "ScatterFunctions", "scatter_nd", "OpScatterNd", "ScatterFunctions/scatter_nd.yaml", "ScatterFunctions/scatter_nd"),
     "MirrorPad": _spec("MirrorPad", "PadFunctions", "mirror_pad", "OpMirrorPad", "PadFunctions/mirror_pad.yaml", "PadFunctions/mirror_pad"),
-    "SelectV2": _spec("SelectV2", "SelectFunctions", "select_v2", "OpSelectV2", "SelectFunctions/select_v2.yaml", "SelectFunctions/select_v2"),
+    "SelectV2": _spec("SelectV2", "SelectFunctions", "select_v2", "OpSelectV2", template_relpath="SelectFunctions/select_v2", descriptor_relpaths=("SelectFunctions/select_v2.yaml", "SelectFunctions/select_v2_float.yaml")),
     "Where": _spec("Where", "SelectFunctions", "where", "OpWhere", "SelectFunctions/where.yaml", "SelectFunctions/where"),
     "ReverseSequence": _spec("ReverseSequence", "ReverseSequenceFunctions", "reverse_sequence", "OpReverseSequence", "ReverseSequenceFunctions/reverse_sequence.yaml", "ReverseSequenceFunctions/reverse_sequence"),
     "DynamicUpdateSlice": _spec("DynamicUpdateSlice", "DynamicUpdateSliceFunctions", "dynamic_update_slice", "OpDynamicUpdateSlice", "DynamicUpdateSliceFunctions/dynamic_update_slice.yaml", "DynamicUpdateSliceFunctions/dynamic_update_slice"),
