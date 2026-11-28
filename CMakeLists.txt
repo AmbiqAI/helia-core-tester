@@ -313,17 +313,19 @@ if(HELIA_BUILD_GENERATED_TESTS)
     add_executable(${TGT_NAME} ${SRCS})
     set_target_properties(${TGT_NAME} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests/${FAMILY_NAME}")
 
-    # Includes (generated API + local cmsis.h + neuralSPOT bits used by tests)
-    file(GLOB NEURALSPOT_INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/modules/neuralSPOT/neuralspot/ns-*/includes")
-    target_include_directories(${TGT_NAME} PRIVATE
-      "${TEST_DIR_ABS}/includes"
-      "${CMAKE_CURRENT_SOURCE_DIR}/src"
-      ${NEURALSPOT_INCLUDE_DIRS}
-      "${CMAKE_CURRENT_SOURCE_DIR}/modules/neuralSPOT/extern/AmbiqSuite/R5.1.0_rc27/utils"
-      "${CMAKE_CURRENT_SOURCE_DIR}/modules/neuralSPOT/extern/AmbiqSuite/R5.1.0_rc27/boards/apollo510_evb/bsp"
-      "${CMAKE_CURRENT_SOURCE_DIR}/modules/neuralSPOT/extern/AmbiqSuite/R5.1.0_rc27/CMSIS/ARM/Include"
-      "${CMAKE_CURRENT_SOURCE_DIR}/modules/neuralSPOT/extern/AmbiqSuite/R5.1.0_rc27/CMSIS/AmbiqMicro/Include"
-      "${CMAKE_CURRENT_SOURCE_DIR}/modules/neuralSPOT/extern/CMSIS/CMSIS-DSP-1.16.2/Include")
+    # Includes: the generated API and local cmsis.h; ns-cmsis-nn's tests also take neuralSPOT's. Another
+    # library's tests take only its own exported headers, never neuralSPOT's bundled CMSIS-DSP.
+    target_include_directories(${TGT_NAME} PRIVATE "${TEST_DIR_ABS}/includes" "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    if(HCT_LIBRARY STREQUAL "cmsis-nn")
+      file(GLOB NEURALSPOT_INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/modules/neuralSPOT/neuralspot/ns-*/includes")
+      target_include_directories(${TGT_NAME} PRIVATE
+        ${NEURALSPOT_INCLUDE_DIRS}
+        "${CMAKE_CURRENT_SOURCE_DIR}/modules/neuralSPOT/extern/AmbiqSuite/R5.1.0_rc27/utils"
+        "${CMAKE_CURRENT_SOURCE_DIR}/modules/neuralSPOT/extern/AmbiqSuite/R5.1.0_rc27/boards/apollo510_evb/bsp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/modules/neuralSPOT/extern/AmbiqSuite/R5.1.0_rc27/CMSIS/ARM/Include"
+        "${CMAKE_CURRENT_SOURCE_DIR}/modules/neuralSPOT/extern/AmbiqSuite/R5.1.0_rc27/CMSIS/AmbiqMicro/Include"
+        "${CMAKE_CURRENT_SOURCE_DIR}/modules/neuralSPOT/extern/CMSIS/CMSIS-DSP-1.16.2/Include")
+    endif()
 
     target_compile_definitions(${TGT_NAME} PRIVATE USING_FVP_CORSTONE_300)
     target_compile_options(${TGT_NAME} PRIVATE -Wno-switch-default -Wno-unused-parameter -Wno-cast-align)

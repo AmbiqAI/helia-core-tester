@@ -232,6 +232,48 @@ def test_ns_cmsis_nn_commands_are_unchanged(tmp_path) -> None:
                           "ARM_NN_ENABLE_F32=OFF", "ARM_NN_ENABLE_F16=OFF"]
 
 
+def _nn_root(tmp_path: Path, profile: str | None) -> Path:
+    root = tmp_path / "nn"
+    (root / "Include").mkdir(parents=True)
+    (root / "Include" / "arm_nnfunctions.h").write_text("")
+    (root / "CMakeLists.txt").write_text("")
+    if profile == "dangling":
+        (root / "hct-library.yaml").symlink_to(tmp_path / "missing.yaml")
+    elif profile is not None:
+        (root / "hct-library.yaml").write_text(profile)
+    return root
+
+
+@pytest.mark.parametrize("profile, said", [
+    ("schema: hct/library-profile/1\nlibrary: [\n", "hct-library.yaml"),
+    ("schema: hct/library-profile/1\nlibrary: ns-cmsis-nn\nbuild:\n  target: cmsis-nn\n",
+     "names build, but this hct builds ns-cmsis-nn from its own rules"),
+    ("dangling", "not a regular file"),
+])
+def test_an_invalid_profile_at_the_cmsis_nn_root_is_refused(tmp_path, profile, said) -> None:
+    root = _nn_root(tmp_path, profile)
+    config = Config(project_root=_repo(tmp_path), cmsis_nn_root=root, cpu="cortex-m55", suite="int",
+                    _explicit_overrides={"project_root", "cmsis_nn_root", "cpu", "suite"})
+    problem = BuildStep(config, runtime_env=_runtime_env(tmp_path)).validate()
+    assert problem is not None and said in problem
+
+
+def test_a_cmsis_nn_root_without_a_profile_still_builds_by_nn_rules(tmp_path) -> None:
+    root = _nn_root(tmp_path, None)
+    config = Config(project_root=_repo(tmp_path), cmsis_nn_root=root, cpu="cortex-m55", suite="int",
+                    _explicit_overrides={"project_root", "cmsis_nn_root", "cpu", "suite"})
+    assert BuildStep(config, runtime_env=_runtime_env(tmp_path)).validate() is None
+
+
+def test_only_ns_cmsis_nn_tests_take_neuralspots_headers() -> None:
+    text = (ROOT / "CMakeLists.txt").read_text()
+    start = text.index("add_executable(${TGT_NAME} ${SRCS})")
+    block = text[start:text.index("target_compile_definitions(${TGT_NAME} PRIVATE USING_FVP_CORSTONE_300)", start)]
+    guarded = block[block.index('if(HCT_LIBRARY STREQUAL "cmsis-nn")'):block.index("endif()")]
+    for needle in ("neuralSPOT/neuralspot/ns-*", "CMSIS-DSP-1.16.2/Include", "AmbiqSuite"):
+        assert block.count(needle) == guarded.count(needle) > 0, needle
+
+
 # --- the root CMake project --------------------------------------------------------------------
 
 

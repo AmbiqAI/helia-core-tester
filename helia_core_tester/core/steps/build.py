@@ -46,13 +46,17 @@ class BuildStep(StepBase):
     def _library_build(self):
         """The profile of a library other than ns-cmsis-nn, which builds from its build block; else None
         (ns-cmsis-nn builds from hct's own rules)."""
-        from helia_core_tester.core.library import SUPPORTED_LIBRARIES
+        from helia_core_tester.core.library import PROFILE_FILE, SUPPORTED_LIBRARIES
 
         try:
             profile = self.config.library_profile
         except ConfigurationError:
-            # A --cmsis-nn-root that loads no profile is ns-cmsis-nn's; its CMake checks the checkout.
-            if self.config.library is not None:
+            # Only a --cmsis-nn-root with no profile at all falls back to ns-cmsis-nn's rules (its CMake
+            # checks the checkout); a profile that is there but invalid is refused.
+            root = self.config.cmsis_nn_root
+            profile_file = Path(root) / PROFILE_FILE if root is not None else None
+            if self.config.library is not None or (
+                    profile_file is not None and (profile_file.exists() or profile_file.is_symlink())):
                 raise
             return None
         if profile is None or profile.library in SUPPORTED_LIBRARIES:
